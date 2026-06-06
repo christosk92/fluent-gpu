@@ -3,6 +3,7 @@
 **A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10 — with Reactor-style fluent C# markup and React-style hooks.**
 
 > **Status (June 2026): architecture complete; engine scaffold + a *running* vertical slice in [`src/`](./src/README.md).** The full design corpus is in [`design/`](./design/README.md); the 18-assembly solution builds on **.NET 10 / C# 14 / NativeAOT-ready**, and the minimum vertical slice passes the architecture's acceptance test on the headless backends. The on-screen Direct3D 12 backend is the next milestone.
+<img width="732" height="614" alt="image" src="https://github.com/user-attachments/assets/88adc595-7ff5-4ed6-afe7-a00b1d0ef6d6" />
 
 ---
 
