@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -31,6 +32,7 @@ public sealed class AppHost : IDisposable
     private readonly DrawList _drawList = new();
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
+    private readonly AnimEngine _anim;
 
     private Element? _oldRoot;
     private bool _dirty = true;
@@ -39,6 +41,7 @@ public sealed class AppHost : IDisposable
     private static ColorF Clear => Theme.WindowBackground;   // theme-driven (transparent later for Mica)
 
     public SceneStore Scene => _scene;
+    public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
@@ -51,6 +54,7 @@ public sealed class AppHost : IDisposable
         _reconciler = new TreeReconciler(_scene, strings);
         _layout = new FlexLayout(_scene, fonts);
         _dispatcher = new InputDispatcher(_scene);
+        _anim = new AnimEngine(_scene);
         _lastSize = window.ClientSizePx;
         _root.Context.RequestRerender = () => _dirty = true;
         // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
@@ -91,6 +95,8 @@ public sealed class AppHost : IDisposable
 
             var layoutEffects = _root.Context.PendingLayoutEffects;   // 6.5 layout effects (Bounds valid)
             if (layoutEffects.Count > 0) { foreach (var e in layoutEffects) e(); layoutEffects.Clear(); }
+
+            _anim.Tick(16f);                                  // 7 animation (writes Opacity/transform; never LayoutDirty)
 
             SceneRecorder.Record(_scene, _drawList);          // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,

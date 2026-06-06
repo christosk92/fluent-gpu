@@ -14,5 +14,6 @@
     <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
     <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
     <ProjectReference Include="..\FluentGpu.Input\FluentGpu.Input.csproj" />
+    <ProjectReference Include="..\FluentGpu.Animation\FluentGpu.Animation.csproj" />
   </ItemGroup>
 </Project>

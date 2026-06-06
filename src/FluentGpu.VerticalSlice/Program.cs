@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -222,6 +223,34 @@ static class Slice
         Check("21. keys bubble to ancestor; Handled stops propagation", bubbled && stopped);
     }
 
+    // Animation timelines: eased opacity completes (PaintDirty, never LayoutDirty); translate marks TransformDirty.
+    static void AnimChecks()
+    {
+        var scene = new SceneStore();
+        var node = scene.CreateNode(1);
+        scene.Root = node;
+        var engine = new AnimEngine(scene);
+
+        scene.Paint(node).Opacity = 0f;
+        scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
+        engine.Animate(node, AnimChannel.Opacity, 0f, 1f, 100f, Easing.Linear);
+        engine.Tick(50f);
+        float op = scene.Paint(node).Opacity;
+        var fl = scene.Flags(node);
+        bool midOk = MathF.Abs(op - 0.5f) < 0.02f && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
+        engine.Tick(60f);   // 110ms > 100ms → complete
+        bool doneOk = MathF.Abs(scene.Paint(node).Opacity - 1f) < 0.001f && !engine.HasActive;
+        Check("22. opacity timeline eases & completes (no relayout)", midOk && doneOk, $"@50ms={op:0.00}");
+
+        scene.Flags(node) &= ~(NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
+        engine.Animate(node, AnimChannel.TranslateX, 0f, 100f, 100f, Easing.Linear);
+        engine.Tick(25f);
+        float dx = scene.Paint(node).LocalTransform.Dx;
+        var fl2 = scene.Flags(node);
+        bool transOk = MathF.Abs(dx - 25f) < 0.5f && (fl2 & NodeFlags.TransformDirty) != 0 && (fl2 & NodeFlags.LayoutDirty) == 0;
+        Check("23. translate timeline marks TransformDirty only", transOk, $"@25ms dx={dx:0.0}");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -266,6 +295,7 @@ static class Slice
         HookChecks();
         KeyedChecks(strings);
         KeyboardChecks(strings);
+        AnimChecks();
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }
