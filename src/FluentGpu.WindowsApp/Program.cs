@@ -40,7 +40,7 @@ static class WindowsApp
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f));
         var fonts = new GdiFontSystem(strings);   // GDI metrics drive layout for both backends (DirectWrite font system is next)
-        IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device();
+        IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings);
         var root = new Counter();
         using var host = new AppHost(app, window, device, fonts, strings, root);
 

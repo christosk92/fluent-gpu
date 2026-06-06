@@ -38,6 +38,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private uint _frameIndex;
     private RoundRectPipeline? _rectPipe;
     private readonly List<RectInstance> _rectInsts = new();
+    private GlyphRenderer? _glyphs;
+    private readonly List<GlyphInstance> _glyphInsts = new();
+    private readonly StringTable _strings;
+
+    public D3D12Device(StringTable strings) => _strings = strings;
 
     public string BackendNameSuffix { get; private set; } = "";
     public string BackendName => "D3D12" + BackendNameSuffix;
@@ -53,6 +58,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         InitSwapChain();
         _rectPipe = new RoundRectPipeline();
         _rectPipe.Init(_device);
+        _glyphs = new GlyphRenderer();
+        _glyphs.Init(_device);
         return new D3D12Swapchain(this);
     }
 
@@ -189,10 +196,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
         RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
         _cmdList->RSSetScissorRects(1, &scd);
 
-        // Step 2: rounded rects (SDF). Step 3 (glyph runs) records after.
-        DecodeRects(drawList);
+        Decode(drawList);
+        _glyphs!.UploadIfDirty(_cmdList);   // copy newly-rasterized glyphs into the GPU atlas (before sampling)
         if (_rectInsts.Count > 0)
             _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), _w, _h);
+        if (_glyphInsts.Count > 0)
+            _glyphs.Record(_cmdList, _glyphInsts, _w, _h);
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
         Check(_cmdList->Close(), "cmdList.Close");
@@ -201,9 +210,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _queue->ExecuteCommandLists(1, &execList);
     }
 
-    private void DecodeRects(ReadOnlySpan<byte> cmds)
+    private void Decode(ReadOnlySpan<byte> cmds)
     {
         _rectInsts.Clear();
+        _glyphInsts.Clear();
         int pos = 0;
         while (pos + sizeof(int) <= cmds.Length)
         {
@@ -224,8 +234,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     break;
                 }
                 case DrawOp.DrawGlyphRun:
-                    pos += Unsafe.SizeOf<DrawGlyphRunCmd>();   // Step 3
+                {
+                    var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
+                    string s = _strings.Resolve(g.Text);
+                    if (s.Length > 0)
+                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _glyphInsts);
                     break;
+                }
                 default:
                     pos = cmds.Length;
                     break;
@@ -279,6 +295,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     public void Dispose()
     {
         if (_device != null) WaitForGpu();
+        _glyphs?.Dispose();
         _rectPipe?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) if (_backBuffers[i] != null) _backBuffers[i]->Release();
         if (_swapChain != null) _swapChain->Release();
