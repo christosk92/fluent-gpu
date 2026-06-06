@@ -59,14 +59,18 @@ which our layout engine measures/arranges and our GPU renderer paints.
    (device/fence/descriptor/command-pool plumbing, D3D12MA, C#→HLSL transpiler) is DX12-only;
    DComp composes any swapchain so D3D11 buys nothing for present. The RHI seam is drawn at the
    **modern-explicit-graphics-API** altitude (explicit barriers, immutable PSOs) so Metal slots in 1:1.
-2. **Hand-written vtable COM, NOT ComWrappers** — for BOTH directions. ComputeSharp's verified
-   pattern is `unsafe partial struct : IComObject` + `void** lpVtbl` + `delegate* unmanaged[MemberFunction]`
-   calli with a `static abstract Guid* IID`; the implement (callee) direction (DWrite callbacks, UIA,
-   TSF) uses the same hand-built static vtables + `[UnmanagedCallersOnly(CallConvMemberFunction)]` +
-   `GCHandle` bridge (the verified `PixelShaderEffect` recipe). **No `System.Runtime.InteropServices.ComWrappers`**
-   anywhere — it allocates per-object RCWs (violates zero-alloc) and is not what ComputeSharp ships.
-   *The Foundations §4 phrase "source-generated ComWrappers" is hereby corrected to
-   "source-generated hand-vtable `IComObject` bindings."*
+2. **COM is tiered — hand-vtable on the hot path, source-generated cold** (canonical:
+   `dotnet10-csharp14-zero-alloc.md` §4; see [`SPEC-INDEX.md`](./SPEC-INDEX.md)). The per-frame hot path
+   (D3D12 command list/queue/swapchain Present, DComp, and any CCW invoked inside the frame loop) uses
+   ComputeSharp's verified pattern: `unsafe partial struct : IComObject` + `void** lpVtbl` +
+   `delegate* unmanaged[MemberFunction]` calli with a `static abstract Guid* IID`, and the implement
+   (callee) direction uses hand-built static vtables + `[UnmanagedCallersOnly(CallConvMemberFunction)]` +
+   `GCHandle` (the verified `PixelShaderEffect` recipe). **All cold/warm COM (UIA, TSF, OLE, DWrite
+   *setup*) uses `[GeneratedComInterface]`/`[GeneratedComClass]`** — the source-generated, AOT-recommended
+   path — isolated in `FluentGpu.PlatformIntegration`. **`System.Runtime.InteropServices.ComWrappers` is
+   rejected on the hot path only** (to avoid the RCW-cache `GetOrCreateObjectForComInstance` lookup and
+   keep call-site control — *not* a per-call alloc, which .NET 10 does not incur), and is adopted via the
+   source generators for everything cold.
 3. **Custom batched 2D renderer**: analytic **SDF** anti-aliasing for the rect family (rounded rects,
    borders), **closed-form erf drop shadows in one quad** (no offscreen blur for the common case),
    **pre-rasterized glyph coverage** in a GPU atlas, **CPU tessellation** of Bezier/arc paths with AA
@@ -93,6 +97,8 @@ which our layout engine measures/arranges and our GPU renderer paints.
 
 ### 1.4 Threading & frame model (one line)
 
+> **⊳ Canonical threading model.** The single-thread loop is **build-order step 1** (`hardened-v1-plan.md` §6), not the shipping topology. The canonical model is the **render-thread seam** — `hardened-v1-plan.md` §2 + [`subsystems/threading-render-seam.md`](./subsystems/threading-render-seam.md) §14 (see [`SPEC-INDEX.md`](./SPEC-INDEX.md)): a **PUBLISH(13a)** phase splits the loop, record/batch/submit/present run on the render thread, and `QUARANTINE = RenderInFlightDepth` (compile-asserted, consume-gated) supersedes the literal `0`/`2`. §4.8 below is the lean step-1 form.
+
 **Single UI thread v1.** 13 ordered frame phases (pump → input → hook-flush → render → reconcile →
 layout → layout-effects → animation → record → batch → submit → present → passive-effects → arena-swap).
 The DrawList POD stream is the *designed* render-thread boundary for the future (slot-reuse quarantine
@@ -105,7 +111,7 @@ constant flips it on); v1 keeps the quarantine at 0.
 | # | Rule | Enforcement |
 |---|------|-------------|
 | **P1** | **Zero / near-zero per-frame managed allocation.** Hot paths use struct data, arenas, slabs, object pools, generational handles, span APIs. No `params object[]`, no LINQ, no `IEnumerable` iterators, no per-node delegates on hot paths. | CI per-frame alloc budget gate (§8); `ref struct` enumerators; arena-backed scratch; `[Conditional("DEBUG")]` alloc-tripwires around frame phases. |
-| **P2** | **NativeAOT-clean.** No reflection, no `MakeGenericType`/`Activator`, no runtime IL emit, no `ComWrappers` machinery. All COM via hand-vtable `calli`. Source generators do all "codegen" at build time. | `<PublishAot>true</PublishAot>`, `<IsTrimmable>true</IsTrimmable>`, zero `[DynamicallyAccessedMembers]` in portable assemblies; `sizoscope`/`.mstat` CI gate. |
+| **P2** | **NativeAOT-clean.** No reflection, no `MakeGenericType`/`Activator`, no runtime IL emit. **COM is tiered** (canonical: [`SPEC-INDEX.md`](./SPEC-INDEX.md) → `dotnet10-csharp14-zero-alloc.md` §4): hand-vtable `calli` on the per-frame hot path + in-loop CCWs; `[GeneratedComInterface]`/`[GeneratedComClass]` (source-gen) for all cold/warm COM. `ComWrappers` rejected **on the hot path only** (cache-lookup + call-site control, not per-call alloc). Source generators do all "codegen" at build time. | `<PublishAot>true</PublishAot>`, `<IsTrimmable>true</IsTrimmable>`, zero `[DynamicallyAccessedMembers]` in portable assemblies; `sizoscope`/`.mstat` CI gate. |
 | **P3** | **Small footprint.** One graphics backend, one binding set, no WinRT projection, no Windows App SDK. | Ratcheted exe-size CI gate (start ~8 MB, tighten); `[SkipLocalsInit]`; trimming feature-switches per leaf. |
 | **P4** | **Swappable platform seam.** Everything OS/GPU-specific lives **below** the PAL/RHI/Text interfaces in leaf assemblies referenced **only** by `Hosting`. The seam vocabulary is POD: generational handles, blittable descriptor structs, spans, opaque `NativeHandle`. No `HWND`/`HRESULT`/`ComPtr`/`ID3D12*`/`IDXGI*`/`WM_*`/`DXGI_*` crosses it. | Assembly reference graph is acyclic (§3); the only `object`-typed seam field is eliminated (`NativeHandle` POD). Headless PAL+RHI prove portability in CI. |
 | **P5** | **Reactor model preserved verbatim where possible.** `Element` stays an immutable record at the edge; `Component`, Hooks, keyed reconciler, context, error boundaries, hot reload kept. Divergences (effect timing, deps representation, re-authored LIS) are **explicitly labeled**, not smuggled as "verbatim." | The reuse table (§3b) marks each Reactor file take-as-is / port / re-author / inspire. |
@@ -376,7 +382,8 @@ batcher needs 64 bits).
 
 Opcodes: `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd`, `FillPathCmd`,
 `DrawImageCmd`, `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushTransformCmd`/
-`PopTransformCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `DrawFocusRectCmd`, `DrawAccessKeyBadgeCmd`.
+`PopTransformCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `DrawFocusRingCmd` (the production focus visual;
+the rectangular `DrawFocusRect` is a superseded debug placeholder), `DrawAccessKeyBadgeCmd`.
 `DrawGlyphRunCmd` references by `{GlyphRunHandle, origin, BrushHandle}` and **never bakes atlas UVs** —
 UVs resolve at batch time (keeps eviction transparent).
 
@@ -476,6 +483,8 @@ D3D12MA). `HandleTable.Free` runs typed teardown (`slot.Res.Dispose()`) **before
 growth, layer-RT recycle, and device-lost rebuild.
 
 ### 4.8 Frame lifecycle & threading model (13 phases)
+
+> **⊳ Canonical threading model.** The 13-phase single-thread loop below is **build-order step 1** (`hardened-v1-plan.md` §6). The canonical shipping model is the **render-thread seam** — `hardened-v1-plan.md` §2 + [`subsystems/threading-render-seam.md`](./subsystems/threading-render-seam.md) §14 (see [`SPEC-INDEX.md`](./SPEC-INDEX.md)): insert **PUBLISH(13a)** between phases 7 and 8, move record/batch/submit/present (8–11) to the render thread reading an immutable `SceneFrame`, make DrawList arenas render-private and **≥3-deep**, and replace the bare quarantine constant with `QUARANTINE = RenderInFlightDepth`. (Amendment checklist: `hardened-v1-plan.md` §7.)
 
 ```
  1 pump           IPlatformWindow.PumpInto(ring)         — WM_*/NSEvent → InputEvent/WindowEvent POD ring
@@ -932,7 +941,8 @@ in the animation phase) are real work (WinUI's `ManipulationInertiaStarting` is 
 ascending then doc order; bucket B = `TabIndex==0`/default in pre-order; B follows A; negative = focusable
 programmatically, skipped by Tab. XYFocus = projection-based candidate scoring over `Bounds` (gamepad
 DPad→arrows, A→Invoke, B→Escape). Focus scopes/trapping via `_scopeStack` (modal push/pop, restore prior
-focus). **Focus visual** = synthesized `DrawFocusRectCmd` **anchored to the focused node's clip chain** (so
+focus). **Focus visual** = synthesized `DrawFocusRingCmd` (shape+raster owned by `gpu-renderer.md`; the
+rectangular `DrawFocusRect` is a superseded placeholder) **anchored to the focused node's clip chain** (so
 it clips/scrolls correctly), its overlay layer marked dirty on focus move so the incremental DrawList
 re-records it. `UseFocus`/`UseElementRef` keep names/return-shapes, reimplemented over `FocusEngine`
 (`ElementRef` now wraps a `NodeHandle`; stale gen → null).
@@ -1115,9 +1125,12 @@ delegate path at step 2d — one declaration, three modalities.
 7. (`FluentGpu.Interop.SourceGen`, leaf-only) COM-binding generator — hand-vtable `IComObject` structs for
    DComp/DWrite/TSF/UIA/OLE against pinned interface versions (`IDWriteFactory2+`, etc.).
 
-**ComWrappers strategy:** **none.** Both COM directions use hand-built vtables (consume: `lpVtbl[n]` calli;
-implement: static `[UnmanagedCallersOnly(CallConvMemberFunction)]` vtables + `GCHandle` + `Interlocked`
-refcount). `ComPtr<T>` is the only lifetime primitive; `[UnmanagedCallersOnly]` for `WndProc` and the
+**COM dispatch strategy (canonical: `dotnet10-csharp14-zero-alloc.md` §4):** **tiered.** The per-frame
+hot path uses hand-built vtables (consume: `lpVtbl[n]` calli; implement: static
+`[UnmanagedCallersOnly(CallConvMemberFunction)]` vtables + `GCHandle` + `Interlocked` refcount); **all
+cold/warm COM (UIA/TSF/OLE/DWrite setup) uses `[GeneratedComInterface]`/`[GeneratedComClass]`.**
+`ComWrappers` is rejected on the hot path only (cache-lookup + call-site control). `ComPtr<T>` is the only
+lifetime primitive; `[UnmanagedCallersOnly]` for `WndProc` and the
 device-lost wait callback; `GCHandle` (Normal for window/device-lost, pooled-pinned for DWrite analyze)
 the only managed-side roots. VARIANT/BSTR marshaling hand-rolled (`SysAllocString`/`VariantInit`), no
 reflection marshalers.

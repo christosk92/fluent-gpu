@@ -28,7 +28,7 @@ Decisions are stated as **MADE** with the losing option and reason. Residual unk
 
 | Category | This doc is authoritative for |
 |---|---|
-| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the 7-field hole-punch shape; §3.1 authority), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, `DrawFocusRectCmd`, `DrawAccessKeyBadgeCmd`. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`). |
+| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the 7-field hole-punch shape; §3.1 authority), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
 | **GPU instance structs** | `QuadInstance` (80B; rect/shadow/border/image), `GlyphInstance` (48B) |
 | **Render-thread algorithms** | `DrawListRecorder` (clean-span memcpy), `RenderLane` classifier, `Batcher` (LSD radix over `ulong[]`), `OverlapGrid` painter-order break, `PathTessellator` (monotone/trapezoidal sweep), `DamageAccumulator`, `LayerPool`, `UploadRing`, `TextureStagingRing` |
 | **RHI methods I drive** | `SubmitDrawList` (PRIMARY hot path), `ICommandEncoder.*` (incl. **`CopyBufferToTexture`**), `CreateGraphicsPipeline`/`CreatePipeline`, the multi-visual present tree |
@@ -170,8 +170,14 @@ public enum DrawOp : byte {
     DrawGlyphRun, DrawImage, DrawVideo, FillPath, StrokePath, FillGradient,
     PushClipRect, PushClipRoundRect, PushStencilClip, PopStencilClip, PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,
-    DrawFocusRect, DrawAccessKeyBadge
+    DrawFocusRect,                                             // superseded rectangular debug placeholder
+    DrawFocusRing, DrawAccessKeyBadge,                         // DrawFocusRing = the production focus-visual opcode (§3.6, §4.4)
+    DrawSelectionRect, DrawScrim                               // overlay/selection family (§3.6, raster §4.4)
 }
+// NOTE: the DrawOp enum LIST is registered/owned by scene-memory.md §4.1 (the encoding framework). The folded
+// entries DrawFocusRing + DrawSelectionRect + DrawScrim are registered there; this doc owns only their PAYLOAD
+// STRUCT SHAPES (§3.6) and their RASTERIZATION (§4.4). The enum reprinted here is for local readability and
+// must stay in lockstep. DrawFocusRect is the superseded rectangular placeholder; DrawFocusRing is production.
 ```
 
 Representative payloads (POD; handle/index refs only; never GC pointers):
@@ -298,6 +304,84 @@ public struct GlyphInstance {
 }
 ```
 
+### 3.6 Selection / overlay opcode shapes (this doc is the opcode-shape authority)
+
+These three opcode families are the **selection-highlight + overlay-composition** shapes pulled into core
+(folds gap rows **L1** selection highlight, **L4** overlay scrim/dismiss-layer, and the **L1/L4 raster of
+the focus ring**). All three are **POD, handle/index refs only** (memcpy-safe, no GC pointer, satisfies the
+scene-memory §4.1 framework contract), all three sort BEHIND or AROUND content per §3.6.1, and none breaks
+the zero-offscreen budget (no opcode here forces a layer RT). The `DrawOp` enum entries are registered in
+`scene-memory.md` §4.1; the device-space geometry that fills them is produced by `text.md`
+(`GetSelectionRects`) and `input-a11y.md` (overlay manager / `FocusEngine`).
+
+```csharp
+// AUTHORITY: this doc owns the struct SHAPE + raster. text.md owns GetSelectionRects geometry; input-a11y.md
+// owns SelectionState (anchor/extent/affinity) semantics + the SelectionBrush theme source. One DrawSelectionRectCmd
+// is emitted PER VISUAL FRAGMENT a logical range maps to under BiDi (text.md §8: a logical range → N disjoint rects).
+[StructLayout(LayoutKind.Sequential)]
+public struct DrawSelectionRectCmd {       // RenderLane.AnalyticSdf — a tinted rounded-rect BEHIND text
+    public RectF        Rect;              // ONE visual fragment, device-space AABB (from GetSelectionRects[i],
+                                           //   projected through the SAME Push/Transform/Clip run as its text run)
+    public CornerRadius4 Radii;            // 0 for the classic block highlight; >0 for the rounded "pill" selection
+                                           //   used on the leading/trailing fragment ends (Fluent reveal selection)
+    public BrushHandle  SelectionBrush;    // theme selection brush (focused vs unfocused tint); HC → SystemColors
+                                           //   highlight; premul-linear like every solid (§8). NOT a per-frame pow().
+    public byte         Affinity;          // 0 = none, bit0 = isLeadingFragment, bit1 = isTrailingFragment
+                                           //   (round only the outer corners of the run via Radii selection)
+    public ClipHandle   Clip;              // the text run's clip chain (so selection scrolls/clips WITH the text)
+    public byte         Flags;             // bit0 = behindText(default 1), bit1 = activeSelection(else inactive tint)
+}
+
+// AUTHORITY: this doc owns the struct SHAPE + raster. input-a11y.md §8.3 owns the light-dismiss FSM + WHEN a scrim
+// is pushed; layout.md owns the device rect (it is the overlay-root's full content bounds). A scrim is the modal
+// dimming/dismiss layer UNDER a popup/dialog/flyout and OVER everything below it in the overlay z-stack.
+[StructLayout(LayoutKind.Sequential)]
+public struct DrawScrimCmd {               // RenderLane.AnalyticSdf — one translucent fill (or transparent hit-only)
+    public RectF        Rect;              // device-space; the overlay-root content rect (full window for a modal)
+    public CornerRadius4 Radii;            // 0 for window-modal; >0 only for an inset themed scrim (rare)
+    public BrushHandle  ScrimBrush;        // premul-linear translucent (e.g. SmokeFill 0.3α); BrushHandle 0 = a
+                                           //   FULLY-TRANSPARENT hit-only dismiss layer (light-dismiss, no dim)
+    public ClipHandle   Clip;              // overlay-root clip (normally none/window)
+    public byte         Flags;             // bit0 = isModalDim(else light-dismiss transparent), bit1 = blurBackdrop
+                                           //   (bit1 set ⇒ recorder promotes to a PushLayer{Effect} acrylic — §7.2;
+                                           //    NOT rastered here, it routes to the backdrop layer path)
+}
+// AUTHORITY: this doc owns the DrawFocusRingCmd struct SHAPE + raster (§4.4). input-a11y.md §8.4 EMITS it
+// (anchors it to the focused node's clip chain) and sources its Brush from ISystemColors; it does not own the shape.
+// DrawFocusRingCmd is the single PRODUCTION focus-visual opcode — a rounded, clip-chain-anchored focus RING that
+// supports the Fluent dashed reveal style. It SUPERSEDES the old rectangular DrawFocusRect(Cmd) placeholder
+// (retained only as a debug rectangle, scene-memory.md §4.1).
+[StructLayout(LayoutKind.Sequential)]
+public struct DrawFocusRingCmd {           // RenderLane.AnalyticSdf — a stroked rounded-rect ring (shape_border PSO)
+    public RectF        OuterRect;         // device-space ring outer AABB; positioned by the enclosing Push/Transform/Clip run
+    public RectF        InnerRect;         // device-space ring inner AABB (OuterRect inset by Thickness) — baked geometry
+    public CornerRadius4 Radii;            // match the focused node's corners
+    public BrushHandle  Brush;             // HC-aware focus color; input-a11y sources it from PAL ISystemColors
+    public float        Thickness;         // device px (Fluent 2px default)
+    public float        DashPeriod;        // 0 = solid; >0 = the Fluent dashed/dotted reveal ring (one Params0 bit)
+    public ClipHandle   Clip;              // the focused node's clip chain (so the ring clips/scrolls WITH the anchor)
+}
+```
+
+#### 3.6.1 SortKey placement for the new opcodes (reuses the §3.2 layout — no new bits)
+
+The §3.2 64-bit SortKey is unchanged; the new opcodes slot into the existing `PassClass` field and the
+`RecordSeq` discipline that already governs translucent correctness:
+
+| Opcode | `PassClass` | Where it sorts | Why |
+|---|---|---|---|
+| `DrawSelectionRect` | **`Fill` (1)** with `RecordSeq` = the text run's seq **− 1** (emitted immediately before its run) | one record *behind* the glyph run it highlights, in the SAME node's intra-node order | guarantees the tint paints UNDER text without a separate pass; the OverlapGrid (§3.4) sees it as an ordinary translucent fill so painter-order stays correct against neighbours |
+| `DrawScrim` (modal dim) | **`Fill` (1)** at the overlay-root's `RecordSeq` | above all content below the overlay, below the overlay's own chrome (overlay chrome has a higher `RecordSeq` ∵ deeper in pre-order) | one translucent fill; the dim is just an alpha quad |
+| `DrawScrim` (light-dismiss transparent) | **`Fill` (1)**, `ScrimBrush=0` | same slot; **culled from the GPU batch** (zero-area-of-color), kept only as the input-a11y hit-target rect | a transparent dismiss layer is an *input* concern (input-a11y owns the hit test); it must not cost a draw |
+| `DrawFocusRing` (in overlay/portal layer) | **`Effect` (6)** — TOP intra-node | above the anchor's own content but inside the anchor's clip chain (input-a11y §8.4) | a focus ring must never be occluded by sibling fills; `PassClass=Effect` puts it last within the node, and the overlay layer's own `RecordSeq` puts the whole overlay above the page |
+
+Because all three reuse `PassClass`+`RecordSeq` (the §3.2 primary), **the OverlapGrid break (§3.4) and the
+radix tie-break see them as ordinary translucent fills** — there is no new batch-break rule and no new
+painter-order mechanism. `DrawSelectionRect` and `DrawScrim` are `RenderLane.AnalyticSdf` (§4), so they
+**batch with every other rounded-rect fill in the frame** when their brush/clip permit (selection
+highlights across a multi-line range are one batch; the modal scrim is one instance). This is the small,
+surgical property: selection + scrim + focus-ring add **zero new pipelines** and **zero new passes**.
+
 ---
 
 ## 4. RenderLane classifier — SDF default, paths the exception
@@ -316,7 +400,8 @@ public enum RenderLane : byte {
 public static RenderLane Classify(DrawOp op, in NodePaintLite p)
     => op switch {
         DrawOp.FillRoundRect or DrawOp.FillRoundRectStroke or DrawOp.DrawShadow
-            or DrawOp.DrawFocusRect or DrawOp.FillGradient => RenderLane.AnalyticSdf,
+            or DrawOp.DrawFocusRect or DrawOp.DrawFocusRing or DrawOp.FillGradient
+            or DrawOp.DrawSelectionRect or DrawOp.DrawScrim => RenderLane.AnalyticSdf,   // §3.6: tint quad / ring / dim
         DrawOp.DrawGlyphRun                                 => RenderLane.Glyph,
         DrawOp.DrawImage or DrawOp.DrawVideo                => RenderLane.Image,   // video = hole-punch fill, image lane
         DrawOp.FillPath or DrawOp.StrokePath               => RenderLane.Path,
@@ -365,6 +450,77 @@ runtime branch.** PSO switch happens at batch granularity (PipelineId in SortKey
 without per-pixel branching. `Custom`/effect/`FallbackD2D` blend PSOs are **runtime-warmed with a one-time
 hitch** (the build-enumerated native set is pre-warmed; PSO claim scoped to the native set — hardened
 §4.3).
+
+### 4.3 Selection-rect + scrim raster — pure `KIND=fill` reuse (zero new PSO)
+
+`DrawSelectionRect` and `DrawScrim` **add no shader and no PSO**. Both lower at batch time into ordinary
+`QuadInstance`s on the **existing `shape_fill.ps.hlsl` `KIND=fill` variant** (§4.2) — the same übershader
+that draws every rounded card. The lowering is a pure field copy, done in the batcher's instance-pack step:
+
+```csharp
+// batch-time lowering (render-thread, in the §9 batcher); NO allocation, NO new pipeline.
+static QuadInstance LowerSelection(in DrawSelectionRectCmd c, in BrushEntry brush) => new() {
+    BoundsDev = Expand(c.Rect, aaPad: 0.5f),          // selection has no blur/shadow extent → tiny AA pad only
+    GeomRect  = c.Rect,
+    Radii     = ResolveAffinityRadii(c.Radii, c.Affinity), // round only leading/trailing outer corners (§3.6)
+    FillRGBA  = brush.SolidLinearPremul,              // theme selection brush, premul-linear (§8) — never a per-frame pow
+    Params0   = Pack(lane: AnalyticSdf, hasTex: 0, aaMode: Fwidth),
+    StrokeWidth = 0, Softness = 0,                    // fill, crisp
+    TexOrGradId = 0,                                  // solid → biggest/cheapest batch
+};
+```
+- **Selection highlight** is therefore literally a rounded-rect fill behind text (§3.6.1 sortkey). A
+  multi-line / BiDi-split selection is **N fragment rects from `text.md`'s `GetSelectionRects`**, each one
+  `DrawSelectionRectCmd`, all sharing the one selection brush + the run's clip → **they coalesce into a
+  single `DrawInstanced`** (the §3.3 break rules see identical pipeline/texture/clip). `ResolveAffinityRadii`
+  rounds only the run's outer corners when `Affinity` flags a leading/trailing fragment, giving the Fluent
+  "rounded selection pill" without any geometry work.
+- **Modal scrim** (`Flags.isModalDim`) is one translucent fill instance over the overlay-root rect; the dim
+  alpha lives in the premultiplied brush. **Light-dismiss scrim** (`ScrimBrush == 0`) is **culled before the
+  GPU batch** (`IsZeroAreaOfColor` — fully-transparent fills never reach `DrawInstanced`); it survives only
+  as the `input-a11y.md` hit-target rect. **`Flags.blurBackdrop`** is NOT rastered here: the recorder
+  promotes it to a `PushLayer{Effect}` acrylic pass on the **backdrop layer RT path** (§7.2, owned with
+  `backdrop-effects-animation.md`) — keeping the heavy in-app-Acrylic case on its existing gated route, not
+  on this lane.
+
+### 4.4 Focus-ring raster — `shape_border.ps.hlsl` + dash, composes in overlay/portal layers
+
+The `DrawFocusRingCmd` **struct shape is owned by this doc (§3.6)** — gpu-renderer is the opcode-shape
+authority; `input-a11y.md` §8.4 only EMITS it. This doc also owns its **raster**. A
+focus ring is a **stroked rounded-rect ring**, so it lowers onto the existing **`shape_border.ps.hlsl`**
+variant (§4.1 border eval: `abs(sd) - halfStroke`, both edges AA'd in one pass) — **no new PSO** for the
+solid ring:
+
+```hlsl
+// inside shape_border.ps.hlsl, KIND=border — the ring coverage is the existing border eval:
+float sd       = sdRoundRect(p, halfExt, radii);
+float ring     = abs(sd) - (thickness * 0.5);          // thickness from DrawFocusRingCmd.Thickness (device px)
+float cov      = 1.0 - smoothstep(-aa, +aa, ring);     // analytic AA, aa = fwidth(ring)
+```
+- **Dashed/dotted ring** (`DrawFocusRingCmd.DashPeriod > 0`, the Fluent dotted reveal-focus ring) is the
+  ONE focus-specific addition: a perimeter-parameter `s` (arc length around the ring, computed in the PS
+  from the per-corner SDF) modulates coverage by `step(frac(s / DashPeriod), 0.5)`. This is gated by a
+  `Params0` bit so the **same border PSO** serves solid and dashed — **no second pipeline**; the dash is a
+  per-fragment multiply, free at batch granularity. Solid rings (`DashPeriod == 0`) skip the modulation.
+- **Overlay / portal composition (the L4 raster guarantee).** `input-a11y.md` §8.4 records the focus ring
+  **anchored to the focused node's clip chain** (recorded as if a child of the focused node) inside the
+  `FocusEngine`'s transient overlay layer. Two composition facts this raster guarantees:
+  1. **Z within the node:** the ring's sortkey uses `PassClass = Effect` (§3.6.1), the TOP intra-node class,
+     so it paints over the node's own fills/glyphs but still inside the node's `Push/PopClip` run — it
+     clips and scrolls with the anchor exactly as `input-a11y` specifies.
+  2. **Z across a portal/overlay:** when the focused node lives in an **overlay/portal** subtree (a popup,
+     flyout, or dialog rendered out-of-tree via the §7.1 layer or the overlay-root), its whole subtree carries
+     a higher `RecordSeq` (deeper in the published pre-order), so the ring composes **above the page beneath
+     the overlay** and **above any `DrawScrim`** — the ring is never dimmed by its own modal scrim. No special
+     case in the batcher: the ring rides the overlay layer's `PushLayer`/`PopLayer` (or the overlay-root's
+     transform/clip run) like any other primitive, and `PassClass=Effect` keeps it last within its node.
+- **HC / theme:** color comes from `DrawFocusRingCmd.Brush`, which `input-a11y` sources from PAL
+  `ISystemColors` (accent / High-Contrast focus color); like every solid it is realized **premul-linear once**
+  per color change (§8), never a per-frame `pow()`.
+- **Clean-span reuse:** the focus ring, selection rects, and scrim are ordinary clean-span citizens (§11.1):
+  their baked-geometry hash covers `Rect`/`Radii`, their `BrushHandle`/`ClipHandle` degenerate to
+  `IsLive`-only (content-hash deduped, no realization epoch), so a frame that only moves focus re-records the
+  tiny overlay span and memcpy-reuses every clean sibling.
 
 ---
 
@@ -714,8 +870,8 @@ transpiler** (compute/D2D1-only).
 | Module (.hlsl) | Stages | Purpose |
 |---|---|---|
 | `quad.vs.hlsl` | VS | unit-quad × per-instance expand to device AABB; pass geom/uv/params to PS |
-| `shape_fill.ps.hlsl` | PS | SDF rounded-rect fill, analytic AA, solid/gradient brush select |
-| `shape_border.ps.hlsl` | PS | SDF ring border (uniform + per-side), analytic AA |
+| `shape_fill.ps.hlsl` | PS | SDF rounded-rect fill, analytic AA, solid/gradient brush select — **also rasters `DrawSelectionRect` + `DrawScrim` (§4.3): same variant, zero new PSO** |
+| `shape_border.ps.hlsl` | PS | SDF ring border (uniform + per-side), analytic AA — **also rasters `DrawFocusRing` (§4.4): ring = existing border eval; one `Params0` bit adds the dashed/dotted focus ring (arc-length dash multiply), still one PSO** |
 | `shape_shadow.ps.hlsl` | PS | closed-form rounded-box Gaussian shadow (`erf`), analytic |
 | `glyph.vs/ps.hlsl` | VS/PS | atlas-uv quad; coverage × gamma × premul color |
 | `image.ps.hlsl` | PS | atlas/standalone sample, rounded clip, crossfade, stretch |
@@ -847,6 +1003,45 @@ list** (D2D is a Windows-only crutch).
 - **DPI change:** invalidate `PathRealizationCache` (scale in key), re-bake gradients if needed, full
   redraw; back buffer is physical px (DPI change without client-size change does not resize the swapchain).
 - **Damage overflow / occluded:** full redraw; occluded window → 1Hz test-present.
+- **Selection spanning many visual fragments (huge BiDi range):** `text.md`'s `GetSelectionRects` is
+  caller-sized + bounded (`E_NOT_SUFFICIENT_BUFFER` → arena-grow-retry on its side); the recorder emits one
+  `DrawSelectionRectCmd` per returned fragment, all coalescing into one `DrawInstanced` (§4.3). A selection
+  larger than the viewport is naturally damage-clipped — only on-screen fragments record.
+- **Zero-area / collapsed selection (caret only):** `Rect.Width≈0` from `GetSelectionRects` → culled before
+  batching like any zero-area quad; the caret itself is the editable seam's concern (text §13, v2), not a
+  selection rect.
+- **Transparent light-dismiss scrim:** `ScrimBrush == 0` → culled from the GPU batch (no `DrawInstanced`),
+  retained only as the `input-a11y` hit-target. A scrim is never silently dimmed.
+- **Focus ring on a freed / scrolled-out node:** `input-a11y` §8.4 owns the lifecycle (stale gen → ring
+  hidden; clip chain hides it when the node scrolls out of its viewport clip). The raster never sees a ring
+  for a dead node — the overlay span simply re-records empty.
+- **Dashed-ring degeneracy:** `DashPeriod` clamped ≥ 1 device px at record; a sub-pixel period collapses to a
+  solid ring (the dash multiply saturates) — no shimmer, no divide-by-zero.
+
+---
+
+## Implemented from the gap analysis
+
+These rows of [`core-fundamentals-gap-analysis.md`](../core-fundamentals-gap-analysis.md) §4 are folded
+into CORE here — **no deferral**. This doc is the opcode-shape + rasterization authority for them; the
+semantics/geometry/lifecycle live in the cross-referenced owners.
+
+| Gap | Folded as | Where |
+|---|---|---|
+| **L1** — text-selection highlight render (`DrawSelectionRectCmd` over `GetSelectionRects`) | New POD opcode shape `DrawSelectionRectCmd` (per-visual-fragment, BiDi-correct, theme selection brush, behind-text z) + its batch-time lowering onto the existing `shape_fill` übershader (zero new PSO/pass) | §0 authority map, §3.6 shape, §3.6.1 sortkey, §4.3 raster, §18 edge cases |
+| **L4** — overlay/portal scrim + dismiss-layer raster, and **focus-ring composition** in overlay/portal layers | New POD opcode shape `DrawScrimCmd` (modal dim / transparent light-dismiss / blur-promote) + the **shape + rasterization** of `DrawFocusRingCmd` (owned here; `input-a11y.md` emits it): ring on `shape_border`, one-bit dashed variant, and the `PassClass=Effect` + overlay-`RecordSeq` composition rule that guarantees a focus ring paints above the page-beneath and above its own scrim | §0 authority map, §3.6 shapes, §3.6.1 sortkey, §4.4 raster, §18 edge cases |
+
+**What this doc deliberately does NOT own (referenced, not redesigned):** `SelectionState`
+(anchor/extent/affinity) semantics + the selection-brush theme source → `input-a11y.md`; the
+`GetSelectionRects` visual-fragment geometry → `text.md`; the overlay light-dismiss FSM, scrim push/pop
+timing, and `FocusEngine` ring lifecycle/clip-anchoring → `input-a11y.md`; anchor placement-flip/nudge
+geometry → `layout.md`; the `DrawOp` enum registration → `scene-memory.md`; the blur-backdrop acrylic pass a
+scrim may promote to → `backdrop-effects-animation.md` (`PushLayer{Effect}` on the backdrop RT path).
+
+**Surgical-addition invariants preserved:** every opcode here is `RenderLane.AnalyticSdf`, reuses an
+existing PSO (zero new pipelines), forces zero offscreen passes (the blur-scrim case routes to the existing
+backdrop layer path), respects the §8 color contract (premul-linear brushes, one CPU realize), and is a
+clean-span citizen under the §11.1 reuse rule. **No part of the renderer was rewritten.**
 
 ---
 
@@ -921,6 +1116,13 @@ Amendments folded into this actualization (everything else preserved from the or
     dotnet10 §4)
 17. **`OQ-4` and `OQ-7` removed from open questions** (now decided); `FA-1`/`FA-2` folded as accepted
     contract amendments (sRGB pin, parallel `ulong[]` SortKeys arena).
+18. **Selection/overlay opcode shapes folded into core** (gap rows L1/L4): new POD opcodes
+    `DrawSelectionRectCmd` (text-selection highlight, per-BiDi-visual-fragment, behind-text z) and
+    `DrawScrimCmd` (modal-dim / light-dismiss / blur-promote overlay layer), plus the **shape + rasterization** of
+    `DrawFocusRingCmd` (owned here; `input-a11y.md` §8.4 emits it) including the dashed reveal-focus ring and the
+    overlay/portal composition rule. All three lower onto the **existing `shape_fill`/`shape_border`
+    übershaders** — zero new PSO, zero new pass, `RenderLane.AnalyticSdf`, clean-span citizens. (§3.6, §4.3,
+    §4.4; gap-analysis §4 L1/L4.)
 
 ---
 

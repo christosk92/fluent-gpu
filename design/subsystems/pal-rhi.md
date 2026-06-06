@@ -10,8 +10,9 @@
 > **This doc is authoritative for** the PAL/RHI interface vocabulary, the Win32 reference impl, the
 > D3D12 backend (device/queue/fence/heaps/D3D12MA, `SubmitDrawList`, `CopyBufferToTexture` + the
 > texture-staging ring + the per-bucket texture pool), the DXGI+DComp present-tree, device-lost
-> handling on the render thread, and the five NEW PAL seams (`ISystemColors`, `IBackdropSource`,
-> `IVideoPresenter`, `IVirtualMemory`, `IImageCodec`). It **references, does not duplicate**, the
+> handling on the render thread, and the NEW PAL seams (`ISystemColors`, `IBackdropSource`,
+> `IVideoPresenter`, `IVirtualMemory`, `IImageCodec`, the L10 cursor seam
+> `IPlatformWindow.SetCursor`/`RegisterCustomCursor`, and `IPlatformLocale`). It **references, does not duplicate**, the
 > shared contracts: threading (`hardened-v1-plan.md` §2/§4.1), COM (`dotnet10-csharp14-zero-alloc.md`
 > §4 + `hardened-v1-plan.md` §4.2), memory/handles (`foundations.md`), scene/drawlist
 > (`architecture-spec.md` §4.4/§4.5/§5.4), and the cross-subsystem frame loop (`architecture-spec.md`
@@ -103,7 +104,14 @@ public interface IPlatformWindow : IDisposable
     void SetTitle(StringId t);
     void Show(); void Activate(); void RequestClose();
     void RequestFrame();                         // coalesced "produce a frame" (sets a dirty flag)
+    void SetCursor(CursorId id);                 // L10 — apply the resolved cursor (Win32: SetCursor/LoadCursor,
+                                                 //   re-asserted on WM_SETCURSOR). CursorId is the
+                                                 //   InteractionInfo.CursorId column (scene-memory.md); not redefined here.
+    void RegisterCustomCursor(CursorId id, ReadOnlySpan<byte> rgbaPremul,   // app cursor → CursorId range
+                              Size2 sizePx, Point2 hotspot);
 }
+// L10 cursor seam: `Pal.Cocoa` mirrors `SetCursor`/`RegisterCustomCursor` via `NSCursor` (set()/addCursorRect).
+// Consumed by input-a11y.md §17 (the CursorResolver walks the L2 hit route and calls SetCursor only on change).
 
 public interface IPlatformAppLoop
 {
@@ -579,6 +587,36 @@ touches no SceneStore/RhiTable/fence. Palette extraction (`FluentGpu.Theme`) con
 staging block (or the optional 16×16 downsample) — **no GPU `ReadbackImage`** (a readback is a UI/render-
 thread device stall and unnecessary since the decoder holds the pixels). macOS → ImageIO/`CGImageSource`.
 
+### 8.5 `IPlatformLocale` (current-culture OS fact — UI thread read, versioned external-store shape)
+
+```csharp
+public enum MeasurementSystem : byte { Metric = 0, UsCustomary = 1 }
+
+public readonly struct LocaleSnapshot                // fat by-value; re-read on demand, never put in a context
+{
+    public readonly StringId CurrentBcp47;           // culture name, e.g. "de-DE"; interned; feeds text.md TextLayoutRequest.locale
+    public readonly char     DecimalSeparator;       // edge formatting (text.md / dsl-aot consume)
+    public readonly char     GroupSeparator;
+    public readonly DayOfWeek FirstDayOfWeek;
+    public readonly MeasurementSystem Measurement;
+    public readonly bool     IsRtlDefault;           // UI default reading order for the culture
+}
+
+public interface IPlatformLocale                     // modeled EXACTLY on ISystemColors (§8.1): Epoch + fat snapshot
+{
+    uint           Epoch       { get; }              // bumped on WM_SETTINGCHANGE (locale/region change)
+    LocaleSnapshot GetSnapshot();                    // current-culture fact by value
+}
+```
+`Pal.Windows` reads `GetUserDefaultLocaleName` + the regional `GetLocaleInfoEx` formatting fields once at
+startup and per `WM_SETTINGCHANGE`, bumping `Epoch`. Like `ISystemColors`, the reactive context is
+**`Context<uint>` over `Epoch`** (DepKey-projectable, boxless) — consumers subscribe to the Epoch and re-read
+the fat `LocaleSnapshot` on demand; a fat `CultureInfo`/snapshot is **never** placed in a context (it would
+box). This is a **versioned external-store-shaped seam** (`threading-render-seam.md` §12bis
+`IExternalStore<TSnapshot>` shape, same as `ISystemColors`). `text.md`/`dsl-aot` consume it for edge
+formatting + the baked-culture pick. **macOS:** `Pal.Cocoa` mirrors it via `NSLocale` (and the
+`NSCurrentLocaleDidChangeNotification`); the formatter + baked blobs stay portable.
+
 ---
 
 ## 9. Thread-confinement & zero-alloc summary (which thread owns what)
@@ -636,6 +674,8 @@ device-lost rebuild). The only permitted per-frame GC is freshly-captured user c
 | present compose | `CALayer` tree: `CAMetalLayer` + sibling video/backdrop layers (z-ordered) | multi-visual DComp tree |
 | `IVideoPresenter` | `AVPlayerLayer`/`CALayer` sibling | DComp child visual |
 | `ISystemColors` | `NSAppearance` / HC colors | `WM_SETTINGCHANGE` accent/HC |
+| `IPlatformLocale` | `NSLocale` + `NSCurrentLocaleDidChangeNotification` | `GetUserDefaultLocaleName`/`GetLocaleInfoEx` + `WM_SETTINGCHANGE` |
+| `IPlatformWindow.SetCursor`/`RegisterCustomCursor` | `NSCursor.set()`/`addCursorRect` | `SetCursor`/`LoadCursor`, `WM_SETCURSOR` |
 | `IBackdropSource` | `NSVisualEffectView` | Mica via DWM/DComp |
 | `IVirtualMemory` | `mmap`/`madvise` | `VirtualAlloc`/`VirtualFree` |
 | `IImageCodec` | ImageIO/`CGImageSource` | WIC |

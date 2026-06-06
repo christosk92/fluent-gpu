@@ -24,28 +24,33 @@ unless noted `Explicit`. Sizes are x64.
 > "edges": user delegates (event handlers, effects), `Element` records (immutable, short-lived,
 > reconcile-only), `Component` instances, and COM `ComPtr<T>` ownership roots.
 
-A handle is a 64-bit POD: 32-bit index + 24-bit generation + 8-bit type-tag. Generation defeats
-ABA (a freed slot reused for a different node yields a stale handle that fails validation).
+A handle is a 64-bit POD: **32-bit index + 32-bit generation** (canonical: `architecture-spec.md` §4.1;
+see [`SPEC-INDEX.md`](./SPEC-INDEX.md)). Generation is bumped on alloc AND free and defeats ABA (a freed
+slot reused for a different node yields a stale handle that fails validation). **The kind tag is NOT
+packed into the handle bits** — it lives on the zero-cost typed wrapper as a `[Conditional("DEBUG")]`
+assert (the wrapper statically knows its kind). This buys the full 32-bit generation back (2^31 alloc/free
+cycles per slot ≈ 400 days/slot at 60 fps) and removes the park-slot-forever-on-wrap policy that the
+earlier handle form forced — a policy that violated the no-growth invariant.
 
 ```csharp
 namespace FluentGpu.Foundation;
 
-// 8 bytes. index in low 32, generation in [32..56), kind tag in [56..64).
+// 8 bytes. {u32 index, u32 gen}. Kind is on the typed wrapper, NOT in the bits.
+[StructLayout(LayoutKind.Sequential, Size = 8)]
 public readonly struct Handle : IEquatable<Handle>
 {
-    private readonly ulong _bits;
-    public int  Index      => (int)(_bits & 0xFFFF_FFFF);
-    public uint Generation => (uint)((_bits >> 32) & 0xFF_FFFF);
-    public byte Kind       => (byte)(_bits >> 56);          // HandleKind
-    public bool IsNull     => _bits == 0;                   // index 0 / gen 0 reserved = Null
+    public readonly uint Index;     // slot index into the owning slab column (0 = null sentinel)
+    public readonly uint Gen;       // 32-bit generation; bumped on alloc AND free (ABA defense)
 
-    internal Handle(int index, uint generation, byte kind)
-        => _bits = (uint)index | ((ulong)(generation & 0xFF_FFFF) << 32) | ((ulong)kind << 56);
+    public bool   IsNull => Index == 0 && Gen == 0;          // index 0 / gen 0 reserved = Null
+    public ulong  Packed => Unsafe.BitCast<Handle, ulong>(this);   // for DepKey/sortkey packing
+    public bool   IsLive(uint slotGen) => Gen == slotGen;    // the one validation, in DEBUG hot paths
+    public bool   Equals(Handle o) => Index == o.Index && Gen == o.Gen;
+    public override int GetHashCode() => (int)(Index * 2654435761u ^ Gen);
     public static readonly Handle Null = default;
-    public bool Equals(Handle o) => _bits == o._bits;
-    public override int GetHashCode() => _bits.GetHashCode();
 }
 
+// HandleKind is carried by the typed wrapper's DEBUG assert (below), NOT packed into Handle.
 public enum HandleKind : byte
 { None=0, Node=1, Brush=2, Clip=3, Layer=4, GlyphRunRef=5, ImageRef=6, GpuBuffer=7,
   Texture=8, Pipeline=9, FontFace=10, AnimTrack=11, EffectChain=12, PathGeom=13 }
@@ -583,11 +588,15 @@ TextElement.Content (string, edge)
 | `IGlyphAtlas`      | engine-owned (portable); uploads via RHI      | same (portable) |
 
 DWrite + DComp COM bindings are NOT in ComputeSharp → authored fresh in `Text.DirectWrite` /
-`Rhi.D3D12` using the ComputeSharp `ComPtr<T>` + source-gen ComWrappers pattern.
+`Rhi.D3D12` using the ComputeSharp `ComPtr<T>` + **hand-vtable `IComObject` pattern on the per-frame
+hot path**; cold/warm COM (DWrite *setup*, UIA, TSF, OLE) uses source-generated
+`[GeneratedComInterface]`/`[GeneratedComClass]` (canonical COM ruling: `dotnet10-csharp14-zero-alloc.md` §4).
 
 ---
 
 ## 6. FRAME LIFECYCLE & THREADING
+
+> **⊳ Canonical threading model.** The single-thread decision below is **build-order step 1** (`hardened-v1-plan.md` §6), not the shipping topology. The canonical model is the **render-thread seam** — `hardened-v1-plan.md` §2 + [`subsystems/threading-render-seam.md`](./subsystems/threading-render-seam.md) §14 (see [`SPEC-INDEX.md`](./SPEC-INDEX.md)): record/batch/submit/present move to a dedicated render thread fed by an immutable `SceneFrame` snapshot, gated by a consume-based `QUARANTINE = RenderInFlightDepth`. The DrawList POD stream is the hand-off, exactly as designed here.
 
 ### Decision: **Single UI/render thread for v1** (reconcile + layout + record + submit all on the
 UI thread); present completion + vsync signaling on the OS compositor thread (DComp, out of our
@@ -735,7 +744,7 @@ Dependency direction: arrows point to dependencies. NO cycles. Impls depend INWA
 
   ┌──────────────────────────────────────────────────────────────────────────────────┐
   │ .SourceGen (Roslyn analyzer assembly; build-time only, referenced by all)          │
-  │  - ElementTypeId table, ComWrappers for D3D/DXGI/DWrite/DComp, DepKey overloads,    │
+  │  - ElementTypeId table, hand-vtable for D3D/DXGI/DWrite/DComp, DepKey overloads,    │
   │    HLSL→DXIL embed (ComputeSharp transpiler reuse), property-dispatch.              │
   └──────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -786,7 +795,7 @@ ChildReconciler LIS algorithm (Reactor, host-agnostic) and RenderContext hooks a
 ---
 
 ## CONTRACT SUMMARY (the load-bearing decisions specialists must honor)
-1. `Handle` = 8B {index32, gen24, kind8}; typed wrappers per kind. Handles on hot paths; GC refs only at edges.
+1. `Handle` = 8B `{u32 index, u32 gen}` (kind on the typed wrapper's DEBUG assert, not in the bits — see §1.1); typed wrappers per kind. Handles on hot paths; GC refs only at edges.
 2. Four allocators: `SlabAllocator<T>` (versioned stable), `ArenaAllocator` (per-frame bump),
    `ObjectPool<T>` (edge GC recycle), `HandleTable<T>` (COM/GPU). Intrusive free list, gen-bump on alloc+free.
 3. SceneStore is **SoA**; one generation/free-list spine; layout-input/result + paint columns co-located, indexed by NodeHandle.

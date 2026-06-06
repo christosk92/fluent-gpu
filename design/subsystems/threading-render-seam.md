@@ -644,13 +644,24 @@ the *relationship* (consume-gated reclaim holds under arbitrary stall), not hard
 
 ---
 
-## 12. Time-sliced + opt-in off-thread reconcile
+## 12. Interruptible reconcile on the UI thread — slice, carry-forward, AND discard-and-restart
 
-- **Default v1: time-sliced reconcile on the UI thread, atomic-on-complete.** `ReconcileSlicer` is
-  deadline-driven: it reconciles within a budget (RenderPriorityPolicy 16 ms), and if it overruns it
-  **never publishes a half-built tree** — it carries the partially-reconciled scratch forward and completes
-  next frame, publishing only when the diff is whole. Input dispatch (phase 2) hit-tests the
-  **last-published-consistent** topology (a UI-owned `Bounds` double-buffer), never the in-flight reconcile.
+Reconcile is **pure** (no `ISceneBackend`-observable mutation is visible across the seam until PUBLISH) — that purity
+is FluentGpu's load-bearing asset (gap analysis §3, §5.4) and it is what makes *both* of the interrupt modes below
+safe-by-construction rather than audited. This section pins the seam-side invariants for the two modes and the
+**carry-forward effect/enqueue gen-stamp contract** that makes a partial pass consistent.
+
+The hook-side machinery (lanes, `UseTransition`/`startTransition`, the phase-3 update queue, `RenderContext`
+generation) is **owned by `reconciler-hooks.md`** (§6–§8); this subsystem references it and pins *the seam invariants
+the work loop must hold* and *when effects may drain*.
+
+### 12.1 The base mode — time-sliced, carry-forward, atomic-on-complete (default)
+
+- **Time-sliced reconcile on the UI thread.** `ReconcileSlicer` is deadline-driven: it reconciles within a budget
+  (`RenderPriorityPolicy` 16 ms), and if it overruns it **never publishes a half-built tree** — it carries the
+  partially-reconciled scratch forward and completes next frame, publishing only when the diff is whole. Input dispatch
+  (phase 2) hit-tests the **last-published-consistent** topology (a UI-owned `Bounds` double-buffer), never the
+  in-flight reconcile.
 
 ```csharp
 public ref struct ReconcileSlicer
@@ -661,11 +672,300 @@ public ref struct ReconcileSlicer
 }
 ```
 
-- **Opt-in / spike-gated / MANAGED: off-thread reconcile.** Moving `Component.Render()` + diff to a worker
-  is React-Fiber-class v2 work. It is descoped from v1 (WaveeMusic §"v2": a 50k Liked-Songs regroup is
-  eaten as one N+1 frame with a skeleton). When it lands it requires the snapshot to **copy** Element
-  inputs into worker-owned arena slices (not `ReadOnlyMemory` views over aliasable arrays — the
-  deep-immutability analyzer cannot prove non-aliasing otherwise).
+### 12.2 P4 — INTERRUPTIBLE DISCARD-AND-RESTART reconcile (folded into core, not deferred)
+
+The gap analysis (P4) left discard-restart deferred and only specified the *precondition*. Per the no-defer directive
+it is now a **fully-specified core mode**. It is the React `workLoopConcurrent` shape — *safe here for exactly the same
+reason*: reconcile is pure, and **nothing it produces is observable before PUBLISH**, so an in-progress reconcile can
+be thrown away with zero rollback.
+
+**The work loop.** Reconcile descends the dirty host path as a unit of work per node. Before each unit, the loop reads
+the highest pending lane (owned by `reconciler-hooks.md`'s phase-3 update queue, exposed read-only here as
+`ILaneScheduler.HighestPending`). If a **strictly-higher-priority lane** arrived than the lane this pass is rendering
+(`_renderingLane`), the loop **abandons** the in-progress scratch and restarts from the dirty root for the new lane.
+
+```csharp
+// UI thread. The slicer + lane check are the only two interrupt sources.
+public ref struct ReconcileWorkLoop
+{
+    long             _deadlineTicks;
+    LaneSet          _renderingLane;       // the lane(s) this pass committed to render (from reconciler-hooks)
+    ILaneScheduler   _lanes;               // read-only seam onto the phase-3 update queue
+    ref ReconcileScratch _scratch;         // arena-backed, UI-private, NOT ISceneBackend
+
+    public ReconcileOutcome Step()
+    {
+        ThreadGuard.AssertUi();
+        while (_scratch.HasWork)
+        {
+            // INTERRUPT 1 — a higher-priority lane preempts: DISCARD and restart from root.
+            if (_lanes.HasHigherPendingThan(_renderingLane))
+                return ReconcileOutcome.DiscardRestart;   // caller resets scratch, re-picks lane, re-enters
+
+            // INTERRUPT 2 — deadline: yield, CARRY the partial scratch forward (§12.1).
+            if (Stopwatch.GetTimestamp() >= _deadlineTicks)
+                return ReconcileOutcome.YieldCarryForward;
+
+            _scratch.AdvanceOneUnit();      // pure: writes ReconcileScratch, never ISceneBackend
+        }
+        return ReconcileOutcome.Complete;   // ONLY now is PUBLISH eligible
+    }
+}
+
+public enum ReconcileOutcome : byte { DiscardRestart, YieldCarryForward, Complete }
+```
+
+**Why DiscardRestart is free and safe (the invariant, stated as a guard):**
+
+> **THE NO-MUTATION-BEFORE-PUBLISH INVARIANT.** Between the start of phase 5 (reconcile) and PUBLISH(13a), the
+> reconcile work loop writes **only** `ReconcileScratch` (a UI-private, arena-backed structure: the keyed-LIS work
+> buffers, the pending `CreateNode`/`Move`/`Remove` op list, the per-element `Diff` masks) — it does **NOT** call any
+> `ISceneBackend.WriteX`/`CreateNode`/`DestroyNode`/`MarkDirty`. The backend ops are *staged* in scratch and *applied*
+> in one burst only on `ReconcileOutcome.Complete`, immediately before layout+publish. Therefore a `DiscardRestart`
+> simply resets the arena (`O(1)`); there is nothing committed to roll back, and **no half-mutated SceneStore can
+> ever be snapshotted.**
+
+This is the harder, hardened form of the existing "atomic-on-complete" rule (§12.1). The base mode already *delays*
+the backend burst to completion; the discard mode *requires* it and additionally requires the scratch to be
+restart-clean. Concretely: `CreateNode` slot picks are *reserved* (gen-bumped) but the columns are written into scratch
+shadow rows, not the live SoA, until `Complete`; on `DiscardRestart` the reserved slots are returned to the free list
+(no quarantine needed — they were never snapshotted).
+
+**`ThreadGuard` enforcement of the invariant.** A new guard surface, `ThreadGuard.AssertNoBackendMutationInReconcile`,
+arms a `[ThreadStatic] bool t_inReconcile` for the duration of the work loop; every `ISceneBackend` mutator opens with
+`AssertNotMidReconcile()` so a stray live-SoA write *during* reconcile is a deterministic throw under `FGGUARD`, not a
+silent tear that only discard-restart would expose:
+
+```csharp
+public static class ThreadGuard   // (extends §1.2)
+{
+    [ThreadStatic] private static bool t_inReconcile;
+
+    [Conditional("FGGUARD")] public static void EnterReconcile() { AssertUi(); t_inReconcile = true; }
+    [Conditional("FGGUARD")] public static void ExitReconcile()  { t_inReconcile = false; }
+
+    // Called at the top of every live-SoA ISceneBackend mutator (NOT the scratch writers).
+    [Conditional("FGGUARD")]
+    public static void AssertNotMidReconcile()
+    {
+        if (t_inReconcile) throw new ReconcilePurityViolation();  // live SoA touched before the Complete burst
+    }
+}
+```
+
+So discard-restart safety is **two guards deep**: (1) the SoA mutators are gated by `AssertNotMidReconcile` (you
+*cannot* mutate observable state mid-pass), and (2) the `ConcurrentRecord_MatchesSingleThreadedGolden` golden
+(§18) is extended to a **discard-restart equality test**: a fuzz schedule that injects a higher-lane preemption at
+every unit boundary must produce a final published `SceneFrame` **byte-identical** to the un-interrupted single-pass
+result. Purity is thereby *checked*, since there is no managed TSan (§0).
+
+**Edge cases.**
+- *Starvation:* a continuously-arriving higher lane could discard forever. The lane scheduler (reconciler-hooks §7)
+  caps consecutive discards; on the cap the loop **promotes to a blocking single-pass** for the current highest lane
+  (ignores further preemption for that one pass) so forward progress is guaranteed. The seam only needs to honor the
+  `ReconcileOutcome` it is handed — the promotion decision lives lane-side.
+- *Interaction with carry-forward (§12.1):* the two interrupts are mutually exclusive per `Step()` — discard wins over
+  yield (a higher lane invalidates the carried partial regardless), so a carried-forward partial is dropped the instant
+  a higher lane appears. There is no "carry a partial of lane A while rendering lane B" state to reason about.
+- *Effects enqueued in the discarded pass:* gated and dropped — see §12.4 (P5).
+
+### 12.3 The seam-side external-store consistency contract (P3) — see §12bis
+
+External-store tearing is a *seam* problem (a store mutates between snapshot and PUBLISH while reconcile is sliced), so
+its full design is §12bis below. It shares this section's no-mutation-before-PUBLISH invariant: the pre-PUBLISH tear
+re-check is the seam's last line before sealing the frame.
+
+### 12.4 P5 — CARRY-FORWARD vs DISCARD effect/enqueue gen-stamp contract (folded into core)
+
+Effects are enqueued during reconcile (phase 5) and drained at phase 6.5 (layout) / phase 12 (passive) — the
+`EffectScheduler` and `EffectRef` are **owned by `reconciler-hooks.md` §4.3**. The seam concern the gap analysis (P5)
+flagged as *unspecified* is now pinned: **what happens to effects enqueued in a pass that was carried-forward or
+discarded before it completed.** The rule is a generation gate keyed on the **`RenderContext.Generation`** stamp
+(reconciler-hooks §3, `ComponentSlotData.Generation`).
+
+> **THE DRAIN-ONLY-AFTER-COMPLETE RULE.** `EffectScheduler.FlushLayout`/`FlushPassive` are invoked **only after a
+> `ReconcileOutcome.Complete`** — never after `YieldCarryForward`, never after `DiscardRestart`. PUBLISH(13a) is the
+> gate: phases 6/6.5/7/PUBLISH/12 run **iff** phase 5 returned `Complete` this frame. A frame that only sliced or
+> discarded re-requests frame N+1 and runs **none** of layout/effects/publish.
+
+That alone handles the common case. The gen-stamp handles the **straddle case** the gap analysis named precisely: an
+effect enqueued during frame N's *partial* (carried-forward) pass whose owning component **re-renders in frame N+1's
+completion** — the effect cell may have new deps, or the component may have unmounted. Without a gate, the phase-6.5/12
+drain would run a stale effect body closed over a superseded `RenderContext` state.
+
+**Mechanism.** Each `EffectRef` carries the `RenderContext.Generation` captured at enqueue. The component's generation
+is bumped (reconciler-hooks §3) every time `BeginRender` runs for that slot. At drain, an `EffectRef` whose captured
+generation **≠** the cell owner's *current* generation is **skipped and its `PendingCleanup` is still run** (the
+cleanup must fire even for a superseded effect, matching React's cleanup-before-create discipline):
+
+```csharp
+// EffectScheduler.Drain — the gen-stamped form (reconciler-hooks §4.3 owns the type; this is the seam-pinned rule)
+internal readonly record struct EffectRef(RenderContext Ctx, int Cell, uint EnqueuedGen);
+
+private static void Drain(List<EffectRef> q)
+{
+    // PHASE A — cleanups ALWAYS run (even superseded), cleanup-before-create.
+    for (int i = 0; i < q.Count; i++) q[i].Ctx.RunPendingCleanup(q[i].Cell);
+    // PHASE B — new effect bodies run ONLY for the current generation; straddle/discarded ones are skipped.
+    for (int i = 0; i < q.Count; i++)
+        if (q[i].Ctx.Generation == q[i].EnqueuedGen)        // gen-stamp gate
+            q[i].Ctx.RunPendingEffect(q[i].Cell);
+    q.Clear();
+}
+```
+
+**Carry-forward semantics, pinned:**
+- A partial pass that yields (`YieldCarryForward`) **does not drain** — its enqueued `EffectRef`s sit in the scheduler
+  lists across the frame boundary. When N+1 completes the *same* lane, the component either (a) did not re-render → the
+  cell's generation is unchanged → the effect runs normally, or (b) re-rendered → generation bumped → the straddled
+  `EffectRef` is gen-skipped at drain and the *fresh* `EffectRef` (enqueued in N+1 with the new gen) runs instead. No
+  double-run, no stale-state run.
+- A **discarded** pass's enqueued `EffectRef`s are likewise carried in the lists but are guaranteed gen-mismatched
+  after the restart re-renders their owners (or the owner unmounted → its slot generation advanced on free → mismatch);
+  the cleanup still fires. **The scheduler lists are never speculatively cleared on discard** — clearing is the drain's
+  job and the drain only runs after Complete, so the gen-gate is the single source of truth. This avoids a second
+  lock-free surface (no cross-pass list surgery).
+- **Unmount during a discarded/partial pass:** unmount cleanups run **synchronously during reconcile remove**
+  (reconciler-hooks §4.4) — but in the discard mode those removes are *staged in scratch* (§12.2), so the synchronous
+  cleanup is itself staged and only executes in the `Complete` burst. A discarded pass therefore runs **zero** unmount
+  cleanups for nodes it never committed — correct, because those nodes were never observable. This is the one place the
+  "cleanups run synchronously in phase 5" rule (reconciler-hooks §4.4) must be read as "synchronously **in the Complete
+  burst**," and this subsystem pins that reading.
+
+**Honest scope.** The gen-stamp + drain-only-after-Complete is a **single-thread (UI) contract** — no cross-thread
+fence is added; it is ordinary UI-thread sequencing. It does not widen the one lock-free surface (§0).
+
+### 12.5 Opt-in / spike-gated / MANAGED: off-thread reconcile
+
+Moving `Component.Render()` + diff to a worker is React-Fiber-class work. The discard-restart loop (§12.2) is its
+on-the-UI-thread precursor and shares its invariant. Off-thread reconcile remains **opt-in / spike-gated / MANAGED**
+(it adds a third lock-free surface and a deep-immutability proof obligation): when it lands it requires the snapshot to
+**copy** Element inputs into worker-owned arena slices (not `ReadOnlyMemory` views over aliasable arrays — the
+deep-immutability analyzer cannot prove non-aliasing otherwise), and it inherits §12.2's no-mutation-before-PUBLISH
+invariant unchanged (the worker writes only its private `ReconcileScratch` copy).
+
+---
+
+## 12bis. External-store consistency across the seam (P3) — `IExternalStore` + frame-start snapshot + pre-PUBLISH tear re-check
+
+**P3 folded into core (was: "specify-now / dormant in v1").** `UseObservable`/`UseResource` read **live external
+sources** (an `IObservable<T>`, a model object, a cache). In the single-pass v1 there is no tearing window; the instant
+reconcile slices (§12.1) or discard-restarts (§12.2), a store that mutates *between* the read at frame start and PUBLISH
+can **tear** — two consumers in the same frame observe two different store states, and the published `SceneFrame`
+encodes an inconsistent tree. This is React's `useSyncExternalStore` problem, and the fix is the same shape, pinned at
+*our* seam: a **frame-start immutable snapshot** + a **pre-PUBLISH tear re-check** that demotes to a blocking single
+pass on mismatch.
+
+The corpus already ships the proven instance of this shape: **`ISystemColors`** is volatile-published, written only on
+OS change, read **by-value-on-demand** through a stable instance carrying an **`Epoch`** change-trigger — i.e. a
+`(getSnapshot, version)` pair, with `Context<uint>`-over-`Epoch` as the boxless change-check (reconciler-hooks §8,
+SPEC-INDEX color row references the `ISystemColors` seam). §12bis **generalizes that exact `Epoch`+by-value-snapshot
+shape** to arbitrary stores.
+
+### 12bis.1 The contract (`IExternalStore<TSnapshot>`)
+
+The hook surface (`UseObservable`/`UseResource` signatures, the cell layout) is **owned by `reconciler-hooks.md`
+(data-hooks)**; this subsystem owns the **seam contract**: the snapshot must be immutable, frame-start-stable, and
+re-checkable just before PUBLISH.
+
+```csharp
+// Owned here as the SEAM contract; the hook that consumes it is reconciler-hooks data-hooks.
+public interface IExternalStore<TSnapshot> where TSnapshot : struct   // value snapshot: blittable, no tear by aliasing
+{
+    /// Coarse monotonic version, like ISystemColors.Epoch. Cheap to read; bumped on ANY store mutation.
+    /// MUST be readable from the UI thread without blocking the store's writer.
+    uint Version { get; }
+
+    /// Returns an IMMUTABLE by-value snapshot of the store as of the call. Pure; no side effects.
+    /// Generalizes ISystemColors' "read the 112B SystemTint by value on demand."
+    TSnapshot GetSnapshot();
+
+    /// Register a change callback that marks the consuming component dirty + requests frame N+1.
+    /// The callback marshals onto the UI thread via IPlatformAppLoop.Post (reconciler-hooks setState path).
+    IDisposable Subscribe(StoreChangedCallback onChanged);
+}
+
+public readonly record struct StoreChangedCallback(IReRenderSink Sink, NodeHandle Owner);
+```
+
+**Why a `struct TSnapshot` by-value.** A reference snapshot can be mutated under the reader (the `ISystemColors`
+lesson: the 112-byte `SystemTint` is read by value precisely so a consumer cannot alias the live mutable record). The
+contract therefore *requires* the snapshot to be a value type the consumer copies; for stores whose state is genuinely
+a large object graph, the store must expose an immutable projection (a frozen DTO / a `ChunkedArena`-backed POD view)
+as `TSnapshot` — the read-side immutability is the store author's obligation, asserted by the deep-immutability
+analyzer where the snapshot crosses into hook state.
+
+### 12bis.2 Frame-start snapshot + version capture (UI thread, phase 4)
+
+When a component reads `UseObservable(store)`/`UseResource(store)` during phase 4 (render), the hook:
+1. reads `store.Version` (cheap, coarse) → `cell.CapturedVersion`,
+2. calls `store.GetSnapshot()` → `cell.Snapshot` (the value the component renders against this frame),
+3. caches `(CapturedVersion, Snapshot)` so **all reads of this store within this frame return the same snapshot**
+   (frame-start stability — the per-frame referential cache `useSyncExternalStore` relies on). A second consumer of the
+   same store this frame gets the *cached* snapshot, never a fresh `GetSnapshot()`, so two consumers can never tear
+   *within* a single render pass.
+
+These captures are recorded into a UI-thread-private **`StoreReadLedger`** for the frame:
+
+```csharp
+// UI-thread-private; reset each frame (arena-backed, zero-alloc steady state).
+internal sealed class StoreReadLedger
+{
+    private readonly ArenaList<StoreRead> _reads;   // (storeId, capturedVersion, IExternalStoreVersioned)
+    public void Record(int storeId, uint version, IExternalStoreVersioned store) { ThreadGuard.AssertUi(); /* dedup by storeId */ }
+    public bool AnyVersionMoved()                   // pre-PUBLISH re-check (§12bis.3)
+    {
+        ThreadGuard.AssertUi();
+        foreach (ref readonly var r in _reads)
+            if (r.Store.Version != r.CapturedVersion) return true;   // a store mutated mid-frame
+        return false;
+    }
+    public void Reset() => _reads.Clear();          // O(1) at frame end
+}
+```
+
+`IExternalStoreVersioned` is the non-generic base exposing only `uint Version` so the ledger can re-check heterogeneous
+stores without boxing the snapshot type.
+
+### 12bis.3 The pre-PUBLISH tear re-check (the seam's last line)
+
+Immediately **before** `SceneFramePublisher.Publish` (the very end of phase 7, before 13a), the UI thread runs the tear
+re-check. This is the `useSyncExternalStore` "re-read in commit, bail if changed" mechanism, placed at *our* commit
+point (PUBLISH):
+
+```csharp
+// UI thread, end of phase 7, immediately before PUBLISH(13a).
+if (reconcileWasSliced && _storeLedger.AnyVersionMoved())
+{
+    // A store mutated between frame-start snapshot and now, AND this frame was not a single atomic pass.
+    // DEMOTE to a blocking single-pass frame: re-render this frame synchronously to completion with the
+    // fresh snapshots, ignoring the slice deadline, so the published tree is internally consistent.
+    RerunFrameBlockingSinglePass();   // re-enter phase 4 with deadline=∞ and lane preemption disabled
+    // then fall through to PUBLISH with a tear-free tree.
+}
+```
+
+**Why gated on `reconcileWasSliced`.** If the frame was a single uninterrupted pass (the common case, and *always* the
+case in single-thread build step 1), the snapshot was captured and the tree built with no yield in between, so a
+version move that happened entirely after the pass simply schedules frame N+1 via the `Subscribe` callback — there is
+**no tear to fix** and the re-check is skipped. The expensive blocking re-render is paid **only** when (a) slicing or
+discard-restart actually split the pass across a store mutation **and** (b) a version moved. This keeps the contract
+**dormant-cost in v1** (gap analysis: "dormant in v1's single-pass model") while making it *correct* the moment slicing
+flips on — exactly the latent-tear the gap analysis warned retrofitting would miss.
+
+**Thread story.** Everything in §12bis is **UI-thread-confined**: snapshot capture, the ledger, the re-check, the
+blocking re-render all run on the UI thread in phases 4–7. `store.Version` is a single volatile word the store's writer
+(possibly a worker or OS thread, e.g. `ISystemColors` on the OS theme-change thread) publishes with a release store and
+the UI reads with an acquire load — this is the **same both-directions-volatile discipline as the publisher** (§2) and
+adds **no new lock-free surface**: it reuses the existing "one volatile version word per store" pattern that
+`ISystemColors.Epoch` already validates. The snapshot bytes themselves never cross a thread mutably (value-copy).
+
+**Zero-alloc.** `StoreReadLedger` is arena-backed and reset O(1) per frame; `GetSnapshot()` returns a value type into a
+hook cell (no box); the re-check is a pointer walk over the ledger. Zero managed allocation on the steady-state path.
+
+**macOS boundary.** Pure C# over POD + one volatile word per store — recompiles unchanged. `ISystemColors` itself is a
+PAL seam (owned by theming/PAL) whose macOS backing differs, but the `IExternalStore`/ledger/re-check shape is
+platform-agnostic.
 
 ---
 
@@ -704,17 +1004,17 @@ public sealed class WorkerPool
 | 1 pump | UI | read `_deviceLostReason` + present-ack seq (single Volatile words) |
 | 2 input-dispatch | UI | hit-test last-published-consistent topology; never the in-flight snapshot |
 | 3 hook-flush | UI | — |
-| 4 render | UI | gated by memo skip (owned by Reconciler) |
-| 5 reconcile | UI | `ReconcileSlicer`; atomic-on-complete; `QuarantineLedger.OnFreed` on every `FreeNode` |
-| 6 layout | UI | — |
-| 6.5 layout-effects | UI | — |
-| 7 animation | UI | compose `WorldTransform[]` (the §3.2 copy budget originates here) |
-| **PUBLISH (13a)** | **UI** | `SceneFramePublisher.Publish` + `SnapshotColumns.CopyInto` + `QuarantineLedger.Tick` |
+| 4 render | UI | gated by memo skip (owned by Reconciler); `UseObservable`/`UseResource` capture frame-start store snapshot+version into `StoreReadLedger` (§12bis) |
+| 5 reconcile | UI | `ReconcileWorkLoop` — slice/carry-forward **and** discard-and-restart (§12.2); `EnterReconcile`/`ExitReconcile` guard arms; backend ops **staged in scratch**, applied only on `Complete`; `QuarantineLedger.OnFreed` on every committed `FreeNode`. **Phases 6→PUBLISH→12 run iff this returned `Complete`** (§12.4) |
+| 6 layout | UI | runs only after reconcile `Complete` |
+| 6.5 layout-effects | UI | `EffectScheduler.FlushLayout` — gen-stamp gated (§12.4); drains only after a complete reconcile |
+| 7 animation | UI | compose `WorldTransform[]` (the §3.2 copy budget originates here); **end of 7: pre-PUBLISH tear re-check** `_storeLedger.AnyVersionMoved()` → blocking single-pass on mismatch (§12bis.3) |
+| **PUBLISH (13a)** | **UI** | `SceneFramePublisher.Publish` + `SnapshotColumns.CopyInto` + `QuarantineLedger.Tick` + `StoreReadLedger.Reset` |
 | 8 record | **RENDER** | DRAIN → evict → render-local epoch validation → record (the §4 invariant) |
 | 9 batch | **RENDER** | radix sort, overlap-aware coalesce, glyph UV resolve |
 | 10 submit | **RENDER** | `SubmitDrawList` → `Signal(fence)` |
 | 11 present | **RENDER** | latency-wait → Present → `IVideoPresenter.Place` → DComp Commit → present-ack |
-| 12 passive-effects | UI | frame N+1, for `seq <= present-ack` |
+| 12 passive-effects | UI | frame N+1, for `seq <= present-ack`; `EffectScheduler.FlushPassive` — gen-stamp gated (§12.4) |
 | (13 arena-swap) | **RENDER** | `DrawListArenaRing.Rotate` + `UploadRing` reset behind fence; **not** a UI-thread step in the seam build |
 | (background) | WORKER | decode/palette/fetch jobs; results drained at phase-8 DRAIN |
 
@@ -804,6 +1104,9 @@ The macOS port inherits the entire confinement table and the one lock-free hands
 | `Publisher_HappensBefore` | inject a delay between the column store and the `_publishedIdx` release; assert the acquirer never reads a torn column (stress + relacy-style schedule enumeration where feasible) | FGGUARD |
 | `RetireFence_BothFences` | free a split resource at seq p with GPU work in flight; assert `Dispose` happens only after `_lastConsumedSeq > p` AND the keyed fence completes | FGGUARD |
 | `DeviceLost_Rendezvous` | inject `DEVICE_REMOVED` on the render thread mid-frame; assert UI pauses publish, render re-realizes from CPU, no `ComPtr` touched off the render thread, tree intact | FGGUARD |
+| `DiscardRestart_MatchesSingleThreadedGolden` (P4) | inject a higher-lane preemption at **every unit boundary** of phase 5; assert (a) `AssertNotMidReconcile` never throws (no live-SoA write mid-pass), (b) reserved-but-discarded slots are returned without quarantine, (c) the final published `SceneFrame` is **byte-identical** to the un-interrupted single-pass golden | FGGUARD |
+| `CarryForward_EffectGenStamp` (P5) | enqueue an effect in a carried-forward partial pass, force the owner to re-render in N+1's completion; assert the straddled `EffectRef` is gen-skipped at drain, its `PendingCleanup` still ran, and the fresh `EffectRef` ran exactly once (no double-run, no stale-state run); assert FlushLayout/FlushPassive ran **only** after a `Complete` reconcile | FGGUARD |
+| `ExternalStore_NoTear` (P3) | two consumers of one `IExternalStore`; mutate the store's `Version` between a sliced pass's two unit boundaries; assert both consumers rendered the **same** frame-start snapshot, the pre-PUBLISH re-check tripped `AnyVersionMoved`, the frame demoted to a blocking single pass, and the published tree is internally consistent. Single-pass (unsliced) variant asserts the re-check is **skipped** (dormant cost) | FGGUARD |
 | render-thread present-stall bench | sustained GPU stall; assert UI input latency stays bounded and quarantine is non-growing (drops frames, doesn't leak) | perf gate |
 
 The honest line repeated for the record: these are **samples + a golden + schedule-fuzz**, not a proof.
@@ -818,22 +1121,33 @@ reusing patterns with long track records.
 This subsystem ships **single-thread-correct first** and flips parallelism only behind a green race gate
 (`hardened-v1-plan.md` §6):
 
-1. **Single-thread, behind the snapshot SHAPE.** Build `SceneFramePublisher` / `SnapshotColumns` /
-   `QuarantineLedger` and run them **single-threaded**: the UI thread both `Publish`es and `TryAcquire`s;
-   `Quarantine = 0` logically (no in-flight cross-thread snapshot). The seam exists as a data shape, not a
-   thread. All CI gates green here.
+1. **Single-thread, behind the snapshot SHAPE — *with the no-mutation-before-PUBLISH invariant + the P3/P5
+   contracts landed from day one*.** Build `SceneFramePublisher` / `SnapshotColumns` / `QuarantineLedger` and run
+   them **single-threaded**: the UI thread both `Publish`es and `TryAcquire`s; `Quarantine = 0` logically. Land
+   **(P5)** the drain-only-after-`Complete` rule + the `EffectRef` gen-stamp (§12.4), **(P3)** the `StoreReadLedger`
+   capture + pre-PUBLISH tear re-check (§12bis — dormant-cost, but the *hook shape* and the ledger are present so
+   nothing retrofits), and the `EnterReconcile`/`AssertNotMidReconcile` guard arming (§12.2) — even though slicing is
+   off, the SoA mutators are gated now so the invariant is true before any interrupt exists. All CI gates green here,
+   including `ExternalStore_NoTear` (single-pass variant) and `CarryForward_EffectGenStamp`.
 2. **(COM hardening + validation spine land here — owned by other docs; this subsystem depends on them
    being green before any thread spawns.)**
-3. **Spawn the render thread; keep quarantine=0 via single-consumer.** Move record/batch/submit/present to
+3. **Turn on time-slicing + carry-forward, then DISCARD-AND-RESTART (P4), still single render-consumer.** Enable
+   `ReconcileWorkLoop` slicing (§12.1) and the discard-restart interrupt (§12.2) keyed off the reconciler-hooks lane
+   scheduler. This is where `DiscardRestart_MatchesSingleThreadedGolden` and the sliced variant of
+   `ExternalStore_NoTear` must go green — both run before the render thread is even spawned, because P4/P3 are
+   **UI-thread contracts**. (Discard-restart is correct here precisely because the backend burst is staged in scratch
+   and nothing is observable across the seam yet.)
+4. **Spawn the render thread; keep quarantine=0 via single-consumer.** Move record/batch/submit/present to
    the render thread reading the published snapshot; migrate `ComPtr` ownership to it; install the >=3
    render-private arenas and the retire-fence handshake for slot recycling. Run **with the render thread
    but no slot reuse in flight yet** (force-sync drain).
-4. **Flip quarantine 0 → derived depth, under the race gate.** Only after `seam.race` (swept params) +
+5. **Flip quarantine 0 → derived depth, under the race gate.** Only after `seam.race` (swept params) +
    `ConcurrentRecord_MatchesSingleThreadedGolden` are green for the required nightly streak. Add the
    present-stall bench.
-5. **Off-thread tessellation + glyph raster** (quarantine >= 2 proven): copy-isolated worker arenas + the
+6. **Off-thread tessellation + glyph raster** (quarantine >= 2 proven): copy-isolated worker arenas + the
    deferred-free slab ring + per-worker AllocScope.
-6. **Off-thread reconcile (opt-in), Metal fence/present-tree.** Spike-gated, MANAGED, not default.
+7. **Off-thread reconcile (opt-in), Metal fence/present-tree.** Spike-gated, MANAGED, not default — inherits the
+   §12.2 no-mutation-before-PUBLISH invariant verbatim (worker writes only its private `ReconcileScratch`).
 
 > **The correct single-thread v1 is genuinely safer than the seam until snapshot lifetime, bounded
 > backpressure, consume-gated quarantine, and the retire-fence are all landed and `seam.race` (swept) is
@@ -872,9 +1186,40 @@ This subsystem ships **single-thread-correct first** and flips parallelism only 
   seam** (quarantine >= 2) — the original wrongly claimed they were safe at quarantine=0.
 - **Time-sliced reconcile defaults to atomic-on-complete on the UI thread**; off-thread reconcile is
   opt-in/spike-gated/MANAGED.
+- **INTERRUPTIBLE DISCARD-AND-RESTART reconcile (P4) is now CORE, not deferred.** The §12.1 base mode is joined by a
+  fully-specified `ReconcileWorkLoop` that abandons an in-progress pass when a higher lane arrives — safe because the
+  backend ops are staged in `ReconcileScratch` and nothing is observable before PUBLISH. Pinned with the
+  no-mutation-before-PUBLISH invariant, the `AssertNotMidReconcile` guard, and a byte-identical discard-restart golden.
+- **External-store consistency (P3) is now CORE**: `IExternalStore<TSnapshot>` (`Version` + by-value `GetSnapshot` +
+  `Subscribe`), generalized from the proven `ISystemColors` Epoch shape; frame-start snapshot capture into a UI-private
+  `StoreReadLedger`; a pre-PUBLISH tear re-check that demotes to a blocking single pass on a version-move-under-slicing.
+  Dormant-cost in single-pass v1, correct the instant slicing flips on. No new lock-free surface (one volatile version
+  word per store, the `ISystemColors` discipline).
+- **Carry-forward effect/enqueue gen-stamp contract (P5) is now CORE**: drain-only-after-`Complete`; `EffectRef`
+  gen-stamped with `RenderContext.Generation`; straddled/discarded effects gen-skipped at drain while cleanups still
+  fire. A pure UI-thread contract — no fence added.
 - **Multi-visual DComp present-tree + video hole-punch + present-ack** folded in from the WaveeMusic
   requirements; `IVideoPresenter`/`IBackdropSource`/`IImageCodec` thread-assignment pinned (decode→worker,
   upload/place→render).
 - **Honesty preserved**: the one lock-free fence is MANAGED-sampled (no managed TSan); all guards are
-  `[Conditional("FGGUARD")]`-erased from shipping AOT, so production safety == CI coverage.
-```
+  `[Conditional("FGGUARD")]`-erased from shipping AOT, so production safety == CI coverage. P3/P4/P5 add **zero** new
+  lock-free surfaces — they are UI-thread sequencing + the existing one-volatile-word-per-store pattern.
+
+---
+
+## 21. Implemented from the gap analysis
+
+This doc folds the following `core-fundamentals-gap-analysis.md` items **into core** (no v2 deferral):
+
+| Gap | Was (gap analysis) | Now (this doc) | Where |
+|---|---|---|---|
+| **P3 — External-store consistency** (`useSyncExternalStore`-analog on `UseObservable`/`UseResource`) | "Specify-now; dormant in v1; latent the moment slicing flips on; painful to retrofit" | Full core design: `IExternalStore<TSnapshot>` `(Version, GetSnapshot, Subscribe)` generalized from the `ISystemColors` Epoch + by-value-snapshot shape; frame-start `StoreReadLedger` capture; **pre-PUBLISH tear re-check** demoting to a blocking single pass on version-move-under-slicing | §12bis (+ §12.3, phase map §14, build step 1/3, test `ExternalStore_NoTear`) |
+| **P4 — Interruptible discard-and-restart reconcile** | "Defer feature; enforce precondition now" | Fully designed `ReconcileWorkLoop` work loop that abandons an in-progress pass on a higher-lane arrival; the **no-`ISceneBackend`-mutation-before-PUBLISH invariant** + `ThreadGuard.AssertNotMidReconcile` + a byte-identical discard-restart golden | §12.2 (+ phase map §14, build step 3, test `DiscardRestart_MatchesSingleThreadedGolden`) |
+| **P5 — Carry-forward effect/enqueue gen-stamp consistency** | "Fold-soon (spec); the interaction is unspecified" | Pinned contract: **drain-only-after-`Complete`**; `EffectRef` gen-stamped with `RenderContext.Generation`; straddled/discarded effects gen-skipped while cleanups still fire; unmount cleanups staged in scratch (read "synchronously in the Complete burst") | §12.4 (+ phase map §14, build step 1, test `CarryForward_EffectGenStamp`) |
+
+**Boundaries respected (referenced, not redesigned).** Lanes / `UseTransition` / `startTransition` / the phase-3
+update queue / `RenderContext` generation / the `UseObservable`/`UseResource` *hook signatures* / `EffectScheduler` +
+`EffectRef` *type* are **owned by `reconciler-hooks.md`** — this doc consumes `ILaneScheduler` read-only and pins only
+the *seam invariants* (work-loop purity, drain timing, snapshot/re-check placement). `ISystemColors` and any
+`IExternalStore` backing are PAL/theming seams. The `ReconcileScratch`/keyed-LIS structure and `ISceneBackend` mutator
+set are owned by Scene/Reconciler; this doc pins only that they are staged, not live, until `Complete`.

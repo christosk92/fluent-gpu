@@ -45,7 +45,15 @@ reason. Open questions are flagged `OQ-n`. New cross-subsystem contract addition
 > `Opacity`, and a new cold `EffectAux` column — **always Transform/PaintDirty, never LayoutDirty** — with
 > a dedicated `DetachedAnim` slab that survives the *synchronous-on-unmount* hook-cleanup contract and pins
 > the animated `ImageHandle` for the animation's life. The `AnimTrack.DrivenClock` decouples the timeline
-> source from the frame clock for scroll-fade and playback-synced lyrics.
+> source from the frame clock for scroll-fade and playback-synced lyrics. **`AnimTrack` carries a second
+> integration MODE** — beside time-normalized easing, a **spring integrator** (mass/stiffness/damping + a
+> velocity field on the track) so an interrupt **retargets** by seeding the new track with the instantaneous
+> velocity (no snap, no overshoot bug); **`animateContentSize` / item-placement auto-layout-change tweens** are
+> seeded from the double-buffered prev-frame `WorldBounds[]` (FrameCache) read at phase 6.5 vs the new
+> phase-6 `Bounds` — a **transform** delta tween, never a relayout; **general shared-element** generalizes the
+> connected-anim overlay to any tagged source/dest pair (not only album-art); and **motion tokens** (named
+> durations/easings/spring constants) ride the theming token machinery so motion is themeable and reduced-
+> motion-aware at one seam. All of it is **Transform/PaintDirty, never LayoutDirty**.
 
 ---
 
@@ -80,7 +88,8 @@ reason. Open questions are flagged `OQ-n`. New cross-subsystem contract addition
 
 | Type / seam | Assembly | Why |
 |---|---|---|
-| `AnimTrack`, `AnimEngine`, `DetachedAnimSlab`, `Curve`/`Easing`, `DrivenClock`, `ReducedMotionState` | **`FluentGpu.Animation`** (exists; dep Scene+Foundation) | Phase-7 timelines already specced to live here (§7 DAG). |
+| `AnimTrack`, `AnimEngine`, `DetachedAnimSlab`, `Curve`/`Easing`, `Spring`/`SpringState`, `DrivenClock`, `ReducedMotionState`, `ContentSizeAnimator`, `SharedElementRegistry`, `MotionTokens` | **`FluentGpu.Animation`** (exists; dep Scene+Foundation) | Phase-7 timelines already specced to live here (§7 DAG). Springs/retarget/content-size/shared-element are all phase-7 column writers (Transform/PaintDirty). |
+| `MotionTokenId`/`MotionTokenTable` *machinery* (named durations/easings/springs) | **`FluentGpu.Dsl`+`FluentGpu.SourceGen`** token machinery (referenced); **semantics here** | Reuses theming's `Tok.*` source-gen + `FrozenDictionary<TokenId,…>` per-theme table; this doc owns the *motion* token family + reduced-motion projection (§5.8). |
 | `EffectAux` column, `BackdropRef`, `EffectChainTable` | **`FluentGpu.Scene`** (cold SoA slab + side table) | Co-located with `SceneStore`; read by record (phase 8). |
 | `BackdropBaker`, `BackdropRtCache`, `BlurredSrcCache`, `BakeTicket`, `AcrylicPass` author-side | **`FluentGpu.Media`** (NEW, portable; dep Foundation + Rhi/Text iface) | Editorial backdrop shares the image-pipeline residency machinery from `media-pipeline.md`. |
 | `UseImageBackdrop`/`UseAcrylic`/`UseImplicitTransition`/`UseConnectedAnimation`/`UseDrivenAnimation`/`UseSyncedLyrics`(timing)/`UseReducedMotion` | thin compositions in **`FluentGpu.Media`** + **`FluentGpu.Hooks`** convenience | `UseRef`/`UseMemo`/`UseEffect` over the above; `DepKey`-span deps. |
@@ -368,43 +377,111 @@ public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotatio
                                  Opacity, BlurSigma, Exposure, WashAlpha, CrossFade, Tint }
 public enum ClockKind   : byte { Frame, Driven }     // Frame = FrameTime.Delta; Driven = external ref
 
-[StructLayout(LayoutKind.Sequential)]                // ~48B POD; lives in a SlabAllocator<AnimTrack>
+// NEW: the integration MODE — the load-bearing L7 fold. NOT another Easing enum entry.
+public enum IntegrationMode : byte { Eased, Spring }  // Eased = time-normalized lerp; Spring = ODE integrate
+
+[StructLayout(LayoutKind.Sequential)]                // 64B POD; lives in a SlabAllocator<AnimTrack>
 public struct AnimTrack
 {
     public NodeHandle Target;        // node whose column this writes (or a DetachedAnim slot)
     public AnimChannel Channel;
-    public float From, To;
-    public float ElapsedMs, DurationMs;
-    public Easing Easing;            // enum → static fn-ptr table (no delegate, AOT-clean)
+    public IntegrationMode Mode;     // NEW: Eased | Spring
     public ClockKind Clock;
+    public AnimFlags Flags;          // Detached, PinsImage, Superseded, Completed, ReducedMotionExempt, Spring(redundant), AtRest
+    // ── EASED-mode fields (Mode==Eased) ──
+    public Easing Easing;            // enum → static fn-ptr table (no delegate, AOT-clean)
+    public float ElapsedMs, DurationMs;
+    // ── SPRING-mode fields (Mode==Spring) — the velocity field carried ON the track ──
+    public float Position;           // current integrated value (the channel's live scalar)
+    public float Velocity;           // NEW: instantaneous velocity (units/s); seeds retarget on interrupt
+    public SpringParams Spring;      // mass/stiffness/damping (or critically-damped omega/zeta form)
+    // ── shared (both modes) ──
+    public float From, To;           // To is the spring's rest target; mutated by retarget (§5.7)
     public int   DrivenRef;          // -1 (frame clock) or index into the DrivenClockTable
-    public AnimFlags Flags;          // Detached, PinsImage, Superseded, Completed, ReducedMotionExempt
+}
+
+[StructLayout(LayoutKind.Sequential, Size = 16)]     // 16B POD
+public readonly struct SpringParams
+{
+    public readonly float Stiffness;   // k  (N/m analog) — higher = snappier
+    public readonly float Damping;     // c  (Ns/m analog) — higher = less oscillation
+    public readonly float Mass;        // m  — default 1.0 (most call sites)
+    public readonly float RestEps;     // settle threshold on |To-Position| AND |Velocity| (default 0.01/0.5)
+    // Helper constructors compute (k,c) from the friendlier (response, dampingRatio) iOS/Compose form:
+    public static SpringParams FromResponse(float responseSec, float dampingRatio, float mass = 1f);
+    public static SpringParams Critical(float responseSec, float mass = 1f); // dampingRatio = 1
 }
 ```
+
+**Why a MODE flag and not an `Easing.Spring` enum entry (MADE — the explicit L7 correction):** an easing is a
+pure function `f(u)→[0,1]` over a *known-duration* normalized timeline; a spring has **no duration** and is a
+**stateful ODE** whose trajectory depends on the carried `Velocity`. Encoding it as an easing entry would force
+a fake duration and discard velocity at every interrupt — exactly the snap/overshoot bug. So `IntegrationMode`
+selects the integrator and `Velocity` lives on the track. The `Easing` fn-ptr table is **untouched** (no delegate,
+AOT-clean) and the spring path is a branchless `Mode==Spring` dispatch in `Tick`.
 
 ```csharp
 public sealed class AnimEngine             // ticked in phase 7 (UI thread); writes Scene columns
 {
-    SlabAllocator<AnimTrack> _active;       // attached tracks (target node is live in topology)
-    DetachedAnimSlab         _detached;     // tracks whose target node has unmounted (§5.3)
-    DrivenClockTable         _clocks;       // ref-float sources (scroll offset, playback ms)
+    SlabAllocator<AnimTrack>  _active;      // attached tracks (target node is live in topology)
+    DetachedAnimSlab          _detached;    // tracks whose target node has unmounted (§5.3)
+    DrivenClockTable          _clocks;      // ref-float sources (scroll offset, playback ms)
+    SharedElementRegistry     _shared;      // NEW (§5.4/§5.6): keyed source-rect provenance, single-slot
+    ContentSizeAnimator       _content;     // NEW (§5.7): auto layout-delta transform tweens
+    MotionTokenTable          _motion;      // NEW (§5.8): named durations/easings/springs (theme-bound)
 
     public void Tick(in FrameTime ft);      // advance both lists, compose, write columns, mark dirty
+    // Per-node track index: a small map NodeHandle→TrackHead so retarget/supersede find the live track O(1).
+    public Handle Seed(NodeHandle target, AnimChannel ch, in TrackSeed s);   // eased OR spring
+    public void   Retarget(NodeHandle target, AnimChannel ch, float newTo);  // §5.7 velocity-handoff
 }
 ```
 
-**Tick algorithm (phase 7, after layout, before record — `architecture-spec.md` §4.8 line 7):**
+**Tick algorithm (phase 7, after layout, before record — `architecture-spec.md` §4.8 line 7):** the two modes
+share the loop; the branch is on `t.Mode`.
 
 ```
 AnimEngine.Tick(ft):
+  reduced = ReducedMotion.Enabled
   for each track t in _active ∪ _detached:           // index loops, no IEnumerable
-     dt   = (t.Clock == Frame) ? ft.DeltaMs : _clocks[t.DrivenRef].DeltaMsSince(t.lastSample)
-     u    = t.ElapsedMs / t.DurationMs              // 0..1 (Driven: u = clamp(drivenValue, 0, 1) directly)
-     e    = ReducedMotion && !t.ReducedMotionExempt ? snapEnd(u) : Easing.Eval(t.Easing, u)
-     v    = lerp(t.From, t.To, e)
-     applyChannel(t.Target, t.Channel, v)           // see channel→column map below
-     if u >= 1: t.Flags |= Completed                // retired in phase 13 (see §5.3)
+     if t.Mode == Eased:                             // ── EASED integrator (unchanged) ──
+        dt = (t.Clock == Frame) ? ft.DeltaMs : _clocks[t.DrivenRef].DeltaMsSince(t.lastSample)
+        t.ElapsedMs += dt
+        u  = clamp(t.ElapsedMs / t.DurationMs, 0, 1) // (Driven: u = clamp(drivenValue, 0, 1) directly)
+        e  = (reduced && !t.ReducedMotionExempt) ? 1f : Easing.Eval(t.Easing, u)
+        v  = lerp(t.From, t.To, e)
+        if u >= 1: t.Flags |= Completed
+     else:                                           // ── SPRING integrator (NEW) ──
+        if reduced && !t.ReducedMotionExempt:        // reduced motion: snap to rest, zero velocity
+           t.Position = t.To; t.Velocity = 0; t.Flags |= Completed
+        else:
+           // semi-implicit (symplectic) Euler, sub-stepped to stay stable at frame-time spikes.
+           // Spring uses the FRAME clock only (a physical ODE; DrivenRef is ignored for Mode==Spring).
+           dtTotal = ft.DeltaMs * 0.001f
+           n  = max(1, ceil(dtTotal / MaxStableStep(t.Spring)))   // adaptive sub-stepping (stiff springs)
+           h  = dtTotal / n
+           for i in 0..n:
+              a = (t.Spring.Stiffness*(t.To - t.Position) - t.Spring.Damping*t.Velocity) / t.Spring.Mass
+              t.Velocity += a * h                    // semi-implicit: velocity first …
+              t.Position += t.Velocity * h           // … then position (energy-stable vs explicit Euler)
+           if abs(t.To - t.Position) < t.Spring.RestEps && abs(t.Velocity) < t.Spring.RestEps*50:
+              t.Position = t.To; t.Velocity = 0; t.Flags |= (Completed | AtRest)
+        v = t.Position
+     applyChannel(t.Target, t.Channel, v)            // see channel→column map below
+     // Completed tracks: attached → freed at phase 13 cleanup; detached → DetachedAnimSlab.Retire (§5.3)
 ```
+
+- **`MaxStableStep` / sub-stepping (MADE):** semi-implicit Euler is unconditionally stable for an under-damped
+  spring up to a step tied to the natural frequency `ω = sqrt(k/m)`; `MaxStableStep ≈ 0.5/ω`. A frame-time spike
+  (GC pause, fling) is sub-stepped so a stiff spring **never explodes** — the integrator is robust to a 200 ms
+  frame, not just 16 ms. This is the one place we deviate from "one update per frame" and it is **bounded**
+  (`n` capped at 8; beyond that the spring is over-stiff for the display and snaps to rest — logged in DEBUG).
+- **Spring tracks are frame-clock only.** A spring is a physical ODE in wall-time; pairing it with a `DrivenClock`
+  (scroll/playback value source) is rejected at `Seed` (DEBUG assert) — driven channels use `Mode==Eased` with
+  `u = clamp(drivenValue)`. (Scroll *rubber-band* that *feels* spring-like is still an `Eased`-over-`DrivenRef`
+  track; a true scroll-release fling decay is the inertia integrator owned by `input-a11y.md`, not a spring here.)
+- **`AnimEngine.Seed` returns a track `Handle`** (gen-versioned, into `_active`) so a hook can `Retarget`/cancel it;
+  the per-node `NodeHandle→TrackHead` index makes "find the live track on this channel" O(1) for the interrupt path.
 
 **Channel → column → dirty axis (the load-bearing invariant — folded verbatim):**
 
@@ -414,14 +491,36 @@ AnimEngine.Tick(ft):
 | Opacity | `NodePaint.Opacity` | **PaintDirty** (or TransformDirty if no overlap → batcher composite) |
 | BlurSigma, Exposure, WashAlpha, CrossFade, Tint | `EffectAux.*` (§4) | **PaintDirty** (layer re-composite) |
 
-**NEVER LayoutDirty.** Pop-in is `ScaleX/ScaleY` from 0.92→1.0, **not** a size change; a hero scale never
-relayouts. (Animating a genuine layout property is the rare opt-in `LayoutSelfDirty`-per-tick path
+**NEVER LayoutDirty — including spring and content-size tracks.** Pop-in is `ScaleX/ScaleY` from 0.92→1.0,
+**not** a size change; a hero scale never relayouts. A spring on `TranslateX` writes `LocalTransform` →
+`TransformDirty`. The `animateContentSize` delta tween (§5.7) is a **transform** track on
+`ScaleX/ScaleY`+`TranslateX/TranslateY` that visually interpolates the old→new world rect **without** re-running
+layout (layout already produced the final `Bounds` at phase 6; the tween only animates the *visual* transform
+toward identity). (Animating a genuine layout property is the rare opt-in `LayoutSelfDirty`-per-tick path
 documented in §7 cross-cutting — not used by any animation this subsystem owns.)
 
+```csharp
+// POD seed passed to AnimEngine.Seed — picks the mode; stackalloc-friendly, [InlineArray] for multi-channel.
+public readonly struct TrackSeed
+{
+    public readonly IntegrationMode Mode;
+    public readonly float From, To;
+    // Eased:
+    public readonly Easing Easing; public readonly float DurationMs;
+    // Spring:
+    public readonly SpringParams Spring; public readonly float InitialVelocity;  // seeds Velocity (retarget)
+    public readonly ClockKind Clock; public readonly int DrivenRef; public readonly AnimFlags Flags;
+    public static TrackSeed Eased(float from, float to, float ms, Easing e);
+    public static TrackSeed SpringTo(float from, float to, in SpringParams k, float v0 = 0);
+}
+```
+
 **Compose order for concurrent tracks on one node (MADE — fixed-order matrix multiply):** when a node has
-both a pop-in scale and a connected-anim transform, `AnimEngine` composes them in a **fixed channel order**
-(Translate → Scale → Rotation) into one `LocalTransform`, so the result is deterministic and order-
-independent of track insertion. Opacity and effect channels are scalar and just multiply/overwrite.
+both a pop-in scale and a connected-anim transform (eased or spring, in any mix), `AnimEngine` composes them in
+a **fixed channel order** (Translate → Scale → Rotation) into one `LocalTransform`, so the result is
+deterministic and order-independent of track insertion. **At most one track per (node, channel)** is live —
+seeding a second on the same channel **retargets** the existing one (§5.7), it does not stack two integrators on
+the same scalar. Opacity and effect channels are scalar and just multiply/overwrite.
 
 ### 5.2 Implicit transitions (`UseImplicitTransition`)
 
@@ -512,6 +611,9 @@ philosophy: the real source unmounts and the real dest is hidden until the overl
   by `Retire` (completion) or by the supersede-cancel path. The pin **survives the source node's
   synchronous unmount** — that is the whole point of routing it through the detached slab, not the recycled
   topology slot.
+- **Connected animation is the album-art special case of the GENERAL shared-element transition (§5.6).** It is
+  preserved verbatim as the convenience for the now-playing fly; the general form below is the same machinery
+  with an arbitrary tagged source/dest and a snapshot of *all* paint columns (not only the image).
 
 ### 5.5 Driven clock (`AnimTrack.DrivenClock`) — scroll-fade and playback-synced lyrics
 
@@ -541,7 +643,145 @@ void UseDrivenAnimation(NodeHandle target, AnimChannel ch, float from, float to,
                         ReadOnlySpan<DepKey> deps);
 ```
 
-### 5.6 Reduced motion
+### 5.6 General shared-element transition (`UseSharedElement`) — beyond connected (FOLDED L7c)
+
+Connected animation (§5.4) is the album-art special case. The **general** shared-element transition lets *any*
+node tagged with a key fly its full visual (transform + opacity + corners + fill + optional image) to a like-
+tagged node in the next route — a list-thumbnail → detail-header, a tab → expanded-panel, a grid-cell →
+modal. The losing option (connected-only) cannot animate non-image surfaces (a rounded card, a text header).
+
+```csharp
+// FluentGpu.Animation — single-slot-per-key provenance registry (generalizes ConnectedRegistry).
+public sealed class SharedElementRegistry
+{
+    // Source-side snapshot, captured at phase 5 on the unmounting route.
+    public readonly struct SharedSnapshot           // POD; the source's full renderable + world rect
+    { public LayoutRect WorldRect; public Affine2D WorldTransform; public float Opacity;
+      public CornerRadius4 Corners; public BrushHandle Fill; public ImageHandle PinnedImage; /* Null ok */
+      public uint Seq; /* TargetGen — supersede/stale guard, shared with media-pipeline */ }
+
+    public void Register(StringId key, in SharedSnapshot s);   // phase 5; single-slot per key (supersede)
+    public bool TryTake(StringId key, out SharedSnapshot s);   // phase 6.5; dest consumes + clears slot
+    public void Expire(uint olderThanSeq);                     // GC unclaimed slots (fast-nav no-dest)
+}
+public readonly record struct SharedElementHandle(StringId Key);
+SharedElementHandle UseSharedElement(in SharedElementTransition t);   // both source and dest call it
+public readonly struct SharedElementTransition       // POD, stackalloc-friendly
+{ public readonly TrackSeed Transform;               // Eased OR Spring (the fly curve)
+  public readonly bool MorphCorners, CrossFadeFill;  // animate corner-radius / fill cross-fade too
+  public readonly bool PinImage; }
+```
+
+```
+SOURCE (unmounting route, phase 5): SharedElementRegistry.Register(key, snapshot of ALL paint columns +
+   prev-frame WorldBounds[] rect); pin ImageHandle iff PinImage. Single-slot per key.
+DEST (mounting route, phase 6.5): TryTake(key) → if hit, create a TRANSIENT OVERLAY DetachedAnim row that
+   owns the snapshot's renderable (and pinned image), seed TranslateX/Y+ScaleX/Y (and optional Rotation)
+   from source world-rect → dest world-rect via t.Transform (eased OR spring); MorphCorners seeds a
+   Corners interpolation on EffectAux-adjacent state; CrossFadeFill cross-fades the fill brush.
+   The real dest is hidden until the overlay completes, then retires + reveals (§5.4 philosophy).
+```
+
+- **Reuses every connected-anim invariant verbatim:** single-slot supersede + pin-release-on-supersede, the
+  pinned-handle-survives-synchronous-unmount routing through `DetachedAnimSlab`, the no-dest-within-timeout
+  `Expire` clean no-op, and the reduced-motion → instant cross-fade degrade.
+- **Spring fly (MADE):** `t.Transform` may be `TrackSeed.SpringTo(...)`; the overlay's transform tracks then
+  spring to the dest rect and **retarget** (§5.7) if a *third* route arrives mid-fly — the in-flight overlay's
+  current velocity seeds the new spring, so a rapid back-and-forth nav never snaps. This is the headline win of
+  carrying velocity on the track.
+- **Corner morph / fill cross-fade** are `EffectAux.CrossFade`/an added corner interpolation — `PaintDirty`,
+  layer re-composite, never LayoutDirty.
+- **macOS:** unchanged (pure portable column writes over the overlay machinery).
+
+### 5.7 Spring usage hooks + retarget / velocity-handoff (FOLDED L7a)
+
+```csharp
+// FluentGpu.Hooks convenience over AnimEngine.Seed/Retarget. Spring or eased, retarget-aware.
+void UseSpring(NodeHandle target, AnimChannel ch, float to, in SpringParams spring,
+               ReadOnlySpan<DepKey> deps);          // re-seed/retarget when `to` (a dep) changes
+void UseAnimatedValue(NodeHandle target, AnimChannel ch, float to, in MotionToken motion,
+                      ReadOnlySpan<DepKey> deps);    // token-driven; motion token picks mode+curve (§5.8)
+```
+
+- **Retarget is the whole reason velocity lives on the track (MADE).** When `to` changes while a track on
+  `(node, channel)` is still in flight, `AnimEngine.Retarget(node, ch, newTo)`:
+  1. finds the **single live track** for that channel via the `NodeHandle→TrackHead` index (O(1));
+  2. for `Mode==Spring`: **mutates `To := newTo` and LEAVES `Position` and `Velocity` untouched** — the
+     integrator continues from the current state toward the new rest, so the motion has **C¹ continuity** (no
+     position jump, no velocity discontinuity). This is iOS/Compose velocity-handoff.
+  3. for `Mode==Eased`: an eased track cannot continue smoothly (it has no velocity state). MADE: on retarget
+     **convert it to a spring** seeded with the *numerically-estimated* instantaneous velocity
+     `(value_thisFrame − value_lastFrame)/dt` and the channel's default token spring, OR (the simpler default,
+     selectable per call) **re-seed a fresh eased track** `From := currentValue, To := newTo` — which has a
+     visible (but bounded) velocity kink. The default for interruptible gestures/drag is **spring** precisely
+     so the handoff is smooth; eased→eased re-seed is the default for non-interactive timed transitions.
+- **Interrupt sources:** a new prop value (dep change re-runs `UseSpring`), a gesture release handing off
+  velocity from the `PointerFsm` inertia integrator (`input-a11y.md`) into a spring's `InitialVelocity`, or a
+  superseding shared-element/connected nav (§5.4/§5.6).
+- **Settle + retire:** a spring track marks `Completed|AtRest` when `|To−Position|` and `|Velocity|` fall under
+  `RestEps`; the per-node index entry is cleared and the slab row freed at phase 13 (same retire path as eased).
+- **Zero-alloc:** `Retarget` is a field mutation on an existing slab row (no new track unless eased→spring
+  conversion, which allocates exactly one slab row, free-list-recycled).
+
+### 5.8 `animateContentSize` / item-placement auto-layout-change tween (FOLDED L7b)
+
+A list reorder, an expander open, a wrap-panel reflow, or a text-grow snaps a node from one laid-out size/
+position to another in a single frame. `animateContentSize` (and per-item `animateItemPlacement`) makes that
+change *visually continuous* — **without relayout** — by animating a transform from the node's **prev-frame
+world rect** to its **new world rect**.
+
+```csharp
+// FluentGpu.Animation — reads the double-buffered prev-frame WorldBounds[] (FrameCache, scene-memory §6.3).
+public sealed class ContentSizeAnimator
+{
+    // Called at phase 6.5 (Bounds valid) for nodes flagged AnimateContentSize / inside an animated container.
+    public void Capture(NodeHandle node, in MotionToken motion);    // arm: remember motion + that it opts in
+    public void SeedDeltas(in FrameCacheView prev, in SceneStore now); // diff prev WorldBounds vs new Bounds → tracks
+}
+void UseContentSizeAnimation(NodeHandle target, in MotionToken motion, ReadOnlySpan<DepKey> deps);
+void UseItemPlacementAnimation(VirtualHandle list, in MotionToken motion);  // per-row placement (virtualization)
+```
+
+**The seed (MADE — the load-bearing FrameCache fold):**
+
+```
+phase 6  (layout):  layout writes the NEW Bounds[] (LOCAL) for the reflowed nodes — final positions/sizes.
+phase 6.5 (UI):     for each opted-in node:
+   prevWorldRect = FrameCache.Prev.WorldBounds[node]      // double-buffered, last frame's composed world rect
+                                                          // (scene-memory §6.3; available read-only at 6.5)
+   newWorldRect  = compose(now.Bounds[node], now.WorldTransform-so-far)   // this frame's target world rect
+   if prevWorldRect exists (node was alive last frame) and rects differ beyond epsilon:
+      // animate the VISUAL transform from "looks like prevRect" → identity (looks like newRect):
+      sx0 = prevW/newW; sy0 = prevH/newH; tx0 = prevX-newX; ty0 = prevY-newY
+      Seed ScaleX:  sx0→1   ; ScaleY:  sy0→1   ; TranslateX: tx0→0 ; TranslateY: ty0→0
+         via motion (Eased OR Spring) — TransformDirty only, NEVER LayoutDirty.
+   else (newly-mounted node): fall through to the implicit onShow (§5.2), not a placement tween.
+phase 7  (animation): the tracks integrate toward identity; WorldTransform[] recomposed top-down as usual.
+```
+
+- **Why prev-frame `WorldBounds[]` and why phase 6.5 (MADE):** the prev-frame composed world rect is the only
+  correct "where this node *visually was*" — local `Bounds` ignore ancestor scroll/transform. `FrameCache` already
+  double-buffers `WorldBounds[]`/`SubtreeWorldBounds[]` for damage (scene-memory §6.3, architecture-spec §5.4); we
+  **read** that prev buffer at 6.5 (it is UI-thread-owned, fully published from the *previous* frame — the same
+  provenance the connected-anim source rect uses, resolving `OQ-2`). The gap analysis's "published at phase 5"
+  means exactly this: the prev buffer is a stable read at the start of the new frame's authoring; we consume it at
+  6.5 once the *new* `Bounds` exist. **No new column** — `WorldBounds[]` is derived FrameCache state, not a
+  SceneStore column.
+- **Never LayoutDirty (the keystone):** layout ran once (phase 6) and produced the final `Bounds`; the tween only
+  animates `LocalTransform` toward identity. The node's layout footprint is the *new* size for the whole tween —
+  siblings do **not** see an animating size, so there is **no per-frame relayout cascade** (the bug a naive
+  "animate the height layout prop" would cause). This is Compose's `animateContentSize` semantics done as a pure
+  transform.
+- **Item placement (virtualization):** `UseItemPlacementAnimation` arms every realized row; on a reorder, each
+  row whose index changed seeds a `TranslateY` delta from prev→new world rect. Recycled rows (new key in a reused
+  slot) are treated as **mounts** (implicit onShow), not placement tweens — the `VirtualState` recycle epoch
+  (scene-memory `VirtualState`) distinguishes "moved" from "recycled". Spring mode gives the canonical iOS list-
+  reorder feel and retargets if a second reorder lands mid-flight.
+- **Edge/failure:** a node with no prev-frame entry (first mount, just-realized row) gets the onShow path, not a
+  delta from a garbage rect; a `FrameCache` miss (resize/device-lost full-rebuild frame) **skips** the tween (no
+  prev world rect → snap, correct). Detached-slab cap (§9.10) bounds a reorder-storm.
+
+### 5.9 Reduced motion
 
 ```csharp
 public readonly struct ReducedMotionState { public readonly bool Enabled; public readonly uint Epoch; }
@@ -555,8 +795,64 @@ ReducedMotionState UseReducedMotion();         // reads PAL (SPI_GETCLIENTAREAAN
 - **Policy (MADE):** when `Enabled`, `AnimEngine.Tick` **snaps every non-exempt track to its end value**
   (no motion) but **keeps opacity cross-fades** (fades are not "motion" and aid orientation — matches the
   platform reduced-motion convention). `AnimFlags.ReducedMotionExempt` marks the rare track that must still
-  animate (e.g. a loading spinner). Connected animation under reduced motion = an instant opacity cross-fade
-  at the dest (no fly).
+  animate (e.g. a loading spinner). Connected / general shared-element animation under reduced motion = an
+  instant opacity cross-fade at the dest (no fly). **Springs** snap to `To` with `Velocity := 0` (the Tick
+  spring branch handles this — no half-second settle). **`animateContentSize` / item-placement** snap to the
+  new rect (the visual transform jumps to identity) — the layout was already correct, so reduced motion just
+  removes the tween. **Motion tokens (§5.10)** carry a `ReducedMotionPolicy` per token so the *theme* can mark a
+  specific motion as "fade-only" or "exempt" centrally, rather than per call site.
+
+### 5.10 Motion tokens — named durations / easings / springs as theme tokens (FOLDED L7d / L14-motion)
+
+Motion is themeable. A **motion token** is a named, theme-resolved animation recipe (`MotionEmphasizedEnter`,
+`MotionStandardSpring`, `MotionConnectedFly`) so call sites reference `Mot.StandardSpring` instead of
+hand-typing `(stiffness:300, damping:25)`. This rides **theming's existing token machinery** (`theming.md`
+owns `Tok.*`, the source-gen `FrozenDictionary<TokenId,…>` per-theme table, and `BrushRecipe`); this doc owns
+the **motion** token *family*, its POD shape, and the reduced-motion projection — exactly the ownership split
+the directive sets (scene-memory/theming own storage machinery; the feature doc owns semantics).
+
+```csharp
+namespace FluentGpu.Animation;
+
+public readonly struct MotionToken                  // 24B POD; resolved from MotionTokenTable by MotionTokenId
+{
+    public readonly IntegrationMode Mode;           // Eased | Spring (a token CAN be either)
+    public readonly Easing Easing; public readonly float DurationMs;     // when Mode==Eased
+    public readonly SpringParams Spring;            // when Mode==Spring
+    public readonly ReducedMotionPolicy Reduced;    // SnapEnd | KeepFade | Exempt — centralizes the policy
+}
+public enum ReducedMotionPolicy : byte { SnapEnd, KeepFade, Exempt }
+
+// Build-time source-gen'd id family (the theming Tok.* mechanism, motion namespace).
+public enum MotionTokenId : ushort
+{ StandardEnter, StandardExit, EmphasizedEnter, EmphasizedExit, StandardSpring, ExpressiveSpring,
+  ConnectedFly, ContentResize, ItemPlacement, ScrollFade, /* … */ }
+
+public sealed class MotionTokenTable                // per-theme; built once at theme load (theming reuse)
+{
+    public ref readonly MotionToken Get(MotionTokenId id);   // O(1) FrozenDictionary lookup
+    public uint Epoch { get; }                               // bumps on theme swap → projects into DepKey
+}
+// Convenience accessors, mirroring theming's `Tok.*`:
+public static class Mot { public static MotionToken StandardSpring => /* table.Get(...) */; /* … */ }
+```
+
+- **Themeable + swappable (MADE):** a theme swap (`UseTheme`) rebuilds the `MotionTokenTable` exactly like the
+  brush tables; in-flight tracks are **not** retargeted by a token change (motion mid-flight keeps its seeded
+  constants — a token swap affects only *new* seeds), the same "recolor is opacity-only, re-bakes nothing"
+  discipline theming uses. The `MotionTokenTable.Epoch` projects into `DepKey` so hooks keyed on a motion token
+  re-seed on theme change at the next state change.
+- **Density / accessibility scaling:** the table is the one place a global "animation speed" or
+  `ReducedMotionPolicy` override is applied — a high-contrast or reduced-motion theme variant supplies a table
+  whose tokens are all `SnapEnd`/`KeepFade`, so reduced motion is *also* expressible as a theme, not only the OS
+  flag. (The OS flag still wins as the global gate in §5.9; the token policy is the per-motion refinement.)
+- **Used by every animation in this doc:** implicit transitions, shared-element/connected fly, `animateContentSize`,
+  item placement, and scroll-fade all take a `MotionToken` (the raw `TrackSeed`/`SpringParams` overloads remain
+  for one-off call sites). This is what makes the system's motion *coherent* rather than per-component ad hoc.
+- **AOT/zero-alloc:** `MotionToken` is blittable POD resolved by `ushort` id; no per-frame allocation, no string.
+  The source-gen emits the id enum + the `Mot.*` accessors (no reflection), reusing the `dsl-aot.md` token gen.
+- **macOS:** unchanged — pure portable POD + the portable token table; only the *values* may differ per platform
+  theme.
 
 ---
 
@@ -593,12 +889,12 @@ the **RENDER thread** (the sole `ComPtr` owner). The PUBLISH(13a) seam sits betw
 
 | Phase | Thread | This subsystem |
 |---|---|---|
-| 1 pump | UI | (window-backdrop epoch / reduced-motion epoch read from PAL flag words — cheap) |
-| 4 render | UI | `UseImageBackdrop`/`UseAcrylic`/`UseImplicit/Connected`/`UseDriven` hook bodies; cache probes; mount-time edge alloc only |
-| 5 reconcile | UI | connected-anim **source snapshot + pin**; unmount → **detach to `DetachedAnimSlab`** (copy paint columns, pin ImageHandle) |
-| 6.5 layout-effects | UI | connected-anim **dest seed** (reads laid-out `Bounds`); implicit `onShow` seed (Bounds valid) |
-| **7 animation** | UI | **`AnimEngine.Tick`**: advance active + detached + driven tracks → write `LocalTransform`/`Opacity`/`EffectAux`; mark Transform/PaintDirty; **never LayoutDirty** |
-| PUBLISH (13a) | UI | `EffectAux`/`LocalTransform`/`Opacity` columns + `DetachedAnim` snapshots value-copied into `SnapshotColumns` |
+| 1 pump | UI | (window-backdrop epoch / reduced-motion epoch / `MotionTokenTable.Epoch` read from PAL/theme flag words — cheap) |
+| 4 render | UI | `UseImageBackdrop`/`UseAcrylic`/`UseImplicit/Connected`/`UseSharedElement`/`UseDriven`/`UseSpring`/`UseAnimatedValue`/`UseContentSizeAnimation` hook bodies; cache probes; **`Retarget`** (on a `to`-dep change of an in-flight spring); mount-time edge alloc only |
+| 5 reconcile | UI | connected/shared-element **source snapshot + pin** (`SharedElementRegistry.Register`, full paint columns + prev `WorldBounds[]` rect); unmount → **detach to `DetachedAnimSlab`** (copy paint columns, pin ImageHandle) |
+| 6.5 layout-effects | UI | connected/shared-element **dest seed** (`TryTake`, reads laid-out `Bounds`); implicit `onShow` seed; **`ContentSizeAnimator.SeedDeltas`** (diff prev-frame `FrameCache.WorldBounds[]` vs new `Bounds` → transform delta tracks) — all Bounds-valid |
+| **7 animation** | UI | **`AnimEngine.Tick`**: advance active + detached + driven tracks, **integrating eased OR spring (semi-implicit Euler, sub-stepped)** → write `LocalTransform`/`Opacity`/`EffectAux`; mark Transform/PaintDirty; recompose `WorldTransform[]` top-down; **never LayoutDirty** |
+| PUBLISH (13a) | UI | `EffectAux`/`LocalTransform`/`Opacity` columns + `DetachedAnim` snapshots value-copied into `SnapshotColumns` (spring `Position`/`Velocity` stay UI-side track state, never published) |
 | 8 record | RENDER | emit `DrawImageCmd`(baked backdrop) / `PushLayerCmd{Effect}` (acrylic/3D) / detached-node opcodes; clean-span memcpy for unchanged backdrop |
 | 9 batch | RENDER | apply animated `WorldTransform` to cached quads (TransformDirty fast path); write per-instance lyric glyph color; layer effect params from `EffectAux` |
 | 10–11 submit/present | RENDER | (acrylic two-pass barrier ordering; the window-backdrop transparent clear is part of the normal pass) |
@@ -614,9 +910,12 @@ hole-punch are different regions and do not conflict.
 
 ## 8. Zero-alloc + thread-confinement story
 
-- **Phase 7 `AnimEngine.Tick` is 0-managed-alloc:** index loops over `SlabAllocator<AnimTrack>` + the
-  detached slab; `Easing.Eval` is a static fn-ptr table (`enum`→pointer, no delegate); channel apply is a
-  `ref`-into-column store. No `IEnumerable`, no LINQ, no closure.
+- **Phase 7 `AnimEngine.Tick` is 0-managed-alloc — eased AND spring:** index loops over
+  `SlabAllocator<AnimTrack>` + the detached slab; `Easing.Eval` is a static fn-ptr table (`enum`→pointer, no
+  delegate); the spring integrator is pure scalar arithmetic on the track's own `Position`/`Velocity` fields (a
+  fixed `for i in 0..n` sub-step loop with `n` capped at 8 — no allocation, no recursion); channel apply is a
+  `ref`-into-column store. No `IEnumerable`, no LINQ, no closure. The `NodeHandle→TrackHead` retarget index is a
+  pre-grown slab-side `int[]` (no per-frame dictionary).
 - **`TransitionSpec`/`AnimTrack`/`EffectAux`/`DetachedNode` are blittable POD** in slabs; `TransitionSpec`
   arrays passed to `UseImplicitTransition` are `stackalloc` spans (the `app-requirements` example uses
   `.Transition(onShow: stackalloc[]{...})`). Multi-spec buffers use `[InlineArray]` where fixed-arity.
@@ -625,8 +924,12 @@ hole-punch are different regions and do not conflict.
 - **`allows ref struct` sink** for the detached-node DrawList walk (phase 8) — same devirtualized POD walk
   as the main record (`dotnet10` §leaf-walk).
 - **Edge alloc only at mount:** a backdrop cache-miss creates one `BackdropRtCache`/`BlurredSrcCache` slot
-  + one bake-job slab row; a connected/implicit anim creates `AnimTrack` slab rows. All slab pushes (no GC
-  array growth in steady state); the managed convenience hooks reuse the existing `List<HookCell>` edge.
+  + one bake-job slab row; a connected/implicit/shared-element/spring/content-size anim creates `AnimTrack`
+  slab rows (free-list-recycled on retire). **Retarget is field-mutation** of an existing spring row (0 alloc);
+  the only retarget that allocates is the eased→spring *conversion* (exactly one slab row, recycled).
+  `animateContentSize`/item-placement seed at most one transform track per channel per moved node, all from the
+  slab free-list. All slab pushes (no GC array growth in steady state); the managed convenience hooks reuse the
+  existing `List<HookCell>` edge.
 - **Thread confinement (the keystone):** **the render thread owns every `ComPtr`** — so all `IEffectRunner`
   runs, all bake RT allocation/eviction, all `LayerPool` use, and all deferred-delete un-pins happen **on
   the render thread**, phase 8/13. The UI thread (phase 4–7) only writes POD columns and POD cache keys; it
@@ -668,6 +971,23 @@ hole-punch are different regions and do not conflict.
     end + retires them, bounding memory.
 11. **Driven clock source throws / NaN:** `Sample` clamps NaN to the last good value; a thrown source is
     isolated (try/catch-log) and the track holds its last value — never propagates into the frame loop.
+12. **Stiff spring + frame-time spike (GC pause / fling):** the semi-implicit integrator is sub-stepped to
+    `MaxStableStep ≈ 0.5/ω`, `n` capped at 8; beyond the cap the spring is over-stiff for the display refresh and
+    **snaps to rest** (logged in DEBUG). A `NaN`/`Inf` in `Position`/`Velocity` (pathological constants) is caught
+    by a finite-check at apply and snaps the track to `To` — never writes a `NaN` transform into the column.
+13. **Retarget on a channel with no live track:** `Retarget` is a no-op that seeds a fresh track (it degenerates
+    to `Seed`); no crash, no orphan velocity.
+14. **`animateContentSize` with no prev-frame `WorldBounds[]`:** newly-mounted / just-realized node → falls to the
+    implicit onShow path, never a delta from an uninitialized rect. A full-rebuild frame (resize/theme/device-lost)
+    has no valid prev `FrameCache` → the tween is **skipped** (snap to new rect, correct).
+15. **Reorder/placement storm (1000-row shuffle):** each moved row seeds one transform track; the `DetachedAnim`
+    cap and a per-frame seed budget (default 256 placement tracks/frame, rest snap) bound the work; springs that
+    cannot keep up snap to rest. No relayout cascade (transform-only).
+16. **General shared-element with non-image source (card/text):** the snapshot copies the full paint columns
+    (`Fill`/`Corners`/`Opacity`/transform); `PinImage=false` means no texture pin — the overlay renders the
+    rounded-rect/text from the snapshot, same retire path. A missing dest within timeout → `Expire` clean no-op.
+17. **Theme swap mid-spring:** `MotionTokenTable` rebuilds; in-flight spring keeps its seeded constants (no
+    retarget-by-token); only the next seed uses the new token. No discontinuity.
 
 ---
 
@@ -679,11 +999,14 @@ hole-punch are different regions and do not conflict.
 | Offscreen effects | `Effects.D2D1` (D2D1 blur/shadow + FXC noise) | `Effects.Metal` (`MPSImageGaussianBlur` + kernels) behind `IEffectRunner` |
 | Reduced motion | `SPI_GETCLIENTAREAANIMATION` | `accessibilityDisplayShouldReduceMotion` |
 | 3D lyrics fan | `IEffectRunner.Supports(Transform3D)`=true (D2D1 3D transform) | likely false → flat 2D degrade |
+| Spring / retarget / content-size / shared-element / motion tokens | pure C# scalar ODE + column writes | **identical** — no platform code; the spring integrator, `SharedElementRegistry`, `ContentSizeAnimator`, `MotionTokenTable` are portable math/POD |
 | Everything else | — | **unchanged**: `AnimEngine`, `DetachedAnimSlab`, `DrivenClock`, `BackdropBaker` policy, the `EffectAux` column, the FrameGraph schedule, all hook authoring — pure portable C# over the seams |
 
-The portable surface (`FluentGpu.Animation`, `FluentGpu.Media` backdrop policy, `FluentGpu.Scene`
+The portable surface (`FluentGpu.Animation` — now incl. the spring integrator, `SharedElementRegistry`,
+`ContentSizeAnimator`, `MotionTokenTable` —, `FluentGpu.Media` backdrop policy, `FluentGpu.Scene`
 `EffectAux`, `FluentGpu.Render` FrameGraph) recompiles unchanged. Only `Effects.D2D1` and `Pal.Windows`
-have Metal/AppKit counterparts.
+have Metal/AppKit counterparts. **The reduced-motion OS flag** (`SPI_GETCLIENTAREAANIMATION` /
+`accessibilityDisplayShouldReduceMotion`) is the only platform touch in the animation path.
 
 ---
 
@@ -697,13 +1020,19 @@ our loop. This subsystem's per-frame cost on a busy now-playing screen:
   render-thread, byte-budgeted) → a one-frame cold hitch hidden by the flat-fill → cross-fade.
 - **Lyrics:** the active line re-records one tiny glyph run/frame with per-instance color from the playback
   clock — within budget.
-- **Connected/implicit/scroll-fade:** all phase-7 column writes; transform tracks are TransformDirty (no
-  re-record, batcher re-applies). Detached exit anims add 0–3 tiny renderables.
+- **Connected/implicit/shared-element/scroll-fade:** all phase-7 column writes; transform tracks are
+  TransformDirty (no re-record, batcher re-applies). Detached exit anims add 0–3 tiny renderables.
+- **Springs:** scalar ODE per live spring track (typically <50 concurrent: gesture handoffs, pop-ins,
+  shared-element flies); sub-µs even at hundreds. No re-record — a spring on a transform channel rides the
+  TransformDirty fast path exactly like an eased transform.
+- **`animateContentSize` / item-placement on a reorder:** one transform track per moved row, seeded once at the
+  reorder frame from prev-frame `WorldBounds[]`; then pure phase-7 integration + the TransformDirty batcher
+  re-apply. **No relayout** during the tween (layout ran once); seed budget bounds a mass shuffle.
 - **Live Acrylic:** at rest only in v1 (overlay static) → one snapshot+blur on `PushLayer`, re-taken only on
   behind-region damage. Scroll-velocity Acrylic is a v2 render-thread item.
 
-No relayout, no video pixel work, no per-tick gradient/atlas re-bake. The only render-thread GPU spend is
-the rate-limited backdrop blur and the at-rest acrylic snapshot.
+No relayout (content-size is transform-only), no video pixel work, no per-tick gradient/atlas re-bake. The only
+render-thread GPU spend is the rate-limited backdrop blur and the at-rest acrylic snapshot.
 
 ---
 
@@ -717,11 +1046,21 @@ the rate-limited backdrop blur and the at-rest acrylic snapshot.
 - `FA-3` — confirm `DetachedAnim` lifetime: detach-on-unmount copies paint columns to a separate slab and
   pins the `ImageHandle`; retire on completion frees + gen-bumps + deferred-delete un-pins. This is the
   fold against the synchronous-on-unmount `RunCleanups` contract (`reconciler-hooks.md` §4.4).
+- `FA-4` (NEW — the L7 fold) — ratify the second **`IntegrationMode` (Spring)** on `AnimTrack` (the carried
+  `Position`/`Velocity` + `SpringParams`, the semi-implicit sub-stepped integrator), the `NodeHandle→TrackHead`
+  retarget index + `AnimEngine.Retarget` (C¹ velocity-handoff; eased→spring conversion), the
+  `SharedElementRegistry` (generalizes `ConnectedRegistry` to any tagged source/dest, full paint-column snapshot),
+  the `ContentSizeAnimator` (phase-6.5 prev-frame-`WorldBounds[]` → transform delta tracks, never LayoutDirty),
+  and the **`MotionTokenTable`/`MotionTokenId` motion-token family** riding theming's `Tok.*` machinery. All in
+  `FluentGpu.Animation`; all phase-7 column writers; all pure portable C#. **AnimTrack grows 48B→64B** (still POD,
+  one slab). Reference: scene-memory `WorldBounds`/`FrameCache` (§6.3), theming token table machinery.
 - `OQ-1` (inherited, resolved) — live-Acrylic depends on the **persistent canvas RT** (`gpu-renderer.md`
   `OQ-7`), ruled in favor of the canvas RT. v1 ships acrylic at rest; scroll-velocity acrylic is v2.
-- `OQ-2` — connected-anim source-rect provenance: prev-frame `WorldBounds[]` (double-buffered `FrameCache`,
-  `architecture-spec.md` §5.4) is the source; confirm it is published to the UI thread at phase 5 (it is, as
-  a UI-owned double buffer). Default: yes.
+- `OQ-2` (RESOLVED) — connected/shared-element source-rect **and** `animateContentSize`/item-placement prev-rect
+  provenance: prev-frame `WorldBounds[]` (double-buffered `FrameCache`, `architecture-spec.md` §5.4 /
+  scene-memory §6.3) is the source. It is a UI-owned double buffer fully published from the *previous* frame, so
+  it is a stable read at the start of authoring (the "published at phase 5" the gap analysis names); both the
+  source snapshot (phase 5) and the content-size delta seed (phase 6.5) read it. Confirmed: yes.
 - `OQ-3` — backdrop bake budget vs image-upload budget share the same phase-13 render-thread byte budget;
   confirm the two-lane split (thumbs/large-art from media-pipeline + backdrop bakes) gives backdrop a
   bounded slice so a fling does not starve a now-playing bake. Default: a dedicated low-priority backdrop
@@ -774,3 +1113,43 @@ first-pass synthesis:
     produces+consumes, quarantine=0) per the build order.
 14. **Live Acrylic is explicitly BLOCKED on the canvas-RT (`OQ-7`) decision** (resolved in favor of the
     canvas RT) and ships **at rest only** in v1; scroll-velocity Acrylic is a named v2 render-thread item.
+15. **Spring is a second INTEGRATION MODE on `AnimTrack`, not an `Easing` enum entry** — the carried
+    `Velocity` field + semi-implicit sub-stepped integrator give it state; an easing is a stateless `f(u)`. This
+    is the precondition for retarget.
+16. **Retarget = C¹ velocity-handoff** — an interrupt mutates `To` and leaves `Position`/`Velocity` intact (no
+    snap, no overshoot); eased tracks convert to spring (or re-seed) on interrupt. The headline correctness win
+    over a duration-based model.
+17. **`animateContentSize` / item-placement are TRANSFORM tweens seeded from prev-frame `WorldBounds[]`** read at
+    phase 6.5 — layout runs ONCE (phase 6), the tween animates `LocalTransform` toward identity, so there is **no
+    per-frame relayout cascade** (the bug a naive "animate the height" would cause). Compose semantics, never
+    LayoutDirty.
+18. **General shared-element generalizes connected animation** — any tagged source/dest, full paint-column
+    snapshot (not only album-art image); connected is the image special case. Spring fly + retarget on rapid nav.
+19. **Motion tokens (named durations/easings/springs) ride theming's token machinery** — `MotionTokenId`/
+    `MotionTokenTable` via the `Tok.*` source-gen + per-theme `FrozenDictionary`; this doc owns the motion family
+    + the per-token `ReducedMotionPolicy`. Motion is themeable, swappable, and reduced-motion-expressible as a
+    theme variant, not hand-typed per call site. **No more "Tier-3/defer" framing for motion tokens — they are
+    core.**
+
+---
+
+## Implemented from the gap analysis
+
+This doc now folds the following `core-fundamentals-gap-analysis.md` rows into CORE (no defer / no v2 / no
+out-of-scope for the assigned gaps):
+
+| Gap row | What it asked | Folded into CORE here |
+|---|---|---|
+| **L7 (a) springs + velocity hand-off** | spring as a second integration *mode* on `AnimTrack` (velocity field + integrating Tick, *not* an Easing enum entry); retarget seeding velocity from instantaneous | §5.1 `IntegrationMode`/`SpringParams`/carried `Velocity`; §5 Tick spring branch (semi-implicit, sub-stepped); §5.7 `UseSpring`/`AnimEngine.Retarget` (C¹ handoff, eased→spring conversion) |
+| **L7 (b) auto layout-change animation** | `animateContentSize`/`animateItemPlacement` seeded from double-buffered prev-frame `WorldBounds[]` (FrameCache, published phase 5) | §5.8 `ContentSizeAnimator`/`UseContentSizeAnimation`/`UseItemPlacementAnimation`; transform delta seeded at 6.5 from prev `WorldBounds[]`, never LayoutDirty; `OQ-2` resolved |
+| **L7 (c) shared-element beyond connected** | general shared-element (not connected-only) | §5.6 `SharedElementRegistry`/`UseSharedElement` — any tagged source/dest, full paint-column snapshot; §5.4 connected anim is now the image special case |
+| **L7 (d) motion tokens** (was "Tier 3") | named durations/easings/springs as theme tokens | §5.10 `MotionToken`/`MotionTokenId`/`MotionTokenTable` riding theming's `Tok.*` machinery; per-token `ReducedMotionPolicy`. **Promoted from Tier-3-defer to core.** |
+| **L14-motion** (was "deferred; reserve seams") | general shared-element + motion tokens (the motion halves of L14) | designed into core as §5.6 + §5.10 above (the "reserve seams only" framing is removed for motion). |
+
+Cross-cutting contracts referenced (not redesigned): **scene-memory.md §6.3** (`WorldTransform[]` derived,
+`WorldBounds[]`/`SubtreeWorldBounds[]` double-buffered in `FrameCache`; `EffectAux`/`AnimTrack` slab placement),
+**theming.md §3/§6** (`Tok.*` token machinery, `FrozenDictionary<TokenId,…>` per-theme table, `Epoch`→`DepKey`
+pattern), **reconciler-hooks.md §4.4/§5** (synchronous-on-unmount `RunCleanups`, phase-6.5 layout-effect timing,
+`WriteAnim` path), **architecture-spec.md §4.8/§5.4** (phase-7 animation, never-LayoutDirty, `WorldTransform`
+top-down), **input-a11y.md** (`PointerFsm` inertia integrator that hands velocity into a spring on gesture
+release). All assigned gaps are FULLY SPECIFIED + BUILDABLE in core; none deferred.

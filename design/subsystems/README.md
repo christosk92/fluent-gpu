@@ -21,7 +21,7 @@ numbering; phase 6.5 RATIFIED; setState-in-effect ⇒ N+1 (no synchronous re-loo
 
 ---
 
-## 1. One line per doc (all 15 subsystem docs)
+## 1. One line per doc (all 18 subsystem docs)
 
 | Doc | Owns (in one line) |
 |-----|--------------------|
@@ -33,18 +33,20 @@ numbering; phase 6.5 RATIFIED; setState-in-effect ⇒ N+1 (no synchronous re-loo
 | [virtualization.md](./virtualization.md) | Virtualized lists/grids/grouping + incremental load: UseVirtual/UseInfiniteCollection/UseVisibleRange consumers, recycle (O(1) per row), realize-window ArrayPool<Element>, the decode→measure→relayout anti-loop guard (bind row height to the fixed bucket), consume-gated DestroyNode. |
 | [reconciler-hooks.md](./reconciler-hooks.md) | Reconciler + keyed-LIS ChildReconciler, RenderContext + hook cells, DepKey/GcDepTable, EffectScheduler/timing (6.5 + 12), 3-signal memo skip (SelfTriggered‖propsChanged‖HasConsumedContextChanged), the full core hook set, the `Mutate()` epoch chokepoint, ISceneBackend op set + NodeChildCollection. |
 | [dsl-aot.md](./dsl-aot.md) | Fluent C# DSL (Element record, modifiers, UI factory, BrushSpec), the authoring attributes, the source generators (ElementTypeId/Modifier/DiffProps/HookDeps/ThemeBlob/SceneWriter), WgpuAnalyzer, and the root AOT/build baseline + footprint ratchet. |
-| [input-a11y.md](./input-a11y.md) | Input/focus/IME/hit-testing/accessibility: InputEvent(Ring), dispatcher, HitTester + TransformChain, gesture/inertia FSM, FocusEngine, accelerators/commands, UIA NodeProvider, DrawFocusRectCmd/DrawAccessKeyBadgeCmd, IME/clipboard/dragdrop/a11y PAL seams, the interaction hooks. |
+| [input-a11y.md](./input-a11y.md) | Input/focus/IME/hit-testing/accessibility: InputEvent(Ring), dispatcher, HitTester + TransformChain, gesture/inertia FSM, FocusEngine, accelerators/commands, UIA NodeProvider, emits DrawFocusRingCmd (shape owned by gpu-renderer.md)/DrawAccessKeyBadgeCmd, IME/clipboard/dragdrop/a11y PAL seams, the interaction hooks. |
 | [media-pipeline.md](./media-pipeline.md) | Image/video/lyrics pipeline: ImageHandle/**ImageRealization/ImageRefTable** (authority), DecodeScheduler, ResidencyManager, mosaic, the small-image-atlas **residency+packing+AcquireAtlasPage** (authority), CopyBufferToTexture/staging-ring/bucket-pool *policy*, VideoSurfaceRegistry, the media hooks; REFERENCES gpu-renderer.md §3.1 for DrawImageCmd/DrawVideoCmd shapes. |
 | [theming.md](./theming.md) | Theming/system+accent reactivity/album-art dynamic color: Palette/BrushRecipe/DerivedKey, PaletteExtractor/BrushDeriver, palette/brush caches + back-refs, IBrushSink + ISystemColors, EpochContext, the theme hooks, opacity-only recolor cross-fade contract, HC bypass. |
 | [backdrop-effects-animation.md](./backdrop-effects-animation.md) | In-app backdrop + effects + connected/implicit animation: IEffectRunner + EffectChain, EffectAux column, BackdropBaker/RT caches, AnimTrack/AnimEngine/DetachedAnimSlab/DrivenClock, ReducedMotion, PushLayerCmd{Effect} recording semantics, the backdrop/animation hooks. (Window-level Mica/Acrylic: see window-backdrop-mica.md.) |
 | [threading-render-seam.md](./threading-render-seam.md) | The 3-thread topology + single-writer table, ThreadGuard, SceneFramePublisher (triple-buffer), **SceneFrame/SnapshotColumns/CopyInto POD shape** (authority), QuarantinePolicy + ledger, DrawListArenaRing, render-frame ordering invariant, retire-fence handshake, device-lost rendezvous, backpressure, WorkerPool, phase→thread map + seam build order. |
 | [com-interop.md](./com-interop.md) | Generated/confined/gated COM: AbiHarvest (*.comabi.json + self-check), ComInteropGenerator + ComCalleeGenerator, ComPtr<T> (render-confined, Move-only), ComTracker, AbiVerify, FGCOM0001-0008 analyzers, the [GeneratedComInterface]/[GeneratedComClass]-only cold-COM policy, the residual hot-path hand-vtable surface, [LibraryImport] policy. |
-| [validation.md](./validation.md) | Validation & maturity program: the SPIKES (text.conformance/com.aot.roundtrip/render.aa/seam.race) + per-PR GATES (alloc/footprint/golden-image/structural/COM-refcount/epoch-fault/data-race), the trust ring + [Capability]/FG0001-3, the fault-injection corpora, regression budgets, the [Conditional]-erasure invariant. |
+| [controls.md](./controls.md) | Accessible-by-default control kit (`FluentGpu.Controls`): the control-template/styling system (`ControlTemplate`/`ControlTheme`/`VisualState`/`ControlShell` — lookless behavior/appearance split) + every control (Button/Checkbox/Radio/Switch/Slider/Progress/TextBox/ComboBox/ListView/GridView/TreeView/Tabs/Menu/Dialog/Flyout/ToolTip/Scrollbar/Expander/InfoBar) wired to the real seams (arena/overlay/UIA-patterns+collection-relations/selection-editable/focus/cursor/RTL/Suspense/springs); adds NO new opcode/column/PAL-seam/hook — pure composition. References Input/Text/Layout/Animation/Theme/Reconciler seams. |
+| [devtools.md](./devtools.md) | Live devtools/inspector/profiler (`FluentGpu.Devtools`, dev-only, release-trimmed): `IDevtoolsObserver`+`DevtoolsBus` in-process protocol, the view-projection POD structs (`ComponentNodeView`/`HookCellView`/`RenderEventView`/`LayoutOverlayItem`/`LedgerView`/`SemanticsNodeView`/`UpdateRecordView`), the per-thread SPSC ring bus + opt-in localhost named-pipe wire, the devtools overlay z-layer (drawn with EXISTING fill/stroke/text ops), time-travel. Read-mostly observer: adds NO production opcode/hook/column/PAL-seam/RHI-method/control. Behind `FluentGpu.EnableDevtools`/`[Conditional("FG_DEVTOOLS")]` ⇒ 0 bytes release; quarantine participation `DevtoolsRenderInFlightDepth=1`. |
+| [validation.md](./validation.md) | Validation & maturity program: the SPIKES (text.conformance/com.aot.roundtrip/render.aa/seam.race) + per-PR GATES (alloc/footprint/golden-image/structural/COM-refcount/epoch-fault/data-race) + the NEW per-gap always-on gates (lanes/transition determinism, auto-batching frame-count, Suspense reveal/keep-stale, external-store tear, discard-restart byte-golden, gesture-arena resolution trace, text-selection+`ITextRangeProvider` Narrator conformance, RTL `Bounds[]` mirror-equality, spring/retarget stability, overlay light-dismiss/focus-restore, virtualized-a11y realization, …), the trust ring + [Capability]/FG0001-3, the fault-injection corpora, regression budgets, the [Conditional]-erasure invariant. Ships the NEW public `FluentGpu.Testing` app-author harness (`TestHost`/simulate/assert/goldens). |
 
 > **Related (not one of the 15 core docs):** [window-backdrop-mica.md](./window-backdrop-mica.md) — the *host-window*
 > DWM system-backdrop (Mica/MicaAlt/DesktopAcrylic without WinRT); consumes `IBackdropSource` (pal-rhi.md) and the
 > transparent-root present contract. In-app Acrylic/effects live in backdrop-effects-animation.md.
-> `dsl-aot-toolchain.md` is **superseded** by `dsl-aot.md` (kept only for history; do not cite it).
+> [`../archive/dsl-aot-toolchain.md`](../archive/dsl-aot-toolchain.md) is **superseded** by `dsl-aot.md` and has been **moved to `design/archive/`** (historical only — do not cite or implement from it; it contains a known-illegal `DepKey` layout).
 
 ---
 
@@ -71,7 +73,12 @@ clean-span+epoch rule) is owned by **scene-memory.md**, which references **gpu-r
 | DrawImageCmd — residency / ImageRealization / placeholder-tint semantics it indirects through | media-pipeline.md |
 | **DrawVideoCmd** — struct SHAPE (7-field: Surface + Dst + PosterBlur + AlbumArt + VideoReady + Radii + Clip; PassClass=VideoHole) | **gpu-renderer.md §3.1** |
 | DrawVideoCmd — present/crossfade/registry consume logic | media-pipeline.md (+ pal-rhi.md present-tree) |
-| DrawFocusRectCmd, DrawAccessKeyBadgeCmd | input-a11y.md |
+| **DrawFocusRingCmd** — struct SHAPE + raster (production focus visual: rounded clip-chain-anchored ring + Fluent dashed reveal; rectangular `DrawFocusRect` is a superseded placeholder) | **gpu-renderer.md §3.6/§4.4** (emitted by input-a11y.md §8.4) |
+| DrawAccessKeyBadgeCmd | input-a11y.md |
+| **DrawSelectionRectCmd** — struct SHAPE + raster (per-BiDi-visual-fragment text-selection highlight; `Rect`+`Radii`+`SelectionBrush`+`Affinity`+`Clip`+`Flags`; behind-text z; solid premul-linear quad, lowers onto `shape_fill`) | **gpu-renderer.md** |
+| DrawSelectionRectCmd — `SelectionState` driving column + semantics | text.md (semantics) / scene-memory.md (column storage + enum registration) / input-a11y.md (selection-drag wiring) |
+| **DrawFocusRing** — struct SHAPE + raster (the real Fluent focus ring on `shape_border`; one `Params0`-bit dashed/dotted reveal variant; overlay/portal composition rule) | **gpu-renderer.md** (struct/raster) / scene-memory.md (enum registration; rectangular `DrawFocusRect` retained as debug placeholder) |
+| **DrawScrimCmd** — struct SHAPE + raster (overlay dismiss-layer: modal-dim / transparent light-dismiss / blur-promote; `Rect`+`Radii`+`ScrimBrush`+`Clip`+`Flags`) | **gpu-renderer.md** (struct/raster) / scene-memory.md (enum registration) / input-a11y.md (push/pop timing via overlay FSM) |
 | DrawBackdropCmd (VisualKind.Backdrop stub) | backdrop-effects-animation.md |
 
 (DrawCmd header + opcode ENUM + parallel `ulong[]` SortKeys arena + clean-span+epoch encoding: **scene-memory.md**.
@@ -99,6 +106,8 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 |------|-----------|
 | IPlatformApp, IPlatformWindow, IPlatformAppLoop, NativeHandle(Kind), InputEventRing/WindowEvent shape | pal-rhi.md |
 | IClipboard, IImeSession | pal-rhi.md (seam definition) / input-a11y.md (consumer + IME caret/clipboard/dragdrop use) |
+| **IPlatformWindow.SetCursor(CursorId) + RegisterCustomCursor** | pal-rhi.md (seam) / input-a11y.md (CursorResolver arbitration along the hit route) |
+| **IPlatformLocale** (Epoch/snapshot, modeled on ISystemColors) | pal-rhi.md (seam) / text.md + dsl-aot.md (edge-localization consumer) |
 | ISystemColors (accent + HC + Epoch) | pal-rhi.md (seam) / theming.md (consumer + EpochContext) |
 | IBackdropSource (Mica/Acrylic) | pal-rhi.md (seam) / window-backdrop-mica.md (host-window consumer) / backdrop-effects-animation.md (in-app bake/recipe consumer) |
 | IVideoPresenter (+ VideoSurfaceId) | pal-rhi.md (seam) / media-pipeline.md (VideoSurfaceRegistry + present-tree placement) |
@@ -118,6 +127,13 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |
 | UseTheme / UseSystemColors / UseHighContrast / UseDerivedBrush / UseDynamicColor | theming.md (UseDynamicColor's wantPalette trigger half: media-pipeline.md) |
 | UseFocus / UseElementRef / UseCommand / UseAccelerator / UseGesture / UseAnnounce | input-a11y.md |
+| **UseTransition / UseDeferredValue / StartTransition** (lanes P1) | reconciler-hooks.md (lowering: dsl-aot.md `LaneCaptureGenerator`) |
+| **UseDerived / UseContextSelector** (P6 derived-state node) | reconciler-hooks.md (lowering: dsl-aot.md `DerivedCaptureGenerator`) |
+| **UseOptimistic / UseActionState** (P7 optimistic UX over transition lanes) | reconciler-hooks.md (lowering: dsl-aot.md `DerivedCaptureGenerator`) |
+| **UseOverlay / UsePointerCursor / UseSelectable / UseDescribedBy / UseFlowsTo** | input-a11y.md |
+| **UseSpring / UseAnimatedValue / UseSharedElement / UseContentSizeAnimation / UseItemPlacementAnimation** | backdrop-effects-animation.md |
+| **UseContainerSize** (container queries consumer cell) | reconciler-hooks.md (cell) / layout.md (physical resolution at WriteLayout) |
+| **UseHover / UsePressed** (pure-composition, ratification-flagged) | controls.md authors; homed in FluentGpu.Hooks (reconciler-hooks.md to confirm/absorb) |
 | UseWindowBackdrop | window-backdrop-mica.md (seam: pal-rhi.md IBackdropSource) |
 | UseImageBackdrop / UseAcrylic / UseImplicitTransition / UseConnectedAnimation / UseDrivenAnimation / UseReducedMotion | backdrop-effects-animation.md |
 | DepKey-span hook authoring surface (interceptor lowering) | dsl-aot.md (lowering) / reconciler-hooks.md (DepKey/GcDepTable semantics) |
@@ -128,7 +144,11 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 |----------------------|-----------|
 | ElementTypeIdGenerator, ModifierGenerator, DiffPropsGenerator, HookDepsGenerator, ThemeBlobGenerator | dsl-aot.md |
 | SceneWriterGenerator (ApplyToScene) + ApplyModifier resolver | dsl-aot.md (authored) / reconciler-hooks.md (homed in Reconciler leaf) |
-| WgpuAnalyzer + CodeFixer (WGPU0001-0011) | dsl-aot.md |
+| WgpuAnalyzer + CodeFixer (WGPU0001-0011 + WGPU0012-0016: transition stack-capture, self-suspending boundary, impure derived, optimistic value-struct, format-on-paint-path) | dsl-aot.md |
+| LaneCaptureGenerator (UseTransition/startTransition/UseDeferredValue → LaneScope capture, await-safe ResumeLane) | dsl-aot.md (lowering) / reconciler-hooks.md (runtime semantics) |
+| BoundaryGenerator (BoundaryElement [Element] + boundary-aware MountWriter) | dsl-aot.md (lowering) / reconciler-hooks.md (SuspenseElement semantics) |
+| DerivedCaptureGenerator (UseDerived/UseContextSelector/UseOptimistic projection + DepKey capture) | dsl-aot.md (lowering) / reconciler-hooks.md (semantics) |
+| LocalizationGenerator (declared-culture CLDR slices baked like theme blobs) | dsl-aot.md |
 | ComInteropGenerator (hot-path vtable structs), ComCalleeGenerator (CCW vtables), AbiHarvest, *.comabi.json | com-interop.md |
 | FGCOM0001-0008 analyzer family | com-interop.md |
 | FG0001/FG0002/FG0003 (trust-ring / [Capability]) | validation.md (rules) / dsl-aot.md (FluentGpu.SourceGen hosts them) |
@@ -142,7 +162,11 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | FluentGpu.Render (renderer + DrawList arenas + render-frame body) | gpu-renderer.md (renderer) / threading-render-seam.md (frame body) |
 | FluentGpu.Media (+ leaf Media.Codecs.Wic) | media-pipeline.md |
 | FluentGpu.Theme | theming.md |
-| FluentGpu.Validation | validation.md |
+| FluentGpu.Validation (CI-only) | validation.md |
+| **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`) | validation.md |
+| **FluentGpu.Controls** (portable leaf control kit; apps + Dsl's `Ui` re-export reference it; pay-per-reference trim) | controls.md (content) / dsl-aot.md (assembly-graph + trim placement) |
+| **FluentGpu.Devtools** (dev-only live inspector; `EnableDevtools`-gated, 0 bytes release) | devtools.md (content) / dsl-aot.md (EnableDevtools FeatureSwitch + trim placement) |
+| **FluentGpu.Localization** (CLDR slices; dropped in `Invariant` mode) | dsl-aot.md (build placement) / text.md (ILocaleFormatter consumer) |
 | FluentGpu.SourceGen | dsl-aot.md |
 | FluentGpu.Interop.SourceGen (+ FGCOM rules) | com-interop.md |
 | FluentGpu.Rhi + leaf Rhi.D3D12, FluentGpu.Pal + leaf Pal.Windows | pal-rhi.md |
@@ -164,6 +188,17 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | ComPtr render-thread confinement + Move-only-across-seam | com-interop.md + threading-render-seam.md |
 | Footprint ratchet budgets (.mstat / sizoscope) | dsl-aot.md (budgets) / validation.md (CI gate) |
 | Foundation: Handle/SlabAllocator/HandleTable/ChunkedArena/ObjectPool/StringId | `../foundations.md` (root) / scene-memory.md (engine usage) |
+| **Lane bitmask (`Lane`/`Lanes`) + phase-3 update queue (`UpdateRecord`/`UpdateQueue` MPSC ring; auto-batching)** | reconciler-hooks.md (semantics) / scene-memory.md (`UpdateQueueSlab`/`UpdatePayloadTable` storage; GC-ref updater via `GcDepTable`) / dsl-aot.md (`LaneCaptureGenerator`) |
+| **Suspense boundary** (`SuspenseElement`/`SuspenseReveal`/`SuspenseSlot`/`SuspenseState`; `VisualKind.SuspenseAnchor` + `SuspenseAnchor` NodeFlags) | reconciler-hooks.md (semantics) / scene-memory.md (`SuspenseSlot` column + VisualKind/NodeFlags storage) / dsl-aot.md (`BoundaryGenerator`) / backdrop-effects-animation.md (keep-stale cross-fade) |
+| **External-store snapshot/version contract** (`IExternalStore<TSnapshot>` (subscribe,getSnapshot,Version) + `StoreReadLedger` pre-PUBLISH tear re-check + demote-to-blocking) | threading-render-seam.md (§12bis) / reconciler-hooks.md (UseObservable/UseResource consume) / pal-rhi.md (ISystemColors/IPlatformLocale Epoch instances) |
+| **SelectionState** (anchor/extent/affinity; sparse side-table, NOT a NodePaint field; `Mutate(SelectionHandle,…)` chokepoint + selection clean-span witness) | scene-memory.md (column storage) / text.md (semantics + read-side) / input-a11y.md (drag wiring) / gpu-renderer.md (DrawSelectionRectCmd raster) |
+| **FlowDirection** (enum + `FlowState` hot column + `LayoutPacked.ResolvedFlowIsRtl` bit; RTL resolved at WriteLayout) | scene-memory.md (column storage) / layout.md (resolution + `ResolveLogical`/`MirrorEdges`) / reconciler-hooks.md (`Context<FlowDirection>` plumbing) |
+| **A11y collection relations** (`SetSize/PositionInSet/Level/DescribedBy/FullDescription/FlowsTo/HeadingLevel/LandmarkType` via cold `A11yRel` slab) + virtualized-provider realization-on-Navigate | scene-memory.md (column storage) / input-a11y.md (UIA projection + realization) / layout.md (virtualizer index+count feed) |
+| **Gesture arena** (`GestureArena`/`ArenaMember`/`ArenaVote`/`ArenaTeam`; tentative-capture-until-resolution; `e.Handled` becomes an Accept vote) | input-a11y.md |
+| **Overlay/portal manager** (`OverlayManager`/`OverlayEntry`/`OverlayKind`/`DismissPolicy`; light-dismiss FSM; focus push/restore; UIA Window/Menu/ToolTip) | input-a11y.md (manager + FSM) / layout.md (`OverlayPlacement.Resolve` flip→nudge→constrain geometry) |
+| **Springs/retarget/shared-element/motion-tokens** (`SpringParams`, `AnimTrack` 48→64B, `SharedElementRegistry`, `MotionToken`/`MotionTokenTable`, `ReducedMotionPolicy`; rides existing LocalTransform/Opacity/EffectAux columns) | backdrop-effects-animation.md (semantics) / theming.md (token table pattern) / dsl-aot.md (`MotionTokenId` gen) |
+| **`FluentGpu.Testing` app-author harness** (`TestHost`/`TestHostOptions`/simulate/assert/MatchGolden; shipped public) | validation.md |
+| **`FluentGpu.Devtools` quarantine participation** (`QUARANTINE = RenderInFlightDepth + (devtools ? 1 : 0) + 1`; reverts on detach; never in release) | devtools.md (derives, never hard-codes) / threading-render-seam.md (canonical quarantine relationship) |
 
 ---
 

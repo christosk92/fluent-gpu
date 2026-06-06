@@ -1,0 +1,89 @@
+# FluentGpu — Canonical Spec Index
+
+> **Read this first when two docs disagree.** The design set is large (26 docs, ~16k lines) and
+> several docs each call themselves "authoritative" / "design-of-record". This file is the **single
+> precedence map**: for every cross-cutting contract it names the *one* owning doc and states the
+> *current canonical value inline*, so you never have to discover a supersession by reading three docs.
+>
+> **All of `core-fundamentals-gap-analysis.md` (Tier-1..Tier-3) is now folded into CORE** — there is no
+> v2/deferred carve-out for any gap there; each is a fully-specified, buildable core design in its owning
+> subsystem doc. The only residuals are the genuinely *physical* limits (a sustained GPU stall still
+> bounds back to the UI thread; production safety == CI coverage; the build *order* ships single-thread-
+> correct first, then flips parallelism behind the race gate) — truths, not gaps.
+>
+> Drift is gated: [`check-canon.ps1`](./check-canon.ps1) fails the build if a known-stale token
+> reappears in the live tree. Last reconciled against the docs: **2026-06-06**.
+
+---
+
+## 1. Precedence (tie-breaker for contracts not in the table below)
+
+Each contract in §2 has exactly **one owner** — that owner wins, regardless of generic order. For
+anything *not* listed, resolve conflicts in this order (higher wins):
+
+1. **`SPEC-INDEX.md`** (this file) — the canonical value.
+2. **`hardened-v1-plan.md`** — threading, safety posture, build order. Its **§7 amendment checklist**
+   is canonical *even where `architecture-spec.md`/`foundations.md` still print the lean single-thread
+   form* (those carry a `⊳ Canonical threading model` banner pointing here).
+3. **`dotnet10-csharp14-zero-alloc.md` §4** — the COM ruling.
+4. **Subsystem design-of-record docs** (`com-interop`, `validation`, `scene-memory`, `dsl-aot`,
+   `gpu-renderer`, `reconciler-hooks`, `layout`, `text`, `pal-rhi`, `input-a11y`, `media-pipeline`,
+   `theming`, `virtualization`, `backdrop-effects-animation`, `window-backdrop-mica`,
+   `threading-render-seam`, `controls`, `devtools`) — deep design *within* the rulings above.
+5. **`architecture-spec.md`** — the end-to-end integrating narrative; canonical owner of the handle
+   byte layout, the color/DPI contract, and the frame-phase *shape*.
+6. **`foundations.md`** — the shared vocabulary. Where it conflicts with anything above, the above wins.
+7. **`README.md`** — the digest. Never authoritative over a deeper doc.
+
+---
+
+## 2. Canonical contracts
+
+| Contract | Canonical owner | Current canonical value |
+|---|---|---|
+| **Handle layout** | `architecture-spec.md` §4.1 (mirrored in `foundations.md` §1.1, `scene-memory.md` §1.1) | `Handle` = 8 bytes `{u32 Index, u32 Gen}`. Generation is **32-bit**, bumped on alloc **and** free (ABA defense). **Kind is NOT packed into the bits** — it lives on the zero-cost typed wrapper as a `[Conditional("DEBUG")]` assert. <!-- canon-allow: names the superseded form on purpose --> The old `{index32, gen24, kind8}` form is superseded. |
+| **COM dispatch** | `dotnet10-csharp14-zero-alloc.md` §4 (deep design: `subsystems/com-interop.md`) | **Tiered.** Hand-vtable `calli` on the per-frame hot path + any CCW invoked inside the frame loop; **`[GeneratedComInterface]`/`[GeneratedComClass]`** (source-gen, AOT-recommended) for *all* cold/warm COM (UIA, TSF, OLE, DWrite setup), isolated in `FluentGpu.PlatformIntegration`. `ComWrappers` is rejected **on the hot path only** (cache-lookup + call-site control — not a per-call alloc). <!-- canon-allow: contrasts with superseded blanket rule --> The blanket "no ComWrappers anywhere / hand-vtable both directions" rule is superseded. |
+| **Threading / frame phases** | `hardened-v1-plan.md` §2 + `subsystems/threading-render-seam.md` §14 | **Render-thread seam.** A **PUBLISH(13a)** phase splits the loop; record/batch/submit/present (8–11) run on a dedicated render thread reading an immutable `SceneFrame`; the UI thread owns no `ComPtr`/GPU object. The single-thread 13-phase loop in `architecture-spec.md` §4.8 / `foundations.md` §6 / `README.md` is **build-order step 1**, not the shipping topology. |
+| **Quarantine constant** | `hardened-v1-plan.md` §2.3 + `subsystems/threading-render-seam.md` | `QUARANTINE = RenderInFlightDepth` (compile-asserted, **consume-gated**: reclaim a freed slot only when `_lastConsumedSeq > freedSeq`), with `+1` slack. `0` in single-thread step 1. The literal `2` is superseded. |
+| **DrawList arenas** | `hardened-v1-plan.md` §4.1 / §7 | **Render-thread-private, ≥3-deep.** Supersedes the 2-deep, UI-swapped design. The UI thread never swaps or resets a DrawList arena. |
+| **DepKey (hook deps)** | `subsystems/reconciler-hooks.md` (+ `README.md` §5) | **Pure-scalar blittable 16-byte struct.** GC-ref deps go through a side `GcDepTable` (`object?[]` reset per render), compared by `ReferenceEquals`. <!-- canon-allow: names the illegal superseded layout --> A `[StructLayout(Explicit)]` `[FieldOffset]` union overlapping a GC ref with a scalar is **illegal CLR layout** (`TypeLoadException`) — see the archived `archive/dsl-aot-toolchain.md` trap. |
+| **Arena allocator** | `hardened-v1-plan.md` §4.4 / §7 (supersedes `foundations.md` §6 single-buffer arena) | **`ChunkedArena` + `IVirtualMemory` PAL seam** (reserve-then-commit / segmented, addresses stable, no LOH/Gen2 copy). A **native high-water counter** — not the GC tripwire — gates chunk growth. |
+| **Validation / safety floor** | `subsystems/validation.md` (+ `hardened-v1-plan.md` §4.5/§8) | Every `ThreadGuard`/alloc-tripwire/`ComTracker`/`CleanSpanWitness`/`IsSpikeCaller` assert is `[Conditional]`-erased from the shipping NativeAOT binary. **In production, safety == CI coverage**; a hazard not covered by a green gate or a retired spike is unguarded at runtime. |
+| **Clean-span validity** | `architecture-spec.md` §5.4 + `hardened-v1-plan.md` §4.4/§4.6 | A memcpy'd clean span is valid iff every referenced handle `IsLive` **and** content-epoch unchanged **and** baked geometry matches. The witness captures a **baked-geometry hash** + `(handle, gen, epoch)`; epoch validation is **render-thread-local**. |
+| **Memo skip** | `subsystems/reconciler-hooks.md` | 3-signal gate: `SelfTriggered \|\| propsChanged \|\| HasConsumedContextChanged(slot)`. `SubtreeDirty` is the **traversal scope only**, never a skip-decision input. |
+| **Tessellation** | `subsystems/gpu-renderer.md` §5 + `hardened-v1-plan.md` §4.3 | One vetted **monotone/trapezoidal O(n log n) sweep** (ear-clip deleted). Complexity bound is SAFE-by-construction; geometric correctness is fuzz-gated + cross-checked against an independent higher-precision rasterizer. |
+| **Color / coordinate / DPI** | `foundations.md` P8 + `architecture-spec.md` §1.3 bet 4 | Brush color = straight-alpha sRGB `float4` → renderer converts to linear-premultiplied at shader input. Swapchain `BGRA8_UNORM` buffer + RTV `BGRA8_UNORM_SRGB` (blend/resolve linear, hardware sRGB on write), output premultiplied. Text gamma is a deliberate exception. DPI applied once at layout→world. `Bounds` is node-LOCAL. |
+| **Lane bitmask + phase-3 update queue** | `subsystems/reconciler-hooks.md` §7 (storage: `scene-memory.md` `UpdateQueueSlab`) | `Lane` = **8-bit bitmask** (`Lanes` helper; `Lane.SyncInput` = urgent, transition/`await`-continuation = non-urgent). Phase 3 is a **real update queue**, not a no-op: each `setState` enqueues an `UpdateRecord{fiber, updater, lane}` (MPSC ring); phase-3 `HookFlush` drains with lane selection + functional-updater fold ⇒ **automatic batching** across handlers and across `await`. `RenderPriorityPolicy` is the lane **executor** (which lanes flush this frame, anti-starvation watermark), not the priority source. GC-ref updaters via `GcDepTable`, never inline in the blittable slab. |
+| **Suspense boundary element** | `subsystems/reconciler-hooks.md` (semantics) + `scene-memory.md` (storage) | `SuspenseElement` + `SuspenseReveal` enum + `SuspenseSlot`/`SuspenseState` + throw-free `UseResource.MarkPending`/`SuspenseContext`. Reconciler mounts the boundary fallback as a unit on pending descendant, atomically swaps to content on ready; **nested progressive reveal** + **transition-aware keep-stale** (keep revealed content during a P1 transition lane rather than flashing fallback, on the existing `DetachedAnim` slab). New `VisualKind.SuspenseAnchor` (Passthrough node) + `SuspenseAnchor` `NodeFlags` bit (storage owned by `scene-memory.md`). |
+| **External-store snapshot/version contract** | `subsystems/threading-render-seam.md` §12bis (consumed by `reconciler-hooks.md` data-hooks) | `IExternalStore<TSnapshot>` = `(uint Version, TSnapshot GetSnapshot(), IDisposable Subscribe(StoreChangedCallback))` (generalizes the proven `ISystemColors` Epoch/by-value-snapshot shape). Frame-start `StoreReadLedger` captures snapshot+version; **pre-PUBLISH `AnyVersionMoved` tear re-check** demotes to a blocking single-pass frame on mismatch. `UseObservable`/`UseResource` read through this seam. Adds **no** new lock-free surface (one volatile version word per store). |
+| **SelectionState column** | `scene-memory.md` (column storage) + `text.md` (semantics) + `input-a11y.md` (drag/selection wiring) | POD `SelectionState{Anchor/AnchorCp, Extent/ExtentCp, Affinity, Flags/Granularity}` (~24B). **Not a NodePaint field** (preserves the 64B one-cache-line invariant) — stored via a sparse `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>` with its own `ContentEpoch` + `BakedRectsHash`; written through the `Mutate(SelectionHandle,…)` chokepoint; selection is a new producer of the existing `(Node,gen,epoch,bakedHash)` clean-span witness signals. Read-side `GetSelectionRects` (BiDi visual fragments) backs **both** on-screen highlight and `ITextRangeProvider`. |
+| **FlowDirection column** | `scene-memory.md` (column storage) + `layout.md` (resolution semantics) | `FlowDirection` enum (Inherit/LTR/RTL) + `FlowState` 4B hot-spine column `{Inherited, Resolved}`. Inherited as `Context<FlowDirection>`; **resolved logical→physical at the `WriteLayout` boundary** (phase 5) so the ported Yoga `CalculateLayoutImpl` stays physical and bit-for-bit with the golden-parity gate. `LayoutPacked.ResolvedFlowIsRtl` (1 bit, zero added bytes — `LayoutInput` stays 96B). |
+| **A11y collection-relation columns** | `scene-memory.md` (column storage) + `input-a11y.md` (UIA semantics) | `A11yInfo` gains `PositionInSet`/`SizeOfSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo`/`HeadingLevel`/`LandmarkType` (via a cold `A11yRel` extension slab; `A11yInfo` 24→28B cold, `A11yRelRef:int`). Virtualizer feeds index+count; **virtualized-provider realization contract** — UIA `Navigate` can *cause* realization (scroll-to-realize). |
+| **DrawSelectionRectCmd / DrawFocusRing opcodes** | `gpu-renderer.md` (struct shape + raster) + `scene-memory.md` (enum registration) | `DrawSelectionRectCmd` (per-BiDi-visual-fragment text-selection highlight; `Rect`+`Radii`+`SelectionBrush`+`Affinity`+`Clip`+`Flags`; behind-text z; solid premul-linear quad, **not** the text-gamma path; lowers onto `shape_fill`, zero new PSO). `DrawFocusRing` (the real Fluent focus ring on `shape_border`, one `Params0`-bit dashed/dotted reveal variant; the rectangular `DrawFocusRect` retained as the debug placeholder). Plus `DrawScrimCmd` (overlay dismiss-layer: modal-dim / transparent light-dismiss / blur-promote). All `RenderLane.AnalyticSdf`, overlay z-layer; SortKey reuses existing `PassClass`/`RecordSeq` (no new bits). `DrawOp` enum entries registered in `scene-memory.md`. |
+| **Gesture-arena tentative-capture** | `subsystems/input-a11y.md` §7A | `GestureArena`/`ArenaMember`/`ArenaVote{Pending,Accept,Reject,EagerAccept}`/`ArenaTeam`. **Pointer capture is tentative until arena resolution**; `e.Handled` becomes an `Accept` *vote* into resolution, not the resolution itself; resolution can defer across pointer-move frames ("first to accept or last to not reject wins," eager-win, pointer-up sweep, hold/release). `PointerFsm` stays the per-recognizer implementation; the arena is the coordinator above it. |
+| **Pal.SetCursor seam** | `subsystems/pal-rhi.md` (seam) + `input-a11y.md` (consumer) | `IPlatformWindow.SetCursor(CursorId)` + `RegisterCustomCursor(...)`; `CursorResolver` arbitrates I-beam/resize/hand/busy along the L2 hit route (`InteractionInfo.CursorId` column is the source). |
+| **Resource budgets** | [`budgets.md`](./budgets.md) (new, consolidated) | Per-subsystem native/GPU/bandwidth budgets, eviction policies, failure behavior, and the open budget gaps. |
+| **macOS / cross-platform debt** | [`macos-debt-ledger.md`](./macos-debt-ledger.md) (new, consolidated) | Every Windows-specific decision, its macOS plan (if any), and status (Designed / Deferred / Unaddressed). |
+| **Control kit + devtools assemblies** | `subsystems/controls.md` (`FluentGpu.Controls`) + `subsystems/devtools.md` (`FluentGpu.Devtools`) | `FluentGpu.Controls` = portable leaf control kit (`ControlTemplate`/`ControlTheme`/`VisualState`/`ControlShell` lookless behavior/appearance split + 19 accessible-by-default controls) wired to the real seams; adds **no** new opcode/column/PAL-seam/hook (pure composition, plus two ratification-flagged composition hooks `UseHover`/`UsePressed`). `FluentGpu.Devtools` = dev-only live inspector/profiler (read-mostly observer; `IDevtoolsObserver`+`DevtoolsBus`; behind `FluentGpu.EnableDevtools`/`[Conditional("FG_DEVTOOLS")]` ⇒ 0 bytes in release; when attached, `QUARANTINE = RenderInFlightDepth + (devtools attached ? 1 : 0) + 1`). |
+
+---
+
+## 3. Superseded / archived
+
+| Doc / claim | Status | Canonical replacement |
+|---|---|---|
+| `archive/dsl-aot-toolchain.md` (whole file) | **Archived** — historical only, contains a known-illegal `DepKey` layout | `subsystems/dsl-aot.md` |
+| `foundations.md` §1.1 handle layout (the earlier gen-24/kind-8 form) <!-- canon-allow: superseded-list row --> | Corrected in place | `{u32 index, u32 gen}` (this index, §2) |
+| Blanket "no ComWrappers / hand-vtable both directions" (was in README P2, architecture-spec bet 2 + P2 + §ComWrappers, foundations) | Corrected in place | Tiered COM ruling (this index, §2) |
+| Single-thread 13-phase loop as the shipping model | Re-labeled "build step 1" via `⊳` banners | Render-thread seam (this index, §2) |
+| `hardened-v1-plan.md` §7 + `dotnet10 §amendments` checklists | **Open backlog** — apply forward into the deep sections of `architecture-spec.md`/`foundations.md`/`gpu-renderer.md` as those sections are next edited | tracked here |
+
+---
+
+## 4. Keeping this true
+
+- When you change a canonical value, **edit it here first**, then in the owning doc, then run
+  [`check-canon.ps1`](./check-canon.ps1).
+- The gate excludes `design/archive/`. To intentionally mention a superseded form in live prose
+  (e.g. to explain a correction), put `<!-- canon-allow: <reason> -->` on that line.
+- New cross-cutting contract? Add a row to §2 with its single owner before two docs can disagree about it.

@@ -12,7 +12,7 @@ hooks, OS-reactivity wiring, derived-brush eviction safety, and the recolor cros
 - `app-requirements-waveemusic.md` §3.3 — the requirement, the three-tier model, the 80B tiered `Palette`,
   the `Context<uint>`-over-Epoch ruling, the back-reference MarkPaintDirty eviction walk, `TargetGen`
   cancellation, the opacity-only recolor cross-fade, and the "rows bind NO derived brushes" invariant.
-- `foundations.md` §1–7 — `Handle{index32,gen24,kind8}`, `BrushHandle`/`HandleKind.Brush`, `SlabAllocator<T>`,
+- `foundations.md` §1–7 — `Handle{u32 index,u32 gen}`, `BrushHandle`/`HandleKind.Brush`, `SlabAllocator<T>`,
   `ObjectPool<class>` (cap 32, edge), `HandleTable`, `StringId`, `ChunkedArena`, the GC-refs-only-at-edges rule.
 - `architecture-spec.md` §4.4/§4.5/§5.4 — the SoA `BrushTable : SlabAllocator<BrushData>` (content-hash
   dedup), gradient stops in a side slab by `GradientRef`, the gradient atlas, the clean-span rule

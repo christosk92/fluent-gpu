@@ -23,7 +23,8 @@ Decisions are stated as **MADE** with the losing option. Open items are `OQ-n`.
 |---|---|
 | **Handle** | the generational `Handle {u32 index, u32 gen}` (8B), the typed wrappers (`NodeHandle`/`BrushHandle`/…), the ABA/wrap policy, `IsLive` |
 | **Allocators** | `SlabAllocator<T:unmanaged>`, `ObjectPool<class>`, `HandleTable<TResource>`, and **`ChunkedArena`** (reserve-commit / segmented, native-high-water-gated) — which **supersedes** the foundations §1.2 single-buffer `ArenaAllocator` |
-| **SceneStore** | the SoA spine (gen + free-list), the **full column catalogue** (Topology, Identity, LayoutInput/LayoutAux, Bounds[LOCAL], NodePaint, InteractionInfo, A11yInfo, FocusNav, NodeFlags + the feature columns `ImageRefTable[ref]`, `EffectAux`, `BackdropRef`, `VirtualState`) — storage shape of each |
+| **SceneStore** | the SoA spine (gen + free-list), the **full column catalogue** (Topology, Identity, LayoutInput/LayoutAux, Bounds[LOCAL], NodePaint, InteractionInfo, A11yInfo, FocusNav, NodeFlags + the feature columns `ImageRefTable[ref]`, `EffectAux`, `BackdropRef`, `VirtualState`, **`SelectionState` [L1], `FlowState` [L5], the `A11yRel` collection/relation extension [L6]**) — storage shape of each |
+| **Update-queue backing** | the per-component **`UpdateQueueSlab`** column storage shape (the phase-3 lane/update record slab for `reconciler-hooks.md` P1/P2a) — this doc owns the slab placement + record layout; the *lane semantics / drain order* live in `reconciler-hooks.md` |
 | **Interning tables** | `StringTable`, `BrushTable`, `ClipTable`, `GlyphRunTable`, `EffectChainTable` — the **content-hash dedup** machinery and the *slab placement*; the SoA spine resizes them in lockstep |
 | **Dirty tracking** | the 3 orthogonal dirty axes (Layout/Paint/Transform), the upward `Subtree*` aggregates, and the **arena-backed dirty WORKLIST** (idle frames O(0)) + the `Vector256` flag-scan fallback |
 | **DrawList encoding framework** | `DrawCmd` 8-byte header, the `DrawOp` opcode **enum list**, the render-private **≥3-deep byte arenas**, the parallel **`ulong[]` sortkey** arena, the clean-span+epoch reuse **rule statement** |
@@ -60,6 +61,21 @@ What it **references, never redesigns** (ownership resolutions from the program 
 - **`reconciler-hooks.md`** owns the `ISceneBackend` *interface declaration*, the `ChildReconciler` algorithm,
   and the conceptual *home* of the `Mutate()` chokepoint (it is the UI-thread writer). This doc owns the
   Scene-side *mechanism* — the actual columns those ops write, the two-phase growth lock, and the epoch bump.
+  **For P1/P2a (lanes + automatic batching):** `reconciler-hooks.md` owns the lane bitmask *values*, the
+  `(fiber, updater, lane)` enqueue API (`setState`/`startTransition`/`UseTransition`), the phase-3 drain order,
+  and the `RenderPriorityPolicy`-as-lane-executor recast. **This doc owns only the BACKING STORAGE** — the
+  per-component `UpdateQueueSlab` shape, the intrusive enqueue-link layout, and its phase-13 reset (§2.8).
+- **`text.md`** owns `SelectionState` **semantics** (anchor/extent/affinity meaning, the `GetSelectionRects`
+  read-side, the `ITextStoreACP2`-shaped commit-lock). This doc owns the **column placement** (`SelectionState`
+  slab + `SelectionRef:int` in `NodePaint`) and registers the `DrawSelectionRectCmd` opcode in the encoding
+  framework (§4.1); the rect payload shape + raster are `gpu-renderer.md`'s (§2.7).
+- **`layout.md`** owns `FlowDirection` **resolution** (inherited→resolved at the `WriteLayout` boundary; the
+  logical→physical mirror of flex direction / justify / align / `Edges4`). This doc owns the **column placement**
+  (`FlowState` 4-byte column: inherited request + resolved physical flag) so layout's ported-Yoga core stays
+  bit-for-bit physical (§2.7).
+- **`input-a11y.md`** owns the `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription` UIA **semantics**
+  (provider projection, virtualized-realization-on-Navigate). This doc owns their **column placement** — the
+  `A11yRel` cold extension slab referenced from `A11yInfo` (§2.7).
 
 > Cross-cutting contracts (threading, COM, color, RHI/PAL seam, hooks/effect timing, language/AOT) are owned by
 > the referenced docs; this doc designs strictly within them and does not relitigate them.
@@ -70,8 +86,8 @@ What it **references, never redesigns** (ownership resolutions from the program 
 
 ### 1.1 `Handle` — the universal hot-path reference (8 bytes)
 
-The canonical handle is **`{u32 index, u32 gen}`** (architecture-spec §4.1, the *amended* form that supersedes
-foundations §1.1's `{index32, gen24, kind8}`). The kind byte is **dropped from the handle bits** and moved to
+The canonical handle is **`{u32 index, u32 gen}`** (architecture-spec §4.1; see [`SPEC-INDEX.md`](../SPEC-INDEX.md);
+it supersedes the earlier handle form in foundations §1.1). The kind byte is **dropped from the handle bits** and moved to
 the typed wrapper's `[Conditional("DEBUG")]` assert (the wrapper statically knows its kind), which buys the
 full 32-bit generation back and removes the "park-slot-forever-on-wrap" policy that violated the no-growth
 invariant.
@@ -242,6 +258,10 @@ blocks as cheap insurance.
 | **EffectAux** (cold) | 32 | `SlabAllocator<EffectAux>`; `EffectAuxRef:int` in `NodePaint`; 0 for common node | animation (write), batch/FrameGraph (read) | this doc (placement) / **`backdrop-effects-animation.md`** (semantics) |
 | **BackdropRef** (side) | ~12 | tiny cold side-table `{BakeTicket, ImageHandle baked, BackdropState}` | record (backdrop node) | **`backdrop-effects-animation.md`** |
 | **VirtualState** (slab) | — | slab-backed column; per-range CTS, anchor `ItemKey`, extent table ref | layout (virtual list/grid), P2 scroll, P4 window realize | **virtualization** (`app-requirements` §3.2) |
+| **SelectionState** (sparse side-table) | 24 | tiny `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>`; **NOT a NodePaint field** (keeps NodePaint at 64B); anchor/extent text-positions + affinity + bake-ticket | record (resolve→`DrawSelectionRectCmd`), input (drag), UIA `ITextRangeProvider` | this doc (placement) / **`text.md`** (semantics, L1) |
+| **FlowState** | 4 | flat POD column on the spine: `{Inherited:byte, Resolved:byte, _pad:ushort}`; written at `WriteLayout` | layout (logical→physical mirror), record (RTL overlay placement) | this doc (placement) / **`layout.md`** (resolution, L5) |
+| **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
+| **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
 
 ```csharp
 [StructLayout(LayoutKind.Sequential, Size = 24)]
@@ -294,7 +314,12 @@ the seam value-copies — §6.3 here, §3.2 of the seam doc).
 > virtualization additions use **distinct** contiguous free bits `VirtualRangeDirty=1<<13`/`StickyPinned=1<<14`
 > only after the want-bits are relocated (`app-requirements` §3.2 explicitly forbids reusing `Realized`).
 > `OQ-1`: pin the final 32-bit assignment once layout (`Realized`) and input (want-bits) lock their needs; the
-> column is 32-bit and there is room, this is a bookkeeping reconciliation not a design conflict.
+> column is 32-bit and there is room, this is a bookkeeping reconciliation not a design conflict. **The folded
+> gap-analysis additions take free high bits:** `HasSelection` (the record walk probes the sparse
+> `SelectionState` index for this `VisualKind.Text` node — §2.7/L1) and `RtlResolved` (this node resolved to RTL
+> — a record-time overlay-placement fast-path so the layout-mirrored geometry branch is one flag test, not a
+> `FlowState` re-read — §2.7/L5). Both are **probe/traversal hints, never skip-decision inputs** (§3). They join
+> the same `OQ-1` final-assignment pass; there is ample room in the 32-bit column.
 
 **Dirty taxonomy (folded MAJOR).** The reconciler distinguishes **intrinsic-affecting** dirt
 (width/height/min/max/aspect/content → `LayoutSelfDirty`) from **participation-affecting** dirt
@@ -358,10 +383,119 @@ public struct ClipData {             // gpu-renderer §6 owns the 3-tier consume
 
 `InteractionInfo` is hot-ish (input pre-filters on `HandlerMask`+`NodeFlags`). `A11yInfo`/`FocusNav` are **cold**
 (scanned only when an AT is attached / on focus nav) and live on the spine but in separate cache-line groups so
-the record/layout walks never touch them. `LayoutAux`/`EffectAux`/`VirtualState` are **referenced cold slabs**:
-the hot row carries a 4-byte ref (`-1`/`0` = shared zero-sentinel for the common leaf), the ~10% of nodes that
-use them index a side `SlabAllocator`. This resolves the architecture-spec §4.4 "~96B vs ~220B" contradiction
-by a ratified hot/cold split.
+the record/layout walks never touch them. `LayoutAux`/`EffectAux`/`VirtualState`/`SelectionState`/`A11yRel` are
+**referenced cold slabs**: the hot row carries a 4-byte ref (`-1`/`0` = shared zero-sentinel for the common leaf,
+or a sparse side-index for `SelectionState`), the small fraction of nodes that use them index a side
+`SlabAllocator`. This resolves the architecture-spec §4.4 "~96B vs ~220B" contradiction by a ratified hot/cold
+split. `FlowState` is the **one exception** — it is a 4-byte *hot-spine* column (not a cold-slab ref) because
+RTL resolution is per-node and read by *both* layout and the record-time overlay-placement path; 4 bytes on the
+spine costs less than the indirection, and it packs into the same cache-line group as `NodeFlags`.
+
+### 2.7 New feature-column structs (storage shapes; SEMANTICS owned by the feature docs)
+
+These are the SoA column-storage shapes the gap analysis folds into core. **This doc owns only the byte layout
+and slab placement**; the cited doc owns every field's meaning, every transition, and the read/write algorithm.
+
+```csharp
+namespace FluentGpu.Scene;
+
+// ── L1: text selection (text.md owns semantics; gpu-renderer.md owns DrawSelectionRectCmd raster) ──
+[StructLayout(LayoutKind.Sequential, Size = 24)]
+public struct SelectionState {            // one per node that HAS a live selection (sparse side-table, §2.6)
+    public int   AnchorPos;               // 4  — text position (cluster-map index, text.md §8); -1 = collapsed
+    public int   ExtentPos;               // 4  — text position; AnchorPos==ExtentPos ⇒ caret only
+    public byte  AnchorAffinity;          // 1  — Upstream|Downstream (BiDi line-boundary disambiguation)
+    public byte  ExtentAffinity;          // 1
+    public byte  SelectionKind;           // 1  — None|Caret|Range|All (text.md enum)
+    public byte  _pad;                    // 1
+    public uint  ContentEpoch;            // 4  — bumped by Mutate() when selection geometry rebakes (§4.4)
+    public ulong BakedRectsHash;          // 8  — hash of the device-space highlight rects (clean-span witness, §4.4)
+}
+// Placement: SlabAllocator<SelectionState> + a sparse Dictionary<NodeHandle,Handle> index (selections are
+// rare — at most one caret + a few range selections live at once). NOT a NodePaint field (NodePaint stays 64B).
+// The record walk probes the index ONLY for VisualKind.Text nodes whose NodeFlags has HasSelection (1<<21).
+
+// ── L5: RTL flow direction (layout.md owns logical→physical resolution at WriteLayout) ──
+public enum FlowDirection : byte { Inherit = 0, LeftToRight = 1, RightToLeft = 2 }
+[StructLayout(LayoutKind.Sequential, Size = 4)]
+public struct FlowState {                 // hot-spine column (see §2.6 exception)
+    public FlowDirection Inherited;        // 1 — author request (Inherit = take parent's resolved)
+    public FlowDirection Resolved;         // 1 — concrete LTR/RTL after WriteLayout inheritance walk; never Inherit
+    public ushort _pad;                    // 2
+}
+// layout.md reads Resolved to mirror flex main-axis / justify / align / Edges4 start↔end → physical at the
+// WriteLayout boundary, so the ported Yoga CalculateLayoutImpl stays bit-for-bit physical (gap §5.5 / L5).
+
+// ── L6: UIA collection relations + descriptions (input-a11y.md owns the provider projection) ──
+[StructLayout(LayoutKind.Sequential, Size = 24)]
+public struct A11yRel {                   // cold extension of A11yInfo; row 0 = shared "none"
+    public int      SetSize;              // 4  — total items in the set (-1 = not in a set)
+    public int      PositionInSet;        // 4  — 1-based position (virtualizer supplies index+count, L6)
+    public int      Level;                // 4  — tree/heading level (0 = none)
+    public StringId FullDescription;      // 4  — UIA FullDescription (interned, edge-formatted, no paint-path string)
+    public Handle   DescribedBy;          // 8  — NodeHandle of the describing element (FlowsTo packs alongside via
+                                          //      a parallel A11yRel2 row only when needed; common node uses neither)
+}
+// Placement: SlabAllocator<A11yRel>; A11yInfo gains a 4-byte A11yRelRef:int (0 = shared none-row). Scanned only
+// when UiaClientsAreListening, exactly like A11yInfo (§2.6 cold). FlowsTo, when present, is a second optional
+// row to avoid widening the common-case struct.
+```
+
+`A11yInfo` gains one 4-byte field to reference the extension:
+
+```csharp
+// A11yInfo (input-a11y.md owns the existing fields) gains:
+public int A11yRelRef;   // 4 — 0 = shared none-row; else A11yRel slab row. A11yInfo grows 24→28B (still cold).
+```
+
+> **`NodeFlags` additions (folded into §2.3, see the bit note there):** `HasSelection` (record probes the
+> sparse selection index for this Text node) and `RtlResolved` (fast-path: this node and ancestors resolved to
+> RTL — lets the record-time overlay-placement path branch without re-reading `FlowState`). Both take free high
+> bits per `OQ-1`; they are *traversal/probe hints*, never skip-decision inputs (§3).
+
+### 2.8 `UpdateQueueSlab` — the phase-3 lane/update-queue backing storage (P1/P2a)
+
+`reconciler-hooks.md` is replacing the reserved phase-3 no-op with a real **update queue**: each `setState`
+enqueues an `(fiber, updater, lane)` record instead of mutating its cell in place, and the queue drains once per
+coalesced frame (automatic batching falls out; lanes order the drain). **This doc owns the slab the records live
+in and the per-component head-index — not the lane values or the drain order** (those are `reconciler-hooks.md`).
+
+```csharp
+namespace FluentGpu.Scene;   // backing storage only; lane meaning + drain = reconciler-hooks.md
+
+[StructLayout(LayoutKind.Sequential, Size = 24)]
+public struct UpdateRecord {
+    public int    ComponentSlot;     // 4  — Identity.ComponentSlot of the owning component (back-pointer for drain)
+    public int    NextInQueue;       // 4  — intrusive link: next record for THIS component (-1 = tail)
+    public byte   Lane;              // 1  — lane bitmask byte (VALUES owned by reconciler-hooks.md P1)
+    public byte   Kind;              // 1  — SetState | Dispatch | Optimistic | Transition (reconciler-hooks.md)
+    public ushort _pad;             // 2
+    public ulong  UpdaterRef;        // 8  — GcDepTable side-index (the updater delegate/value is a GC ref → NOT
+                                     //      stored inline; SPEC-INDEX §2 DepKey rule: no GC ref in a blittable slab)
+    public uint   EnqueueEpoch;      // 4  — frame ordinal of enqueue (drain-after-complete + carry-forward gate, P5)
+    public uint   _resv;            // 4
+}
+
+public sealed class UpdateQueueSlab {            // UI-thread-confined; one instance, all components share it
+    SlabAllocator<UpdateRecord> _records;        // pooled records, free-listed (zero per-frame growth steady state)
+    // per-component head index lives in the component-slot table (reconciler-hooks.md owns ComponentSlotData);
+    // this slab exposes the enqueue/drain-walk primitives over the intrusive NextInQueue link:
+    public Handle Enqueue(int componentSlot, int prevHeadOrNeg1, byte lane, byte kind, ulong updaterDepRef, uint epoch);
+    public ref UpdateRecord Get(Handle r);       // gen-checked in DEBUG
+    public void  RetireComponentQueue(int headRecordIndex);   // free-list the whole chain after a complete drain
+    public void  ResetFrame();                   // phase 13: free-list any fully-drained chains (O(drained))
+}
+```
+
+**Why a slab and not a `ChunkedArena`.** Update records can outlive a single frame under carry-forward slicing
+(P4/P5): an update enqueued in frame N's partial reconcile must survive into N+1's completion, so the records
+need *stable, gen-validated* slots (a `ChunkedArena.Reset` at phase 13 would free them mid-flight). The
+`SlabAllocator<UpdateRecord>` gives stable handles + a free list; `EnqueueEpoch` is the gate `reconciler-hooks.md`
+uses to assert "drain only after a *complete* reconcile" (P5 carry-forward effect-consistency). **Zero-alloc:**
+steady state recycles record slots via the free list (no growth); the GC-ref updater goes through the existing
+per-render `GcDepTable` (SPEC-INDEX §2 DepKey rule — never a GC pointer inside the blittable slab), so the slab
+stays pure POD and the no-GC-ref-in-slab invariant holds. Lane *values*, the urgent-vs-transition cause mapping,
+`startTransition`/`UseTransition`, and `RenderPriorityPolicy`-as-executor are all `reconciler-hooks.md` §7.
 
 ---
 
@@ -452,18 +586,37 @@ public enum DrawOp : byte {
     // clip / layer / transform stack (payloads: gpu-renderer.md; PushLayer{Effect}: backdrop)
     PushClipRect, PushClipRoundRect, PushStencilClip, PopStencilClip, PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,
-    // overlays (payloads: input-a11y.md)
+    // overlays (payloads: input-a11y.md / text.md)
     DrawFocusRect, DrawAccessKeyBadge,
+    DrawFocusRing,        // FOLDED (L6/L4): the real two-tone Fluent focus ring (shape+raster: gpu-renderer.md
+                          //   DrawFocusRing; supersedes the DrawFocusRect placeholder which stays only for the
+                          //   simple rectangular debug case). Emitted by the focus engine / overlay manager.
+    DrawSelectionRect,    // FOLDED (L1): per-BiDi-fragment text-selection highlight rect (shape+raster:
+                          //   gpu-renderer.md DrawSelectionRectCmd; geometry from text.md GetSelectionRects).
+    DrawScrim,            // FOLDED (L4): overlay dismiss-layer (modal-dim / transparent light-dismiss /
+                          //   blur-promote). Shape+raster owned by gpu-renderer.md DrawScrimCmd; pushed by
+                          //   input-a11y.md §8.3 (light-dismiss FSM). Same registration contract as DrawSelectionRect.
     // backdrop stub (payload: backdrop-effects-animation.md)
     DrawBackdrop,
 }
 ```
 
-> The payload structs (`FillRoundRectCmd`, `DrawImageCmd`, `DrawGlyphRunCmd`, `PushLayerCmd`, …) are defined in
-> the owning subsystem docs and **not restated here**; this doc only guarantees they are blittable
-> `[StructLayout(Sequential)]` POD with **handle/index references only** (no GC pointers), so a `DrawCmd`+payload
-> pair is pure bytes that `memcpy`s safely and crosses no GC concern. The encoding framework treats every
-> payload as `PayloadSz` opaque bytes.
+> The payload structs (`FillRoundRectCmd`, `DrawImageCmd`, `DrawGlyphRunCmd`, `PushLayerCmd`,
+> **`DrawSelectionRectCmd`, `DrawFocusRingCmd`**, …) are defined in the owning subsystem docs and **not restated
+> here**; this doc only guarantees they are blittable `[StructLayout(Sequential)]` POD with **handle/index
+> references only** (no GC pointers), so a `DrawCmd`+payload pair is pure bytes that `memcpy`s safely and crosses
+> no GC concern. The encoding framework treats every payload as `PayloadSz` opaque bytes.
+>
+> **Opcode-registration contract for the folded opcodes.** Registering `DrawSelectionRect`/`DrawFocusRing`/`DrawScrim`
+> in the `DrawOp` enum is *this doc's* job (the enum is the framework's); the payload field layout + raster +
+> SortKey lane assignment are `gpu-renderer.md`'s. The framework imposes exactly two requirements on the new
+> shapes, identical to every existing opcode: (1) blittable POD addressed only by `RectF`/handle/`StringId`
+> (so the clean-span `memcpy` and the cross-thread/cross-OS POD-stream boundary stay pure — §10); (2) the
+> baked device-space rects live *inside* the payload (e.g. `DrawSelectionRectCmd.Rect`,
+> `DrawFocusRingCmd.OuterRect`/`InnerRect`), so the baked-geometry-hash limb of the reuse rule (§4.3 rule 3)
+> and the `CleanSpanWitness` (§4.4) cover them with no special-casing. Selection highlights are **overlay
+> opcodes** (recorded after content into the overlay z-layer per `gpu-renderer.md` SortKey), so a selection
+> change re-records only the overlay span, never the underlying `DrawGlyphRun` span.
 
 ### 4.2 The writer and the arenas (zero-alloc, render-private, ≥3-deep)
 
@@ -496,8 +649,9 @@ the *reuse rule*; the seam fixes *who owns and rotates the ring*.
 A memcpy'd clean DrawList span is **valid IFF**:
 
 1. **every handle it references `IsLive`** (gen matches the slot), **AND**
-2. **for `GlyphRunHandle` and `ImageHandle` it references, the backing realization's `ContentEpoch` is
-   unchanged** (brush/clip handles degenerate to `IsLive`-only via content-hash dedup — §2.5), **AND**
+2. **for `GlyphRunHandle`, `ImageHandle`, and `SelectionState` (L1) it references, the backing realization's
+   `ContentEpoch` is unchanged** (brush/clip handles degenerate to `IsLive`-only via content-hash dedup — §2.5;
+   `SelectionState` is in-place-mutated like a glyph run, so it carries an epoch — §2.7/§4.4), **AND**
 3. **its baked-geometry hash is unchanged** — device-space rects live *inside* command payloads
    (`FillRoundRectCmd.Rect`, `DrawGlyphRunCmd.Origin`), so a `Bounds`-move-without-`PaintDirty` would otherwise
    pass the handle/epoch check while shipping stale geometry.
@@ -547,6 +701,27 @@ asserts equality — so a span whose geometry moved without `PaintDirty` is caug
 hardened §4.4). Alternatively all `Bounds` writes route through a chokepoint with an asserted post-condition;
 the witness is the belt, the chokepoint the suspenders.
 
+**Folded extension — `SelectionState` baked geometry (L1).** A text-selection highlight (`DrawSelectionRect`
+overlay span) bakes its device-space rects from `GetSelectionRects` *plus* the node's `WorldTransform`/`Bounds`,
+and its source — the `SelectionState` anchor/extent/affinity — can change *without* the underlying
+`GlyphRunHandle`'s `ContentEpoch` moving (selecting different text does not re-shape the run). Two independent
+mutation sources therefore feed one baked overlay span, so the witness limbs are extended exactly as for any
+in-place-mutated realization, with **no new mechanism**:
+
+1. `SelectionState` carries its **own `ContentEpoch`** (§2.7), bumped only through the same `Mutate()`
+   chokepoint (`Mutate(SelectionHandle, in SelectionState)` — UI thread, `ThreadGuard.AssertUi()`), which also
+   registers it in the per-layer `RealizationDirtySet`. So an anchor/extent edit auto-invalidates the overlay
+   span via the existing rule-2 epoch check — the `DrawGlyphRun` content span underneath stays clean.
+2. The witness's existing **baked-geometry-hash** limb (rule 3) already covers the rect-moves-with-`Bounds`
+   case for the highlight rects, because the device-space rects live inside `DrawSelectionRectCmd` (§4.1). The
+   `SelectionState.BakedRectsHash` field is the value the witness records and the validator recomputes from the
+   *current* `GetSelectionRects`×`WorldTransform`.
+
+`CleanSpanWitness.Witness` therefore needs no shape change — `ContentEpoch` already generalizes over
+glyph/image/selection realizations, and `BakedGeomHash` already generalizes over content/overlay rects. The
+selection case is a **new producer of the same four signals**, not a new witness limb (the design intent of
+keeping the witness keyed on `(Node, gen, epoch, bakedHash)` rather than on opcode kind).
+
 ---
 
 ## 5. `ISceneBackend` — the Scene-side mutation API (the reconciler↔scene bridge)
@@ -572,10 +747,19 @@ public interface ISceneBackend
     NodeChildCollection Children(NodeHandle parent);   // borrowed O(n)-walked-ONCE snapshot span (§5.2)
     // property writes (edit sub-phase; growth locked; mask says which fields are live → zero-alloc diff)
     void WriteVisual (NodeHandle node, in VisualProps p, VisualMask mask); // → NodePaint columns
-    void WriteLayout (NodeHandle node, in LayoutInput  p, LayoutMask mask); // → LayoutInput/LayoutAux
+    void WriteLayout (NodeHandle node, in LayoutInput  p, LayoutMask mask); // → LayoutInput/LayoutAux + FlowState
+                                                                            //   (the WriteLayout boundary is where
+                                                                            //   FlowDirection inherited→resolved is
+                                                                            //   written — layout.md owns the mirror, L5)
     void WriteText   (NodeHandle node, in TextProps    p, TextMask  mask);  // → GlyphRun realization key
     void WritePayload(NodeHandle node, PayloadRef payload);
     void WriteAnim   (NodeHandle node, in AnimWrite anim);                  // → EffectAux / AnimTrack seeds
+    // folded feature-column writers (storage here; semantics in the cited doc)
+    void WriteFlow     (NodeHandle node, FlowDirection inherited);          // → FlowState.Inherited (L5; resolution
+                                                                            //   walk owned by layout.md at WriteLayout)
+    void WriteSelection(NodeHandle node, in SelectionState sel);            // → SelectionState slab via Mutate();
+                                                                            //   sets/clears HasSelection (L1; text.md)
+    void WriteA11yRel  (NodeHandle node, in A11yRel rel);                   // → A11yRel cold slab (L6; input-a11y.md)
     // diff-on-Dispose edit scopes (capture+revalidate backing array on Dispose; assert _growthLocked)
     EditPaintScope  EditPaint(NodeHandle node);    // marks PaintDirty ONLY on a real delta
     EditLayoutScope EditLayout(NodeHandle node);   // marks LayoutDirty/Participation on a real delta
@@ -659,8 +843,19 @@ The seam's `SnapshotColumns` (threading §3.1) is a **projection** of the column
 `WorldTransform` (derived, §6.3), `BoundsLocal` (the `Bounds` column), `NodePaintLite` (the
 `Fill`/`Stroke`/`Corners`/`Opacity`/`Clip`/`VisualKind`/`Layer`/`StrokeWidth`/`EffectAuxRef` subset of
 `NodePaint`), `Flags` (`NodeFlags`), `PayloadRef`, and `TopologyLite` (`FirstChild`/`NextSibling`/`ChildCount`
-for the record walk order). What is **NOT** copied: `LayoutInput`, `LayoutAux`, `A11yInfo`, `FocusNav`,
-`InteractionInfo` — those stay UI-thread-confined (layout is done; input/UIA read live UI-thread state). The
+for the record walk order). **Folded paint-relevant additions** (because the record walk now emits the new
+overlay opcodes and mirrors RTL geometry):
+- `FlowState.Resolved` is **copied** (1 byte/node, packed into the `NodePaintLite` group) — the record-time
+  overlay-placement path needs the resolved direction; layout already consumed `Inherited`, so only `Resolved`
+  crosses (L5).
+- `SelectionState` is **copied for the (sparse) set of nodes with `HasSelection`** only — the seam projects the
+  live selection side-table into a small `SelectionSnapshot[]` keyed by snapshot node ordinal, so the record
+  thread resolves a Text node's highlight rects without touching the UI-thread side-table (L1). Its
+  `ContentEpoch` rides along for the render-thread-local epoch check (§4.3 rule 2).
+
+What is **NOT** copied: `LayoutInput`, `LayoutAux`, `A11yInfo`, `FocusNav`, `InteractionInfo`, `A11yRel`,
+`UpdateQueueSlab`, `FlowState.Inherited` — those stay UI-thread-confined (layout is done; input/UIA read live
+UI-thread state; `A11yRel` is UIA-only and never on the paint path; the update queue is reconcile-only). The
 *shape* of each copied element is this doc's; the *copy* and its lifetime are the seam's.
 
 ### 6.2 The confinement, stated against this doc's tables
@@ -672,6 +867,10 @@ for the record walk order). What is **NOT** copied: `LayoutInput`, `LayoutAux`, 
 | `DirtyWorklist` | UI thread | none (UI consumes it in layout; render reads `Flags` from the snapshot) |
 | DrawList byte+sortkey arenas | **render thread** | render-private ring ≥3 (threading §6) — Scene defines the **format**, render owns the **arenas** |
 | `RealizationDirtySet` / `Mutate()` epoch bump | UI thread | epoch read render-thread-LOCAL (threading §7) |
+| `FlowState` (L5) | UI thread (`WriteLayout`) | `Resolved` byte value-copied at PUBLISH; `Inherited` UI-confined |
+| `SelectionState` slab + sparse index (L1) | UI thread (`Mutate(SelectionHandle,…)`) | sparse projection value-copied at PUBLISH; `ContentEpoch` read render-thread-LOCAL (§4.3/§4.4) |
+| `A11yRel` cold slab (L6) | UI thread (`WriteA11yRel`) | none — UIA reads live UI-thread state (never crosses the seam) |
+| `UpdateQueueSlab` (P1/P2a) | UI thread (enqueue+drain) | none — reconcile-only; never crosses the seam |
 
 ### 6.3 `WorldTransform[]` — derived, not a column
 
@@ -692,19 +891,19 @@ because the *column* (`LocalTransform`) is ours; the *copy budget* is the seam's
 |---|---|---|
 | 1 pump | UI | — |
 | 2 input-dispatch | UI | hit-test reads `Bounds`(LOCAL) + `Clip` + `Flags.HitTestVisible` + `InteractionInfo`; reverse-z via `LastChild→PrevSibling`; reads the **last-published-consistent** topology, never an in-flight reconcile (threading §2.2) |
-| 3 hook-flush | UI | — |
+| 3 hook-flush | UI | **`UpdateQueueSlab` is DRAINED here (P1/P2a):** `reconciler-hooks.md` walks each component's `NextInQueue` chain by lane, computes the coalesced next-state, and frees the drained chains (`RetireComponentQueue`); this doc only owns the slab + intrusive link the drain walks. Automatic batching = one drain per coalesced frame |
 | 4 render | UI | — (Element world; Scene untouched) |
-| **5 reconcile** | **UI** | `ISceneBackend` writes columns: structural sub-phase (`CreateNode`/`InsertChild`/`MoveChild`/`RemoveChild`/`DestroyNode` → quarantine ledger) then edit sub-phase (`WriteX`/`EditPaint`/`EditLayout` → `MarkDirty` → `DirtyWorklist`) |
-| 6 layout | UI | layout reads `LayoutInput`/`LayoutAux`, consumes `DirtyWorklist`/`LayoutDirty`, writes `Bounds` (LOCAL) |
+| **5 reconcile** | **UI** | `ISceneBackend` writes columns: structural sub-phase (`CreateNode`/`InsertChild`/`MoveChild`/`RemoveChild`/`DestroyNode` → quarantine ledger) then edit sub-phase (`WriteX`/`EditPaint`/`EditLayout`/`WriteFlow`/`WriteSelection`/`WriteA11yRel` → `MarkDirty` → `DirtyWorklist`). `WriteLayout` writes `FlowState.Inherited`; `WriteSelection` routes through `Mutate(SelectionHandle,…)` |
+| 6 layout | UI | layout reads `LayoutInput`/`LayoutAux`, consumes `DirtyWorklist`/`LayoutDirty`, writes `Bounds` (LOCAL); **resolves `FlowState.Inherited→Resolved`** at the `WriteLayout` boundary and mirrors logical→physical (L5; layout.md owns the mirror, this doc owns the column) |
 | 6.5 layout-effects | UI | — (effects read `Bounds`; Scene only serves the columns) |
 | 7 animation | UI | writes `LocalTransform`/`Opacity`/`EffectAux` via `WriteAnim`/`EditPaint` → `MarkTransform`/`MarkPaint`; composes derived `WorldTransform[]` |
 | **PUBLISH (7.5/13a)** | **UI** | the seam value-copies the paint-relevant column subset (§6.1); `Mutate()` epochs captured; `QuarantineLedger.Tick` → `ReclaimSlot` for cleared slots |
-| **8 record** | **RENDER** | `DrawListWriter` walks the snapshot topology, emits `DrawCmd`+payload into the front arena, clean spans memcpy'd from the render-private back arena per §4.3; epoch validation render-thread-local |
-| 9 batch | RENDER | reads the parallel `ulong[]` sortkeys this doc's framework produced |
+| **8 record** | **RENDER** | `DrawListWriter` walks the snapshot topology, emits `DrawCmd`+payload into the front arena, clean spans memcpy'd from the render-private back arena per §4.3; epoch validation render-thread-local. **Emits the folded overlay opcodes** `DrawSelectionRect` (for snapshot Text nodes with `HasSelection`, from the `SelectionSnapshot` projection) and `DrawFocusRing` (focus engine / overlay manager), each into the overlay z-layer |
+| 9 batch | RENDER | reads the parallel `ulong[]` sortkeys this doc's framework produced (the two new opcodes carry an overlay-lane SortKey assigned by gpu-renderer.md) |
 | 10 submit | RENDER | — |
 | 11 present | RENDER | — |
 | 12 passive-effects | UI | — |
-| 13 arena swap | UI / RENDER | UI: `DirtyWorklist.Reset()` + per-frame `ChunkedArena.Reset()`; RENDER: `DrawListArenaRing.Rotate()` (the DrawList arenas are render-local — threading §14) |
+| 13 arena swap | UI / RENDER | UI: `DirtyWorklist.Reset()` + per-frame `ChunkedArena.Reset()` + `UpdateQueueSlab.ResetFrame()` (free-list fully-drained chains, O(drained)); RENDER: `DrawListArenaRing.Rotate()` (the DrawList arenas are render-local — threading §14) |
 
 ---
 
@@ -728,6 +927,13 @@ because the *column* (`LocalTransform`) is ours; the *copy budget* is the seam's
   `NextSibling`); no `params object[]`; `ref T Get` mutate-in-place; `[SkipLocalsInit]`; C# 14 SoA
   compound-assignment accumulators for bounds/clip unions (audited so the result is discarded into a real
   variable, else a silent re-alloc); `Unsafe.BitCast` for `Handle↔ulong`.
+- **Folded columns hold the same bound.** `SelectionState`/`A11yRel`/`UpdateRecord` are `SlabAllocator<unmanaged>`
+  POD — slot recycle via free list, zero per-frame growth in steady state, gen-validated; `FlowState` is a
+  pre-grown spine `T[]` resized in lockstep with every other column (no separate growth event). The only
+  per-frame *managed* touch on these paths is the existing `GcDepTable` side-buffer for the `UpdateRecord`
+  updater delegate (a render-edge concession the DepKey rule already permits, SPEC-INDEX §2), never a slab
+  field. The `SelectionState` sparse `Dictionary<NodeHandle,Handle>` index mutates only on
+  selection-create/clear (a user gesture, not per-frame), so it never allocates on the paint path.
 
 ---
 
@@ -744,6 +950,24 @@ because the *column* (`LocalTransform`) is ours; the *copy budget* is the seam's
   (worst case one stale-pixel frame), never a crash.
 - **Bounds-move-without-PaintDirty:** caught by `CleanSpanWitness`'s baked-geometry hash (the validator
   recomputes the dest rect from current `Bounds[]`/`WorldTransform[]`).
+- **Selection-changed-without-glyph-reshape (L1):** the `DrawSelectionRect` overlay span carries
+  `SelectionState.ContentEpoch`; an anchor/extent edit bumps it via `Mutate()` and auto-invalidates only the
+  overlay span (the underlying `DrawGlyphRun` content span stays clean) — §4.4. A selection whose rects moved
+  with the node (scroll) is caught by the same baked-geometry-hash limb as any content rect.
+- **Stale selection on a freed/recycled node (L1):** the sparse selection index is keyed by `NodeHandle`; a
+  `DestroyNode` gen-bump makes the stale key fail `IsLive`, and `WriteSelection` on recycle clears the index
+  entry + `HasSelection` flag — no orphan highlight survives a recycle (mirrors the virtualization
+  derived-column-clear rule).
+- **`FlowState` unresolved at record (L5):** `Resolved` is written at the phase-6 `WriteLayout` boundary before
+  PUBLISH; a node that reached record with `Resolved == Inherit` is a layout-ordering bug, asserted in DEBUG
+  (the record overlay-placement path requires a concrete LTR/RTL). Production degrades to LTR (no corruption).
+- **`A11yRel` referenced when no AT is listening (L6):** the `A11yRel` slab is scanned only under
+  `UiaClientsAreListening` (cold, §2.6); the common-case `A11yRelRef == 0` shared none-row means an
+  unannotated node costs zero extra bytes and is never visited on the paint path.
+- **`UpdateRecord` orphan under carry-forward (P1/P5):** `EnqueueEpoch` gates the drain so
+  `reconciler-hooks.md` consumes a chain only after a *complete* reconcile; a partial-frame (sliced) reconcile
+  leaves the chain in the slab (stable gen-validated slots) until completion, and `ResetFrame` frees only
+  fully-drained chains — no record is reclaimed mid-flight (the carry-forward consistency contract, P5).
 - **Dirty-worklist overflow / full rebuild:** falls back to the `Vector256` `Flags[]` scan over the whole
   column (first frame, resize, theme swap, device-lost re-realize).
 - **`ChunkedArena` system-OOM on Commit:** clean fatal exception, not corruption (the named residual).
@@ -769,12 +993,42 @@ identical (the seam doc §17 inherits the whole confinement table unchanged). Th
 designed render-thread/cross-platform boundary; this doc's job is to keep it pure POD addressed by handle/index
 so neither the thread split nor the OS swap touches it.
 
+**The folded columns are equally portable.** `SelectionState`, `FlowState`, `A11yRel`, and `UpdateQueueSlab`
+are pure POD `SlabAllocator`/spine columns with **zero** platform types — they recompile unchanged on macoS.
+The macOS boundary for the *features* on top of them lives in the owning leaf docs: text-selection IME/commit
+binds Imm32 on Windows vs the equivalent on macOS (`text.md`); UIA collection relations bind to UIA on Windows
+vs NSAccessibility on macOS (`input-a11y.md`) — but the **column storage this doc defines is the same on both**.
+The two new opcodes (`DrawSelectionRect`/`DrawFocusRing`) are POD addressed by `RectF`/handle, so they cross the
+render-thread/cross-platform POD boundary exactly like every existing opcode (the focus ring's Fluent two-tone
+look is a raster detail owned by `gpu-renderer.md`, identical container on both OSes).
+
+---
+
+## Implemented from the gap analysis
+
+The directive folds every assigned gap into **core** (no v2 deferral). This doc owns the SoA **column storage**
+and the **opcode-enum registration**; the *semantics* live in the cited feature docs (this doc references them,
+never redesigns them). Folded here:
+
+| Gap | What this doc now defines (storage / registration) | Where | Semantics owner (referenced) |
+|---|---|---|---|
+| **L1** text selection | `SelectionState` struct (24B) + sparse `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>`; `HasSelection` `NodeFlags` bit; `Mutate(SelectionHandle,…)` chokepoint + `ContentEpoch`; `SelectionState.BakedRectsHash` for the witness; seam projection `SelectionSnapshot[]`; `ISceneBackend.WriteSelection` | §2.2, §2.7, §4.1, §4.3, §4.4, §5, §6.1 | `text.md` (anchor/extent/affinity, `GetSelectionRects`, commit-lock) |
+| **L5** RTL flow direction | `FlowDirection` enum + `FlowState` 4B **hot-spine** column `{Inherited, Resolved}`; `RtlResolved` `NodeFlags` bit; `ISceneBackend.WriteFlow`; resolution wired at the phase-6 `WriteLayout` boundary | §2.2, §2.7, §5, §6.1, §7 | `layout.md` (logical→physical mirror, Yoga golden-parity) |
+| **L6** UIA collection relations | `A11yRel` cold extension slab (24B) `{SetSize, PositionInSet, Level, FullDescription, DescribedBy(+FlowsTo opt row)}`; `A11yInfo.A11yRelRef:int`; `ISceneBackend.WriteA11yRel` | §2.2, §2.7, §5 | `input-a11y.md` (provider projection, virtualized-realization-on-Navigate) |
+| **P1/P2a** lanes + automatic batching | `UpdateRecord` struct (24B) + `UpdateQueueSlab` (`SlabAllocator<UpdateRecord>`, intrusive `NextInQueue`, per-component head-index, `EnqueueEpoch` carry-forward gate); phase-3 drain placement + phase-13 reset | §0, §2.2, §2.8, §7 | `reconciler-hooks.md` (lane *values*, enqueue API, drain order, `RenderPriorityPolicy`-as-executor) |
+| **opcodes** | `DrawSelectionRect` + `DrawFocusRing` registered in the `DrawOp` enum; opcode-registration contract (blittable POD, baked rects in payload so the reuse rule + witness cover them); overlay z-layer placement | §4.1, §4.4, §7 | `gpu-renderer.md` (payload field shapes + raster + SortKey lane) |
+
+**No "v2 / deferred / out-of-scope" framing remains for L1/L5/L6/P1/P2a in this doc** — each is a buildable
+core column/slab/opcode with its zero-alloc, thread-confinement, failure-mode, and macOS story stated above.
+The `CleanSpanWitness`/`ChunkedArena`/epoch/`Mutate()` contracts are **unchanged** — the folded columns reuse
+them (selection is a *new producer of the existing four witness signals*, not a new witness limb — §4.4).
+
 ---
 
 ## 11. Changed vs the original synthesis
 
 - **Handle is `{u32 index, u32 gen}` (kind byte dropped from the bits).** Supersedes foundations §1.1's
-  `{index32, gen24, kind8}`; the kind moves to the typed wrapper's DEBUG assert, buying full 32-bit generation
+  earlier layout; the kind moves to the typed wrapper's DEBUG assert, buying full 32-bit generation
   and removing the park-slot-on-wrap policy (architecture-spec §4.1).
 - **`ChunkedArena` SUPERSEDES the single-buffer `ArenaAllocator`** (foundations §1.2): reserve-commit /
   segmented, native-backed (GC-invisible), O(1) add-chunk with stable prior-chunk addresses, **native
@@ -810,6 +1064,12 @@ so neither the thread split nor the OS swap touches it.
   `gpu-renderer.md` owns each opcode payload's fields + the SortKey layout. Feature-column semantics deferred to
   media-pipeline (`ImageRealization`), backdrop (`EffectAux`), theming (`BrushDeriver`), virtualization
   (`VirtualState`).
+- **Gap-analysis columns folded into CORE (L1/L5/L6/P1/P2a).** Added `SelectionState` (sparse side-table +
+  slab + epoch + `HasSelection` bit, L1), `FlowState` (4B hot-spine, `RtlResolved` bit, L5), `A11yRel` (cold
+  extension slab + `A11yInfo.A11yRelRef`, L6), and `UpdateQueueSlab` (`SlabAllocator<UpdateRecord>` with
+  intrusive enqueue link + `EnqueueEpoch` carry-forward gate, P1/P2a). Registered `DrawSelectionRect` +
+  `DrawFocusRing` in the `DrawOp` enum. The witness/`Mutate()`/`ChunkedArena`/epoch contracts are unchanged —
+  selection reuses them as a new producer of the existing signals. See **§ Implemented from the gap analysis**.
 
 ---
 
@@ -819,6 +1079,11 @@ so neither the thread split nor the OS swap touches it.
 - **DrawList opcode PAYLOAD structs + SortKey layout + reuse-rule statement:** [gpu-renderer.md](./gpu-renderer.md) §3, §11.1
 - **`SceneFrame` / `SnapshotColumns` / `CopyInto` / publish / quarantine / retire-fence / arena ring:** [threading-render-seam.md](./threading-render-seam.md) §2, §3, §5, §6, §8
 - **`ISceneBackend` interface decl / `ChildReconciler` / `Mutate()` caller / 3-signal memo skip / effect timing:** [reconciler-hooks.md](./reconciler-hooks.md) §2, §4, §5, §6.3
+- **Lane *values* / `(fiber,updater,lane)` enqueue API / phase-3 drain order / `UseTransition` / `RenderPriorityPolicy`-as-executor (P1/P2a — this doc owns only the `UpdateQueueSlab` storage):** [reconciler-hooks.md](./reconciler-hooks.md) §7
+- **`SelectionState` semantics / `GetSelectionRects` read-side / `ITextStoreACP2` commit-lock (L1 — this doc owns the column + opcode registration):** [text.md](./text.md) §8
+- **`FlowDirection` logical→physical mirror at `WriteLayout` / Yoga golden-parity (L5 — this doc owns the `FlowState` column):** [layout.md](./layout.md) §4.1
+- **UIA `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription` provider projection + virtualized-realization (L6 — this doc owns the `A11yRel` slab):** [input-a11y.md](./input-a11y.md) §11
+- **`DrawSelectionRectCmd` / `DrawFocusRingCmd` payload shapes + raster + SortKey lane (this doc registers the opcode *enum* entries):** [gpu-renderer.md](./gpu-renderer.md) §3, §11.1
 - **`ImageRealization` semantics / residency / pinning:** [media-pipeline.md](./media-pipeline.md) §1
 - **`EffectAux` semantics / `EffectChainTable` fields:** [backdrop-effects-animation.md](./backdrop-effects-animation.md) §4
 - **`BrushDeriver` / `BrushRecipe` / `IBrushSink`:** [theming.md](./theming.md) §3, §6

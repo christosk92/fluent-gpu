@@ -8,7 +8,16 @@ Assemblies: **`FluentGpu.Text`** (portable seam, interface + POD only) · **`Flu
 This document is the authority for the text seam interfaces, `GlyphKey`/`PackedGlyph`/`ShapedRunBuilder`/
 `GlyphRunRealization`, the two-level shaped/wrap cache, the R8 + BGRA glyph atlas and its epoch/eviction
 discipline, `DrawGlyphRunCmd` emission, the DWrite leaf (RCW hot-path + thread-confined callee CCWs), the
-`UseSyncedLyrics` hook + per-instance lyric glyph color, and the CoreText boundary. It is **decisive** and
+`UseSyncedLyrics` hook + per-instance lyric glyph color, and the CoreText boundary. **As of the gap-analysis
+fold (L1 / L3-readside / L9-format / L14-inline) it is additionally the authority for** the text **selection
+model** (`SelectionState` anchor/extent/affinity — semantics here, column storage in `scene-memory.md`), the
+**selection-highlight geometry** that drives `DrawSelectionRectCmd` (built on the existing `GetSelectionRects`),
+the **editable transactional buffer seam** (an `ITextStoreACP2`-shaped commit-lock — designed FULLY for both
+single-line and multi-line editing, **not** "v2"), the **selection→clipboard binding** via `IClipboard`, the
+**text read-side that backs BOTH on-screen selection AND `ITextRangeProvider`** (input-a11y owns the UIA
+wrapper; this doc owns the read-side it calls), **edge localization** (format number/date/currency/plural at
+the edge into already-formatted `StringId`, preserving no-string-on-paint-path), and **inline-flow rich text**
+(object-replacement characters in the itemizer so inline elements flow with text). It is **decisive** and
 **designed to the AUTHORITATIVE cross-subsystem contracts** — it references, never redefines, them:
 
 - **Threading / 13-phase / publish / quarantine** → `hardened-v1-plan.md` §2 (canonical). The render thread
@@ -73,11 +82,25 @@ This subsystem owns, end to end:
    `GlyphRunRealization` content-epoch, and the by-handle `DrawGlyphRunCmd` reference.
 7. **Caching** — L1 shaped-run (constraint-free) + L2 wrap (constraint-bearing); zero-alloc measurement.
 8. **Synced lyrics** — `LyricsLayoutEngine` line layout + per-instance syllable color on the playback clock.
+9. **Selection model** (`SelectionState` anchor/extent/affinity) + the **selection-highlight geometry** read-side
+   (over `GetSelectionRects`) that drives `DrawSelectionRectCmd`, and **selection→clipboard** binding (§15).
+10. **Editable transactional buffer seam** — an `ITextStoreACP2`-shaped commit-lock document (`ITextDocument` +
+    `ITextEditSink`) backing single-line **and** multi-line editing, IME composition, and undo/redo (§16).
+11. **The text read-side that backs BOTH on-screen selection AND `ITextRangeProvider`** — one
+    `ITextReadSide` consumed by the highlight emitter (this doc) and the UIA range provider (input-a11y) (§17).
+12. **Edge localization** — `ILocaleFormatter` formats number/date/currency/plural at the edge into an
+    already-formatted `StringId`, preserving the no-string-on-paint-path invariant (§18).
+13. **Inline-flow rich text** — object-replacement codepoints (U+FFFC) in the itemizer so inline elements
+    (`Image`/`Button`/badge) flow with text; the itemizer emits `InlineObjectRun`s the layout engine reserves
+    advance for and the layout doc places (§19).
 
 It does **not** own: the quad batcher / glyph PSO (Render owns — `gpu-renderer.md` §10; we hand it instance
 data), the RHI texture-upload mechanics (we call `ICommandEncoder.CopyBufferToTexture` via the seam,
-`architecture-spec.md` §4.7), font *file* I/O policy (PAL/OS), or editing/IME (**v1 = display-only**; a named
-follow-up — see §13).
+`architecture-spec.md` §4.7), font *file* I/O policy (PAL/OS), the `DrawSelectionRectCmd` payload STRUCT SHAPE +
+raster (→ `gpu-renderer.md` §3.1/§10), the `SelectionState` SoA **column storage** + `DrawOp` registration (→
+`scene-memory.md` §2.2/§4.1), the `ITextRangeProvider`/`ITextProvider` **UIA wrapper** + `IClipboard` OLE
+mechanism + IME `IImeSession` event pump (→ `input-a11y.md` §10/§11.4/§12), the inline-object **placement
+geometry** + `FlowDirection` resolution (→ `layout.md` §4.1/§10), or font/locale data tables (PAL/OS).
 
 ---
 
@@ -168,6 +191,51 @@ public interface ITextItemizer
     // v1 Windows: backed by DWrite Analyze* (callee CCW). CoreText milestone: portable FluentGpu.Text.Unicode.
     int Itemize(in ItemizeInput input, Span<ItemRun> dstRuns);       // returns run count; -needed if too small
     int FindBreakOpportunities(ReadOnlySpan<char> text, StringId locale, Span<BreakOpp> dst); // UAX #14
+    // INLINE-FLOW (L14): caller pre-marks U+FFFC OBJECT REPLACEMENT positions; the itemizer treats each as a
+    // single zero-script, neutral-BiDi cluster boundary and emits an InlineObjectRun whose advance is RESERVED
+    // (filled by layout from the measured inline element size). Object runs never merge with glyph runs.
+    int CollectInlineObjects(in ItemizeInput input, Span<InlineObjectRun> dst);  // one per U+FFFC; -needed if small
+}
+
+// One inline object-replacement slot (the itemizer's view; layout.md §10 owns placement geometry).
+public readonly struct InlineObjectRun
+{
+    public readonly int    TextPos;        // UTF-16 index of the U+FFFC code unit
+    public readonly int    ObjectId;       // index into the caller's inline-element table (NodeHandle.Index)
+    public readonly float  AdvanceDip;     // measured inline width (RESERVED until layout fills it)
+    public readonly float  AscentDip;      // above-baseline extent (for line-height contribution)
+    public readonly float  DescentDip;     // below-baseline extent
+    public readonly byte   BaselineAlign;  // InlineBaseline { TextBaseline, Top, Center, Bottom }
+}
+
+// ───────────────────────────── Editable transactional buffer seam (L1 — single AND multi-line) ─────────────────────────────
+// ITextStoreACP2-SHAPED commit-lock document. Owned here (portable, COM-free); input-a11y.md §10 hosts the
+// IImeSession event pump + the cold-COM ITextStoreACP2 TSF CCW that forwards into this seam. NOT "v2".
+public interface ITextDocument
+{
+    int  Length { get; }
+    bool IsMultiLine { get; }                                          // single-line collapses \n; multi-line keeps
+    ReadOnlySpan<char> Snapshot();                                     // stable, pinnable view for the frame
+    SelectionState Selection { get; }                                  // current anchor/extent/affinity (§14)
+    // ── lock arbitration (the ITextStoreACP2 write-lock contract — no mutation outside a held write lock) ──
+    bool TryLock(LockKind kind, out EditLock token);                   // ReadOnly | ReadWrite; fails if conflicting
+    void Unlock(in EditLock token);                                    // flushes pending sinks, bumps ContentVersion
+    // ── transactional mutation (only valid under a ReadWrite lock; coalesced into ONE undo unit per lock) ──
+    EditResult Replace(in EditLock token, int start, int len, ReadOnlySpan<char> insert);
+    void SetSelection(in EditLock token, in SelectionState sel);
+    // ── IME composition span (Imm32 GCS_COMPSTR underline / TSF composition; committed via Replace) ──
+    void SetComposition(in EditLock token, int start, int len, ReadOnlySpan<char> text, ReadOnlySpan<CompUnderline> u);
+    void EndComposition(in EditLock token, bool commit);
+    // ── undo/redo (transaction stack; one entry per Unlock that mutated) ──
+    bool Undo(); bool Redo();
+    // ── change notification (drives layout re-shape, UIA TextChanged, ITextEditSink, caret rect) ──
+    void AdviseSink(ITextEditSink sink);  void UnadviseSink(ITextEditSink sink);
+}
+public interface ITextEditSink
+{
+    void OnTextChanged(int start, int oldLen, int newLen);             // → re-shape the affected lines only (§16)
+    void OnSelectionChanged(in SelectionState sel);                    // → re-emit highlight + caret rect (§15)
+    void OnCompositionChanged(int start, int len);                     // → re-emit composition underline overlay
 }
 
 // ───────────────────────────── Shaping ─────────────────────────────
@@ -211,7 +279,44 @@ public interface ITextLayoutEngine
     HitTestResult  HitTestPoint(TextLayoutHandle layout, float x, float y);
     HitTestMetrics HitTestTextPosition(TextLayoutHandle layout, int textPos, bool trailing);
     int GetSelectionRects(TextLayoutHandle layout, int start, int len, Span<RectF> dst); // BiDi ⇒ multiple
+    // RECORD phase: emit the selection HIGHLIGHT (one DrawSelectionRectCmd per visual fragment) UNDER the glyphs,
+    // and the caret as a thin fill; both at FINAL device space. (§15; gpu-renderer.md owns the cmd shape.)
+    void EmitSelection(TextLayoutHandle layout, in SelectionState sel, in Affine2D transform,
+                       BrushHandle highlight, BrushHandle caret, ref DrawListWriter w);
+    // Read-side accessor that backs BOTH on-screen selection and ITextRangeProvider (§17; one source of truth).
+    ITextReadSide ReadSide(TextLayoutHandle layout);
     void Release(TextLayoutHandle layout);
+}
+
+// ───────────────────────────── Read-side (backs on-screen selection AND ITextRangeProvider) ─────────────────────────────
+// Owned here; input-a11y.md §11.4 wraps it in the UIA ITextProvider/ITextRangeProvider CCW. ZERO COM, span-filling.
+public interface ITextReadSide
+{
+    int  Length { get; }                                                 // total UTF-16 code units in the layout
+    // navigation by UAX #29 grapheme/word/line/paragraph boundaries (Narrator read-by-unit; selection extend)
+    int  MoveBoundary(int pos, TextUnit unit, int count, out int actualMoved);   // returns new pos
+    int  ExpandToEnclosing(int pos, TextUnit unit, out int rangeStart);          // returns rangeEnd
+    // geometry for a logical range (BiDi ⇒ multiple visual rects). Shared by highlight emit + RangeFromRect.
+    int  GetRangeRects(int start, int len, Span<RectF> dst);             // returns frag count; -needed if too small
+    int  RangeFromPoint(float x, float y, out bool trailing);            // device pt → text pos (UIA RangeFromPoint)
+    // attributes at a position (UIA GetAttributeValue): font/size/weight/fg/bg/underline/bidi-level/lang.
+    bool GetTextAttribute(int pos, TextAttributeId attr, out TextAttributeValue val);
+    // copy the plain text of a range into a caller-owned span (UIA GetText / clipboard / Narrator). No string alloc.
+    int  CopyText(int start, int len, Span<char> dst);                   // returns chars copied; -needed if too small
+    ulong ContentVersion { get; }                                        // bumps on any edit (UIA range staleness)
+}
+
+// ───────────────────────────── Edge localization (format → StringId; no string on paint path) ─────────────────────────────
+public interface ILocaleFormatter
+{
+    // Format at the EDGE (reconcile/render phase 4, UI thread) into the StringTable; returns an interned id.
+    // The PAINT path then sees ONLY the already-formatted StringId — the no-string-on-paint-path invariant holds.
+    StringId FormatNumber(double value, NumberStyle style, StringId locale);
+    StringId FormatCurrency(decimal value, StringId currencyCode, StringId locale);
+    StringId FormatDate(long unixMs, DateStyle style, StringId locale);
+    StringId FormatPlural(StringId messageTemplate, double count, StringId locale,
+                          ReadOnlySpan<(StringId name, StringId value)> args);   // ICU MessageFormat select/plural
+    PluralCategory ResolvePlural(double count, StringId locale);                 // zero/one/two/few/many/other
 }
 ```
 
@@ -703,9 +808,12 @@ final arrange. The arrange-phase `Bounds` (LOCAL space, phase 8) then feeds `Emi
 - `HitTestTextPosition(pos, trailing)` → inverse: locate run/cluster, sum advances, account for BiDi (caret X
   in visual space ≠ logical order) → caret `{X, Y, Height}`.
 - `GetSelectionRects(start, len, dst)` → one `RectF` per **visual** fragment (a logical range maps to multiple
-  disjoint rects under BiDi); bounded by `dst.Length` (zero-alloc; caller sizes).
-- All operate on `TextLayoutSlot` arenas. (The caret/selection model is part of the **display-only v1**
-  read-side; *editing* — mutation, IME, UAX #29 grapheme navigation — is the named follow-up §13.)
+  disjoint rects under BiDi); bounded by `dst.Length` (zero-alloc; caller sizes). **This is the single
+  read-side geometry primitive that backs BOTH the on-screen selection highlight (§15) and
+  `ITextRangeProvider` (§17)** — there is no second path.
+- All operate on `TextLayoutSlot` arenas. The caret/selection geometry **is** the `ITextReadSide` (§17) the UIA
+  range provider and the highlight emitter share; **UAX #29 grapheme/word navigation, mutation, IME, and
+  undo/redo are CORE** via the `ITextDocument` editable seam (§16) — no longer deferred.
 
 ---
 
@@ -863,28 +971,262 @@ stays minimal — `architecture-spec.md` §10.6).
   the absolute ms, no accumulation state.
 - **Stale glyph-run after eviction mid-frame** → impossible: eviction is frame-START + live-pin + epoch bump;
   the §4.6 contract makes a clean span referencing a repacked run re-record, not read stale UVs.
+- **Empty / collapsed selection** (`anchor == extent`) → no `DrawSelectionRectCmd`; emit only the caret fill (§15).
+- **Selection spanning a soft-wrap boundary** → `GetRangeRects` returns one fragment per line; a trailing-edge
+  rect extends to the line's content box right edge (LTR) / left edge (RTL) to read as "wraps to next line."
+- **Edit grows a single-line field past width** → re-shape produces overflow metrics; the editable control
+  scrolls horizontally (caret-follow), not a re-wrap (single-line ignores break opps; §16).
+- **IME composition then app loses focus** → `EndComposition(commit:false)` discards the composing span; the
+  document `Snapshot()` excludes uncommitted composition text (composition is an overlay, not buffer state).
+- **Undo across an IME commit** → one undo unit per `Unlock` that mutated; the committed IME run is one unit.
+- **Concurrent UIA read + edit** → `ITextDocument.TryLock(ReadOnly)` is granted while no ReadWrite lock is held;
+  a UIA `GetText`/range walk takes a read lock; the contract forbids mutation under a foreign read lock.
+- **`RangeFromPoint` outside any glyph** → snap to the nearest line's start/end position; never returns -1.
+- **Localized string with no ICU data** (`InvariantGlobalization` build) → `ILocaleFormatter` falls back to
+  invariant formatting + an `other`-only plural ruleset; logs once (§18 build config).
+- **Inline object with no measured size** → itemizer reserves `AdvanceDip = 0`; layout fills it at arrange; if
+  still 0 (unmeasured element) the object collapses to a zero-width cluster (never splits a grapheme).
+- **U+FFFC with no backing inline element** → treated as `.notdef` tofu (object id sentinel −1), never crashes.
 
 ---
 
-## 14. Where each piece lands in the 13-phase loop (and on which thread)
+## 14. Selection model — `SelectionState` (semantics; column storage in `scene-memory.md`)
+
+The selection is a **value-type model** owned here; its **SoA column storage** (a `SelectionState` column keyed
+by `NodeHandle.Index`) and the `DrawOp.DrawSelectionRect` **registration** live in `scene-memory.md` §2.2/§4.1
+(this doc owns the **semantics**, that doc owns the **bytes** — they reference each other). A node has a
+selection iff it carries a live `TextLayoutHandle` and `SelectionState.HasContent`.
+
+```csharp
+// 12 B, blittable POD; stored in the scene SelectionState column (scene-memory.md owns the column).
+public readonly struct SelectionState : IEquatable<SelectionState>
+{
+    public readonly int  Anchor;     // 4  the FIXED end (where the drag/shift-select started), UTF-16 index
+    public readonly int  Extent;     // 4  the MOVING end (the caret), UTF-16 index
+    public readonly byte Affinity;   // 1  CaretAffinity { Downstream=0, Upstream=1 } — line-wrap boundary side
+    public readonly byte Flags;      // 1  bit0 HasContent (Anchor!=Extent), bit1 IsBlockSelection (col-mode), bit2 Active
+    public readonly ushort _pad;     // 2
+    public int Start => Math.Min(Anchor, Extent);
+    public int Len   => Math.Abs(Extent - Anchor);
+    public bool IsCollapsed => Anchor == Extent;     // caret only, no highlight
+}
+```
+
+- **Anchor/extent (not start/len)** so shift-extend and drag-select are directional: the *extent* is the caret
+  the user moves; the *anchor* is pinned. `Start`/`Len` derive the normalized range the read-side consumes.
+- **Affinity** disambiguates the soft-wrap boundary (a position at the end of line N == start of line N+1): the
+  caret renders on the line implied by `Downstream`/`Upstream`. Mirrors the existing `isTrailingHit` plumbing
+  in §8.3 (the read-side already produces affinity from hit-testing).
+- **Mutation chokepoint:** the selection is written ONLY via `ITextDocument.SetSelection` under an edit lock, or
+  by the selection-drag gesture (input-a11y arena, L2) calling `SetSelection` on the focused document. The
+  reconciler writes the resulting `SelectionState` into the scene column at phase 5 `WriteLayout` (same
+  single-writer discipline as every other column). `SelectionState` equality drives a `PaintDirty` (not
+  `LayoutDirty`) bump — a selection change re-emits the highlight overlay, never re-shapes.
+- **macOS boundary:** `SelectionState` is portable POD; on macOS the same column feeds `NSTextInputClient`
+  selected-range reporting and `NSAccessibility` selection. No Windows type appears in the model.
+
+## 15. Selection-highlight + caret geometry → `DrawSelectionRectCmd` (this doc owns the read-side; `gpu-renderer.md` owns the cmd shape + raster)
+
+`EmitSelection` (§2 seam) is the RECORD-phase (phase 8, render thread) emitter. It reads the layout's
+`ITextReadSide.GetRangeRects(Start, Len, dst)` — the **same** primitive `GetSelectionRects` already exposes —
+and writes one `DrawSelectionRectCmd` per visual fragment **before** the run's `DrawGlyphRun` (so the highlight
+sits under the glyphs and the gamma-corrected text composites on top), then a thin caret fill at the extent.
+
+- **The opcode:** `DrawSelectionRectCmd` is a **NEW** `DrawOp` (`gpu-renderer.md` §3.1 owns the payload struct
+  shape + the raster; `scene-memory.md` §4.1 owns the `DrawOp.DrawSelectionRect` enum registration). Its payload
+  is the union of `{ RectF Rect; BrushHandle Fill; ClipHandle Clip; byte Flags }` — the same shape family as
+  `FillRoundRectCmd`; it rasters as a plain premultiplied-linear quad (NOT the text gamma path — highlight is a
+  solid fill, not coverage). The caret reuses `FillRoundRectCmd` (a 1-dip rounded rect), so **only one new
+  opcode is introduced** by this doc.
+- **Geometry source of truth:** fragment rects come exclusively from the read-side (BiDi ⇒ multiple disjoint
+  rects, the §8.3 / §13 wrap-boundary rule). There is no second selection-geometry path; `ITextRangeProvider`
+  (§17) consumes the identical `GetRangeRects`.
+- **Clean-span discipline:** the highlight `DrawSelectionRectCmd` references `BrushHandle`/`ClipHandle` only
+  (no `GlyphRunHandle`), so it follows the ordinary clean-span rule (valid IFF handles `IsLive`); a
+  selection-only change bumps `PaintDirty` on the text node and re-records its highlight span + glyph run —
+  inactive text stays clean (memcpy'd). The selection overlay does **not** invalidate the `GlyphRunRealization`
+  content-epoch (selection is not a pixel property of glyphs).
+- **Composition underline** (IME) reuses this emitter family: a `FillRoundRectCmd` underline + the existing
+  transient `DrawGlyphRun` for the composing run (input-a11y.md §10 already specifies the underline overlay; we
+  supply the geometry via the read-side).
+
+**Selection → clipboard binding.** The L1 "the `IClipboard` mechanism exists; it has nothing to read" gap is
+closed here: a Copy/Cut command (from the input route / `UseCommand`) calls `ITextReadSide.CopyText(sel.Start,
+sel.Len, scratch)` (§17) to fill a caller-owned `Span<char>`, then `IClipboard.SetText(span)` (the OLE mechanism
+owned by `input-a11y.md` §12 — referenced, not redefined). **Cut** additionally takes an `ITextDocument` write
+lock and `Replace(sel.Start, sel.Len, default)` (editable docs only; §16). **Paste** = `IClipboard.TryGetText`
+(an edge `string`, input-a11y's named edge alloc) → `Replace(sel.Start, sel.Len, pasted)`. The clipboard string
+is an edge allocation (input-a11y §12), never on the paint path; the read-side copy is zero-alloc into the
+caller's span.
+
+## 16. Editable transactional buffer — `ITextDocument` (single AND multi-line; FULLY core, not v2)
+
+The editable seam (§2) is an **`ITextStoreACP2`-shaped commit-lock document**. It is **portable + COM-free**;
+`input-a11y.md` §10 hosts (a) the `IImeSession` Imm32 event pump and (b) — when TSF lands — the cold-COM
+`ITextStoreACP2` CCW that forwards OS lock/edit callbacks into this seam. The buffer model is designed FULLY
+here for v1; nothing about editing is deferred.
+
+### 16.1 Buffer representation (zero-alloc steady state)
+
+```
+TextDocument (in a SlabAllocator<DocSlot>; one per editable control instance)
+  ├─ Buffer     : a PIECE-TABLE over two ChunkedArena spans (original + add), so an edit is O(pieces),
+  │               never an O(n) array shift; Snapshot() flattens lazily into a pinned char[] cache (re-flattened
+  │               only on ContentVersion change — the paint/measure path reads the flattened span, no per-edit copy).
+  ├─ Selection  : SelectionState (§14)
+  ├─ Composition: { int Start, Len; CompUnderline[] underlines } or empty (overlay, NOT buffer content)
+  ├─ Undo       : ChunkedArena ring of UndoUnit { int start, oldLen, newLen, AddSpanRef, prevSelection } — one per Unlock
+  ├─ ContentVersion : ulong (bumps on every committed Replace; drives ITextReadSide.ContentVersion + UIA staleness)
+  ├─ Lock       : { LockKind held; uint lockGen } — the ITextStoreACP2 write-lock state machine
+  └─ Sinks      : ITextEditSink[] (small inline array; layout re-shape + UIA TextChanged + caret-rect)
+```
+
+- **Piece-table** (not a gap buffer) so multi-line documents and large paste are O(pieces); `ChunkedArena` keeps
+  added text native-backed (no LOH cliff). `Snapshot()` returns a stable pinnable `ReadOnlySpan<char>` for the
+  frame (the §6 source-text edge rule — the one legitimate edge GC ref is the flattened cache, re-flattened only
+  on version change).
+- **Single vs multi-line:** `IsMultiLine=false` collapses `\r\n`/`\n` on insert (Enter commits/moves focus per
+  the control), ignores break opps in wrap, and scrolls horizontally on overflow; `IsMultiLine=true` keeps
+  newlines as hard paragraph breaks and wraps within the content box. **Both are core; the seam is identical.**
+
+### 16.2 The commit-lock contract (the `ITextStoreACP2` write-lock state machine)
+
+- **No mutation outside a held `ReadWrite` lock.** `TryLock(ReadWrite)` fails (returns false) if any lock is
+  held; `TryLock(ReadOnly)` succeeds while no ReadWrite is held (UIA reads + Narrator walks take read locks).
+  This is exactly the TSF document-lock arbitration `input-a11y.md` §10 names as the v2 TSF workstream — but the
+  **seam and the buffer state machine are core now**, so Imm32 (v1) and TSF (when it lands) both drive the same
+  `ITextDocument`.
+- **One transaction per lock:** all `Replace`/`SetSelection`/`SetComposition` calls between `TryLock` and
+  `Unlock` coalesce into ONE `UndoUnit`; `Unlock` flushes sinks (`OnTextChanged`/`OnSelectionChanged`), bumps
+  `ContentVersion`, and is the single point that makes an edit visible to layout/UIA — closing the
+  "read a half-built edit" race the same way `Committed` closes it for shaping (§3.4).
+- **Thread:** edits run on the **UI thread** (input arrives there; phase 2 input → phase 4/5 reconcile). The
+  document is UI-thread-confined; the render thread only ever reads the *committed* `TextLayoutSlot` + the
+  scene `SelectionState` column (never the live document). No ComPtr touches the document.
+
+### 16.3 Edit → re-shape (incremental, via the L1/L2 caches)
+
+`OnTextChanged(start, oldLen, newLen)` invalidates only the **affected lines'** L2 wrap entries and the
+**affected runs'** L1 shaped entries (line-granular: a single-char insert re-shapes one line, re-wraps from that
+line down). The two-level cache (§7) already keys shaping by run content, so unchanged runs L1-hit. Caret-rect
+for `IImeSession.SetCompositionRect` comes from `HitTestTextPosition(extent)` (§8.3) projected by input-a11y's
+shared transform helper.
+
+### 16.4 Undo/redo + IME
+
+- **Undo/redo** walk the `UndoUnit` ring: `Undo` re-`Replace`s the inverse span and restores `prevSelection`
+  (each is itself a transaction under an internal lock, so a redo of an undo is symmetric). Bounded ring (LRU
+  drop oldest); coalescing rule = consecutive single-char typing folds into one unit until a caret jump/IME/paste.
+- **IME composition** is an **overlay, not buffer content**: `SetComposition` stamps the composing span +
+  underlines (drives the §15 underline overlay + the composing `DrawGlyphRun`); `EndComposition(commit:true)`
+  turns it into a real `Replace` (one undo unit); `EndComposition(commit:false)` discards. `Snapshot()` never
+  includes composing text, so measure/paint/UIA see a consistent committed buffer.
+
+## 17. The shared text read-side — `ITextReadSide` (backs on-screen selection AND `ITextRangeProvider`)
+
+**One read-side, two consumers.** `ITextReadSide` (§2) is the single source of truth for text geometry,
+navigation, attributes, and plain-text extraction over a retained `TextLayoutSlot`. It is consumed by:
+1. **On-screen selection** — `EmitSelection` (§15) calls `GetRangeRects` for the highlight.
+2. **`ITextRangeProvider`/`ITextProvider`** — `input-a11y.md` §11.4 owns the **UIA CCW wrapper** (cold COM,
+   `[GeneratedComInterface]`/`[GeneratedComClass]`, `UseComThreading`); it is a thin adapter that forwards every
+   UIA call into `ITextReadSide`:
+
+| UIA member (input-a11y owns the CCW) | `ITextReadSide` call (this doc owns) |
+|---|---|
+| `ITextProvider.GetSelection` / `RangeFromPoint` | `Selection` (§14) / `RangeFromPoint(x,y)` |
+| `ITextRangeProvider.GetBoundingRectangles` | `GetRangeRects(start,len,dst)` (same as §15 highlight) |
+| `ITextRangeProvider.Move`/`MoveEndpointByUnit` | `MoveBoundary(pos, TextUnit, count, …)` (UAX #29) |
+| `ITextRangeProvider.ExpandToEnclosingUnit` | `ExpandToEnclosing(pos, TextUnit, …)` |
+| `ITextRangeProvider.GetText` | `CopyText(start, len, dst)` (no string alloc inside; edge `ToString` in the CCW) |
+| `ITextRangeProvider.GetAttributeValue` | `GetTextAttribute(pos, TextAttributeId, …)` |
+| range staleness (re-validate on text change) | `ContentVersion` |
+
+- **`TextUnit`** mirrors UIA: `Character (grapheme, UAX #29)`, `Format`, `Word`, `Line`, `Paragraph`, `Page`,
+  `Document`. `MoveBoundary` operates on the retained slot — **no re-shape, no COM** (UAX #29 grapheme/word
+  segmentation runs over the cluster map + `SearchValues`-classified word boundaries; the portable
+  `FluentGpu.Text.Unicode` tables carry the full UAX #29 DFA at the CoreText milestone, DWrite/cluster-map
+  approximation in v1).
+- **Narrator read-by-line/word + caret tracking + selection announce** all resolve through this one read-side;
+  the screen reader's *only* document-text path (the L3 gap) is now fully backed.
+- **macOS:** `ITextReadSide` is portable; the `NSAccessibility` text protocol (`accessibilityString(for:)`,
+  `accessibilityRange(for:)`) wraps the identical seam — `input-a11y.md` §11.7 boundary unchanged.
+
+## 18. Edge localization — `ILocaleFormatter` (format → `StringId`; no string on the paint path)
+
+The L9 gap: shaping does locale *digit* substitution (DWrite `IDWriteNumberSubstitution`, §4.4) but there is no
+locale *value* formatting. `ILocaleFormatter` (§2 seam) closes it **at the edge**, preserving the
+no-string-on-paint-path invariant:
+
+- **Where it runs:** phase 4 (render/reconcile, UI thread) when a component builds its `Element` tree. The app
+  writes `Text(fmt.FormatCurrency(amount, usd, locale))`; the formatter produces a **`StringId`** interned in
+  the `StringTable` (`scene-memory.md` owns the table). The `TextBlockPayload` thereafter holds the
+  already-formatted `char[]`; **the paint/measure path sees only the `StringId`** — zero string work in phases
+  6–13, the invariant intact.
+- **Backing data:** ICU via .NET globalization. This **reverses the `InvariantGlobalization=true`** default for
+  the shipping app: `dsl-aot.md` owns the `Directory.Build.props` localization build config (ICU app-local or
+  OS ICU); this doc owns the **formatter seam + the edge contract**. When ICU is absent (a deliberate
+  invariant-only build), the formatter degrades to invariant formatting + `other`-only plurals (§13 edge case).
+- **Plural/select:** `FormatPlural` is an ICU-MessageFormat-style `select`/`plural` over a `StringId` template +
+  named args; `ResolvePlural` exposes the CLDR plural category. The template is parsed once and cached in a
+  `FrozenDictionary` (build-once, §6) keyed by `(StringId template, StringId locale)` so a repeated format is a
+  dictionary probe + a span fill, not a re-parse.
+- **RTL icon/image mirroring** (the other L9 half) is an `AutoMirror` flag on `Image`/`Path` resolved at
+  `layout.md` §4.1's `FlowDirection` boundary — **not owned here** (referenced: `layout.md` owns the mirror
+  geometry; this doc owns only the text/number formatting).
+- **macOS:** ICU is the same cross-platform library; the seam is portable, the formatter implementation shared.
+
+## 19. Inline-flow rich text — object-replacement characters in the itemizer (L14, core)
+
+The L14 gap: text is an opaque leaf; inline elements (an avatar in a sentence, an inline `Button`, a count
+badge) cannot flow with text. The fix is **object-replacement codepoints (U+FFFC) in the itemizer**:
+
+- **Itemizer treats each U+FFFC as a single, zero-script, neutral-BiDi cluster boundary** and emits an
+  `InlineObjectRun` (§2) instead of a glyph run; `CollectInlineObjects` returns one per U+FFFC. The object run
+  **never merges** with adjacent glyph runs (it is its own item), and its boundaries align to grapheme clusters
+  (the §4.6 UAX #29 rule) so it never splits a combining sequence.
+- **Advance is RESERVED, filled by layout:** the itemizer/layout reserves `AdvanceDip`/`AscentDip`/`DescentDip`
+  for the object; the **measured inline-element size comes from `layout.md` §10** (the inline element is a
+  real layout node measured by the flex/grid pass). This doc owns the *itemizer seam* (where the hole is in the
+  text stream); **`layout.md` owns the *placement geometry*** (where the node lands on the line, baseline
+  alignment, line-height contribution) — they reference each other. The line-fill (§8 WRAP) treats the reserved
+  advance like a glyph cluster's advance, so wrap/align/justify all just work.
+- **Hit-testing + selection over inline objects:** the U+FFFC occupies exactly one UTF-16 position; selecting
+  "through" an inline object includes one position (the object is one selectable atom). `ITextReadSide`
+  navigation treats it as one `Character` unit; `GetRangeRects` returns the object's reserved box as a fragment.
+- **Emission:** the text engine emits the surrounding glyph runs as usual; the inline element draws via its own
+  node's normal record path at the position layout assigned — the text engine does **not** rasterize inline
+  content, it only reserves the flow gap (the same separation as the oversized-glyph valve §4.7, but for whole
+  elements). No new opcode is needed for inline objects.
+- **macOS:** U+FFFC handling is portable (CoreText `CTRunDelegate` is the analogous mechanism, wrapped behind
+  the same `ITextItemizer` seam at the CoreText milestone); v1 Windows DWrite itemization pre-marks U+FFFC
+  before `Analyze*`.
+
+---
+
+## 20. Where each piece lands in the 13-phase loop (and on which thread)
 
 | Phase | Work | Thread | Assembly |
 |---|---|---|---|
 | 1 pump | atlas `BeginFrame` (LRU clock advance + frame-START eviction sweep, epoch bump) | RENDER | Text.DirectWrite / Text |
-| 4 render | `UseSyncedLyrics` memoizes line layout (shape-on-miss) | UI | Media / Text |
-| 6 layout | `MeasureText` via static `YogaMeasureFunc` → itemize → shape (L1) → wrap (L2) → metrics; `CommitBounds` sets `Committed` | UI | Layout / Text |
+| 2 input | selection-drag / caret moves arrive (input-a11y arena, L2) → `ITextDocument.SetSelection`; edge-autoscroll (L11) writes `ScrollOffset` | UI | Input / Text |
+| 4 render | `UseSyncedLyrics` memoizes line layout (shape-on-miss); **`ILocaleFormatter` formats values → `StringId`** at the edge (§18) | UI | Media / Text |
+| 5 reconcile | `WriteLayout` writes the `SelectionState` column (§14) + inline-object reserved advances (§19); edit `OnTextChanged` invalidates affected L1/L2 entries (§16) | UI | Reconciler / Text |
+| 6 layout | `MeasureText` via static `YogaMeasureFunc` → itemize (incl. U+FFFC inline objects) → shape (L1) → wrap (L2) → metrics; `CommitBounds` sets `Committed` | UI | Layout / Text |
 | 7 animation | lyric per-instance color via `AnimTrack.DrivenClock` (playback ms); line-scroll `LocalTransform` | UI | Media |
-| 8 record | `Emit` FINAL device-space glyph runs (VISUAL order) → `DrawGlyphRunCmd`; clean spans memcpy (epoch+geometry-hash validated) | RENDER | Render / Text |
-| 9 batch | resolve `GlyphKey`→`PackedGlyph` UVs; coalesce by `(page, AaMode, clip)`; atlas `EndFrame` → batched `CopyBufferToTexture` | RENDER | Render / Text.DirectWrite |
+| 8 record | `Emit` FINAL device-space glyph runs (VISUAL order) → `DrawGlyphRunCmd`; **`EmitSelection` → `DrawSelectionRectCmd` + caret** UNDER the glyphs (§15); clean spans memcpy (epoch+geometry-hash validated) | RENDER | Render / Text |
+| 9 batch | resolve `GlyphKey`→`PackedGlyph` UVs; coalesce by `(page, AaMode, clip)`; selection quads coalesce as fills; atlas `EndFrame` → batched `CopyBufferToTexture` | RENDER | Render / Text.DirectWrite |
 | 10 submit | glyph PSO draws inside the submitted command list | RENDER | Rhi.D3D12 |
+| 12 passive | UIA `TextChanged`/`SelectionChanged`/caret events for seq ≤ last-presented (`ITextEditSink` → input-a11y `ITextRangeProvider` notifications) | UI | Input / Text |
 
 ComPtr touches are confined to phases 1/9/10 on the render thread (the sole COM owner). The UI-thread shaping
-call in phase 6 uses the thread-confined callee CCW (§4.2); the build order ships single-thread-first
-(quarantine=0) before this split is flipped behind the green race gate.
+call in phase 6 uses the thread-confined callee CCW (§4.2); editing (§16), selection (§14), the read-side
+(§17), and localization (§18) are **all UI-thread + COM-free** in this seam (the render thread reads only the
+committed `TextLayoutSlot` + the scene `SelectionState` column, never the live document). The build order ships
+single-thread-first (quarantine=0) before the UI/render split is flipped behind the green race gate.
 
 ---
 
-## 15. Summary of load-bearing decisions
+## 21. Summary of load-bearing decisions
 
 1. **Seam is portable + COM-free**: `IFontSystem / ITextItemizer / ITextShaper / IGlyphRasterizer /
    IGlyphAtlas / ITextLayoutEngine`, span-filling, handle-returning, no `string` on the paint path.
@@ -909,9 +1251,44 @@ call in phase 6 uses the thread-confined callee CCW (§4.2); the build order shi
    in one pass; Yoga's 8-ring × L2 cache ⇒ one layout per content/constraint set.
 10. **Synced lyrics** (`LyricsLayoutEngine`, `FluentGpu.Media`): cached shaping, **per-INSTANCE syllable color
     on the phase-7 playback-driven clock** (not `BrushHandle` re-bake), active line re-records one run/frame.
-11. **Display-only v1**; editing/IME/caret-mutation is a named follow-up (the read-side caret/selection model
-    + cluster map already exist to lean on).
-12. **~70% portable**; macOS/CoreText implements 3 method families and is simpler (grayscale-only).
+11. **Selection is CORE** (not display-only): a 12 B `SelectionState{Anchor,Extent,Affinity}` model (semantics
+    here; SoA column in `scene-memory.md`); highlight via the **new `DrawSelectionRectCmd`** opcode emitted
+    UNDER the glyphs from the **same `GetSelectionRects`** read-side; `PaintDirty` (never `LayoutDirty`).
+12. **Editing is CORE** (not v2): an `ITextStoreACP2`-shaped **commit-lock `ITextDocument`** over a piece-table,
+    single-line **and** multi-line, with IME composition (overlay, not buffer), undo/redo, and a write-lock
+    state machine; UI-thread-confined + COM-free (the render thread reads only the committed slot + column).
+13. **One read-side, two consumers** (`ITextReadSide`): the identical geometry/navigation/attributes/text seam
+    backs the on-screen selection highlight (§15) **and** `ITextRangeProvider` (input-a11y owns the UIA CCW) —
+    closing both L1 (selection) and L3 (text a11y) against one source of truth.
+14. **Edge localization** (`ILocaleFormatter`): number/date/currency/plural formatted at phase 4 into an
+    interned `StringId`, so the paint path still sees no `string` — the no-string-on-paint-path invariant holds.
+15. **Inline-flow rich text** (L14): U+FFFC object-replacement codepoints in the itemizer emit `InlineObjectRun`s
+    whose advance is reserved (placement geometry owned by `layout.md`); inline elements flow with text.
+16. **~70% portable**; macOS/CoreText implements 3 method families and is simpler (grayscale-only); selection,
+    editing, the read-side, and localization are all portable seams (CoreText/`NSTextInputClient`/ICU leaves).
+
+---
+
+## Implemented from the gap analysis
+
+These `core-fundamentals-gap-analysis.md` rows are now **fully-specified, buildable CORE design** in this doc
+(no "v2", no "defer", no "display-only"):
+
+| Gap item | What it was | Folded into CORE — where |
+|---|---|---|
+| **L1** — text selection + editable seam | "display-only v1; `SelectionState`/highlight/clipboard/editable absent; editing stays v2" | §0 (scope 9–10), §2 (`SelectionState`, `ITextDocument`, `ITextEditSink`, `EmitSelection`), **§14** selection model, **§15** highlight→`DrawSelectionRectCmd`, **§16** editable commit-lock buffer (single+multi-line, IME, undo/redo — **NOT v2**), **§15** clipboard binding (see also §17 `CopyText`), §13 edge cases, §20 phase table |
+| **L3 (read-side)** — text-selection a11y read-side backing `ITextRangeProvider` | "only the UIA Text *bit*; zero range-provider design" | §2 (`ITextReadSide`), **§17** the one read-side feeding BOTH on-screen selection AND `ITextRangeProvider` (UIA CCW owned by input-a11y, mapping table inline) |
+| **L9 (format)** — edge localization (number/date/currency/plural) | "`InvariantGlobalization=true`; no locale value formatting" | §2 (`ILocaleFormatter`), **§18** format-at-the-edge → `StringId` (no-string-on-paint-path preserved); build config referenced to `dsl-aot.md` |
+| **L14 (inline)** — inline-flow rich text | "text is an opaque leaf; reserve the object-replacement seam only" | §0 (scope 13), §2 (`ITextItemizer.CollectInlineObjects`, `InlineObjectRun`), **§19** U+FFFC object-replacement in the itemizer; placement geometry referenced to `layout.md` |
+
+**New artifacts this doc now defines (owned here):** the `SelectionState` POD model (semantics), the
+`ITextReadSide` seam, the `ITextDocument`/`ITextEditSink` editable commit-lock seam, the `ILocaleFormatter`
+seam, the `InlineObjectRun` shape + `CollectInlineObjects` itemizer method, and the `EmitSelection`/`ReadSide`
+additions to `ITextLayoutEngine`. **Referenced (owned elsewhere):** `DrawSelectionRectCmd` payload + raster
+(`gpu-renderer.md`), the `SelectionState` **column** + `DrawOp.DrawSelectionRect` registration
+(`scene-memory.md`), the `ITextProvider`/`ITextRangeProvider` UIA CCW + `IClipboard` + `IImeSession`/TSF
+(`input-a11y.md`), inline-object **placement geometry** + `FlowDirection`/`AutoMirror` (`layout.md`), the
+localization **build config** (`dsl-aot.md`).
 
 ---
 
@@ -926,7 +1303,7 @@ Folded the following amendments from the authoritative cross-cutting docs into t
   "requests").
 - **Thread model made explicit.** Added the `hardened-v1-plan.md` §2 confinement: the render thread owns every
   ComPtr; the **DWrite factory is SHARED + shaping CCW thread-confined**; per-phase UI/render thread placement
-  table (§14); single-thread-first build order; consume-gated quarantine + refcounted glyph-run slots.
+  table (§20); single-thread-first build order; consume-gated quarantine + refcounted glyph-run slots.
 - **Itemization promoted to its own seam** (`ITextItemizer`) above the shaper, with the explicit **itemize
   (BiDi+script+linebreak) → fallback → shape** pipeline and the BiDi-multiple-visual-runs clause; line-break
   is **not** greedy-on-advances; **`SearchValues<char>`** for break/space/control classification.
@@ -951,7 +1328,16 @@ Folded the following amendments from the authoritative cross-cutting docs into t
   syllable color written by the phase-7 `AnimTrack.DrivenClock` on the playback clock** (not a `BrushHandle`
   re-bake, not a gradient-atlas lerp), active line re-records one run/frame; the `UseSyncedLyrics` hook;
   CJK furigana/line-scroll/backdrop/3D-fan boundaries.
-- **Display-only v1** explicitly stated; editing/IME/caret-mutation named as the follow-up (read-side
-  caret/selection retained).
+- **Display-only v1 SUPERSEDED → selection + editing are CORE** (gap fold L1/L3-readside). <!-- canon-allow: names the superseded display-only framing -->
+  Added the `SelectionState` model (§14), the `DrawSelectionRectCmd` highlight emitter + caret + clipboard
+  binding (§15), the `ITextStoreACP2`-shaped editable `ITextDocument` commit-lock buffer (single+multi-line,
+  piece-table, IME-as-overlay, undo/redo — §16), and the shared `ITextReadSide` that backs BOTH on-screen
+  selection AND `ITextRangeProvider` (§17). The old "editing is a v2 follow-up" framing is removed.
+- **Edge localization ADDED** (gap fold L9): the `ILocaleFormatter` seam formats number/date/currency/plural at
+  the edge into an interned `StringId` (§18) — no `string` on the paint path; build config referenced to
+  `dsl-aot.md`.
+- **Inline-flow rich text ADDED** (gap fold L14): U+FFFC object-replacement codepoints in the itemizer emit
+  `InlineObjectRun`s with reserved advance (§19); placement geometry referenced to `layout.md`.
 - **macOS/CoreText boundary** updated to the 3-method-family contract and the `FluentGpu.Text.Unicode`
-  portable-itemization milestone (deferred so DWrite `Analyze*` carries v1).
+  portable-itemization milestone (deferred so DWrite `Analyze*` carries v1); the new selection/editing/read-side/
+  localization seams are all portable (CoreText / `NSTextInputClient` / `NSAccessibility` / ICU leaves).

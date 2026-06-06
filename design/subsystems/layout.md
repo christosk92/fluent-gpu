@@ -8,18 +8,28 @@
 > (`-ScrollOffset` `LocalTransform`, layout-free); the **Grid distinct true-tracks** algorithm; the
 > `VirtualList`/`VirtualGrid` `LayoutKind` + the extent table (slab-backed Fenwick/BIT) + scroll-anchoring as the
 > **layout-participant contract** for virtualization; the **text intrinsic-measure seam** call into `ITextShaper`;
-> absolute/overlay positioning.
+> absolute/overlay positioning; **RTL layout mirroring** (`FlowDirection` resolution logical→physical at the
+> reconciler's `WriteLayout` boundary, keeping the ported core physical + golden-parity-clean); the **overlay
+> placement-with-flip/nudge geometry** the overlay manager calls; **container queries** (a container exposes its
+> resolved size to descendants for conditional layout) and **inline-flow participation** (object-replacement boxes
+> laid out within a text run, coordinating with `text.md`).
 > **Runs on:** the **UI thread**, phase **6** (with `ScrollToIndex`/`UseVisibleRange` reads in **6.5**). Zero
 > per-frame managed allocation.
 
 This doc obeys the cross-cutting contracts in `../foundations.md`, `../architecture-spec.md` §4.4/§4.8/§5.5,
 `../hardened-v1-plan.md` §2/§4.4/§7, and `../dotnet10-csharp14-zero-alloc.md` §D. It REFERENCES (never redesigns):
 `scene-memory` (the `LayoutInput`/`Bounds` columns + the SoA spine — currently `architecture-spec.md` §4.4 until
-that doc lands), `reconciler-hooks.md` (phase-6.5 reads `Bounds`; `ISceneBackend.WriteLayout`/`MarkDirty`; the
-`UseVirtual` hook family; the 3-signal memo skip; `SubtreeDirty` is **traversal scope only**), `text.md` (the
-`ITextLayoutEngine.Measure` seam; the `static readonly YogaMeasureFunc` + `TextLayoutHandle` user-data slot),
-`virtualization` (the hook-level window/recycle logic — not yet written; its layout-participant half is owned here),
-`threading-render-seam.md` (`Bounds`/`WorldTransform` are value-copied into `SnapshotColumns` at PUBLISH).
+that doc lands; **owns the `FlowDirection` packed-bit storage in `LayoutInput.Packed` + the `ContainerSizeQuery`
+column placement**), `reconciler-hooks.md` (phase-6.5 reads `Bounds`; `ISceneBackend.WriteLayout`/`MarkDirty`; the
+`UseVirtual` hook family; the 3-signal memo skip; `SubtreeDirty` is **traversal scope only**; **`FlowDirection` is an
+inherited `Context<FlowDirection>` resolved at the Element edge — the reconciler does logical→physical resolution
+inside `WriteLayout`; `UseContainerSize` is the container-query hook**), `text.md` (the `ITextLayoutEngine.Measure`
+seam; the `static readonly YogaMeasureFunc` + `TextLayoutHandle` user-data slot; **the inline object-replacement
+itemizer seam — `text.md` owns the run-level inline-box anchoring, this doc owns the box's own measure/arrange**),
+`input-a11y.md` (**the overlay manager is the consumer of this doc's `OverlayPlacement` flip/nudge geometry; the
+light-dismiss FSM/focus/z lives there, the math lives here**), `virtualization` (the hook-level window/recycle
+logic — not yet written; its layout-participant half is owned here), `threading-render-seam.md` (`Bounds`/
+`WorldTransform` are value-copied into `SnapshotColumns` at PUBLISH).
 
 ---
 
@@ -41,6 +51,10 @@ that doc lands), `reconciler-hooks.md` (phase-6.5 reads `Bounds`; `ISceneBackend
 | `VirtualList`/`VirtualGrid` `LayoutKind` + `ExtentTable` (Fenwick/BIT) + scroll-anchoring | virtualization **as a layout participant** | §8 |
 | `MeasureKind` dispatcher + the `ITextShaper`/`ITextLayoutEngine` measure seam call | the only external dependency on the hot path | §9 |
 | Absolute / overlay positioning + `FormsContainingBlock` containing-block model | ported `LayoutAbsoluteDescendants` | §10 |
+| **RTL logical→physical resolution at `WriteLayout`** (`FlowDirection` + `ResolveLogical`) | mirrors flex dir / justify-align / `Edges4` start-end so the ported core stays physical | §10A |
+| **`OverlayPlacement` flip/nudge anchor geometry** | the pure-math overlay placement the overlay manager calls | §10B |
+| **Container queries** (`ContainerSizeQuery` resolved-size exposure + `UseContainerSize` participant half) | size-based responsive layout — a container publishes its content-box size to descendants | §10C |
+| **Inline-flow participation** (`InlineBox` object-replacement boxes laid out within a text run) | layout's half of the rich-text inline-object seam, coordinating with `text.md` | §10D |
 
 ### 1.2 What it explicitly does NOT own (and where it lives)
 
@@ -57,6 +71,19 @@ that doc lands), `reconciler-hooks.md` (phase-6.5 reads `Bounds`; `ISceneBackend
 - **`WorldTransform[]` composition** (phase 7) and the `LocalTransform` scroll write are *consumed* by layout's
   scroll contract but the writes are owned by Animation/Input (`architecture-spec.md` §5.5: "Input owns
   `ScrollOffset`; Layout writes `ContentSize`; Render reads the clip").
+- **The overlay MANAGER** (light-dismiss FSM, focus push/restore, z-layer stack, hover-delay, anchor lifecycle,
+  the UIA `Window`/`Menu`/`ToolTip` control types) → `input-a11y.md`. This doc owns only the **placement math**
+  (`OverlayPlacement.Resolve`, §10B) — the pure function `(anchorRect, overlaySize, mode, monitorWorkArea) →
+  finalOrigin + actualPlacement` that the manager calls. The manager owns *when* placement runs and *what it does*
+  with the result; layout owns the flip/nudge/constrain arithmetic.
+- **The inline-object itemizer + run-level anchoring** → `text.md`. `text.md` owns the object-replacement codepoint
+  (U+FFFC) emission into the itemizer, the inline-box advance/baseline slot inside the line, and the run geometry;
+  this doc owns the inline box's own measure (it is a normal `LayoutNode` measured against the run's available
+  width) and the arrange that writes the box `Bounds` from the run-relative origin `text.md` hands back (§10D).
+- **`FlowDirection` as inherited app-facing context + the `UseContainerSize` hook cell** → `reconciler-hooks.md`.
+  This doc owns the *physical resolution* of `FlowDirection` at `WriteLayout` (§10A) and the *layout-participant
+  half* of container queries (publishing the resolved container size; §10C); the reconciler owns the
+  `Context<FlowDirection>` plumbing and the `UseContainerSize` consumer cell.
 
 ### 1.3 The single seam call
 
@@ -97,11 +124,11 @@ public struct LayoutInput
     public LengthValue FlexBasis;              // 8
     public Edges4      Margin;                 // 16  ([InlineArray(4)] float — L,T,R,B; see §2.4)
     // packed enums + gap + the cold ref
-    public LayoutPacked Packed;                // 4   (FlexDir|Wrap|JustifyContent|AlignItems|AlignSelf|AlignContent|PositionType|Display|Overflow|BoxSizing — bitfields)
+    public LayoutPacked Packed;                // 4   (FlexDir|Wrap|JustifyContent|AlignItems|AlignSelf|AlignContent|PositionType|Display|Overflow|BoxSizing|MeasureKind|**ResolvedFlow** — bitfields)
     public ushort      LayoutKind;             // 2   (Flex | Grid | VirtualList | VirtualGrid | Absolute-overlay; §2.5)
     public ushort      AuxRef;                 // 2   (0 = shared zero-sentinel; else index into SlabAllocator<LayoutAux>)
     public float       GapRow, GapColumn;      // 8   (flex `gap`; grid track gap)
-} // = 96B exactly
+} // = 96B exactly — FlowDirection adds ZERO bytes (it is a 2-bit field stolen from LayoutPacked, §10A.2)
 ```
 
 ```csharp
@@ -319,6 +346,12 @@ source-gen'd `DiffProps` mask in `WriteLayout`):
 **Rule (binding):** participation dirt **always** forces the parent container's flex/grid algorithm to re-run,
 regardless of whether the child's measured size changed. Intrinsic dirt that leaves measured size **identical** may
 stop at the node (the "measured-size-unchanged ⇒ stop" rule applies **only** to intrinsic dirt).
+
+**RTL note (folds L5, full design §10A):** the `DiffProps`→dirt computation runs on **already logical→physical-
+resolved** `LayoutInput` — `WriteLayout` calls `ResolveLogical` (§10A.3) *before* writing the column, so the
+ported core and this dirty taxonomy never see a logical value. A `FlowDirection` context change is treated as both
+`LayoutSelfDirty + LayoutParticipationDirty` on the whole affected subtree (it re-mirrors direction + edges +
+percentage-inset resolution), seeded into the worklist (§4.4); it is rare (locale switch).
 
 ### 4.2 The two-rule invalidation graph
 
@@ -722,6 +755,384 @@ static bool FormsContainingBlock(in LayoutInput s) =>
 
 ---
 
+## 10A. RTL LAYOUT MIRRORING — `FlowDirection` resolved logical→physical at `WriteLayout` (folds L5 into core)
+
+**The binding decision (gap-analysis L5 / §5.5):** the box layout must mirror under RTL — flex *direction*,
+`JustifyContent`/`AlignItems` start/end, and `Edges4` start/end margins/padding/insets — **without** touching the
+ported Yoga `CalculateLayoutImpl`. The ported core stays **physical and bit-for-bit** with the golden-parity gate
+(§5). The way to achieve both is to **resolve logical→physical exactly once, at the reconciler's `WriteLayout`
+boundary**, where `LayoutInput` is written and `DiffProps` is already computed. Yoga never sees a logical value;
+it always receives physical Left/Right/Row-vs-RowReverse — so the verbatim numeric parity contract is untouched.
+
+### 10A.1 `FlowDirection` — inherited context, resolved at the edge
+
+`FlowDirection` is an **inherited** value (a `Context<FlowDirection>` owned by `reconciler-hooks.md`; the root
+seeds it from the OS locale / app setting, a subtree may override it for embedded RTL/LTR islands). It is a 2-bit
+enum:
+
+```csharp
+public enum FlowDirection : byte { Inherit = 0, LeftToRight = 1, RightToLeft = 2 }
+```
+
+The reconciler resolves the effective `FlowDirection` for each Element during descent (it is on the inherited-
+context path — a change is a `HasConsumedContextChanged` signal for any component that reads it, but **structurally
+it is resolved for every node** because every box may need mirroring; the reconciler carries the resolved value on
+its descent cursor, not a per-node hook cell). The **resolved** direction (never `Inherit`) is what reaches
+`WriteLayout`.
+
+### 10A.2 Storage: 1 free bit in `LayoutPacked` (zero new bytes)
+
+The 96B `LayoutInput` budget is not touched. `LayoutPacked` (the 4-byte bitfield, §2.1) gains a 1-bit
+**`ResolvedFlowIsRtl`** field (the resolved direction is always LTR or RTL at this point — `Inherit` cannot reach
+storage, so one bit suffices). `scene-memory.md` owns the byte layout of the `Packed` column and adds this bit to
+its `LayoutPacked` definition; this doc owns the *meaning* (it drives §10A.3 resolution and §10A.4 read-side
+mirroring for hit-test/UIA traversal order). The `Unsafe.SizeOf<LayoutInput>() == 96` assert (§2.1) is unchanged.
+
+### 10A.3 The resolution function (the entire mirroring story)
+
+`WriteLayout` calls `ResolveLogical(in LogicalLayout authored, FlowDirection flow) → LayoutInput physical` before
+storing. The reconciler builds `LogicalLayout` from the Element's authored props (which use **logical** names:
+`MarginStart`/`MarginEnd`, `JustifyContent` over logical main-axis, `FlexDirection.Row` meaning *inline-start→
+inline-end*). Resolution is a pure, branch-light transform:
+
+```csharp
+[MethodImpl(AggressiveInlining)]
+static void ResolveLogical(in LogicalLayout a, FlowDirection flow, ref LayoutInput phys)
+{
+    bool rtl = flow == FlowDirection.RightToLeft;
+    phys.Packed.ResolvedFlowIsRtl = rtl;
+
+    // 1. flex MAIN-AXIS direction: logical Row → physical RowReverse under RTL (Column is unaffected — RTL is
+    //    an inline-axis concept; vertical writing modes are out of scope, §10A.6).
+    phys.Packed.FlexDirection = a.FlexDirection switch {
+        FlexDir.Row        => rtl ? FlexDir.RowReverse : FlexDir.Row,
+        FlexDir.RowReverse => rtl ? FlexDir.Row        : FlexDir.RowReverse,
+        var col            => col,           // Column / ColumnReverse pass through
+    };
+
+    // 2. main-axis justify start/end swap (center/space-* are symmetric — untouched). Yoga's FlexStart/FlexEnd
+    //    are already flex-relative, so flipping the *direction* in (1) is sufficient for flex-relative values;
+    //    only the WRITING-MODE-relative Start/End justify values (CSS `start`/`end`) swap here.
+    phys.Packed.JustifyContent = MirrorMainEdge(a.JustifyContent, rtl);   // start<->end iff value is writing-relative
+    phys.Packed.AlignContent   = a.AlignContent;    // cross-axis unaffected by inline RTL (vertical, §10A.6)
+    phys.Packed.AlignItems     = a.AlignItems;      //   "
+    phys.Packed.AlignSelf      = a.AlignSelf;       //   "
+
+    // 3. Edges4 start/end → physical L/R swap. Top/Bottom never swap. This is the ONLY place logical edges exist.
+    phys.Margin = MirrorEdges(a.MarginLogical, rtl);                       // L<->R iff rtl
+    // (Padding/Border/Position live in LayoutAux — mirrored there by the same MirrorEdges when AuxRef != 0.)
+
+    // 4. text alignment passthrough: TextAlignment Start/End is resolved INSIDE text.md's shaper from the SAME
+    //    resolved FlowDirection (carried on TextLayoutRequest.FlowDirection, text.md §8.1) — layout does not
+    //    re-resolve text alignment; it only mirrors the BOX. The box and the glyphs resolve from one source.
+}
+
+[MethodImpl(AggressiveInlining)]
+static Edges4 MirrorEdges(in EdgesLogical e, bool rtl) =>
+    rtl ? new Edges4(e.End, e.Top, e.Start, e.Bottom)     // L=End, R=Start
+        : new Edges4(e.Start, e.Top, e.End, e.Bottom);    // L=Start, R=End
+```
+
+**Why this is bit-for-bit safe:** after `ResolveLogical`, every value Yoga reads is physical. An RTL row is
+**literally a `RowReverse` flex** to the ported core — the original Reactor-Yoga already computes `RowReverse`
+positions, so the golden-parity test (§5, run at LTR) covers the *arithmetic*; the RTL goldens (§10A.5) only assert
+the *resolution* mapped to the right physical inputs. No mirror logic ever runs inside `CalculateLayoutImpl`.
+
+### 10A.4 Read-side mirroring (hit-test / UIA traversal order)
+
+`Bounds` is physical after layout, so paint and hit-test geometry need no RTL awareness. The **one** read-side
+consumer is **traversal *order***: UIA "next in reading order" and arrow-key spatial nav over a flex row must walk
+RTL rows right-to-left. The `ResolvedFlowIsRtl` bit is read by `input-a11y.md`'s focus/UIA navigation to flip
+sibling-walk direction for a row container — a pure read of the bit this doc resolved, no recompute.
+
+### 10A.5 Invalidation + parity gate
+
+- A `FlowDirection` context change at or above a subtree marks every descendant box `LayoutSelfDirty +
+  LayoutParticipationDirty` (mirroring changes both own-size resolution of percentage insets and participation),
+  seeding the worklist (§4.4). Direction changes are rare (locale switch) so the cost is a one-time subtree relayout.
+- **Parity gate (extends §5):** the golden `Bounds` corpus gains an **RTL twin** for every flex/grid fixture — the
+  same authored logical tree resolved under `FlowDirection.RightToLeft`, asserted against the original Reactor-Yoga
+  run with the equivalent **physical** `RowReverse`/swapped-edge inputs. This proves `ResolveLogical` is the *only*
+  RTL code and that it produces the exact physical inputs whose output the LTR gate already blesses.
+
+### 10A.6 Scope boundary
+
+Vertical writing modes (`vertical-rl`/`tb`) are **out of scope for v1** (consistent with `text.md`'s 2-axis
+scope) — `FlowDirection` is the inline-axis (LTR/RTL) only; the cross axis is always vertical. This keeps
+`MirrorEdges` a single L↔R swap and leaves the door open (a future `WritingMode` enum would generalize the swap
+table without touching the seam).
+
+---
+
+## 10B. OVERLAY PLACEMENT GEOMETRY — `OverlayPlacement.Resolve` (folds L4 into core)
+
+The overlay **manager** (`input-a11y.md`: light-dismiss FSM, focus push/restore, z-layer stack, hover-delay,
+UIA control types) is the consumer; **this doc owns the placement *math*** — the pure function it calls to turn an
+anchor + a desired side + a measured overlay size into a final origin, flipping and nudging to stay on-screen. This
+is the anchor-relative placement-with-flip/nudge the gap analysis names (L4).
+
+### 10B.1 The request / result PODs (pure, allocation-free)
+
+```csharp
+public enum PlacementMode : byte {
+    // primary side, then alignment along the cross edge (Start/Center/End), writing-direction-aware
+    BottomStart, BottomCenter, BottomEnd, TopStart, TopCenter, TopEnd,
+    RightStart, RightCenter, RightEnd, LeftStart, LeftCenter, LeftEnd,
+    // special: center on anchor (dialogs), and full (cover work area)
+    Center, FullWorkArea,
+}
+
+public readonly struct OverlayPlacementRequest
+{
+    public RectF Anchor;          // the anchor's WORLD rect (manager passes world; placement is world-space)
+    public SizeF OverlaySize;     // the overlay's MEASURED size (manager runs FlexLayout.Run on the overlay first)
+    public RectF WorkArea;        // monitor work area in world coords (manager derives from Pal monitor info)
+    public PlacementMode Mode;    // preferred placement
+    public float  Gap;            // anchor↔overlay gap (e.g. tooltip 4px, menu 0)
+    public float  NudgeMargin;    // min distance to keep from the work-area edge after nudging
+    public bool   FlipEnabled;    // false for tooltips that prefer truncation over a flip (rare)
+    public bool   Rtl;            // resolved FlowDirection (Start/End on the cross edge mirror, §10A)
+}
+
+public readonly struct OverlayPlacementResult
+{
+    public PointF Origin;             // final top-left in WORLD space → manager writes overlay LocalTransform
+    public PlacementMode Actual;      // the placement actually used after flip (may differ from requested)
+    public RectF  ConstrainedSize;    // size after work-area clamp (overlay may shrink + scroll if too tall)
+    public PointF AnchorTip;          // where a callout beak/arrow should point (anchor-edge midpoint), if any
+}
+```
+
+### 10B.2 The algorithm (flip → nudge → constrain, deterministic)
+
+`OverlayPlacement.Resolve(in OverlayPlacementRequest r) → OverlayPlacementResult` is a pure, branchy-but-allocation-
+free routine:
+
+1. **Resolve preferred rect.** From `Mode` + `Anchor` + `Gap`, compute the candidate overlay rect on the preferred
+   side. Cross-edge alignment (`Start`/`Center`/`End`) is **RTL-mirrored** when `r.Rtl` (Start hugs the right edge
+   under RTL) — the same writing-direction source as §10A.
+2. **Flip if it overflows the work area** (and `FlipEnabled`). The flip table is fixed: `Bottom↔Top`, `Right↔Left`.
+   Choose the side with the **most available space** if *both* the preferred and flipped sides overflow (best-effort,
+   then constrain). A flip changes `Actual`; the cross-alignment is preserved.
+3. **Nudge along the cross axis** to bring the overlay fully on-screen: slide left/right (for top/bottom placements)
+   or up/down (for left/right placements) by the minimum delta so `overlayRect ⊆ workArea − NudgeMargin`. Nudging
+   **never** changes which side the overlay is on (so it never re-covers the anchor); it only slides along the edge.
+4. **Constrain size** if the overlay still exceeds the work area after flip+nudge: clamp `ConstrainedSize` to
+   `workArea − NudgeMargin` on the overflowing axis. The manager is responsible for making an over-tall menu
+   scrollable (it sets `Overflow != Visible` on the overlay root → a layout boundary + clip, §4.3 / §6); placement
+   only reports the clamped size.
+5. **Compute `AnchorTip`** = the midpoint of the anchor edge facing the overlay (for callout beaks/menu connectors);
+   clamped to the overlay's edge span so the beak never points outside the overlay.
+
+```csharp
+public static OverlayPlacementResult Resolve(in OverlayPlacementRequest r)
+{
+    var (side, align) = Decompose(r.Mode);
+    RectF cand = PlaceOnSide(r.Anchor, r.OverlaySize, side, align, r.Gap, r.Rtl);
+    if (r.FlipEnabled && !Fits(cand, r.WorkArea))
+    {
+        RectF flipped = PlaceOnSide(r.Anchor, r.OverlaySize, Flip(side), align, r.Gap, r.Rtl);
+        if (FreeSpace(flipped, r.WorkArea) > FreeSpace(cand, r.WorkArea)) { cand = flipped; side = Flip(side); }
+    }
+    cand = NudgeIntoWorkArea(cand, r.WorkArea, r.NudgeMargin, side);   // slide along cross axis only
+    SizeF clamped = ClampToWorkArea(cand.Size, r.WorkArea, r.NudgeMargin);
+    return new OverlayPlacementResult {
+        Origin = cand.Origin, Actual = Recompose(side, align),
+        ConstrainedSize = new RectF(cand.Origin, clamped),
+        AnchorTip = AnchorEdgeMidpoint(r.Anchor, side, cand),
+    };
+}
+```
+
+### 10B.3 Integration: layout boundary + transform-only re-place
+
+- The overlay subtree is rooted at an **overlay-root node** that is both a containing block (§10) and a **layout
+  boundary** (§4.3): page changes do not re-arrange the overlay and the overlay's internal changes do not escape.
+- The manager's flow each open/anchor-move: (a) `FlexLayout.Run(overlayRoot, …)` to get `OverlaySize`; (b) call
+  `OverlayPlacement.Resolve`; (c) write `Origin` as the overlay-root's `LocalTransform` (Animation/Input own that
+  write, §6) — **a re-anchor on scroll is therefore a transform-only frame** (the overlay is already laid out; only
+  `Origin` moves). Re-running placement does **not** relayout the overlay unless its own content changed.
+- **Zero-alloc:** `Resolve` is a pure function over PODs; no allocation, UI-thread, callable from phase 6/6.5 or
+  from the manager's open path. It never reads the scene store (the manager passes the world rects in), so it has no
+  thread-confinement concern beyond being UI-thread like the rest of layout.
+
+### 10B.4 What lives where (no two-owner conflict)
+
+| Concern | Owner |
+|---|---|
+| `OverlayPlacement.Resolve` flip/nudge/constrain math + the request/result PODs | **this doc** (§10B) |
+| When to call it, focus push/restore, light-dismiss FSM, hover-delay, z-stack, UIA `Window`/`Menu`/`ToolTip` | `input-a11y.md` (overlay manager) |
+| Writing `Origin` as `LocalTransform` (phase 7) | Animation/Input (`architecture-spec.md` §5.5) |
+| Monitor work-area + DPI of the target monitor | `pal-rhi.md` monitor-info seam (manager queries; passes world `WorkArea` in) |
+
+---
+
+## 10C. CONTAINER QUERIES — size-based responsive layout (folds L14-container into core)
+
+**Decision (gap-analysis L14, promoted from "defer; reserve seam" to fully-specified core):** a container can expose
+its **resolved content-box size** to descendants so they can choose layout conditionally (the CSS Container Queries
+model — responsive layout keyed off an ancestor's size, not the window). This is the engine half; the consumer hook
+`UseContainerSize` is `reconciler-hooks.md`'s.
+
+### 10C.1 The data flow problem (and why it is a controlled 1-frame contract)
+
+A container's size is known only **after** its own measure/arrange in phase 6. A descendant that conditions its
+*structure* on that size (e.g. "below 480px wide, stack vertically") would need the size *before* it renders — a
+classic measure→render→measure cycle. We break it with a **bounded one-frame settle**, exactly the discipline the
+virtualizer's decode-bucket rule (§8.3) and the off-thread page arrival (§12) already use:
+
+- A **query container** is any node with `LayoutPacked.IsQueryContainer` set (the reconciler sets it when a
+  descendant subtree contains a `UseContainerSize` consumer keyed to this container — a build-time/source-gen'd
+  relationship via the `ContainerName`, so the bit is only paid where a query exists).
+- After the query container is arranged (phase 6), its resolved content-box size is written to a **`ContainerSizeQuery`
+  side column** (slab-backed, owned for *placement* by `scene-memory.md`, semantics here). The column carries the
+  **current** and **last-published** size + a `Generation`.
+- The `UseContainerSize` hook (reconciler) reads `last-published` at render time (phase 4/5). If the resolved size
+  **crossed a breakpoint the consumer cares about** (the hook compares against the dev's breakpoint set via a
+  `derivedStateOf`-style change-check — see `reconciler-hooks.md` `UseDerived`), the consumer re-renders **next
+  frame** (the standard `setState→coalesce→N+1`, no synchronous re-loop). A size change that does **not** cross a
+  breakpoint is a no-op (the change-check absorbs it) — so steady-state and sub-breakpoint resizes cost **zero**
+  re-render.
+
+This is honest: a container-query structural change is a **+1-frame** response (resize → next frame the descendant
+re-renders at the new breakpoint), identical to every other data-driven structural change in the engine. It is
+**not** a same-frame iterate-to-fixpoint (which would reintroduce the layout-cycle hazard). Most container-query
+*styling* (padding/gap/font-size that does not change structure) can instead be driven *within* layout without a
+re-render at all (§10C.3).
+
+### 10C.2 `ContainerSizeQuery` — the side column
+
+```csharp
+public struct ContainerSizeQuery     // SlabAllocator<ContainerSizeQuery>, referenced by a ref in LayoutAux
+{
+    public SizeF Resolved;            // content-box size after THIS frame's arrange (written phase 6)
+    public SizeF Published;           // size the descendants last saw (the value UseContainerSize reads)
+    public uint  Generation;          // bumped when Resolved is written; consumer gen-stamp gates re-read
+    public StringId ContainerName;    // matches the consumer's UseContainerSize(name) — 0 = nearest query ancestor
+}
+```
+
+`scene-memory.md` owns the column placement (a slab column + the `LayoutAux` ref + the `LayoutPacked.IsQueryContainer`
+bit registration); this doc owns when `Resolved`/`Published` are written and the publish-vs-read timing.
+
+### 10C.3 Two response paths (structural = +1 frame; stylistic = same frame)
+
+1. **Structural** (the descendant changes *which Elements it returns*): goes through `UseContainerSize` →
+   change-check → `setState` → N+1 (§10C.1). This is the only path that can change the tree, so it must be the
+   deferred path.
+2. **Stylistic** (the descendant keeps its structure but wants a different `gap`/`padding`/`font-size` band): the
+   reconciler can encode this as a **`LayoutInput` that interpolates from the resolved container size at
+   `WriteLayout`** — but since the container size for the *current* frame isn't known until phase 6, the v1 contract
+   keeps it simple and **routes stylistic queries through the same +1-frame path** as structural, to avoid an
+   intra-frame ordering hazard. (A future optimization could special-case pure-numeric stylistic bands inside the
+   layout pass since they don't mutate topology; the seam — `ContainerSizeQuery.Resolved` being readable in phase 6
+   — is reserved for it, but v1 ships the uniform +1-frame rule for determinism.)
+
+### 10C.4 Invalidation, nesting, edge cases
+
+- **Nesting:** queries resolve against the **nearest ancestor query container** (by `ContainerName`, else nearest
+  unnamed). The slab ref chain is walked once at consumer mount and cached as a `NodeHandle` on the hook cell
+  (gen-checked, like `UseElementRef`).
+- **Idempotence / loop guard:** because the structural path is strictly +1-frame and gated by a breakpoint
+  change-check, a query that oscillates at a breakpoint boundary (resize lands exactly on 480px and the new layout
+  changes the container size back across 480px) is the one pathological case. Mitigation: the change-check uses the
+  **resolved breakpoint band index** (hysteresis-free comparison of *band*, not raw px), and a `[Conditional]`
+  DEBUG lint flags a container whose query band flips for >2 consecutive frames without an external input change
+  (the same lint shape as the decode→relayout-loop guard, §12).
+- **Virtualization interaction:** a `UseContainerSize` inside a virtual row reads the **viewport** container size
+  (stable across scroll), not the row's own — so realizing/derealizing rows never thrashes container queries
+  (the viewport is a layout boundary, §4.3, and its size is scroll-invariant).
+
+---
+
+## 10D. INLINE-FLOW PARTICIPATION — object-replacement boxes in a text run (folds L14-inline into core)
+
+**Decision (gap-analysis L14, promoted from "defer; reserve seam" to core):** a `LayoutNode` (an image, a chip, a
+custom box) can be laid out **inline within a text run** — flowing with the glyphs, wrapping with the line,
+contributing its size and baseline to line metrics. This is the rich-text inline-object obligation. **`text.md` owns
+the itemizer/run side; this doc owns the box's measure/arrange.**
+
+### 10D.1 The seam split (the one coordination point)
+
+The object-replacement codepoint **U+FFFC** (OBJECT REPLACEMENT CHARACTER) is emitted into the text content where an
+inline box belongs. `text.md`'s itemizer (`ITextItemizer`, text.md §4.4/§8.1) recognizes U+FFFC and emits an
+**`InlineObjectRun`** (text.md §20: a zero-script, neutral-BiDi, never-merged item) carrying an `InlineBoxRef` (the
+slot of the participating `LayoutNode`) instead of glyphs, with its `AdvanceDip`/`AscentDip`/`DescentDip` **reserved**
+and filled by this doc. The seam contract:
+
+```csharp
+// text.md owns the InlineObjectRun + this request/result pair's shape (text.md §20); layout IMPLEMENTS the measure
+// callback and CONSUMES the placement result. (Width fills the run's AdvanceDip; Ascent/Descent fill Ascent/DescentDip.)
+public readonly struct InlineBoxMeasureRequest { public int BoxSlot; public float AvailWidth; public MeasureMode WMode; }
+public readonly struct InlineBoxMetrics        { public float Width, Height, Ascent, Descent; } // → AdvanceDip/AscentDip/DescentDip
+
+// the seam callback text.md invokes during WRAP (text.md §8.1 step 4 / §20), implemented HERE:
+static InlineBoxMetrics MeasureInlineBox(in InlineBoxMeasureRequest r);
+```
+
+- During **WRAP**, `text.md` calls back into layout's `MeasureInlineBox` for each `InlineObjectRun` to fill its
+  reserved advance (= `Width` → `AdvanceDip`) and its `Ascent`/`Descent` so the line height and baseline account for
+  the box (a tall inline image grows the line; vertical alignment — baseline/top/middle/bottom — is an inline-box
+  style resolved here). The line-fill then treats `AdvanceDip` like a glyph cluster's advance (text.md §20).
+- After WRAP/visual-reorder, `text.md` hands back each inline box's **run-relative origin** `(x, y)` within the
+  paragraph (post-BiDi-reorder, so an inline box in an RTL run lands at the mirrored position automatically — it
+  rides the same reorder as the glyphs). This doc's arrange writes the box's `Bounds` from
+  `paragraphLocalOrigin + runRelativeOrigin`.
+
+### 10D.2 `MeasureInlineBox` — a normal layout measure
+
+The inline box is **not special to measure**: it is a `LayoutNode` like any other, measured with the
+`MeasureKind`/`FlexLayout.Run` machinery (§3/§9) against the available width `text.md` passes (which is the line's
+remaining width when `WMode == AtMost`, or `Undefined` for an intrinsic pass). The ring cache (§2.3) caches it.
+The only inline-specific output is `Ascent`/`Descent`, derived from the box's vertical-align mode:
+
+```csharp
+static InlineBoxMetrics MeasureInlineBox(in InlineBoxMeasureRequest r)
+{
+    var n = new LayoutNode(s_ctx, r.BoxSlot);
+    var size = FlexLayout.Run(n, r.AvailWidth, r.WMode, /*availH*/ float.NaN, MeasureMode.Undefined, s_scale);
+    var (ascent, descent) = n.Style.InlineVAlign switch {
+        InlineVAlign.Baseline => (size.Height /* box baseline = bottom unless box has its own baseline */, 0f),
+        InlineVAlign.Top      => (lineAscentSeed, size.Height - lineAscentSeed),
+        InlineVAlign.Middle   => (size.Height * 0.5f + s_halfXHeight, size.Height * 0.5f - s_halfXHeight),
+        InlineVAlign.Bottom   => (size.Height - lineDescentSeed, lineDescentSeed),
+        _                     => (size.Height, 0f),
+    };
+    return new InlineBoxMetrics { Width = size.Width, Height = size.Height, Ascent = ascent, Descent = descent };
+}
+```
+
+(`InlineVAlign` is a small enum on the inline box's `LayoutInput`/`LayoutAux`; only present when the node is an
+inline participant — `LayoutKind` is still `Flex`/`Grid`, inline-ness is carried by the parent text run owning the
+U+FFFC slot, so there is **no new `LayoutKind`**.)
+
+### 10D.3 Arrange, invalidation, dirty coupling
+
+- **Arrange:** after `text.md` returns run-relative origins, layout writes each inline box's `Bounds` (LOCAL to the
+  paragraph node) and recurses `FlexLayout.Run`'s arrange into the box's subtree (the box is a real subtree — it can
+  contain a flex/grid layout of its own). Pixel-snap (§5) treats it like any other child.
+- **Dirty coupling (the key invariant):** an inline box that changes its **own intrinsic size** (`LayoutSelfDirty`)
+  must re-WRAP the owning paragraph (the box's advance changed → line fill changes). So an inline-box
+  `LayoutSelfDirty` propagates **up to the owning text node** and marks it `LayoutSelfDirty` (re-WRAP, O(glyphs),
+  **not** re-SHAPE — the text content is unchanged, text.md §8.2). This is the up-rule (§4.2) crossing the text
+  seam: the text node is the inline box's layout parent for invalidation purposes. The reconciler wires this when it
+  sets up the U+FFFC slot (the inline box's parent-for-invalidation is the text node, recorded in Topology).
+- **Decode→relayout guard reuse:** an inline **image** box must bind its size to the fixed decode bucket (not the
+  late natural size), exactly the §8.3 rule — otherwise a late image decode re-WRAPs the paragraph forever. Same
+  `[Conditional]` lint (§12).
+- **Layout boundary:** an inline box with a fixed size is a layout boundary (§4.3), so a change *inside* it does not
+  re-WRAP the paragraph (only a change to its *measured size* does). This keeps inline-box internals cheap.
+
+### 10D.4 Zero-alloc + macOS
+
+`MeasureInlineBox` is a normal layout measure (arena scratch, ring cache) — zero managed alloc. The seam
+(`InlineBoxMeasureRequest`/`InlineBoxMetrics` PODs by value) crosses no GC ref. macOS is unaffected: the itemizer
+seam (`ITextItemizer`) is already portable (text.md §12/§20 — CoreText `CTRunDelegate` is the analogous U+FFFC
+mechanism behind the same seam), and the inline-box measure is pure C# over SoA columns — the CoreText itemizer
+recognizes U+FFFC and calls the same `MeasureInlineBox`.
+
+---
+
 ## 11. THREAD, PHASE PLACEMENT, ASSEMBLY, ZERO-ALLOC
 
 ### 11.1 Thread + phase placement (canonical 13-phase, `hardened-v1-plan.md` §2.2)
@@ -734,10 +1145,17 @@ valid `Bounds`). The phase→thread map this subsystem touches:
 PUBLISH 13a (UI: SnapshotColumns value-copy) → 8 record (RENDER) → ...
 ```
 
-- **Reads:** `LayoutInput[]`/`LayoutAux` (set by phase-5 `WriteLayout`), the dirty worklist (phase 5), `ScrollOffset`/
-  `ContentSize` (Input, last frame), `float scale`, the `ITextLayoutEngine` seam.
+- **Reads:** `LayoutInput[]`/`LayoutAux` (set by phase-5 `WriteLayout`, **already RTL-resolved physical** — §10A),
+  the dirty worklist (phase 5), `ScrollOffset`/`ContentSize` (Input, last frame), `float scale`, the
+  `ITextLayoutEngine` seam, `ContainerSizeQuery.Published` (consumer reads at render; layout reads `Resolved`
+  intra-frame for nothing in v1, §10C.3).
 - **Writes:** `Bounds[]` (LOCAL), `ContentSize` (viewport), `LayoutCacheEntry` (ring/`AbsLeft`/`AbsTop`),
-  `VirtualState.{ContentSize,Anchor*,First/LastRealized}`, the extent BIT.
+  `VirtualState.{ContentSize,Anchor*,First/LastRealized}`, the extent BIT, **`ContainerSizeQuery.{Resolved,
+  Generation}`** (phase 6, after a query container is arranged — §10C; `Published` is advanced at the same point so
+  consumers read a consistent value next frame). `OverlayPlacement.Resolve` (§10B) writes nothing to the scene — it
+  is a pure function returning a value to the overlay manager.
+- **Resolution boundary:** `ResolveLogical` (§10A) runs in **phase 5** inside `WriteLayout` (reconciler thread =
+  UI thread), not phase 6 — so by phase 6 every `LayoutInput` is physical and the ported core is RTL-oblivious.
 - **The seam:** `Bounds[]` is **value-copied into `SnapshotColumns` at PUBLISH (13a)** by the UI thread
   (`threading-render-seam.md` §3 — `BoundsLocal` is in the copied set). The render thread never reads layout's live
   columns. Phase 6.5 layout effects + phase-2 hit-test read the **UI-owned committed `Bounds`** (the
@@ -771,7 +1189,11 @@ Per-frame layout managed allocations = **0** (`architecture-spec.md` §5.5):
 
 - All scratch is arena-backed (`LayoutScratch` child lists + `FlexLine`s; the non-relocating bump region, §3.5).
 - All stable state is slab columns (`LayoutInput`/`LayoutAux`/`LayoutCacheEntry`/`VirtualState`/`GridDefinition`/
-  `TrackDef`/extent BIT).
+  `TrackDef`/extent BIT/**`ContainerSizeQuery`**).
+- **`ResolveLogical` (§10A), `OverlayPlacement.Resolve` (§10B), `MeasureInlineBox` (§10D)** are pure functions over
+  PODs (`LogicalLayout`/`OverlayPlacementRequest`/`InlineBoxMeasureRequest` by value) — **zero managed alloc**, no
+  scene reads in the placement case. Container-query response is a `setState→N+1` re-render (bounded Gen0 on the
+  *reconciler* side, like every structural change), never a layout-phase alloc.
 - `[InlineArray]` `Ring8`/`Edges4` are stack/inline (`dotnet10` §D); `LayoutNode`/`FlexLine`/`LayoutContext` are
   `ref struct` (no box; never reach a member through an interface type — boxing hard-error, `dotnet10` §D).
 - The text measure seam is pure + cached + span-filled (§9). Custom measure delegates are pooled (edge alloc only).
@@ -795,6 +1217,14 @@ Per-frame layout managed allocations = **0** (`architecture-spec.md` §5.5):
 | **Worklist overflow** | a pathological frame dirties more nodes than the worklist cap | fall back to the full-rebuild path (`Vector256` `FlagsSpan` scan + `SubtreeLayout` bottom-up recompute, §4.4) — correct, just O(capacity) for that frame |
 | **Off-thread page arrival** | a worker `Post`s a page mid-frame | marks dirty + schedules **frame N+1** (no synchronous re-loop, `architecture-spec.md` §5.4); on apply, re-derive the current window + `PaintDirty` only still-realized rows; +1-frame minimum page→pixels (§8.8) |
 | **Custom measure mutates tree** | a dev `MeasureFunc` calls back into the scene | reentrancy-guarded; `[Conditional]` assert; documented contract (struct in, struct out, §9.3) |
+| **RTL parity drift** | a mirror path leaks into the ported `CalculateLayoutImpl` | structurally impossible — `ResolveLogical` runs in phase 5 `WriteLayout`; the core only ever sees physical inputs; the RTL golden twin (§10A.5) is the gate that proves it |
+| **Logical edge mis-mapped** | `MarginStart`/`End` swapped wrong under RTL | single `MirrorEdges` swap table (§10A.3), unit-tested both directions; Top/Bottom never swap; the RTL goldens assert the physical inputs match the original Reactor `RowReverse` run |
+| **Overlay placed off-screen** | anchor near a monitor edge, overlay larger than free space on both sides | `OverlayPlacement.Resolve` flips to the side with most space, nudges along the cross axis, then **constrains** size to the work area (§10B.2 steps 2–4) — never returns an origin outside `WorkArea − NudgeMargin` |
+| **Overlay re-anchor relayouts page** | scroll moves the anchor | overlay-root is a layout boundary (§4.3) + the re-anchor is a transform-only write of `Origin` (§10B.3) — page never relayouts, overlay never re-measures unless its content changed |
+| **Container-query oscillation** | resize lands exactly on a breakpoint and the new layout flips the container size back | breakpoint-**band** comparison (not raw px) absorbs sub-band jitter; `[Conditional]` DEBUG lint flags a band that flips >2 consecutive frames without external input (§10C.4) |
+| **Container-query measure cycle** | a descendant conditions structure on the current-frame container size | forbidden by design — `UseContainerSize` reads `Published` (last frame) and responds **+1 frame** via `setState→N+1` (§10C.1); no same-frame iterate-to-fixpoint |
+| **Inline-box decode→re-wrap loop** | inline image bound to late natural size re-WRAPs the paragraph forever | bind to the fixed decode bucket (§10D.3 reuses §8.3); same `[Conditional]` lint as the virtual decode loop |
+| **Inline-box size change doesn't re-wrap** | a tall inline image grows but the line height stays stale | inline-box `LayoutSelfDirty` propagates **up to the owning text node** (the up-rule crossing the seam, §10D.3) → re-WRAP (O(glyphs), not re-SHAPE) |
 
 ---
 
@@ -814,6 +1244,21 @@ Layout is **fully portable** — the cleanest seam in the system (`architecture-
 No `HWND`/`HRESULT`/`ComPtr`/D3D/Metal crosses into `FluentGpu.Layout`. Scroll-as-transform, the extent BIT,
 anchoring, Grid, the flex algorithm, pixel-snap, and the containing-block model are all pure C# over SoA columns + the
 two seam values. The macOS swap touches the Text leaf and the PAL scale source — **zero layout code**.
+
+The four folded gaps are equally portable:
+
+3. **RTL mirroring** (§10A) — `ResolveLogical` is pure C# over `LayoutInput`; `FlowDirection` arrives as an inherited
+   value (locale-seeded on Windows from `GetUserDefaultLocaleName`, on macOS from `NSLocale.characterDirection`) — a
+   plain enum, no platform type. The ported core stays physical on both platforms; the RTL golden twin is platform-
+   agnostic.
+4. **Overlay placement** (§10B) — `OverlayPlacement.Resolve` is a pure function over rects; the only platform input is
+   the monitor **work area**, which the overlay manager passes in as a world `RectF` (it queries `pal-rhi.md`'s
+   monitor-info seam — Windows `MonitorFromWindow`/`GetMonitorInfo`, macOS `NSScreen.visibleFrame`). Layout sees only
+   the rect.
+5. **Container queries** (§10C) — pure SoA column read/write + a `setState→N+1` re-render; no platform surface.
+6. **Inline flow** (§10D) — rides the portable `ITextItemizer` U+FFFC seam; `MeasureInlineBox` is pure layout. The
+   CoreText itemizer recognizes U+FFFC identically (text.md §12/§20, `CTRunDelegate`). **Zero layout code** on the
+   macOS swap for any of the four.
 
 ---
 
@@ -863,3 +1308,59 @@ hardenings and resolving the ownership splits the task assigned to this doc:
    `hardened-v1-plan.md` §2 (the README supersession order). The scroll-ownership split (Input owns offset, Layout
    writes `ContentSize`, Render reads clip), the `MeasureFunc` static-readonly + handle-user-data mechanism, and the
    `NodeFlags.VirtualRangeDirty/StickyPinned` bit assignments are all carried verbatim from the authoritative sources.
+
+9. **RTL layout mirroring folded into core (L5), not deferred.** The original box layout was direction-blind
+   (`FlowDirection` lived only in text BiDi). This doc adds `FlowDirection` as an inherited value resolved
+   logical→physical at the **`WriteLayout` boundary** (§10A) via a single `ResolveLogical` transform (1 free bit in
+   `LayoutPacked`, zero new bytes), so the ported `CalculateLayoutImpl` stays physical and bit-for-bit with the golden
+   gate — the RTL goldens are a **twin** of the LTR corpus asserting only that resolution produced the right physical
+   inputs. Read-side mirroring is one bit consumed by `input-a11y.md` for nav traversal order.
+
+10. **Overlay placement geometry folded into core (L4).** The original had the overlay-root containing-block + layout-
+    boundary *substrate* (§10) but no placement math. This doc adds `OverlayPlacement.Resolve` (§10B) — the pure
+    flip→nudge→constrain function the overlay manager (`input-a11y.md`) calls — with explicit ownership split: math
+    here, FSM/focus/z there, monitor work-area from `pal-rhi.md`. A re-anchor is a transform-only frame.
+
+11. **Container queries folded into core (L14-container), not "defer; reserve seam".** A query container publishes its
+    resolved content-box size into a `ContainerSizeQuery` side column (§10C); the `UseContainerSize` consumer
+    (`reconciler-hooks.md`) reads `Published` and responds **+1 frame** via the standard `setState→N+1`, gated by a
+    breakpoint-band change-check (zero re-render for sub-band resizes). Honest +1-frame contract, no same-frame
+    measure-cycle. Virtual rows read the scroll-invariant viewport size.
+
+12. **Inline-flow participation folded into core (L14-inline), not deferred.** An object-replacement (U+FFFC) box is
+    laid out within a text run (§10D): `text.md` owns the itemizer/run anchoring, this doc implements `MeasureInlineBox`
+    (a normal layout measure returning `Width`/`Ascent`/`Descent` for line metrics) and the arrange from the run-
+    relative origin. No new `LayoutKind`; the up-rule crosses the text seam so an inline-box size change re-WRAPs
+    (O(glyphs), not re-SHAPE) the owning paragraph; the decode-bucket guard is reused.
+
+---
+
+## 15. Implemented from the gap analysis
+
+This section records exactly which `core-fundamentals-gap-analysis.md` rows this doc folds into core (no v2 deferral),
+and where each lands. All four were re-specified from "Tier-1 fold" / "Tier-3 defer; reserve seam" into buildable
+core designs.
+
+| Gap row | Title | Folded as core in | New artifacts |
+|---|---|---|---|
+| **L5** | RTL layout mirroring | §10A (`ResolveLogical` at `WriteLayout`; `FlowDirection` inherited; `LayoutPacked.ResolvedFlowIsRtl` 1-bit; `MirrorEdges`/`MirrorMainEdge`); §10A.5 RTL golden twin; §11.1 phase-5 resolution boundary | `FlowDirection` enum; `LogicalLayout`/`EdgesLogical` PODs; `ResolveLogical`; `LayoutPacked.ResolvedFlowIsRtl` bit (storage owned by `scene-memory.md`) |
+| **L4** | Overlay placement geometry | §10B (`OverlayPlacement.Resolve` flip→nudge→constrain; request/result PODs; §10B.4 ownership split; §10B.3 transform-only re-place) | `OverlayPlacement.Resolve`; `PlacementMode` enum; `OverlayPlacementRequest`/`OverlayPlacementResult` PODs |
+| **L14-container** | Container queries | §10C (`ContainerSizeQuery` side column; +1-frame structural response; breakpoint-band change-check; nesting + oscillation guard + virtualization interaction) | `ContainerSizeQuery` struct (placement owned by `scene-memory.md`); `LayoutPacked.IsQueryContainer` bit; the layout-participant half of `UseContainerSize` |
+| **L14-inline** | Inline-flow participation | §10D (`MeasureInlineBox` seam impl; arrange from run-relative origin; up-rule across the text seam; `InlineVAlign`; decode-bucket reuse) | `MeasureInlineBox`; `InlineBoxMeasureRequest`/`InlineBoxMetrics` PODs (request/result shape owned by `text.md`); `InlineVAlign` enum |
+
+**Removed "defer/out-of-scope" framing:** the prior treatment of RTL (direction-blind box), overlay placement (only
+substrate, no math), container queries (L14 "defer; reserve seam"), and inline flow (L14 "defer; reserve seam") is
+replaced by the §10A–§10D core designs above. The only scope boundary retained is **vertical writing modes**
+(§10A.6) — orthogonal to RTL and consistent with `text.md`'s 2-axis scope; the `MirrorEdges` swap-table seam is
+reserved to generalize it without touching the `WriteLayout` boundary.
+
+**Cross-doc ownership obeyed (no two-owner conflict):**
+- `scene-memory.md` owns the **column storage** for the `FlowDirection`/`IsQueryContainer` `LayoutPacked` bits and the
+  `ContainerSizeQuery` slab column; this doc owns their **semantics** (§10A/§10C).
+- `reconciler-hooks.md` owns `Context<FlowDirection>` plumbing + the `UseContainerSize` consumer cell; this doc owns
+  the physical resolution (§10A) and the resolved-size publish (§10C).
+- `input-a11y.md` owns the overlay **manager** (FSM/focus/z/UIA); this doc owns the placement **math** (§10B).
+- `text.md` owns the inline-object **itemizer + run anchoring** (U+FFFC, run-relative origins); this doc owns the
+  inline box's **measure + arrange** (§10D).
+- `pal-rhi.md` owns the **monitor-info seam** the overlay manager queries for the work area (this doc only consumes a
+  passed-in `RectF`).

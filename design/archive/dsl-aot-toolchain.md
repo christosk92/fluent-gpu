@@ -1,7 +1,17 @@
-> **SUPERSEDED — see [`dsl-aot.md`](./dsl-aot.md), the current authoritative doc.** This file is retained
-> for history only; it predates the render-thread-seam threading model, the corrected COM ruling (harvested
-> `*.comabi.json` + hand-vtable hot path + `[GeneratedComInterface]` cold), the pure-scalar `DepKey` +
-> `GcDepTable` fix, the `ChunkedArena`, and the seventh (scene-writer, reconciler-homed) generator.
+> # ⛔ ARCHIVED — HISTORICAL ONLY. DO NOT IMPLEMENT FROM THIS FILE.
+>
+> **Superseded by [`../subsystems/dsl-aot.md`](../subsystems/dsl-aot.md), the current authoritative doc.**
+> Retained for provenance only. It predates the render-thread-seam threading model, the corrected COM
+> ruling (harvested `*.comabi.json` + hand-vtable hot path + `[GeneratedComInterface]` cold), the
+> pure-scalar `DepKey` + `GcDepTable` fix, the `ChunkedArena`, and the seventh (scene-writer,
+> reconciler-homed) generator.
+>
+> **Known-WRONG code below (kept so the trap is documented, NOT to copy):** the `DepKey` at §2.6
+> (≈ line 414) declares `[StructLayout(LayoutKind.Explicit)]` with `[FieldOffset(8)] object? Ref`
+> overlapping `[FieldOffset(8)] ulong Bits`. A GC reference overlapping a scalar is **illegal CLR layout**
+> and throws `TypeLoadException` at load. The canonical fix is a **pure-scalar `DepKey` + a side
+> `GcDepTable`** (`../subsystems/reconciler-hooks.md`; `../README.md` §5). Canonical values:
+> [`../SPEC-INDEX.md`](../SPEC-INDEX.md).
 
 # fluent-gpu — Subsystem Design: Fluent C# DSL + NativeAOT Toolchain + Source Generators
 
