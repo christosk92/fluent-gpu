@@ -177,5 +177,10 @@ public sealed unsafe class Win32Window : IPlatformWindow
         return false;
     }
 
-    private static Point2 MousePt(long lp) => new((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+    // Pointer arrives in PHYSICAL px (DPI-aware window); convert to DIP so it matches the DIP scene bounds.
+    private Point2 MousePt(long lp)
+    {
+        float s = _scale <= 0f ? 1f : _scale;
+        return new Point2((short)(lp & 0xFFFF) / s, (short)((lp >> 16) & 0xFFFF) / s);
+    }
 }

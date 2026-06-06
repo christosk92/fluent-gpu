@@ -77,6 +77,12 @@ public sealed class RenderContext
         return any;
     }
 
+    /// <summary>Run every pending effect cleanup (component unmount).</summary>
+    public void RunAllCleanups()
+    {
+        foreach (var cell in _cells) if (cell is EffectCell e) e.Cleanup?.Invoke();
+    }
+
     public (T Value, Action<T> Set) UseState<T>(T initial)
     {
         StateCell<T> cell;

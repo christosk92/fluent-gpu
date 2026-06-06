@@ -24,4 +24,7 @@ public abstract class Component
         Context.EndRender();
         return el;
     }
+
+    /// <summary>Called by the reconciler when this component leaves the tree — run effect cleanups.</summary>
+    public void Unmount() => Context.RunAllCleanups();
 }
