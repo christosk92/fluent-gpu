@@ -7,8 +7,14 @@ using static TerraFX.Interop.Windows.Windows;
 namespace FluentGpu.Pal.Windows;
 
 /// <summary>Real Win32 PAL: <c>CreateWindowExW</c> + a static <c>WndProc</c> + a PeekMessage pump that drains WM_* into POD input.</summary>
-public sealed unsafe class Win32App : IPlatformApp
+public sealed unsafe partial class Win32App : IPlatformApp
 {
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4 — render at native resolution (no OS bitmap-stretch blur).
+    [LibraryImport("user32.dll")]
+    private static partial int SetProcessDpiAwarenessContext(nint value);
+
+    public Win32App() => SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
+
     public IPlatformWindow CreateWindow(in WindowDesc desc) => new Win32Window(desc);
     public void Dispose() { }
 }

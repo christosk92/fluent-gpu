@@ -130,11 +130,13 @@ float4 PSMain(VSOut i) : SV_Target
         return face;
     }
 
-    private GlyphEntry GetGlyph(char ch, float size, bool bold)
+    // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
+    private GlyphEntry GetGlyph(char ch, float size, bool bold, float dpiScale)
     {
         IDWriteFontFace* face = bold ? _faceBold : _faceRegular;
         int sizeQ = (int)MathF.Round(size);
-        long key = ((long)(bold ? 1 : 0) << 40) | ((long)sizeQ << 24) | ch;
+        int scaleQ = (int)MathF.Round(dpiScale * 100f);
+        long key = ((long)scaleQ << 44) | ((long)(bold ? 1 : 0) << 43) | ((long)sizeQ << 24) | ch;
         if (_cache.TryGetValue(key, out var e)) return e;
 
         uint cp = ch;
@@ -143,13 +145,13 @@ float4 PSMain(VSOut i) : SV_Target
 
         DWRITE_GLYPH_METRICS gm;
         face->GetDesignGlyphMetrics(&gi, 1, &gm, BOOL.FALSE);
-        float scale = size / _unitsPerEm;
-        float advance = gm.advanceWidth * scale;
+        float advance = gm.advanceWidth * (size / _unitsPerEm);   // advance in DIP (scale-independent)
+        float physEm = size * dpiScale;                            // rasterize at physical pixels
 
         float zeroAdvance = 0f;
         DWRITE_GLYPH_RUN run = default;
         run.fontFace = face;
-        run.fontEmSize = size;
+        run.fontEmSize = physEm;
         run.glyphCount = 1;
         run.glyphIndices = &gi;
         run.glyphAdvances = &zeroAdvance;
@@ -195,20 +197,20 @@ float4 PSMain(VSOut i) : SV_Target
         if (h > _shelfH) _shelfH = h;
     }
 
-    /// <summary>Lay out one run (LTR, design advances) into glyph quads; rasterizes missing glyphs into the atlas.</summary>
-    public void LayoutRun(string text, float size, bool bold, float originX, float topY, ColorF color, List<GlyphInstance> outList)
+    /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space; rasterizes missing glyphs at physical px.</summary>
+    public void LayoutRun(string text, float size, bool bold, float originX, float topY, ColorF color, float dpiScale, List<GlyphInstance> outList)
     {
-        float scale = size / _unitsPerEm;
-        float baseline = topY + _ascent * scale;   // top of layout box → baseline
-        float pen = originX;
+        float baseline = topY + _ascent * (size / _unitsPerEm);   // top of layout box → baseline (DIP)
+        float pen = originX;                                       // DIP
+        float inv = 1f / dpiScale;                                 // physical atlas px → DIP
         foreach (char ch in text)
         {
-            var g = GetGlyph(ch, size, bold);
+            var g = GetGlyph(ch, size, bold, dpiScale);
             if (g.W > 0 && g.H > 0)
             {
                 outList.Add(new GlyphInstance
                 {
-                    DstX = pen + g.BearingX, DstY = baseline + g.BearingY, DstW = g.W, DstH = g.H,
+                    DstX = pen + g.BearingX * inv, DstY = baseline + g.BearingY * inv, DstW = g.W * inv, DstH = g.H * inv,
                     U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS,
                     U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
                     R = color.R, G = color.G, B = color.B, A = color.A,

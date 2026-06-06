@@ -40,6 +40,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<RectInstance> _rectInsts = new();
     private GlyphRenderer? _glyphs;
     private readonly List<GlyphInstance> _glyphInsts = new();
+    private float _frameScale = 1f;
     private readonly StringTable _strings;
     private readonly bool _composited;
 
@@ -225,6 +226,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
         RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
         _cmdList->RSSetScissorRects(1, &scd);
 
+        // DPI: render at native resolution but map DIP coordinates via a LOGICAL viewport (= physical / scale),
+        // while glyphs are rasterized at physical px → crisp + correctly sized at high DPI.
+        _frameScale = ctx.Scale <= 0f ? 1f : ctx.Scale;
+        float lw = _w / _frameScale, lh = _h / _frameScale;
+
         Decode(drawList);
         Diag.Set("d3d12", "rects", _rectInsts.Count);
         Diag.Set("d3d12", "glyphInstances", _glyphInsts.Count);
@@ -232,9 +238,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
         _glyphs.UploadIfDirty(_cmdList);   // copy newly-rasterized glyphs into the GPU atlas (before sampling)
         if (_rectInsts.Count > 0)
-            _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), _w, _h);
+            _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), lw, lh);
         if (_glyphInsts.Count > 0)
-            _glyphs.Record(_cmdList, _glyphInsts, _w, _h);
+            _glyphs.Record(_cmdList, _glyphInsts, lw, lh);
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
         Check(_cmdList->Close(), "cmdList.Close");
@@ -272,7 +278,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
-                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _glyphInsts);
+                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _frameScale, _glyphInsts);
                     break;
                 }
                 default:
