@@ -251,6 +251,8 @@ public sealed class TreeReconciler
                 bool hasSurface = b.Fill.A > 0f || b.BorderWidth > 0f || b.OnClick is not null;
                 paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
                 paint.Fill = b.Fill;
+                paint.HoverFill = b.HoverFill;
+                paint.PressedFill = b.PressedFill;
                 paint.BorderColor = b.BorderColor;
                 paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;

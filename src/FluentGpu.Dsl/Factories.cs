@@ -21,26 +21,26 @@ public static class Ui
     public static TextEl Text(string text)
         => new(text) { Size = 14f, Color = Theme.WindowText };
 
-    /// <summary>The default button is the accent (primary) button, matching a WinUI <c>AccentButtonStyle</c>.</summary>
-    public static BoxEl Button(string label, Action onClick)
-        => FluentButton(Theme.Accent, Theme.AccentBorder, Theme.AccentText, label, onClick);
-
-    /// <summary>A neutral WinUI standard button (subtle fill + stroke).</summary>
-    public static BoxEl StandardButton(string label, Action onClick)
-        => FluentButton(Theme.ControlFill, Theme.ControlBorder, Theme.ControlText, label, onClick);
-
-    // WinUI 3 button: ControlCornerRadius = 4, content padding ~ (11,5,11,6) → min height ~32 with 14px Body text,
-    // a 1px ControlStroke border. Rendered as a bordered rounded rect (border ring + inset fill) + centered label.
-    private static BoxEl FluentButton(ColorF fill, ColorF border, ColorF text, string label, Action onClick)
-        => new()
+    /// <summary>A button. Barebone behavior (clickable + focusable) + a style on top — defaults to the Fluent accent
+    /// style, fully overrideable by passing your own <see cref="ButtonStyle"/> (or chaining modifiers on the result).</summary>
+    public static BoxEl Button(string label, Action onClick, ButtonStyle? style = null)
+    {
+        var s = style ?? Theme.AccentButton;
+        return new BoxEl
         {
             Direction = 0,
-            Padding = new Edges4(12, 6, 12, 7),
-            Fill = fill,
-            BorderColor = border,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(4),
+            Padding = s.Padding,
+            Fill = s.Background,
+            HoverFill = s.HoverBackground,
+            PressedFill = s.PressedBackground,
+            BorderColor = s.Border,
+            BorderWidth = s.BorderWidth,
+            Corners = CornerRadius4.All(s.CornerRadius),
             OnClick = onClick,
-            Children = [new TextEl(label) { Size = 14f, Color = text }],
+            Children = [new TextEl(label) { Size = s.FontSize, Bold = s.Bold, Color = s.Foreground }],
         };
+    }
+
+    /// <summary>A neutral WinUI standard button (subtle fill + stroke) — i.e. Button with the standard style.</summary>
+    public static BoxEl StandardButton(string label, Action onClick) => Button(label, onClick, Theme.StandardButton);
 }

@@ -21,6 +21,8 @@ public sealed record BoxEl : Element
     public Edges4 Padding { get; init; }
     public Edges4 Margin { get; init; }
     public ColorF Fill { get; init; }
+    public ColorF HoverFill { get; init; }
+    public ColorF PressedFill { get; init; }
     public ColorF BorderColor { get; init; }
     public float BorderWidth { get; init; }
     public CornerRadius4 Corners { get; init; }

@@ -50,6 +50,8 @@ public struct NodePaint
     public Affine2D LocalTransform;
     public float Opacity;
     public ColorF Fill;
+    public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
+    public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
     public ColorF BorderColor;
     public float BorderWidth;
     public CornerRadius4 Corners;

@@ -51,14 +51,24 @@ sealed class DemoApp : Component
                 // Nested component reads the count across the component boundary via context.
                 Ctx.Provide(Demo.Count, count, Embed.Comp(() => new CountDisplay())),
 
-                // A row of controls: accent +/-, a neutral reset, and a self-stateful Like button.
+                // A row of controls: accent +/-, a neutral reset, a custom-styled button, and a self-stateful Like button.
                 HStack(8,
                     Button("-", () => setCount(count - 1)),
                     Button("+", () => setCount(count + 1)),
                     StandardButton("Reset", () => setCount(0)),
+                    Button("Save", () => { }, new ButtonStyle
+                    {
+                        Background = ColorF.FromRgba(0x10, 0x7C, 0x10),
+                        Foreground = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+                        Border = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
+                        HoverBackground = ColorF.FromRgba(0x16, 0x95, 0x16),
+                        PressedBackground = ColorF.FromRgba(0x0B, 0x5A, 0x0B),
+                        CornerRadius = 6f,
+                    }),
                     Embed.Comp(() => new LikeButton())),
 
-                Text("Accent + standard buttons · nested components · UseContext · real system accent on Mica."),
+                Text("Accent · standard · custom-styled · nested components · UseContext · hover/press · Mica.")
+                    .Foreground(ColorF.FromRgba(0xB0, 0xB0, 0xB0)),
             ],
         };
     }

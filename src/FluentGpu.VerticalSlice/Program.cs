@@ -378,6 +378,28 @@ static class Slice
         Check("26. hover/pressed states track the pointer", hov && prs && released && unhov, "enter→hover, down→pressed, up→release, leave→unhover");
     }
 
+    // Controls are barebone + a default Fluent style on top, overrideable per-instance (ButtonStyle) or via modifiers.
+    static void StyleChecks()
+    {
+        var s = new ButtonStyle
+        {
+            Background = ColorF.FromRgba(10, 20, 30),
+            Foreground = ColorF.FromRgba(40, 50, 60),
+            HoverBackground = ColorF.FromRgba(70, 80, 90),
+            CornerRadius = 8f,
+        };
+        var btn = Ui.Button("x", () => { }, s);
+        bool styled = btn.Fill == s.Background
+            && btn.HoverFill == s.HoverBackground
+            && Near(btn.Corners.TopLeft, 8f)
+            && btn.Children[0] is TextEl t && t.Color == s.Foreground;
+
+        var modded = Ui.Button("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
+        bool overridden = modded.Fill == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
+
+        Check("27. controls are user-styleable (ButtonStyle + modifiers)", styled && overridden, "custom style + .Background().Rounded()");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -426,6 +448,7 @@ static class Slice
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
+        StyleChecks();
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

@@ -31,8 +31,9 @@ public static class SceneRecorder
                 // Interaction visual states (composition-style — no re-render): pressed darkens, hover lightens.
                 NodeFlags f = scene.Flags(node);
                 ColorF fill = p.Fill, border = p.BorderColor;
-                if ((f & NodeFlags.Pressed) != 0) { fill = Darken(fill, 0.12f); border = Darken(border, 0.12f); }
-                else if ((f & NodeFlags.Hovered) != 0) { fill = Lighten(fill, 0.08f); border = Lighten(border, 0.08f); }
+                // User-specified state color wins; otherwise auto-derive (darken pressed / lighten hover).
+                if ((f & NodeFlags.Pressed) != 0) { fill = p.PressedFill.A > 0f ? p.PressedFill : Darken(fill, 0.12f); border = Darken(border, 0.12f); }
+                else if ((f & NodeFlags.Hovered) != 0) { fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f); border = Lighten(border, 0.08f); }
 
                 if (p.BorderWidth > 0f && border.A > 0f)
                 {

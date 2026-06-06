@@ -23,4 +23,9 @@ public static class Theme
     // Window surface.
     public static ColorF WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20);
     public static ColorF WindowText = ColorF.FromRgba(0xF2, 0xF2, 0xF2);
+
+    // Default control styles — the framework's Fluent look. Computed from the live theme colors; override per-instance
+    // by passing your own ButtonStyle, or swap these out wholesale. (HoverBackground/PressedBackground left auto.)
+    public static ButtonStyle AccentButton => new() { Background = Accent, Foreground = AccentText, Border = AccentBorder };
+    public static ButtonStyle StandardButton => new() { Background = ControlFill, Foreground = ControlText, Border = ControlBorder };
 }
