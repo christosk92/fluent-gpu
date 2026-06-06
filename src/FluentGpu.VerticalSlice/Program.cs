@@ -420,6 +420,25 @@ static class Slice
         Check("28. UseAnimatedValue eases then settles", v1 > 0f && v1 < 1f && Near(v2, 1f), $"step={v1:0.00} settled={v2:0.0}");
     }
 
+    // flex-wrap: a 100-wide row of three 40-wide boxes flows to two lines ([0,1] then [2]).
+    static void WrapChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 100, Height = 100, Wrap = true,
+            Children =
+            [
+                new BoxEl { Width = 40, Height = 20 },
+                new BoxEl { Width = 40, Height = 20 },
+                new BoxEl { Width = 40, Height = 20 },
+            ],
+        });
+        var c0 = scene.AbsoluteRect(Child(scene, scene.Root, 0));
+        var c1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
+        var c2 = scene.AbsoluteRect(Child(scene, scene.Root, 2));
+        Check("29. flex-wrap flows children to lines", Near(c0.X, 0) && Near(c1.X, 40) && Near(c2.X, 0) && Near(c2.Y, 20), $"c2=({c2.X:0.#},{c2.Y:0.#})");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -470,6 +489,7 @@ static class Slice
         HoverChecks(strings);
         StyleChecks();
         AnimValueChecks();
+        WrapChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

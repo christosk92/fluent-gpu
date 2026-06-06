@@ -51,26 +51,33 @@ public sealed class FlexLayout
         else
         {
             bool row = Row(li);
-            float main = 0f, cross = 0f;
-            int n = 0;
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            if (li.Wrap && !float.IsNaN(row ? li.Width : li.Height))
             {
-                var cs = Measure(c);
-                ref LayoutInput cli = ref _scene.Layout(c);
-                float cMain = row ? cs.Width : cs.Height;
-                float cCross = row ? cs.Height : cs.Width;
-                if (!float.IsNaN(cli.FlexBasis)) cMain = cli.FlexBasis;
-                cMain += MarginMain(cli, row);
-                cCross += MarginCross(cli, row);
-                main += cMain;
-                cross = MathF.Max(cross, cCross);
-                n++;
+                (w, h) = MeasureWrap(node, in li, row);   // multi-line: main is fixed, cross grows with line count
             }
-            if (n > 1) main += li.Gap * (n - 1);
-            main += row ? li.Padding.Horizontal : li.Padding.Vertical;
-            cross += row ? li.Padding.Vertical : li.Padding.Horizontal;
-            w = row ? main : cross;
-            h = row ? cross : main;
+            else
+            {
+                float main = 0f, cross = 0f;
+                int n = 0;
+                for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+                {
+                    var cs = Measure(c);
+                    ref LayoutInput cli = ref _scene.Layout(c);
+                    float cMain = row ? cs.Width : cs.Height;
+                    float cCross = row ? cs.Height : cs.Width;
+                    if (!float.IsNaN(cli.FlexBasis)) cMain = cli.FlexBasis;
+                    cMain += MarginMain(cli, row);
+                    cCross += MarginCross(cli, row);
+                    main += cMain;
+                    cross = MathF.Max(cross, cCross);
+                    n++;
+                }
+                if (n > 1) main += li.Gap * (n - 1);
+                main += row ? li.Padding.Horizontal : li.Padding.Vertical;
+                cross += row ? li.Padding.Vertical : li.Padding.Horizontal;
+                w = row ? main : cross;
+                h = row ? cross : main;
+            }
         }
 
         if (!float.IsNaN(li.Width)) w = li.Width;
@@ -92,6 +99,8 @@ public sealed class FlexLayout
         ref LayoutInput li = ref _scene.Layout(node);
         if (_scene.FirstChild(node).IsNull) return;
         bool row = Row(li);
+
+        if (li.Wrap && !float.IsNaN(row ? li.Width : li.Height)) { ArrangeWrap(node, finalW, finalH, in li, row); return; }
 
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
         float availCross = (row ? finalH : finalW) - (row ? li.Padding.Vertical : li.Padding.Horizontal);
@@ -173,6 +182,70 @@ public sealed class FlexLayout
 
             Arrange(c, cx, cy, cw, ch);
             cursor += MarginMain(cli, row) + fMain + li.Gap + between;
+        }
+    }
+
+    // Wrap: main axis is fixed (explicit size); children flow onto multiple lines, cross grows with line count.
+    private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row)
+    {
+        float availMain = (row ? li.Width : li.Height) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+        float cursor = 0f, lineCross = 0f, totalCross = 0f;
+        bool first = true, any = false;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            var cs = Measure(c);
+            ref LayoutInput cli = ref _scene.Layout(c);
+            float oMain = (row ? cs.Width : cs.Height) + MarginMain(cli, row);
+            float oCross = (row ? cs.Height : cs.Width) + MarginCross(cli, row);
+            if (!first && cursor + li.Gap + oMain > availMain + 0.01f)
+            {
+                totalCross += lineCross + li.Gap;   // close the line + a cross-axis gap
+                cursor = oMain; lineCross = oCross;
+            }
+            else
+            {
+                cursor += first ? oMain : li.Gap + oMain;
+                lineCross = MathF.Max(lineCross, oCross);
+            }
+            first = false; any = true;
+        }
+        if (any) totalCross += lineCross;
+        float crossSize = totalCross + (row ? li.Padding.Vertical : li.Padding.Horizontal);
+        float mainSize = row ? li.Width : li.Height;
+        return row ? (mainSize, crossSize) : (crossSize, mainSize);
+    }
+
+    private void ArrangeWrap(NodeHandle node, float finalW, float finalH, in LayoutInput li, bool row)
+    {
+        float padMainStart = row ? li.Padding.Left : li.Padding.Top;
+        float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
+        float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+
+        float cursor = padMainStart, lineTop = padCrossStart, lineCross = 0f;
+        bool first = true;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            ref LayoutInput cli = ref _scene.Layout(c);
+            ref RectF cb = ref _scene.Bounds(c);
+            float baseMain = row ? cb.W : cb.H, baseCross = row ? cb.H : cb.W;
+            float oMain = baseMain + MarginMain(cli, row), oCross = baseCross + MarginCross(cli, row);
+
+            if (!first && (cursor - padMainStart) + li.Gap + oMain > availMain + 0.01f)
+            {
+                lineTop += lineCross + li.Gap;   // wrap to the next line
+                cursor = padMainStart; lineCross = 0f; first = true;
+            }
+            if (!first) cursor += li.Gap;
+
+            float childMainPos = cursor + MarginMainStart(cli, row);
+            float childCrossPos = lineTop + MarginCrossStart(cli, row);
+            float cx = row ? childMainPos : childCrossPos;
+            float cy = row ? childCrossPos : childMainPos;
+            Arrange(c, cx, cy, row ? baseMain : baseCross, row ? baseCross : baseMain);
+
+            cursor += oMain;
+            lineCross = MathF.Max(lineCross, oCross);
+            first = false;
         }
     }
 

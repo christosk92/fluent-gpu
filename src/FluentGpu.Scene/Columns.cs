@@ -23,6 +23,7 @@ public struct LayoutInput
 
     public FlexJustify Justify;   // container: main-axis distribution
     public FlexAlign AlignItems;  // container: default child cross alignment
+    public bool Wrap;             // container: wrap children to multiple lines when the main axis is constrained
 
     public TextStyle TextStyle;   // for VisualKind.Text leaves
 

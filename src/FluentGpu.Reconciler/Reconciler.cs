@@ -271,6 +271,7 @@ public sealed class TreeReconciler
                 li.AlignSelf = b.AlignSelf;
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
+                li.Wrap = b.Wrap;
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 if (b.OnClick is not null)

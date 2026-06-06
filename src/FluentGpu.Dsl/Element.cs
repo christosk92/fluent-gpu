@@ -45,6 +45,7 @@ public sealed record BoxEl : Element
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
+    public bool Wrap { get; init; }
 }
 
 /// <summary>A text run.</summary>
