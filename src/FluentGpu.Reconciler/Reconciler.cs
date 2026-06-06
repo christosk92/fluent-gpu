@@ -51,6 +51,7 @@ public sealed class TreeReconciler
     private void Mount(NodeHandle node, Element el)
     {
         if (el is ComponentEl ce) { MountComponent(node, ce); return; }
+        if (el is ContextProviderEl cp) { MountProvider(node, cp); return; }
 
         WriteColumns(node, el, isMount: true);
         if (el is BoxEl box)
@@ -99,8 +100,43 @@ public sealed class TreeReconciler
             return;
         }
 
+        if (newEl is ContextProviderEl np)
+        {
+            ContextStack.Push(np.Channel, np.Value);
+            var oldChild = (oldEl as ContextProviderEl)?.Child;
+            var childNode = _scene.FirstChild(node);
+            if (childNode.IsNull)
+            {
+                var nc = _scene.CreateNode(np.Child.ElementTypeId);
+                _scene.AppendChild(node, nc);
+                Mount(nc, np.Child);
+            }
+            else if (oldChild is not null && oldChild.ElementTypeId == np.Child.ElementTypeId)
+            {
+                Update(childNode, np.Child, oldChild);
+            }
+            else
+            {
+                Remove(childNode);
+                var nc = _scene.CreateNode(np.Child.ElementTypeId);
+                _scene.AppendChild(node, nc);
+                Mount(nc, np.Child);
+            }
+            ContextStack.Pop();
+            return;
+        }
+
         WriteColumns(node, newEl, isMount: false);
         ReconcileChildren(node, (newEl as BoxEl)?.Children ?? [], (oldEl as BoxEl)?.Children ?? []);
+    }
+
+    private void MountProvider(NodeHandle node, ContextProviderEl cp)
+    {
+        ContextStack.Push(cp.Channel, cp.Value);
+        var child = _scene.CreateNode(cp.Child.ElementTypeId);
+        _scene.AppendChild(node, child);
+        Mount(child, cp.Child);
+        ContextStack.Pop();
     }
 
     private void MountComponent(NodeHandle node, ComponentEl ce)

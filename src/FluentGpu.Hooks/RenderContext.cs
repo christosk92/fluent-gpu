@@ -154,6 +154,13 @@ public sealed class RenderContext
         return cell.Value;
     }
 
+    /// <summary>Read the nearest provided value of <paramref name="context"/> (or its default). Re-render propagates it.</summary>
+    public T UseContext<T>(Context<T> context)
+    {
+        if (ContextStack.TryGet(context, out var v) && v is T tv) return tv;
+        return context.Default;
+    }
+
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
     public Ref<T> UseRef<T>(T initial)
     {

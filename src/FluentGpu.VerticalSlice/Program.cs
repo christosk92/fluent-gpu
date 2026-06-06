@@ -43,6 +43,23 @@ sealed class NestParent : Component
         => VStack(8, Heading("parent"), Embed.Comp(() => new NestChild()));
 }
 
+// Context: a provider feeds a value to a nested consumer component across the component boundary.
+sealed class CtxConsumer : Component
+{
+    public override Element Render() => Ui.Text($"ctx {UseContext(Slice.NumCtx)}");
+}
+
+sealed class CtxParent : Component
+{
+    public override Element Render()
+    {
+        var (v, setV) = UseState(7);
+        return VStack(4,
+            Button("inc", () => setV(v + 1)),
+            Ctx.Provide(Slice.NumCtx, v, Embed.Comp(() => new CtxConsumer())));
+    }
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -64,6 +81,7 @@ sealed class HookProbe : Component
 static class Slice
 {
     static int s_failures;
+    public static readonly Context<int> NumCtx = new(0);
 
     static void Check(string name, bool ok, string? detail = null)
     {
@@ -294,6 +312,31 @@ static class Slice
         Check("24. nested component renders & owns state", mounted && f2.ClicksHandled == 1 && childUpdated, "child 0 → click → child 1");
     }
 
+    // UseContext: provider value reaches a nested consumer, and a change propagates on re-render.
+    static void ContextChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("ctx", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new CtxParent();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        bool c0 = HasGlyph(device, strings, "ctx 7");
+
+        var incBtn = Child(host.Scene, host.Scene.Root, 0);   // VStack child 0 = "inc" button
+        var rr = host.Scene.AbsoluteRect(incBtn);
+        var center = new Point2(rr.X + rr.W / 2f, rr.Y + rr.H / 2f);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        host.RunFrame();
+        bool c1 = HasGlyph(device, strings, "ctx 8");
+
+        Check("25. UseContext provides + propagates across components", c0 && c1, "ctx 7 → ctx 8");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -340,6 +383,7 @@ static class Slice
         KeyboardChecks(strings);
         AnimChecks();
         NestedChecks(strings);
+        ContextChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

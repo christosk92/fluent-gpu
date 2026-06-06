@@ -15,6 +15,7 @@ public abstract class Component
     protected (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial) => Context.UseReducer(reducer, initial);
     protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
+    protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
 
     /// <summary>Run one render pass with hook bookkeeping.</summary>
     public Element RenderWithHooks()
