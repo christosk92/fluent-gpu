@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
+    <ProjectReference Include="..\FluentGpu.Pal\FluentGpu.Pal.csproj" />
+    <ProjectReference Include="..\FluentGpu.Rhi\FluentGpu.Rhi.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <ProjectReference Include="..\FluentGpu.Scene\FluentGpu.Scene.csproj" />
+    <ProjectReference Include="..\FluentGpu.Layout\FluentGpu.Layout.csproj" />
+    <ProjectReference Include="..\FluentGpu.Render\FluentGpu.Render.csproj" />
+    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
+    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
+    <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
+    <ProjectReference Include="..\FluentGpu.Input\FluentGpu.Input.csproj" />
+  </ItemGroup>
+</Project>

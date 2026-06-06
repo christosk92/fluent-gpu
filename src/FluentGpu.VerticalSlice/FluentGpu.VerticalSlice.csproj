@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- AOT baseline for the app; stable alloc measurement for the slice's zero-alloc assertion. -->
+    <PublishAot>true</PublishAot>
+    <TieredCompilation>false</TieredCompilation>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
+    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
+    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
+    <ProjectReference Include="..\FluentGpu.Rhi.Headless\FluentGpu.Rhi.Headless.csproj" />
+    <ProjectReference Include="..\FluentGpu.Pal.Headless\FluentGpu.Pal.Headless.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text.Headless\FluentGpu.Text.Headless.csproj" />
+  </ItemGroup>
+</Project>

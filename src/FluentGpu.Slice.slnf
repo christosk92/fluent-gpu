@@ -1,0 +1,23 @@
+{
+  "solution": {
+    "path": "FluentGpu.slnx",
+    "projects": [
+      "FluentGpu.Foundation\\FluentGpu.Foundation.csproj",
+      "FluentGpu.Rhi\\FluentGpu.Rhi.csproj",
+      "FluentGpu.Pal\\FluentGpu.Pal.csproj",
+      "FluentGpu.Text\\FluentGpu.Text.csproj",
+      "FluentGpu.Scene\\FluentGpu.Scene.csproj",
+      "FluentGpu.Layout\\FluentGpu.Layout.csproj",
+      "FluentGpu.Render\\FluentGpu.Render.csproj",
+      "FluentGpu.Dsl\\FluentGpu.Dsl.csproj",
+      "FluentGpu.Hooks\\FluentGpu.Hooks.csproj",
+      "FluentGpu.Reconciler\\FluentGpu.Reconciler.csproj",
+      "FluentGpu.Input\\FluentGpu.Input.csproj",
+      "FluentGpu.Hosting\\FluentGpu.Hosting.csproj",
+      "FluentGpu.Rhi.Headless\\FluentGpu.Rhi.Headless.csproj",
+      "FluentGpu.Pal.Headless\\FluentGpu.Pal.Headless.csproj",
+      "FluentGpu.Text.Headless\\FluentGpu.Text.Headless.csproj",
+      "FluentGpu.VerticalSlice\\FluentGpu.VerticalSlice.csproj"
+    ]
+  }
+}

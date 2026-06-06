@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
+    <ProjectReference Include="..\FluentGpu.Scene\FluentGpu.Scene.csproj" />
+    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+  </ItemGroup>
+</Project>
