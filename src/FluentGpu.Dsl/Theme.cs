@@ -10,22 +10,40 @@ public static class Theme
 {
     public static bool Dark = true;
 
-    // System accent (overwritten from the OS). Default = Windows default blue.
-    public static ColorF Accent = ColorF.FromRgba(0x00, 0x78, 0xD4);
-    public static ColorF AccentText = ColorF.FromRgba(0xFF, 0xFF, 0xFF);
-    public static ColorF AccentBorder = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20);   // subtle top light line
+    // Accent (dark theme): fill = SystemAccentColorLight2 (set from the OS AccentPalette; default ≈ Light2 of #0078D4).
+    // TextOnAccentFillColorPrimary in DARK theme is BLACK (light fill → dark text). Hover/Pressed = same shade @ .9/.8.
+    public static ColorF Accent = ColorF.FromRgba(0x60, 0xCD, 0xFF);              // SystemAccentColorLight2 (default)
+    public static ColorF AccentText = ColorF.FromRgba(0x00, 0x00, 0x00);         // TextOnAccentFillColorPrimary (dark)
+    public static ColorF AccentBorder = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23); // AccentControlElevation top stop
 
-    // Neutral control (standard button) — WinUI ControlFillColorDefault / ControlStrokeColorDefault over the backdrop.
-    public static ColorF ControlFill = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x10);
-    public static ColorF ControlBorder = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18);
-    public static ColorF ControlText = ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+    // Neutral control (standard button) — exact WinUI dark ControlFillColor* / ControlStrokeColor* / TextFillColor*.
+    public static ColorF ControlFill = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F);          // ControlFillColorDefault
+    public static ColorF ControlFillHover = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15);     // ControlFillColorSecondary
+    public static ColorF ControlFillPressed = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08);   // ControlFillColorTertiary
+    public static ColorF ControlBorder = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18);        // ControlStrokeColorSecondary
+    public static ColorF ControlText = ColorF.FromRgba(0xFF, 0xFF, 0xFF);                // TextFillColorPrimary
 
-    // Window surface.
+    // Window surface (SolidBackgroundFillColorBase).
     public static ColorF WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20);
     public static ColorF WindowText = ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
-    // Default control styles — the framework's Fluent look. Computed from the live theme colors; override per-instance
-    // by passing your own ButtonStyle, or swap these out wholesale. (HoverBackground/PressedBackground left auto.)
-    public static ButtonStyle AccentButton => new() { Background = Accent, Foreground = AccentText, Border = AccentBorder };
-    public static ButtonStyle StandardButton => new() { Background = ControlFill, Foreground = ControlText, Border = ControlBorder };
+    // Default control styles — the framework's Fluent look (exact WinUI dark per-state). Override per-instance by
+    // passing your own ButtonStyle, or swap these out wholesale.
+    public static ButtonStyle AccentButton => new()
+    {
+        Background = Accent,
+        Foreground = AccentText,
+        Border = AccentBorder,
+        HoverBackground = Accent with { A = 0.9f },
+        PressedBackground = Accent with { A = 0.8f },
+    };
+
+    public static ButtonStyle StandardButton => new()
+    {
+        Background = ControlFill,
+        Foreground = ControlText,
+        Border = ControlBorder,
+        HoverBackground = ControlFillHover,
+        PressedBackground = ControlFillPressed,
+    };
 }

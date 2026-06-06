@@ -30,6 +30,8 @@ public static class Ui
         {
             Direction = 0,
             Padding = s.Padding,
+            MinHeight = s.MinHeight,
+            AlignItems = FlexAlign.Center,   // center the label vertically within the min-height
             Fill = s.Background,
             HoverFill = s.HoverBackground,
             PressedFill = s.PressedBackground,

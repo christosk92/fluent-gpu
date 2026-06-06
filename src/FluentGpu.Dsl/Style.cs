@@ -16,8 +16,9 @@ public sealed record ButtonStyle
     public ColorF HoverBackground { get; init; }     // Transparent ⇒ auto-lighten
     public ColorF PressedBackground { get; init; }   // Transparent ⇒ auto-darken
     public float BorderWidth { get; init; } = 1f;
-    public float CornerRadius { get; init; } = 4f;
-    public Edges4 Padding { get; init; } = new(12, 6, 12, 7);
-    public float FontSize { get; init; } = 14f;
+    public float CornerRadius { get; init; } = 4f;                // ControlCornerRadius
+    public Edges4 Padding { get; init; } = new(11, 5, 11, 6);     // ButtonPadding
+    public float FontSize { get; init; } = 14f;                   // ControlContentThemeFontSize
+    public float MinHeight { get; init; } = 32f;                  // effective WinUI button height
     public bool Bold { get; init; }
 }

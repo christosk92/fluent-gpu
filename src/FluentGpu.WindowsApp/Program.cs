@@ -98,8 +98,9 @@ static class WindowsApp
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Demo", new Size2(560, 360), 1f, composited));
 
-        // Pull the real system accent + apply dark titlebar / Mica backdrop (Windows 11).
-        if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
+        // Pull the real system accent (dark-theme accent fill = SystemAccentColorLight2) + dark titlebar / Mica.
+        if (Win32Theme.AccentLight2() is { } a2) Theme.Accent = ColorF.FromRgba(a2.R, a2.G, a2.B);
+        else if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark);
         if (composited) Theme.WindowBackground = ColorF.Transparent;   // clear transparent → Mica shows through
 

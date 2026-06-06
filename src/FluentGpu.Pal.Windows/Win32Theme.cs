@@ -15,8 +15,13 @@ public static partial class Win32Theme
     private const int DWMSBT_MAINWINDOW = 2;   // Mica
     private const int DWMSBT_TRANSIENTWINDOW = 3; // Acrylic
 
+    private const uint RRF_RT_REG_BINARY = 0x00000008;
+
     [LibraryImport("advapi32.dll", EntryPoint = "RegGetValueW", StringMarshalling = StringMarshalling.Utf16)]
     private static partial int RegGetValueW(nint hkey, string subKey, string value, uint flags, nint pdwType, out uint pvData, ref uint pcbData);
+
+    [LibraryImport("advapi32.dll", EntryPoint = "RegGetValueW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int RegGetValueBinaryW(nint hkey, string subKey, string value, uint flags, nint pdwType, [Out] byte[] pvData, ref uint pcbData);
 
     [LibraryImport("dwmapi.dll")]
     private static partial int DwmGetColorizationColor(out uint color, [MarshalAs(UnmanagedType.Bool)] out bool opaqueBlend);
@@ -37,6 +42,21 @@ public static partial class Win32Theme
         if (DwmGetColorizationColor(out uint argb, out _) == 0)
             return ((byte)((argb >> 16) & 0xFF), (byte)((argb >> 8) & 0xFF), (byte)(argb & 0xFF));    // 0xAARRGGBB
 
+        return null;
+    }
+
+    /// <summary>
+    /// The OS-derived <c>SystemAccentColorLight2</c> shade — what WinUI uses for the dark-theme accent button fill
+    /// (lighter than the base accent). Read from the AccentPalette blob: 8×RGBA entries, index 1 = Light2 (bytes 4..6).
+    /// </summary>
+    public static (byte R, byte G, byte B)? AccentLight2()
+    {
+        byte[] buf = new byte[32];
+        uint cb = 32;
+        int rc = RegGetValueBinaryW(HKEY_CURRENT_USER,
+            @"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent", "AccentPalette",
+            RRF_RT_REG_BINARY, 0, buf, ref cb);
+        if (rc == 0 && cb >= 8) return (buf[4], buf[5], buf[6]);
         return null;
     }
 
