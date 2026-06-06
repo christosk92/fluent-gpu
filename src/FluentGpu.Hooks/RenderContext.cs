@@ -32,6 +32,26 @@ internal sealed class EffectCell : HookCell
     public override bool Flush() => false;
 }
 
+internal sealed class MemoCell<T> : HookCell
+{
+    public T Value = default!;
+    public object[]? Deps;
+    public override bool Flush() => false;
+}
+
+internal sealed class RefHolderCell : HookCell
+{
+    public object? Ref;
+    public override bool Flush() => false;
+}
+
+/// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
+public sealed class Ref<T>
+{
+    public T Value;
+    public Ref(T value) => Value = value;
+}
+
 /// <summary>
 /// Per-component hook storage (ordered; rules-of-hooks = stable call order). Holds <see cref="UseState"/> cells and
 /// schedules a re-render through the host. The slice uses managed cells (edge allocation only, at mount).
@@ -43,7 +63,8 @@ public sealed class RenderContext
     private bool _mounted;
     public Action RequestRerender = static () => { };
 
-    public readonly List<Action> PendingEffects = new();
+    public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
+    public readonly List<Action> PendingLayoutEffects = new();  // UseLayoutEffect — after layout, before paint (phase 6.5)
 
     internal void BeginRender() => _cursor = 0;
     internal void EndRender() => _mounted = true;
@@ -70,7 +91,12 @@ public sealed class RenderContext
         return (value, set);
     }
 
-    public void UseEffect(Action effect, params object[] deps)
+    public void UseEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingEffects);
+
+    /// <summary>Like <see cref="UseEffect"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
+    public void UseLayoutEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingLayoutEffects);
+
+    private void EffectImpl(Action effect, object[] deps, List<Action> target)
     {
         EffectCell cell;
         if (!_mounted) { cell = new EffectCell(); _cells.Add(cell); }
@@ -81,12 +107,55 @@ public sealed class RenderContext
         if (changed)
         {
             cell.Deps = deps;
-            PendingEffects.Add(() =>
-            {
-                cell.Cleanup?.Invoke();
-                effect();
-            });
+            target.Add(() => { cell.Cleanup?.Invoke(); effect(); });
         }
+    }
+
+    /// <summary>State driven by a reducer (the React <c>useReducer</c>); dispatches fold over the latest pending state.</summary>
+    public (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial)
+    {
+        StateCell<TState> cell;
+        if (!_mounted) { cell = new StateCell<TState>(initial); _cells.Add(cell); }
+        else { cell = (StateCell<TState>)_cells[_cursor]; }
+        _cursor++;
+
+        var captured = cell; var req = RequestRerender; var r = reducer;
+        Action<TAction> dispatch = action =>
+        {
+            TState cur = captured.HasPending ? captured.Pending : captured.Value;
+            captured.Pending = r(cur, action);
+            captured.HasPending = true;
+            req();
+        };
+        return (cell.Value, dispatch);
+    }
+
+    /// <summary>Memoize an expensive value; recomputes only when <paramref name="deps"/> change.</summary>
+    public T UseMemo<T>(Func<T> factory, params object[] deps)
+    {
+        MemoCell<T> cell;
+        if (!_mounted)
+        {
+            cell = new MemoCell<T> { Value = factory(), Deps = deps };
+            _cells.Add(cell);
+        }
+        else
+        {
+            cell = (MemoCell<T>)_cells[_cursor];
+            if (!DepsEqual(cell.Deps, deps)) { cell.Value = factory(); cell.Deps = deps; }
+        }
+        _cursor++;
+        return cell.Value;
+    }
+
+    /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
+    public Ref<T> UseRef<T>(T initial)
+    {
+        RefHolderCell cell;
+        if (!_mounted) { cell = new RefHolderCell { Ref = new Ref<T>(initial) }; _cells.Add(cell); }
+        else { cell = (RefHolderCell)_cells[_cursor]; }
+        _cursor++;
+        return (Ref<T>)cell.Ref!;
     }
 
     private static bool DepsEqual(object[]? a, object[]? b)

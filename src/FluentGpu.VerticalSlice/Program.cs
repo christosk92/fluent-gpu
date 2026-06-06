@@ -25,6 +25,23 @@ sealed class Counter : Component
     }
 }
 
+// Probe component for the expanded hooks.
+sealed class HookProbe : Component
+{
+    public int Dep = 1, MemoRuns, State, Memo;
+    public Action<int>? Dispatch;
+    public Ref<int>? RefBox;
+
+    public override Element Render()
+    {
+        var (s, d) = UseReducer<int, int>((st, a) => st + a, 0);
+        var m = UseMemo(() => { MemoRuns++; return Dep * 10; }, Dep);
+        var r = UseRef(7);
+        State = s; Dispatch = d; Memo = m; RefBox = r;
+        return Ui.Text("probe");
+    }
+}
+
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
 static class Slice
 {
@@ -103,6 +120,31 @@ static class Slice
         Check("13. padding + gap stacking", Near(p0.Y, 10) && Near(p1.Y, 38) && Near(p0.X, 10), $"y0={p0.Y:0.#} y1={p1.Y:0.#}");
     }
 
+    // UseReducer / UseMemo / UseRef exercised through a real Component across renders.
+    static void HookChecks()
+    {
+        var p = new HookProbe();
+
+        p.RenderWithHooks();   // frame 1 (mount)
+        var r1 = p.RefBox;
+        bool ok1 = p.State == 0 && p.Memo == 10 && p.MemoRuns == 1 && r1!.Value == 7;
+
+        p.Dispatch!(5); p.Dispatch!(3);   // fold: 0+5=5, +3=8
+        p.Context.FlushPending();
+        r1!.Value = 42;
+
+        p.RenderWithHooks();   // frame 2 (same dep)
+        bool ok2 = p.State == 8 && p.Memo == 10 && p.MemoRuns == 1 && ReferenceEquals(p.RefBox, r1) && p.RefBox!.Value == 42;
+
+        p.Dep = 2;
+        p.RenderWithHooks();   // frame 3 (changed dep)
+        bool ok3 = p.Memo == 20 && p.MemoRuns == 2;
+
+        Check("14. UseReducer folds dispatches", ok1 && p.State == 8, "0 →(+5,+3)→ 8");
+        Check("15. UseMemo recomputes only on dep change", ok2 && ok3, $"memoRuns={p.MemoRuns}");
+        Check("16. UseRef persists & is stable", p.RefBox!.Value == 42 && ReferenceEquals(p.RefBox, r1));
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -144,6 +186,7 @@ static class Slice
         Check("9. ZERO managed alloc on the paint half (phases 6–11)", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
 
         FlexChecks(strings);
+        HookChecks();
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

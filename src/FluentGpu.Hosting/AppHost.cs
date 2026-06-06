@@ -88,6 +88,10 @@ public sealed class AppHost : IDisposable
 
             long before = GC.GetAllocatedBytesForCurrentThread();
             if (rendered) _layout.Run(_scene.Root);          // 6 layout
+
+            var layoutEffects = _root.Context.PendingLayoutEffects;   // 6.5 layout effects (Bounds valid)
+            if (layoutEffects.Count > 0) { foreach (var e in layoutEffects) e(); layoutEffects.Clear(); }
+
             SceneRecorder.Record(_scene, _drawList);          // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
