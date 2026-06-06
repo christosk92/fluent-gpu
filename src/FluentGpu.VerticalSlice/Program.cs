@@ -27,6 +27,22 @@ sealed class Counter : Component
     }
 }
 
+// Nested composition: a parent embedding a stateful child component (its own hooks).
+sealed class NestChild : Component
+{
+    public override Element Render()
+    {
+        var (n, setN) = UseState(0);
+        return Button($"child {n}", () => setN(n + 1));
+    }
+}
+
+sealed class NestParent : Component
+{
+    public override Element Render()
+        => VStack(8, Heading("parent"), Embed.Comp(() => new NestChild()));
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -251,6 +267,33 @@ static class Slice
         Check("23. translate timeline marks TransformDirty only", transOk, $"@25ms dx={dx:0.0}");
     }
 
+    // Nested stateful component: renders, owns its own UseState, and re-renders on its own setState.
+    static void NestedChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("nest", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new NestParent();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        bool mounted = HasGlyph(device, strings, "child 0");
+
+        // parent VStack → [Heading, componentHost]; host → [Button]
+        var compHost = Child(host.Scene, host.Scene.Root, 1);
+        var btn = Child(host.Scene, compHost, 0);
+        var r = host.Scene.AbsoluteRect(btn);
+        var center = new Point2(r.X + r.W / 2f, r.Y + r.H / 2f);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        var f2 = host.RunFrame();
+
+        bool childUpdated = HasGlyph(device, strings, "child 1");
+        Check("24. nested component renders & owns state", mounted && f2.ClicksHandled == 1 && childUpdated, "child 0 → click → child 1");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -296,6 +339,7 @@ static class Slice
         KeyedChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
+        NestedChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

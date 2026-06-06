@@ -1,5 +1,6 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using FluentGpu.Text;
 
@@ -15,6 +16,16 @@ public sealed class TreeReconciler
     private readonly SceneStore _scene;
     private readonly StringTable _strings;
 
+    // Mounted child components, keyed by their host node (the ComponentEl anchor).
+    private sealed class CompEntry { public Component Comp = null!; public Element Rendered = null!; public Type Type = null!; }
+    private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
+    private readonly List<Component> _live = new();
+
+    /// <summary>Live nested components — the host flushes their state and drains their effects each frame.</summary>
+    public List<Component> LiveComponents => _live;
+    /// <summary>Set by the host; a nested component's setState calls this to request the next frame.</summary>
+    public Action RequestRerender { get; set; } = static () => { };
+
     public TreeReconciler(SceneStore scene, StringTable strings)
     {
         _scene = scene;
@@ -26,7 +37,7 @@ public sealed class TreeReconciler
     {
         if (_scene.Root.IsNull || oldRoot is null || oldRoot.ElementTypeId != newRoot.ElementTypeId)
         {
-            if (!_scene.Root.IsNull) _scene.FreeSubtree(_scene.Root);
+            if (!_scene.Root.IsNull) Remove(_scene.Root);
             var node = _scene.CreateNode(newRoot.ElementTypeId);
             _scene.Root = node;
             Mount(node, newRoot);
@@ -39,6 +50,8 @@ public sealed class TreeReconciler
 
     private void Mount(NodeHandle node, Element el)
     {
+        if (el is ComponentEl ce) { MountComponent(node, ce); return; }
+
         WriteColumns(node, el, isMount: true);
         if (el is BoxEl box)
         {
@@ -53,8 +66,82 @@ public sealed class TreeReconciler
 
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
+        if (newEl is ComponentEl nce)
+        {
+            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.TryGetValue(node, out var entry))
+            {
+                // Reuse the instance (state preserved): re-render and reconcile its single output child.
+                var newRendered = RenderComponent(entry.Comp);
+                var childNode = _scene.FirstChild(node);
+                if (childNode.IsNull)
+                {
+                    childNode = _scene.CreateNode(newRendered.ElementTypeId);
+                    _scene.AppendChild(node, childNode);
+                    Mount(childNode, newRendered);
+                }
+                else if (entry.Rendered.ElementTypeId == newRendered.ElementTypeId)
+                {
+                    Update(childNode, newRendered, entry.Rendered);
+                }
+                else
+                {
+                    Remove(childNode);
+                    var nc = _scene.CreateNode(newRendered.ElementTypeId);
+                    _scene.AppendChild(node, nc);
+                    Mount(nc, newRendered);
+                }
+                entry.Rendered = newRendered;
+            }
+            else
+            {
+                ReplaceComponent(node, nce);   // different component type at this position
+            }
+            return;
+        }
+
         WriteColumns(node, newEl, isMount: false);
         ReconcileChildren(node, (newEl as BoxEl)?.Children ?? [], (oldEl as BoxEl)?.Children ?? []);
+    }
+
+    private void MountComponent(NodeHandle node, ComponentEl ce)
+    {
+        var comp = ce.Factory();
+        comp.Context.RequestRerender = RequestRerender;
+        var rendered = RenderComponent(comp);
+        _comps[node] = new CompEntry { Comp = comp, Rendered = rendered, Type = ce.ComponentType };
+        _live.Add(comp);
+
+        var child = _scene.CreateNode(rendered.ElementTypeId);
+        _scene.AppendChild(node, child);
+        Mount(child, rendered);
+    }
+
+    private void ReplaceComponent(NodeHandle node, ComponentEl ce)
+    {
+        if (_comps.Remove(node, out var old)) { old.Comp.Unmount(); _live.Remove(old.Comp); }
+        var kids = new List<NodeHandle>();
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
+        foreach (var k in kids) Remove(k);
+        MountComponent(node, ce);
+    }
+
+    private Element RenderComponent(Component comp)
+    {
+        try { return comp.RenderWithHooks(); }
+        catch (Exception ex) { Diag.Event("reconciler", "component render threw: " + ex.Message); return new BoxEl(); }
+    }
+
+    /// <summary>Remove a subtree: run component effect-cleanups within it, then free the nodes.</summary>
+    private void Remove(NodeHandle node)
+    {
+        UnmountSubtree(node);
+        _scene.FreeSubtree(node);
+    }
+
+    private void UnmountSubtree(NodeHandle node)
+    {
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
+        if (_comps.Remove(node, out var e)) { e.Comp.Unmount(); _live.Remove(e.Comp); }
     }
 
     /// <summary>
@@ -109,7 +196,7 @@ public sealed class TreeReconciler
         }
 
         for (int j = 0; j < oldN; j++)
-            if (!used[j]) _scene.FreeSubtree(oldNodes[j]);   // removed
+            if (!used[j]) Remove(oldNodes[j]);   // removed (runs nested component cleanups first)
 
         for (int i = 0; i < newN; i++)                       // reorder to new order
         {

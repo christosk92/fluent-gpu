@@ -57,6 +57,7 @@ public sealed class AppHost : IDisposable
         _anim = new AnimEngine(_scene);
         _lastSize = window.ClientSizePx;
         _root.Context.RequestRerender = () => _dirty = true;
+        _reconciler.RequestRerender = () => _dirty = true;   // a nested component's setState requests the next frame
         // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
         _window.PaintRequested = () => Paint(0);
     }
@@ -67,7 +68,11 @@ public sealed class AppHost : IDisposable
         _ring.Clear();
         _window.PumpInto(_ring);              // 1 pump
         int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch
-        if (_root.Context.FlushPending()) _dirty = true;    // 3 hook-state flush
+
+        bool changed = _root.Context.FlushPending();        // 3 hook-state flush (root + all nested components)
+        foreach (var c in _reconciler.LiveComponents) changed |= c.Context.FlushPending();
+        if (changed) _dirty = true;
+
         return Paint(clicks);
     }
 
@@ -93,8 +98,7 @@ public sealed class AppHost : IDisposable
             long before = GC.GetAllocatedBytesForCurrentThread();
             if (rendered) _layout.Run(_scene.Root);          // 6 layout
 
-            var layoutEffects = _root.Context.PendingLayoutEffects;   // 6.5 layout effects (Bounds valid)
-            if (layoutEffects.Count > 0) { foreach (var e in layoutEffects) e(); layoutEffects.Clear(); }
+            DrainLayoutEffects();                             // 6.5 layout effects (root + nested; Bounds valid)
 
             _anim.Tick(16f);                                  // 7 animation (writes Opacity/transform; never LayoutDirty)
 
@@ -104,13 +108,31 @@ public sealed class AppHost : IDisposable
             _swapchain.Present();                             // 11 present
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            var effects = _root.Context.PendingEffects;       // 12 passive effects
-            if (effects.Count > 0) { foreach (var e in effects) e(); effects.Clear(); }
+            DrainPassiveEffects();                            // 12 passive effects (root + nested)
 
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered);
             return LastStats;
         }
         finally { _inPaint = false; }
+    }
+
+    private void DrainLayoutEffects()
+    {
+        Drain(_root.Context.PendingLayoutEffects);
+        foreach (var c in _reconciler.LiveComponents) Drain(c.Context.PendingLayoutEffects);
+    }
+
+    private void DrainPassiveEffects()
+    {
+        Drain(_root.Context.PendingEffects);
+        foreach (var c in _reconciler.LiveComponents) Drain(c.Context.PendingEffects);
+    }
+
+    private static void Drain(List<Action> q)
+    {
+        if (q.Count == 0) return;
+        foreach (var e in q) e();
+        q.Clear();
     }
 
     /// <summary>Resize the swapchain to match the window's client size; force a re-layout on change.</summary>
