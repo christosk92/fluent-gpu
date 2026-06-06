@@ -41,8 +41,18 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private GlyphRenderer? _glyphs;
     private readonly List<GlyphInstance> _glyphInsts = new();
     private readonly StringTable _strings;
+    private readonly bool _composited;
 
-    public D3D12Device(StringTable strings) => _strings = strings;
+    // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
+    private IDCompositionDevice* _dcomp;
+    private IDCompositionTarget* _dcompTarget;
+    private IDCompositionVisual* _dcompVisual;
+
+    public D3D12Device(StringTable strings, bool composited = false)
+    {
+        _strings = strings;
+        _composited = composited;
+    }
 
     public string BackendNameSuffix { get; private set; } = "";
     public string BackendName => "D3D12" + BackendNameSuffix;
@@ -145,18 +155,37 @@ public sealed unsafe class D3D12Device : IGpuDevice
         sd.SampleDesc.Quality = 0;
         sd.BufferUsage = DXGI.DXGI_USAGE_RENDER_TARGET_OUTPUT;
         sd.BufferCount = FRAME_COUNT;
-        sd.Scaling = DXGI_SCALING.DXGI_SCALING_STRETCH;
+        sd.Scaling = _composited ? DXGI_SCALING.DXGI_SCALING_STRETCH : DXGI_SCALING.DXGI_SCALING_STRETCH;
         sd.SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        sd.AlphaMode = DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
+        sd.AlphaMode = _composited ? DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
         sd.Flags = 0;
 
         IDXGISwapChain1* sc1;
-        Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, _hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
+        if (_composited)
+            Check(_factory->CreateSwapChainForComposition((IUnknown*)_queue, &sd, null, &sc1), "CreateSwapChainForComposition");
+        else
+            Check(_factory->CreateSwapChainForHwnd((IUnknown*)_queue, _hwnd, &sd, null, null, &sc1), "CreateSwapChainForHwnd");
 
         IDXGISwapChain3* sc3;
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
         _swapChain = sc3;
+
+        if (_composited)
+        {
+            IDCompositionDevice* dc;
+            Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
+            _dcomp = dc;
+            IDCompositionTarget* target;
+            Check(_dcomp->CreateTargetForHwnd(_hwnd, BOOL.TRUE, &target), "CreateTargetForHwnd");
+            _dcompTarget = target;
+            IDCompositionVisual* visual;
+            Check(_dcomp->CreateVisual(&visual), "CreateVisual");
+            _dcompVisual = visual;
+            Check(_dcompVisual->SetContent((IUnknown*)_swapChain), "Visual.SetContent");
+            Check(_dcompTarget->SetRoot(_dcompVisual), "Target.SetRoot");
+            Check(_dcomp->Commit(), "DComp.Commit");
+        }
 
         CreateRtvs();
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
@@ -299,6 +328,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
     public void Dispose()
     {
         if (_device != null) WaitForGpu();
+        if (_dcompVisual != null) _dcompVisual->Release();
+        if (_dcompTarget != null) _dcompTarget->Release();
+        if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
         _rectPipe?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) if (_backBuffers[i] != null) _backBuffers[i]->Release();

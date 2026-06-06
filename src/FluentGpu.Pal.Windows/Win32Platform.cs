@@ -27,6 +27,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    private const uint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 
     private const string ClassName = "FluentGpuWindow";
     private static ushort s_atom;
@@ -70,7 +71,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
         fixed (char* title = desc.Title)
         {
             _hwnd = CreateWindowExW(
-                0, cn, title, WS_OVERLAPPEDWINDOW,
+                desc.Composited ? WS_EX_NOREDIRECTIONBITMAP : 0, cn, title, WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }

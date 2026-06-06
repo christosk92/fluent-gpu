@@ -33,7 +33,8 @@ public interface IPlatformApp : IDisposable
     IPlatformWindow CreateWindow(in WindowDesc desc);
 }
 
-public readonly record struct WindowDesc(string Title, Size2 SizePx, float Scale);
+/// <summary><paramref name="Composited"/> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels.</summary>
+public readonly record struct WindowDesc(string Title, Size2 SizePx, float Scale, bool Composited = false);
 
 public interface IPlatformWindow : IDisposable
 {

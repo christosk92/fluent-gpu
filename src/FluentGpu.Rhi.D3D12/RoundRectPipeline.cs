@@ -59,7 +59,8 @@ float4 PSMain(VSOut i) : SV_Target
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;
     float aa = max(fwidth(d), 1e-4);
     float cov = 1.0 - smoothstep(-aa, aa, d);
-    return float4(i.color.rgb, i.color.a * cov);
+    float aOut = i.color.a * cov;
+    return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
 """;
 
@@ -155,7 +156,7 @@ float4 PSMain(VSOut i) : SV_Target
 
             // alpha blend on RT0
             pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
-            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_SRC_ALPHA;
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;   // premultiplied
             pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
             pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
             pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;

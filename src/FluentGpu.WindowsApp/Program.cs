@@ -31,24 +31,29 @@ static class WindowsApp
         int maxFrames = -1;
         int resizeTest = 0;
         string backend = "d3d12";   // the real backend by default; "gdi" for the bring-up renderer
+        string present = "dcomp";   // dcomp = composited (Mica); "hwnd" = opaque flip swapchain (fallback)
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--frames" && i + 1 < args.Length && int.TryParse(args[i + 1], out int f)) maxFrames = f;
             if (args[i] == "--resize-test" && i + 1 < args.Length && int.TryParse(args[i + 1], out int r)) resizeTest = r;
             if (args[i] == "--backend" && i + 1 < args.Length) backend = args[i + 1].ToLowerInvariant();
+            if (args[i] == "--present" && i + 1 < args.Length) present = args[i + 1].ToLowerInvariant();
         }
+        bool composited = backend == "d3d12" && present != "hwnd";   // Mica needs the composited D3D12 path
 
         Diag.Sink = Console.WriteLine;   // route engine diagnostics to the console (stripped on release builds)
 
         var strings = new StringTable();
         using var app = new Win32App();
-        var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f));
+        var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f, composited));
 
         // Pull the real system accent + apply dark titlebar / Mica backdrop (Windows 11).
         if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark);
+        if (composited) Theme.WindowBackground = ColorF.Transparent;   // clear transparent → Mica shows through
+
         var fonts = new GdiFontSystem(strings);   // GDI metrics drive layout for both backends (DirectWrite font system is next)
-        IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings);
+        IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings, composited);
         var root = new Counter();
         using var host = new AppHost(app, window, device, fonts, strings, root);
 

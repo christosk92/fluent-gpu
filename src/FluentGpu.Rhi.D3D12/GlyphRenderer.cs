@@ -77,7 +77,8 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 float4 PSMain(VSOut i) : SV_Target
 {
     float a = gAtlas.Sample(gSamp, i.uv).r;
-    return float4(i.color.rgb, i.color.a * a);
+    float aOut = i.color.a * a;
+    return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
 """;
 
@@ -345,7 +346,7 @@ float4 PSMain(VSOut i) : SV_Target
             pd.RasterizerState.FillMode = D3D12_FILL_MODE.D3D12_FILL_MODE_SOLID;
             pd.RasterizerState.CullMode = D3D12_CULL_MODE.D3D12_CULL_MODE_NONE;
             pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
-            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_SRC_ALPHA;
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;   // premultiplied
             pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
             pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
             pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
