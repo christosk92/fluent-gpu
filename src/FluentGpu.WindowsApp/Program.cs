@@ -1,12 +1,7 @@
+using FluentGpu;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
-using FluentGpu.Hosting;
-using FluentGpu.Pal;
-using FluentGpu.Pal.Windows;
-using FluentGpu.Rhi;
-using FluentGpu.Rhi.Gdi;
-using FluentGpu.Rhi.D3D12;
 using static FluentGpu.Dsl.Ui;
 
 // Shared context channel: the parent provides the live count; nested components read it via UseContext.
@@ -21,15 +16,17 @@ sealed class CountDisplay : Component
     public override Element Render() => Heading($"Count: {UseContext(Demo.Count)}");
 }
 
-// A nested component with its OWN local state — a like toggle, proving per-component state.
+// A nested component with its OWN local state. On toggle, ONLY the icon glyph + its color change (the reconciler
+// diffs and patches just that node); the color fades grey→red over 200ms via UseAnimatedValue (re-renders until settled).
 sealed class LikeButton : Component
 {
     public override Element Render()
     {
         var (liked, setLiked) = UseState(false);
-        return liked
-            ? Button("♥ Liked", () => setLiked(false))
-            : StandardButton("♡ Like", () => setLiked(true));
+        float t = UseAnimatedValue(liked ? 1f : 0f, 200f);                 // 0→1 eased on like
+        var fg = ColorF.Lerp(ColorF.FromRgba(0xC5, 0xC5, 0xC5), ColorF.FromRgba(0xE8, 0x11, 0x23), t);
+        return Button.Standard(liked ? "♥ Liked" : "♡ Like", () => setLiked(!liked),
+            Button.StandardStyle with { Foreground = fg });
     }
 }
 
@@ -53,10 +50,10 @@ sealed class DemoApp : Component
 
                 // A row of controls: accent +/-, a neutral reset, a custom-styled button, and a self-stateful Like button.
                 HStack(8,
-                    Button("-", () => setCount(count - 1)),
-                    Button("+", () => setCount(count + 1)),
-                    StandardButton("Reset", () => setCount(0)),
-                    Button("Save", () => { }, new ButtonStyle
+                    Button.Accent("-", () => setCount(count - 1)),
+                    Button.Accent("+", () => setCount(count + 1)),
+                    Button.Standard("Reset", () => setCount(0)),
+                    Button.Accent("Save", () => { }, new ButtonStyle
                     {
                         Background = ColorF.FromRgba(0x10, 0x7C, 0x10),
                         Foreground = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
@@ -74,74 +71,15 @@ sealed class DemoApp : Component
     }
 }
 
-static class WindowsApp
+// The entire app: define components, then one line to run. No PAL/RHI/AppHost/Mica/accent/loop to think about.
+static class Program
 {
-    static int Main(string[] args)
+    static void Main(string[] args)
     {
-        // --frames N : render N frames then exit (for headless/CI). Default: run until the window closes.
-        int maxFrames = -1;
-        int resizeTest = 0;
-        string backend = "d3d12";   // the real backend by default; "gdi" for the bring-up renderer
-        string present = "dcomp";   // dcomp = composited (Mica); "hwnd" = opaque flip swapchain (fallback)
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i] == "--frames" && i + 1 < args.Length && int.TryParse(args[i + 1], out int f)) maxFrames = f;
-            if (args[i] == "--resize-test" && i + 1 < args.Length && int.TryParse(args[i + 1], out int r)) resizeTest = r;
-            if (args[i] == "--backend" && i + 1 < args.Length) backend = args[i + 1].ToLowerInvariant();
-            if (args[i] == "--present" && i + 1 < args.Length) present = args[i + 1].ToLowerInvariant();
-        }
-        bool composited = backend == "d3d12" && present != "hwnd";   // Mica needs the composited D3D12 path
+        int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
+        for (int i = 0; i < args.Length - 1; i++)
+            if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
 
-        Diag.Sink = Console.WriteLine;   // route engine diagnostics to the console (stripped on release builds)
-
-        var strings = new StringTable();
-        using var app = new Win32App();
-        var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Demo", new Size2(560, 360), 1f, composited));
-
-        // Pull the real system accent (dark-theme accent fill = SystemAccentColorLight2) + dark titlebar / Mica.
-        if (Win32Theme.AccentLight2() is { } a2) Theme.Accent = ColorF.FromRgba(a2.R, a2.G, a2.B);
-        else if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark);
-        if (composited) Theme.WindowBackground = ColorF.Transparent;   // clear transparent → Mica shows through
-
-        var fonts = new GdiFontSystem(strings);   // GDI metrics drive layout for both backends (DirectWrite font system is next)
-        IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings, composited);
-        var root = new DemoApp();
-        using var host = new AppHost(app, window, device, fonts, strings, root);
-
-        window.Show();
-
-        if (resizeTest > 0)
-        {
-            host.RunFrame();
-            var proc = System.Diagnostics.Process.GetCurrentProcess();
-            proc.Refresh();
-            long before = proc.PrivateMemorySize64;
-            for (int i = 0; i < resizeTest; i++)
-            {
-                window.SetClientSize(420 + (i * 7) % 360, 300 + (i * 5) % 240);   // vary like a live drag
-                host.RunFrame();                                                  // pumps WM_SIZE → resize path
-            }
-            GC.Collect(); GC.WaitForPendingFinalizers();
-            proc.Refresh();
-            long after = proc.PrivateMemorySize64;
-            Console.WriteLine($"RESIZE-TEST backend={device.BackendName} n={resizeTest} | private MB before={before / 1048576.0:0.0} after={after / 1048576.0:0.0} delta={(after - before) / 1048576.0:+0.0;-0.0} | managed MB={GC.GetTotalMemory(true) / 1048576.0:0.0}");
-            Diag.Dump($"{backend} after {resizeTest} resizes");
-            return 0;
-        }
-
-        int n = 0;
-        while (!window.IsClosed)
-        {
-            host.RunFrame();
-            n++;
-            if (n == 2) Diag.Dump($"{backend} frame 2");
-            if (maxFrames > 0 && n >= maxFrames) break;
-            Thread.Sleep(8);   // ~120 Hz cap; the real loop would block on the frame-latency waitable
-        }
-
-        Console.WriteLine($"FluentGpu WindowsApp: rendered {n} frame(s) on the {device.BackendName} backend; " +
-                          $"window {(window.IsClosed ? "closed by user" : "exited after --frames")}.");
-        return 0;
+        FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
     }
 }

@@ -16,6 +16,7 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    protected float UseAnimatedValue(float target, float durationMs = 180f) => Context.UseAnimatedValue(target, durationMs);
 
     /// <summary>Run one render pass with hook bookkeeping.</summary>
     public Element RenderWithHooks()

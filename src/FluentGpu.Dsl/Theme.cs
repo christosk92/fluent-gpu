@@ -27,23 +27,6 @@ public static class Theme
     public static ColorF WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20);
     public static ColorF WindowText = ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
-    // Default control styles — the framework's Fluent look (exact WinUI dark per-state). Override per-instance by
-    // passing your own ButtonStyle, or swap these out wholesale.
-    public static ButtonStyle AccentButton => new()
-    {
-        Background = Accent,
-        Foreground = AccentText,
-        Border = AccentBorder,
-        HoverBackground = Accent with { A = 0.9f },
-        PressedBackground = Accent with { A = 0.8f },
-    };
-
-    public static ButtonStyle StandardButton => new()
-    {
-        Background = ControlFill,
-        Foreground = ControlText,
-        Border = ControlBorder,
-        HoverBackground = ControlFillHover,
-        PressedBackground = ControlFillPressed,
-    };
+    // Theme holds design TOKENS only. Control default styles live with each control (e.g. Button.AccentStyle),
+    // built from these tokens and overrideable there.
 }

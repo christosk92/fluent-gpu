@@ -45,6 +45,12 @@ internal sealed class RefHolderCell : HookCell
     public override bool Flush() => false;
 }
 
+internal sealed class AnimValueCell : HookCell
+{
+    public float Current, From, Target, Elapsed;
+    public override bool Flush() => false;
+}
+
 /// <summary>A stable, mutable per-component box that persists across renders (the React <c>useRef</c> container).</summary>
 public sealed class Ref<T>
 {
@@ -159,6 +165,30 @@ public sealed class RenderContext
     {
         if (ContextStack.TryGet(context, out var v) && v is T tv) return tv;
         return context.Default;
+    }
+
+    /// <summary>
+    /// A value that smoothly eases toward <paramref name="target"/> whenever the target changes (React/framer-style).
+    /// While animating it requests the next frame; once settled it stops (no more renders). Bind it to a color/scale.
+    /// </summary>
+    public float UseAnimatedValue(float target, float durationMs = 180f)
+    {
+        AnimValueCell cell;
+        if (!_mounted) { cell = new AnimValueCell { Current = target, From = target, Target = target }; _cells.Add(cell); }
+        else cell = (AnimValueCell)_cells[_cursor];
+        _cursor++;
+
+        if (cell.Target != target) { cell.From = cell.Current; cell.Target = target; cell.Elapsed = 0f; }
+        if (cell.Current != cell.Target)
+        {
+            cell.Elapsed += 16f;   // ~one frame; the host renders ~60 Hz while a value is animating
+            float t = Math.Clamp(cell.Elapsed / MathF.Max(durationMs, 1f), 0f, 1f);
+            float e = t < 0.5f ? 2f * t * t : 1f - 2f * (1f - t) * (1f - t);   // ease-in-out
+            cell.Current = cell.From + (cell.Target - cell.From) * e;
+            if (t >= 1f) cell.Current = cell.Target;
+            else RequestRerender();
+        }
+        return cell.Current;
     }
 
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>

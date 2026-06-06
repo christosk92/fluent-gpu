@@ -21,28 +21,5 @@ public static class Ui
     public static TextEl Text(string text)
         => new(text) { Size = 14f, Color = Theme.WindowText };
 
-    /// <summary>A button. Barebone behavior (clickable + focusable) + a style on top — defaults to the Fluent accent
-    /// style, fully overrideable by passing your own <see cref="ButtonStyle"/> (or chaining modifiers on the result).</summary>
-    public static BoxEl Button(string label, Action onClick, ButtonStyle? style = null)
-    {
-        var s = style ?? Theme.AccentButton;
-        return new BoxEl
-        {
-            Direction = 0,
-            Padding = s.Padding,
-            MinHeight = s.MinHeight,
-            AlignItems = FlexAlign.Center,   // center the label vertically within the min-height
-            Fill = s.Background,
-            HoverFill = s.HoverBackground,
-            PressedFill = s.PressedBackground,
-            BorderColor = s.Border,
-            BorderWidth = s.BorderWidth,
-            Corners = CornerRadius4.All(s.CornerRadius),
-            OnClick = onClick,
-            Children = [new TextEl(label) { Size = s.FontSize, Bold = s.Bold, Color = s.Foreground }],
-        };
-    }
-
-    /// <summary>A neutral WinUI standard button (subtle fill + stroke) — i.e. Button with the standard style.</summary>
-    public static BoxEl StandardButton(string label, Action onClick) => Button(label, onClick, Theme.StandardButton);
+    // Controls (Button, …) live in their own classes under Controls/ — e.g. Button.Accent(...) / Button.Standard(...).
 }

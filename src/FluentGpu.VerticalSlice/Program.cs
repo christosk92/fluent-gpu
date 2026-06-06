@@ -22,8 +22,8 @@ sealed class Counter : Component
         return VStack(12,
             Heading($"Count: {count}"),
             HStack(8,
-                Button("-", () => setCount(count - 1)),
-                Button("+", () => setCount(count + 1))));
+                Button.Accent("-", () => setCount(count - 1)),
+                Button.Accent("+", () => setCount(count + 1))));
     }
 }
 
@@ -33,7 +33,7 @@ sealed class NestChild : Component
     public override Element Render()
     {
         var (n, setN) = UseState(0);
-        return Button($"child {n}", () => setN(n + 1));
+        return Button.Accent($"child {n}", () => setN(n + 1));
     }
 }
 
@@ -55,14 +55,21 @@ sealed class CtxParent : Component
     {
         var (v, setV) = UseState(7);
         return VStack(4,
-            Button("inc", () => setV(v + 1)),
+            Button.Accent("inc", () => setV(v + 1)),
             Ctx.Provide(Slice.NumCtx, v, Embed.Comp(() => new CtxConsumer())));
     }
 }
 
 sealed class HoverProbe : Component
 {
-    public override Element Render() => Button("hi", () => { });
+    public override Element Render() => Button.Accent("hi", () => { });
+}
+
+sealed class AnimProbe : Component
+{
+    public float Target;
+    public float Value;
+    public override Element Render() { Value = UseAnimatedValue(Target, 100f); return Ui.Text("x"); }
 }
 
 // Probe component for the expanded hooks.
@@ -388,16 +395,29 @@ static class Slice
             HoverBackground = ColorF.FromRgba(70, 80, 90),
             CornerRadius = 8f,
         };
-        var btn = Ui.Button("x", () => { }, s);
+        var btn = Button.Accent("x", () => { }, s);
         bool styled = btn.Fill == s.Background
             && btn.HoverFill == s.HoverBackground
             && Near(btn.Corners.TopLeft, 8f)
             && btn.Children[0] is TextEl t && t.Color == s.Foreground;
 
-        var modded = Ui.Button("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
+        var modded = Button.Accent("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
         bool overridden = modded.Fill == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
 
         Check("27. controls are user-styleable (ButtonStyle + modifiers)", styled && overridden, "custom style + .Background().Rounded()");
+    }
+
+    // UseAnimatedValue eases toward a changed target across renders, then settles (React/framer-style transition).
+    static void AnimValueChecks()
+    {
+        var p = new AnimProbe { Target = 0f };
+        p.RenderWithHooks();                 // mount → value = 0
+        p.Target = 1f;
+        p.RenderWithHooks();                 // target changed → first eased step
+        float v1 = p.Value;
+        for (int i = 0; i < 20; i++) p.RenderWithHooks();   // advance past the 100ms duration
+        float v2 = p.Value;
+        Check("28. UseAnimatedValue eases then settles", v1 > 0f && v1 < 1f && Near(v2, 1f), $"step={v1:0.00} settled={v2:0.0}");
     }
 
     static int Main()
@@ -449,6 +469,7 @@ static class Slice
         ContextChecks(strings);
         HoverChecks(strings);
         StyleChecks();
+        AnimValueChecks();
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

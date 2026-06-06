@@ -42,6 +42,10 @@ public readonly record struct ColorF(float R, float G, float B, float A)
     public static ColorF Transparent => default;
     public static ColorF FromRgba(byte r, byte g, byte b, byte a = 255)
         => new(r / 255f, g / 255f, b / 255f, a / 255f);
+
+    /// <summary>Linear interpolation between two colors (t in 0..1) — for animated color transitions.</summary>
+    public static ColorF Lerp(ColorF a, ColorF b, float t)
+        => new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t, a.A + (b.A - a.A) * t);
 }
 
 /// <summary>2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).</summary>
