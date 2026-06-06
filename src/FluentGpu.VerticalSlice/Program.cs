@@ -60,6 +60,11 @@ sealed class CtxParent : Component
     }
 }
 
+sealed class HoverProbe : Component
+{
+    public override Element Render() => Button("hi", () => { });
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -337,6 +342,42 @@ static class Slice
         Check("25. UseContext provides + propagates across components", c0 && c1, "ctx 7 → ctx 8");
     }
 
+    // Hover/pressed visual states: the dispatcher tracks them as node flags following the pointer.
+    static void HoverChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("hover", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new HoverProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var btn = host.Scene.Root;
+        var r = host.Scene.AbsoluteRect(btn);
+        var center = new Point2(r.X + r.W / 2f, r.Y + r.H / 2f);
+        var outside = new Point2(r.Right + 50f, r.Bottom + 50f);
+
+        window.QueueInput(new InputEvent(InputKind.PointerMove, center, 0, 0));
+        host.RunFrame();
+        bool hov = (host.Scene.Flags(btn) & NodeFlags.Hovered) != 0;
+
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        host.RunFrame();
+        bool prs = (host.Scene.Flags(btn) & NodeFlags.Pressed) != 0;
+
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        host.RunFrame();
+        bool released = (host.Scene.Flags(btn) & NodeFlags.Pressed) == 0;
+
+        window.QueueInput(new InputEvent(InputKind.PointerMove, outside, 0, 0));
+        host.RunFrame();
+        bool unhov = (host.Scene.Flags(btn) & NodeFlags.Hovered) == 0;
+
+        Check("26. hover/pressed states track the pointer", hov && prs && released && unhov, "enter→hover, down→pressed, up→release, leave→unhover");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -384,6 +425,7 @@ static class Slice
         AnimChecks();
         NestedChecks(strings);
         ContextChecks(strings);
+        HoverChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

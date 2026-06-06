@@ -27,21 +27,29 @@ public static class SceneRecorder
         switch (p.VisualKind)
         {
             case VisualKind.Box when p.Fill.A > 0f || (p.BorderWidth > 0f && p.BorderColor.A > 0f):
-                if (p.BorderWidth > 0f && p.BorderColor.A > 0f)
+            {
+                // Interaction visual states (composition-style — no re-render): pressed darkens, hover lightens.
+                NodeFlags f = scene.Flags(node);
+                ColorF fill = p.Fill, border = p.BorderColor;
+                if ((f & NodeFlags.Pressed) != 0) { fill = Darken(fill, 0.12f); border = Darken(border, 0.12f); }
+                else if ((f & NodeFlags.Hovered) != 0) { fill = Lighten(fill, 0.08f); border = Lighten(border, 0.08f); }
+
+                if (p.BorderWidth > 0f && border.A > 0f)
                 {
-                    dl.FillRoundRect(rect, p.Corners, p.BorderColor, key);        // border ring (drawn first)
+                    dl.FillRoundRect(rect, p.Corners, border, key);              // border ring (drawn first)
                     float bw = p.BorderWidth;
                     var inner = new RectF(rect.X + bw, rect.Y + bw, MathF.Max(0f, rect.W - 2 * bw), MathF.Max(0f, rect.H - 2 * bw));
                     var ic = new CornerRadius4(
                         MathF.Max(0f, p.Corners.TopLeft - bw), MathF.Max(0f, p.Corners.TopRight - bw),
                         MathF.Max(0f, p.Corners.BottomRight - bw), MathF.Max(0f, p.Corners.BottomLeft - bw));
-                    if (p.Fill.A > 0f) dl.FillRoundRect(inner, ic, p.Fill, key);   // inset fill on top
+                    if (fill.A > 0f) dl.FillRoundRect(inner, ic, fill, key);     // inset fill on top
                 }
                 else
                 {
-                    dl.FillRoundRect(rect, p.Corners, p.Fill, key);
+                    dl.FillRoundRect(rect, p.Corners, fill, key);
                 }
                 break;
+            }
             case VisualKind.Text when !p.Text.IsEmpty:
                 ref var li = ref scene.Layout(node);
                 dl.DrawGlyphRun(rect, p.TextColor, p.Text, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0, key);
@@ -51,4 +59,7 @@ public static class SceneRecorder
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             Walk(scene, dl, c, ax, ay, depth + 1);
     }
+
+    private static ColorF Lighten(ColorF c, float t) => new(c.R + (1f - c.R) * t, c.G + (1f - c.G) * t, c.B + (1f - c.B) * t, c.A);
+    private static ColorF Darken(ColorF c, float t) => new(c.R * (1f - t), c.G * (1f - t), c.B * (1f - t), c.A);
 }

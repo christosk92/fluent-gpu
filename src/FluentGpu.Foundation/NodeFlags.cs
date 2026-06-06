@@ -18,6 +18,8 @@ public enum NodeFlags : uint
     WantsPointer = 1u << 12,
     Focusable = 1u << 13,
     Focused = 1u << 14,
+    Hovered = 1u << 15,
+    Pressed = 1u << 16,
 
     // lifecycle
     NewThisFrame = 1u << 29,

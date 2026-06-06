@@ -16,6 +16,8 @@ public sealed class InputDispatcher
     private readonly List<NodeHandle> _focusables = new();
     private NodeHandle _down;
     private NodeHandle _focused;
+    private NodeHandle _hovered;
+    private NodeHandle _pressed;
 
     public InputDispatcher(SceneStore scene) => _scene = scene;
 
@@ -23,19 +25,28 @@ public sealed class InputDispatcher
 
     public int Dispatch(ReadOnlySpan<InputEvent> events)
     {
-        if (!_focused.IsNull && !_scene.IsLive(_focused)) _focused = NodeHandle.Null;   // focus survived a free? drop it
+        // Drop transient state that pointed at a freed node.
+        if (!_focused.IsNull && !_scene.IsLive(_focused)) _focused = NodeHandle.Null;
+        if (!_hovered.IsNull && !_scene.IsLive(_hovered)) _hovered = NodeHandle.Null;
+        if (!_pressed.IsNull && !_scene.IsLive(_pressed)) _pressed = NodeHandle.Null;
 
         int handled = 0;
         foreach (ref readonly var e in events)
         {
             switch (e.Kind)
             {
+                case InputKind.PointerMove:
+                    SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
+                    break;
+
                 case InputKind.PointerDown:
                     _down = HitTest(e.PositionPx);
+                    SetState(ref _pressed, _down, NodeFlags.Pressed);
                     break;
 
                 case InputKind.PointerUp:
                     var up = HitTest(e.PositionPx);
+                    SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     if (!up.IsNull && up == _down)
                     {
                         SetFocus(up);                       // pointer activation focuses the target
@@ -51,6 +62,15 @@ public sealed class InputDispatcher
             }
         }
         return handled;
+    }
+
+    /// <summary>Move a single-node interaction flag (hover/pressed) from the old node to <paramref name="next"/>.</summary>
+    private void SetState(ref NodeHandle slot, NodeHandle next, NodeFlags flag)
+    {
+        if (slot == next) return;
+        if (!slot.IsNull && _scene.IsLive(slot)) _scene.Flags(slot) &= ~flag;
+        slot = next;
+        if (!next.IsNull) _scene.Flags(next) |= flag;
     }
 
     private void OnKey(int key)
