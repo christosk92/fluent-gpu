@@ -19,12 +19,27 @@ public sealed record BoxEl : Element
     public byte Direction { get; init; }          // 0 = row, 1 = column
     public float Gap { get; init; }
     public Edges4 Padding { get; init; }
+    public Edges4 Margin { get; init; }
     public ColorF Fill { get; init; }
     public ColorF BorderColor { get; init; }
     public float BorderWidth { get; init; }
     public CornerRadius4 Corners { get; init; }
     public Action? OnClick { get; init; }
     public Element[] Children { get; init; } = [];
+
+    // Flexbox
+    public float Width { get; init; } = float.NaN;
+    public float Height { get; init; } = float.NaN;
+    public float MinWidth { get; init; } = float.NaN;
+    public float MinHeight { get; init; } = float.NaN;
+    public float MaxWidth { get; init; } = float.NaN;
+    public float MaxHeight { get; init; } = float.NaN;
+    public float Grow { get; init; }
+    public float Shrink { get; init; }
+    public float Basis { get; init; } = float.NaN;
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    public FlexJustify Justify { get; init; } = FlexJustify.Start;
+    public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
 }
 
 /// <summary>A text run.</summary>

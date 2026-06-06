@@ -101,8 +101,16 @@ public sealed class TreeReconciler
                 li.Direction = b.Direction;
                 li.Gap = b.Gap;
                 li.Padding = b.Padding;
-                li.Width = float.NaN;
-                li.Height = float.NaN;
+                li.Margin = b.Margin;
+                li.Width = b.Width;
+                li.Height = b.Height;
+                li.MinW = b.MinWidth; li.MinH = b.MinHeight; li.MaxW = b.MaxWidth; li.MaxH = b.MaxHeight;
+                li.FlexGrow = b.Grow;
+                li.FlexShrink = b.Shrink;
+                li.FlexBasis = b.Basis;
+                li.AlignSelf = b.AlignSelf;
+                li.Justify = b.Justify;
+                li.AlignItems = b.AlignItems;
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 if (b.OnClick is not null)
