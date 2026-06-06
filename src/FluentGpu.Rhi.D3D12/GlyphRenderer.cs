@@ -81,6 +81,10 @@ float4 PSMain(VSOut i) : SV_Target
 }
 """;
 
+    // diagnostics (surfaced through the standardized Diag facility; stripped on release)
+    public int CachedGlyphs => _cache.Count;
+    public long AtlasNonZero { get { long n = 0; var c = _cpu; for (int i = 0; i < c.Length; i++) if (c[i] != 0) n++; return n; } }
+
     private static void Check(HRESULT hr, string what)
     {
         if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}");
@@ -156,19 +160,24 @@ float4 PSMain(VSOut i) : SV_Target
         Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL,
             DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
 
+        // NATURAL (antialiased) rendering mode → must query the CLEARTYPE_3x1 texture (ALIASED_1x1 returns empty bounds here).
         RECT bounds;
-        Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_ALIASED_1x1, &bounds), "GetAlphaTextureBounds");
+        Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds), "GetAlphaTextureBounds");
         int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
 
         e = new GlyphEntry { Advance = advance, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
+        Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h} adv={advance:0.0}");
         if (w > 0 && h > 0)
         {
-            byte[] tmp = new byte[w * h];
-            fixed (byte* pt = tmp)
-                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_ALIASED_1x1, &bounds, pt, (uint)tmp.Length), "CreateAlphaTexture");
-            Pack(ref e, tmp, w, h);
+            byte[] rgb = new byte[w * h * 3];   // 3 subpixel coverage bytes per pixel
+            fixed (byte* pr = rgb)
+                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
+            byte[] gray = new byte[w * h];      // average to grayscale coverage for the R8 atlas
+            for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
+            Pack(ref e, gray, w, h);
             _atlasDirty = true;
         }
+        Diag.Count("text.glyph", "rasterized");
         analysis->Release();
         _cache[key] = e;
         return e;

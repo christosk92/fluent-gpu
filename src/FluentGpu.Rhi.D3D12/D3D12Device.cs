@@ -197,7 +197,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _cmdList->RSSetScissorRects(1, &scd);
 
         Decode(drawList);
-        _glyphs!.UploadIfDirty(_cmdList);   // copy newly-rasterized glyphs into the GPU atlas (before sampling)
+        Diag.Set("d3d12", "rects", _rectInsts.Count);
+        Diag.Set("d3d12", "glyphInstances", _glyphInsts.Count);
+        Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
+        Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
+        _glyphs.UploadIfDirty(_cmdList);   // copy newly-rasterized glyphs into the GPU atlas (before sampling)
         if (_rectInsts.Count > 0)
             _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), _w, _h);
         if (_glyphInsts.Count > 0)

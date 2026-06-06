@@ -36,6 +36,8 @@ static class WindowsApp
             if (args[i] == "--backend" && i + 1 < args.Length) backend = args[i + 1].ToLowerInvariant();
         }
 
+        Diag.Sink = Console.WriteLine;   // route engine diagnostics to the console (stripped on release builds)
+
         var strings = new StringTable();
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f));
@@ -51,6 +53,7 @@ static class WindowsApp
         {
             host.RunFrame();
             n++;
+            if (n == 2) Diag.Dump($"{backend} frame 2");
             if (maxFrames > 0 && n >= maxFrames) break;
             Thread.Sleep(8);   // ~120 Hz cap; the real loop would block on the frame-latency waitable
         }
