@@ -128,6 +128,12 @@ public sealed class SceneStore : ISceneBackend
         _childCount[p]++;
     }
 
+    /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
+    public void Detach(NodeHandle child)
+    {
+        if (IsLive(child)) DetachFromParent((int)child.Raw.Index);
+    }
+
     private void DetachFromParent(int c)
     {
         int p = _parent[c];

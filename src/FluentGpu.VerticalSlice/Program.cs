@@ -145,6 +145,38 @@ static class Slice
         Check("16. UseRef persists & is stable", p.RefBox!.Value == 42 && ReferenceEquals(p.RefBox, r1));
     }
 
+    // Keyed reconcile: reorder preserves node identity (state), removal frees only the dropped key.
+    static void KeyedChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+
+        static Element Row(params string[] keys)
+        {
+            var ch = new Element[keys.Length];
+            for (int i = 0; i < keys.Length; i++) ch[i] = new BoxEl { Key = keys[i], Width = 10, Height = 10 };
+            return new BoxEl { Direction = 0, Children = ch };
+        }
+
+        var t1 = Row("a", "b", "c");
+        recon.ReconcileRoot(t1, null);
+        var hA = Child(scene, scene.Root, 0);
+        var hB = Child(scene, scene.Root, 1);
+        var hC = Child(scene, scene.Root, 2);
+
+        var t2 = Row("c", "a", "b");
+        recon.ReconcileRoot(t2, t1);
+        bool reordered = Child(scene, scene.Root, 0) == hC && Child(scene, scene.Root, 1) == hA && Child(scene, scene.Root, 2) == hB;
+        Check("17. keyed reconcile reorders, preserving identity", reordered, "[a,b,c] → [c,a,b]");
+
+        var t3 = Row("a", "b");
+        recon.ReconcileRoot(t3, t2);
+        int count = 0;
+        for (var c = scene.FirstChild(scene.Root); !c.IsNull; c = scene.NextSibling(c)) count++;
+        bool removed = count == 2 && Child(scene, scene.Root, 0) == hA && Child(scene, scene.Root, 1) == hB;
+        Check("18. keyed reconcile removes only the dropped key", removed, "[c,a,b] → [a,b]");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -187,6 +219,7 @@ static class Slice
 
         FlexChecks(strings);
         HookChecks();
+        KeyedChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

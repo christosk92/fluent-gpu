@@ -54,32 +54,67 @@ public sealed class TreeReconciler
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
         WriteColumns(node, newEl, isMount: false);
+        ReconcileChildren(node, (newEl as BoxEl)?.Children ?? [], (oldEl as BoxEl)?.Children ?? []);
+    }
 
-        var newKids = (newEl as BoxEl)?.Children ?? [];
-        var oldKids = (oldEl as BoxEl)?.Children ?? [];
+    /// <summary>
+    /// Keyed child reconcile: match old↔new by Key (else by position+type), update matches in place (state preserved),
+    /// mount new, free removed, then reorder the sibling chain to the new order via O(1) detach+append. (LIS move-
+    /// minimization is a perf follow-up; correctness + identity preservation are here.)
+    /// </summary>
+    private void ReconcileChildren(NodeHandle node, Element[] newKids, Element[] oldKids)
+    {
+        int oldN = oldKids.Length, newN = newKids.Length;
+        if (oldN == 0 && newN == 0) return;
 
-        bool structuralSame = newKids.Length == oldKids.Length;
-        for (int i = 0; structuralSame && i < newKids.Length; i++)
-            if (newKids[i].ElementTypeId != oldKids[i].ElementTypeId) structuralSame = false;
-
-        if (structuralSame)
+        // Snapshot old child handles in order.
+        var oldNodes = oldN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[oldN];
+        if (oldN > 0)
         {
             int i = 0;
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), i++)
-                Update(c, newKids[i], oldKids[i]);
+            for (var c = _scene.FirstChild(node); !c.IsNull && i < oldN; c = _scene.NextSibling(c)) oldNodes[i++] = c;
         }
-        else
+
+        // Key → old index map.
+        Dictionary<string, int>? keyMap = null;
+        for (int j = 0; j < oldN; j++)
+            if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
+
+        var used = oldN == 0 ? Array.Empty<bool>() : new bool[oldN];
+        var newNodes = newN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[newN];
+
+        for (int i = 0; i < newN; i++)
         {
-            // rebuild this level (correct; the slice never hits it)
-            var toFree = new List<NodeHandle>();
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) toFree.Add(c);
-            foreach (var c in toFree) _scene.FreeSubtree(c);
-            foreach (var childEl in newKids)
+            Element nk = newKids[i];
+            int match = -1;
+            if (nk.Key is string key && keyMap is not null && keyMap.TryGetValue(key, out int j)
+                && !used[j] && oldKids[j].ElementTypeId == nk.ElementTypeId)
+                match = j;
+            else if (nk.Key is null && i < oldN && !used[i] && oldKids[i].Key is null
+                && oldKids[i].ElementTypeId == nk.ElementTypeId)
+                match = i;
+
+            if (match >= 0)
             {
-                var child = _scene.CreateNode(childEl.ElementTypeId);
-                _scene.AppendChild(node, child);
-                Mount(child, childEl);
+                used[match] = true;
+                newNodes[i] = oldNodes[match];
+                Update(oldNodes[match], nk, oldKids[match]);   // reuse → state preserved
             }
+            else
+            {
+                var child = _scene.CreateNode(nk.ElementTypeId);
+                Mount(child, nk);
+                newNodes[i] = child;
+            }
+        }
+
+        for (int j = 0; j < oldN; j++)
+            if (!used[j]) _scene.FreeSubtree(oldNodes[j]);   // removed
+
+        for (int i = 0; i < newN; i++)                       // reorder to new order
+        {
+            _scene.Detach(newNodes[i]);
+            _scene.AppendChild(node, newNodes[i]);
         }
     }
 
