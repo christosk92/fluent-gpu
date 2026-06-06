@@ -36,7 +36,7 @@ public sealed class AppHost : IDisposable
     private bool _dirty = true;
     private bool _inPaint;
     private Size2 _lastSize;
-    private readonly ColorF _clear = ColorF.FromRgba(0x1E, 0x1E, 0x1E);
+    private static ColorF Clear => Theme.WindowBackground;   // theme-driven (transparent later for Mica)
 
     public SceneStore Scene => _scene;
     public FrameStats LastStats { get; private set; }
@@ -90,7 +90,7 @@ public sealed class AppHost : IDisposable
             if (rendered) _layout.Run(_scene.Root);          // 6 layout
             SceneRecorder.Record(_scene, _drawList);          // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
-                new FrameInfo(_window.ClientSizePx, _window.Scale, _clear)); // 10 submit
+                new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                             // 11 present
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
 

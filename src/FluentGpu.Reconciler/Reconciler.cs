@@ -90,9 +90,11 @@ public sealed class TreeReconciler
             case BoxEl b:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
-                bool hasSurface = b.Fill.A > 0f || b.OnClick is not null;
+                bool hasSurface = b.Fill.A > 0f || b.BorderWidth > 0f || b.OnClick is not null;
                 paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
                 paint.Fill = b.Fill;
+                paint.BorderColor = b.BorderColor;
+                paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;
 
                 ref LayoutInput li = ref _scene.Layout(node);

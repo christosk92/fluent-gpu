@@ -20,6 +20,8 @@ public sealed record BoxEl : Element
     public float Gap { get; init; }
     public Edges4 Padding { get; init; }
     public ColorF Fill { get; init; }
+    public ColorF BorderColor { get; init; }
+    public float BorderWidth { get; init; }
     public CornerRadius4 Corners { get; init; }
     public Action? OnClick { get; init; }
     public Element[] Children { get; init; } = [];

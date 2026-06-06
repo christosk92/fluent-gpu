@@ -15,7 +15,7 @@ sealed class Counter : Component
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        return VStack(12,
+        return Panel(new Edges4(28, 24, 28, 28), 16,
             Heading($"Count: {count}"),
             HStack(8,
                 Button("-", () => setCount(count - 1)),
@@ -43,6 +43,10 @@ static class WindowsApp
         var strings = new StringTable();
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f));
+
+        // Pull the real system accent + apply dark titlebar / Mica backdrop (Windows 11).
+        if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark);
         var fonts = new GdiFontSystem(strings);   // GDI metrics drive layout for both backends (DirectWrite font system is next)
         IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings);
         var root = new Counter();

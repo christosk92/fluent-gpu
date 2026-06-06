@@ -31,6 +31,8 @@ public struct NodePaint
     public Affine2D LocalTransform;
     public float Opacity;
     public ColorF Fill;
+    public ColorF BorderColor;
+    public float BorderWidth;
     public CornerRadius4 Corners;
     public ColorF TextColor;
     public StringId Text;

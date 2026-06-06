@@ -26,8 +26,21 @@ public static class SceneRecorder
 
         switch (p.VisualKind)
         {
-            case VisualKind.Box when p.Fill.A > 0f:
-                dl.FillRoundRect(rect, p.Corners, p.Fill, key);
+            case VisualKind.Box when p.Fill.A > 0f || (p.BorderWidth > 0f && p.BorderColor.A > 0f):
+                if (p.BorderWidth > 0f && p.BorderColor.A > 0f)
+                {
+                    dl.FillRoundRect(rect, p.Corners, p.BorderColor, key);        // border ring (drawn first)
+                    float bw = p.BorderWidth;
+                    var inner = new RectF(rect.X + bw, rect.Y + bw, MathF.Max(0f, rect.W - 2 * bw), MathF.Max(0f, rect.H - 2 * bw));
+                    var ic = new CornerRadius4(
+                        MathF.Max(0f, p.Corners.TopLeft - bw), MathF.Max(0f, p.Corners.TopRight - bw),
+                        MathF.Max(0f, p.Corners.BottomRight - bw), MathF.Max(0f, p.Corners.BottomLeft - bw));
+                    if (p.Fill.A > 0f) dl.FillRoundRect(inner, ic, p.Fill, key);   // inset fill on top
+                }
+                else
+                {
+                    dl.FillRoundRect(rect, p.Corners, p.Fill, key);
+                }
                 break;
             case VisualKind.Text when !p.Text.IsEmpty:
                 ref var li = ref scene.Layout(node);
