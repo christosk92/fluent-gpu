@@ -57,8 +57,8 @@ float4 PSMain(VSOut i) : SV_Target
 {
     float2 q = abs(i.local) - (i.halfSize - i.radius);
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;
-    float aa = max(fwidth(d), 1e-4);
-    float cov = 1.0 - smoothstep(-aa, aa, d);
+    float fw = max(fwidth(d), 1e-4);
+    float cov = clamp(0.5 - d / fw, 0.0, 1.0);   // crisp ~1px linear AA (was a ~2px smoothstep band)
     float aOut = i.color.a * cov;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
