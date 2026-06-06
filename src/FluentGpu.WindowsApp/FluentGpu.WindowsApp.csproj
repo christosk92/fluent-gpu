@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
+    <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
+    <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
+    <ProjectReference Include="..\FluentGpu.Pal.Windows\FluentGpu.Pal.Windows.csproj" />
+    <ProjectReference Include="..\FluentGpu.Rhi.Gdi\FluentGpu.Rhi.Gdi.csproj" />
+  </ItemGroup>
+</Project>

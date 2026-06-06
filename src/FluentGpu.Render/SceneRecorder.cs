@@ -30,7 +30,8 @@ public static class SceneRecorder
                 dl.FillRoundRect(rect, p.Corners, p.Fill, key);
                 break;
             case VisualKind.Text when !p.Text.IsEmpty:
-                dl.DrawGlyphRun(rect, p.TextColor, p.Text, key);
+                ref var li = ref scene.Layout(node);
+                dl.DrawGlyphRun(rect, p.TextColor, p.Text, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0, key);
                 break;
         }
 

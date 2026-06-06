@@ -5,6 +5,8 @@
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
     <ProjectReference Include="..\FluentGpu.Pal\FluentGpu.Pal.csproj" />
-    <ProjectReference Include="..\FluentGpu.Win32.Interop\FluentGpu.Win32.Interop.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
   </ItemGroup>
 </Project>

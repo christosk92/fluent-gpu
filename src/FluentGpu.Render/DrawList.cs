@@ -8,7 +8,7 @@ public enum DrawOp : int { FillRoundRect = 1, DrawGlyphRun = 2 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
 public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, ColorF Fill);
-public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text);
+public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, float FontSize, int Bold);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -40,10 +40,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, ulong sortKey = 0)
+    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, float fontSize, int bold, ulong sortKey = 0)
     {
         WriteOp(DrawOp.DrawGlyphRun);
-        WritePayload(new DrawGlyphRunCmd(bounds, color, text));
+        WritePayload(new DrawGlyphRunCmd(bounds, color, text, fontSize, bold));
         PushSort(sortKey);
     }
 

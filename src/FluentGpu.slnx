@@ -22,6 +22,7 @@
     <Project Path="FluentGpu.Pal.Windows/FluentGpu.Pal.Windows.csproj" />
     <Project Path="FluentGpu.Text.DirectWrite/FluentGpu.Text.DirectWrite.csproj" />
     <Project Path="FluentGpu.Accessibility.Uia/FluentGpu.Accessibility.Uia.csproj" />
+    <Project Path="FluentGpu.Rhi.Gdi/FluentGpu.Rhi.Gdi.csproj" />
   </Folder>
   <Folder Name="/Backends.Headless/">
     <Project Path="FluentGpu.Rhi.Headless/FluentGpu.Rhi.Headless.csproj" />
@@ -34,5 +35,6 @@
   </Folder>
   <Folder Name="/Apps/">
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
+    <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
   </Folder>
 </Solution>

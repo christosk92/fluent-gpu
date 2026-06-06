@@ -19,7 +19,9 @@
       "FluentGpu.Rhi.D3D12\\FluentGpu.Rhi.D3D12.csproj",
       "FluentGpu.Pal.Windows\\FluentGpu.Pal.Windows.csproj",
       "FluentGpu.Text.DirectWrite\\FluentGpu.Text.DirectWrite.csproj",
-      "FluentGpu.Accessibility.Uia\\FluentGpu.Accessibility.Uia.csproj"
+      "FluentGpu.Accessibility.Uia\\FluentGpu.Accessibility.Uia.csproj",
+      "FluentGpu.Rhi.Gdi\\FluentGpu.Rhi.Gdi.csproj",
+      "FluentGpu.WindowsApp\\FluentGpu.WindowsApp.csproj"
     ]
   }
 }
