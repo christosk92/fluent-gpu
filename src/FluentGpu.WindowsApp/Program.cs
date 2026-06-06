@@ -29,10 +29,12 @@ static class WindowsApp
     {
         // --frames N : render N frames then exit (for headless/CI). Default: run until the window closes.
         int maxFrames = -1;
+        int resizeTest = 0;
         string backend = "d3d12";   // the real backend by default; "gdi" for the bring-up renderer
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--frames" && i + 1 < args.Length && int.TryParse(args[i + 1], out int f)) maxFrames = f;
+            if (args[i] == "--resize-test" && i + 1 < args.Length && int.TryParse(args[i + 1], out int r)) resizeTest = r;
             if (args[i] == "--backend" && i + 1 < args.Length) backend = args[i + 1].ToLowerInvariant();
         }
 
@@ -47,6 +49,25 @@ static class WindowsApp
         using var host = new AppHost(app, window, device, fonts, strings, root);
 
         window.Show();
+
+        if (resizeTest > 0)
+        {
+            host.RunFrame();
+            var proc = System.Diagnostics.Process.GetCurrentProcess();
+            proc.Refresh();
+            long before = proc.PrivateMemorySize64;
+            for (int i = 0; i < resizeTest; i++)
+            {
+                window.SetClientSize(420 + (i * 7) % 360, 300 + (i * 5) % 240);   // vary like a live drag
+                host.RunFrame();                                                  // pumps WM_SIZE → resize path
+            }
+            GC.Collect(); GC.WaitForPendingFinalizers();
+            proc.Refresh();
+            long after = proc.PrivateMemorySize64;
+            Console.WriteLine($"RESIZE-TEST backend={device.BackendName} n={resizeTest} | private MB before={before / 1048576.0:0.0} after={after / 1048576.0:0.0} delta={(after - before) / 1048576.0:+0.0;-0.0} | managed MB={GC.GetTotalMemory(true) / 1048576.0:0.0}");
+            Diag.Dump($"{backend} after {resizeTest} resizes");
+            return 0;
+        }
 
         int n = 0;
         while (!window.IsClosed)

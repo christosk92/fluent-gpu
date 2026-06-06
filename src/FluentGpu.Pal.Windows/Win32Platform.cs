@@ -26,6 +26,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     private const uint PM_REMOVE = 0x0001;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
+    private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
 
     private const string ClassName = "FluentGpuWindow";
     private static ushort s_atom;
@@ -94,6 +95,14 @@ public sealed unsafe class Win32Window : IPlatformWindow
     {
         ShowWindow(_hwnd, SW_SHOW);
         UpdateWindow(_hwnd);
+    }
+
+    /// <summary>Resize the window so the client area is exactly w×h px (drives a real WM_SIZE → resize path). For tests.</summary>
+    public void SetClientSize(int w, int h)
+    {
+        RECT rc = new() { left = 0, top = 0, right = w, bottom = h };
+        AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, false, 0);
+        SetWindowPos(_hwnd, HWND.NULL, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
     public void SetTitle(StringId title) { }

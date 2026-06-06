@@ -99,8 +99,9 @@ public sealed class GdiSwapchain : ISwapchain
     {
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (w == _w && h == _h && _memDc != 0) return;
-        if (_bmp != 0) Gdi32.DeleteObject(_bmp);
+        // Order matters: a bitmap selected into a DC cannot be deleted. Destroy the DC first (deselects _bmp), then free it.
         if (_memDc != 0) Gdi32.DeleteDC(_memDc);
+        if (_bmp != 0) Gdi32.DeleteObject(_bmp);
         nint wdc = Gdi32.GetDC(_hwnd);
         _memDc = Gdi32.CreateCompatibleDC(wdc);
         _bmp = Gdi32.CreateCompatibleBitmap(wdc, w, h);
