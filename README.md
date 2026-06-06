@@ -2,7 +2,7 @@
 
 **A from-scratch, near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10 — with Reactor-style fluent C# markup and React-style hooks.**
 
-> **Status: design-stage (June 2026).** This repo currently contains the complete architecture — no engine code yet. The full spec lives in [`design/`](./design/README.md).
+> **Status (June 2026): architecture complete; engine scaffold + a *running* vertical slice in [`src/`](./src/README.md).** The full design corpus is in [`design/`](./design/README.md); the 18-assembly solution builds on **.NET 10 / C# 14 / NativeAOT-ready**, and the minimum vertical slice passes the architecture's acceptance test on the headless backends. The on-screen Direct3D 12 backend is the next milestone.
 
 ---
 
@@ -49,11 +49,30 @@ The driving app is [**WaveeMusic**](https://github.com/christosk92/WaveeMusic), 
 
 Read the [architecture spec](./design/architecture-spec.md) for the full picture, or the [subsystem index](./design/subsystems/README.md) for the 16 component designs.
 
-## Roadmap (relative phases, not dates — design-stage estimates)
+## Running it
+
+The portable core is implemented and the **minimum vertical slice runs green** on the headless backends (the architecture's acceptance test). The Windows D3D12/DirectWrite/UIA leaves and the source generators are scaffolded.
+
+```powershell
+cd src
+dotnet build FluentGpu.slnx                  # whole 18-assembly solution (.NET 10)
+dotnet build FluentGpu.Slice.slnf            # just the headless, runnable subset
+dotnet run  --project FluentGpu.VerticalSlice
+```
+
+```
+[PASS] window + GPU clear · rounded-rect · text runs · flex layout ·
+       reconciler + UseState · clickable Button (Count 0 → 1) ·
+       steady frame memoized · ZERO managed alloc on the paint half (0 bytes)
+```
+
+The `Counter` shown above is the actual slice component. The solution (`FluentGpu.slnx`) uses solution folders (Core · Seams · Backends.Windows · Backends.Headless · Tooling · Apps) with `.slnf` filters; see [`src/README.md`](./src/README.md).
+
+## Roadmap (relative phases)
 
 Built in an order where **safety is never speculative** (full detail in the [hardened-v1 plan](./design/hardened-v1-plan.md) §6):
 
-1. **Vertical slice** — window → GPU clear → one rounded rect → one text run → flex layout → reconciler + `UseState` → a clickable button. This *is* the architecture's acceptance test (zero per-frame alloc, on real D3D12 + a headless path).
+1. **Vertical slice** — ✅ *done (headless)*: window → GPU clear → rounded rect → text → flex → reconciler + `UseState` → clickable button — the architecture's acceptance test, **zero per-frame alloc on the paint half**, running on the headless RHI/PAL/Text backends. The on-screen **real D3D12** path is the next step.
 2. **Core engine** — full renderer, layout, text, the reconciler/hooks runtime, the DSL + source generators, input + UIA.
 3. **App subsystems** — image/media pipeline, virtualization (10k+ lists), theming + album-art dynamic color, Mica/backdrops — i.e. everything WaveeMusic needs.
 4. **Hardening, folded into v1** — generated + thread-confined COM, the validation spine (alloc tripwire, golden-image, leak gates), then the **render-thread seam** (so a busy UI thread no longer stalls present), flipped on only behind a green race gate.
