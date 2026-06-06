@@ -1,4 +1,6 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
 
@@ -71,6 +73,10 @@ public sealed class RenderContext
 
     public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
     public readonly List<Action> PendingLayoutEffects = new();  // UseLayoutEffect — after layout, before paint (phase 6.5)
+
+    // Set by the reconciler at mount: the engine + this component's host scene node, so hooks can animate "itself".
+    public AnimEngine? Anim;
+    public NodeHandle HostNode;
 
     internal void BeginRender() => _cursor = 0;
     internal void EndRender() => _mounted = true;
@@ -190,6 +196,25 @@ public sealed class RenderContext
         }
         return cell.Current;
     }
+
+    // ── Declarative animation (seed/retarget engine tracks on this component's node; composited, no re-render/frame) ──
+
+    /// <summary>Spring a transform/opacity channel of this node toward <paramref name="to"/>. When deps change it
+    /// retargets, keeping velocity (smooth interruption) — e.g. UseSpring(ScaleX, hovered?1.05f:1f, spring, hovered).</summary>
+    public void UseSpring(AnimChannel channel, float to, SpringParams spring, params object[] deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
+
+    /// <summary>Eased transition of a channel from→to when deps change (the CSS <c>transition</c> model).</summary>
+    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
+
+    /// <summary>Multi-keyframe animation on a channel (the CSS <c>@keyframes</c> model).</summary>
+    public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop); }, deps);
+
+    /// <summary>Scroll/value-driven animation: a channel tracks a value source through [min,max] (animation-timeline: scroll()).</summary>
+    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
+        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
 
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
     public Ref<T> UseRef<T>(T initial)

@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 
 namespace FluentGpu.Hooks;
@@ -17,6 +18,12 @@ public abstract class Component
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
     protected float UseAnimatedValue(float target, float durationMs = 180f) => Context.UseAnimatedValue(target, durationMs);
+
+    // Declarative, composited animation of this component's node (no per-frame re-render):
+    protected void UseSpring(AnimChannel channel, float to, SpringParams spring, params object[] deps) => Context.UseSpring(channel, to, spring, deps);
+    protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
+    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
+    protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
 
     /// <summary>Run one render pass with hook bookkeeping.</summary>
     public Element RenderWithHooks()

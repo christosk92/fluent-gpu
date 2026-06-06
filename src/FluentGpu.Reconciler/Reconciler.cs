@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -25,6 +26,8 @@ public sealed class TreeReconciler
     public List<Component> LiveComponents => _live;
     /// <summary>Set by the host; a nested component's setState calls this to request the next frame.</summary>
     public Action RequestRerender { get; set; } = static () => { };
+    /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
+    public AnimEngine? Anim { get; set; }
 
     public TreeReconciler(SceneStore scene, StringTable strings)
     {
@@ -143,11 +146,13 @@ public sealed class TreeReconciler
     {
         var comp = ce.Factory();
         comp.Context.RequestRerender = RequestRerender;
+        comp.Context.Anim = Anim;
         var rendered = RenderComponent(comp);
         _comps[node] = new CompEntry { Comp = comp, Rendered = rendered, Type = ce.ComponentType };
         _live.Add(comp);
 
         var child = _scene.CreateNode(rendered.ElementTypeId);
+        comp.Context.HostNode = child;   // animation hooks (queued during render) read this when they run in phase 6.5
         _scene.AppendChild(node, child);
         Mount(child, rendered);
     }

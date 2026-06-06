@@ -1,4 +1,5 @@
 using FluentGpu;
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -23,7 +24,11 @@ sealed class LikeButton : Component
     public override Element Render()
     {
         var (liked, setLiked) = UseState(false);
-        float t = UseAnimatedValue(liked ? 1f : 0f, 200f);                 // 0→1 eased on like
+        // bouncy scale pop on toggle — a composited spring on this button's node (no per-frame re-render);
+        // the heart colour fades via the value hook. Toggle ⇒ deps change ⇒ the spring retargets (keeps velocity).
+        UseSpring(AnimChannel.ScaleX, liked ? 1.12f : 1f, SpringParams.FromResponse(0.28f, 0.45f), liked);
+        UseSpring(AnimChannel.ScaleY, liked ? 1.12f : 1f, SpringParams.FromResponse(0.28f, 0.45f), liked);
+        float t = UseAnimatedValue(liked ? 1f : 0f, 200f);
         var fg = ColorF.Lerp(ColorF.FromRgba(0xC5, 0xC5, 0xC5), ColorF.FromRgba(0xE8, 0x11, 0x23), t);
         return Button.Standard(liked ? "♥ Liked" : "♡ Like", () => setLiked(!liked),
             Button.StandardStyle with { Foreground = fg });
@@ -36,6 +41,9 @@ sealed class DemoApp : Component
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
+        // entrance: the whole UI fades + slides up on mount (composited transition on the root node).
+        UseTransition(AnimChannel.Opacity, 0f, 1f, 350f, Easing.EaseOut, "enter");
+        UseTransition(AnimChannel.TranslateY, 14f, 0f, 350f, Easing.EaseOut, "enter");
         return new BoxEl
         {
             Direction = 1,

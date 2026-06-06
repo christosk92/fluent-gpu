@@ -74,6 +74,16 @@ sealed class AnimProbe : Component
     public override Element Render() { Value = UseAnimatedValue(Target, 100f); return Ui.Text("x"); }
 }
 
+// A component that animates ITS OWN node declaratively — UseSpring seeds a track on the host node (no per-frame re-render).
+sealed class SpringProbe : Component
+{
+    public override Element Render()
+    {
+        UseSpring(AnimChannel.ScaleX, 1.2f, SpringParams.FromResponse(0.2f, 1f), Array.Empty<object>());
+        return new BoxEl { Width = 20, Height = 20, Fill = ColorF.FromRgba(0, 128, 255) };
+    }
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -509,6 +519,26 @@ static class Slice
         Check("34. scroll-driven timeline", Near(op25, 0.25f, 0.02f) && Near(op100, 1f, 0.01f), $"op@25={op25:0.00} op@100={op100:0.00}");
     }
 
+    // Phase 3 — declarative hooks: a component animates its own node via UseSpring (composited, no re-render per frame).
+    static void AnimHookChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var anim = new AnimEngine(scene);
+        var recon = new TreeReconciler(scene, strings) { Anim = anim };
+        recon.ReconcileRoot(Embed.Comp(() => new SpringProbe()), null);
+
+        foreach (var c in recon.LiveComponents)   // phase 6.5: drain layout effects → seeds the spring on the host node
+        {
+            foreach (var e in c.Context.PendingLayoutEffects) e();
+            c.Context.PendingLayoutEffects.Clear();
+        }
+        for (int i = 0; i < 150; i++) anim.Tick(16f);
+
+        var host = scene.FirstChild(scene.Root);   // the SpringProbe's box node
+        float sx = scene.Paint(host).LocalTransform.M11;
+        Check("35. UseSpring hook seeds + drives the node", !host.IsNull && Near(sx, 1.2f, 0.03f), $"scaleX={sx:0.###}");
+    }
+
     static SceneStore Single(StringTable strings)
     {
         var scene = new SceneStore();
@@ -569,6 +599,7 @@ static class Slice
         WrapChecks(strings);
         CompositorChecks(strings);
         AnimEngineChecks(strings);
+        AnimHookChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

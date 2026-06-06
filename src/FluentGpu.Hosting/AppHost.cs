@@ -58,6 +58,8 @@ public sealed class AppHost : IDisposable
         _lastSize = window.ClientSizePx;
         _root.Context.RequestRerender = () => _dirty = true;
         _reconciler.RequestRerender = () => _dirty = true;   // a nested component's setState requests the next frame
+        _reconciler.Anim = _anim;          // animation hooks in nested components seed tracks on their nodes
+        _root.Context.Anim = _anim;
         // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
         _window.PaintRequested = () => Paint(0);
     }
@@ -91,6 +93,7 @@ public sealed class AppHost : IDisposable
                 var newRoot = _root.RenderWithHooks();      // 4 render
                 _reconciler.ReconcileRoot(newRoot, _oldRoot); // 5 reconcile
                 _oldRoot = newRoot;
+                _root.Context.HostNode = _scene.Root;         // root component animates itself via the scene root
                 _dirty = false;
                 rendered = true;
             }
