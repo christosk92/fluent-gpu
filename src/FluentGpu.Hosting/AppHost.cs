@@ -34,6 +34,8 @@ public sealed class AppHost : IDisposable
 
     private Element? _oldRoot;
     private bool _dirty = true;
+    private bool _inPaint;
+    private Size2 _lastSize;
     private readonly ColorF _clear = ColorF.FromRgba(0x1E, 0x1E, 0x1E);
 
     public SceneStore Scene => _scene;
@@ -49,56 +51,66 @@ public sealed class AppHost : IDisposable
         _reconciler = new TreeReconciler(_scene, strings);
         _layout = new FlexLayout(_scene, fonts);
         _dispatcher = new InputDispatcher(_scene);
+        _lastSize = window.ClientSizePx;
         _root.Context.RequestRerender = () => _dirty = true;
+        // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
+        _window.PaintRequested = () => Paint(0);
     }
 
-    /// <summary>Run exactly one frame. Returns the per-frame stats (incl. allocations across the paint half).</summary>
+    /// <summary>Run one full frame: pump + input + hook-flush, then paint.</summary>
     public FrameStats RunFrame()
     {
-        // 1 pump
         _ring.Clear();
-        _window.PumpInto(_ring);
-        var events = _ring.Drain();
+        _window.PumpInto(_ring);              // 1 pump
+        int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch
+        if (_root.Context.FlushPending()) _dirty = true;    // 3 hook-state flush
+        return Paint(clicks);
+    }
 
-        // 2 input dispatch (handlers' setState marks dirty via RequestRerender)
-        int clicks = _dispatcher.Dispatch(events);
-
-        // 3 hook-state flush
-        if (_root.Context.FlushPending()) _dirty = true;
-
-        bool rendered = false;
-        if (_dirty)
+    /// <summary>Phases 6–12 (+ resize): re-layout if dirty, record, submit, present, effects. No pump — safe to call from WndProc.</summary>
+    public FrameStats Paint(int clicks = 0)
+    {
+        if (_inPaint) return LastStats;       // re-entrancy guard (WM_SIZE during the pump)
+        _inPaint = true;
+        try
         {
-            // 4 render
-            var newRoot = _root.RenderWithHooks();
-            // 5 reconcile
-            _reconciler.ReconcileRoot(newRoot, _oldRoot);
-            _oldRoot = newRoot;
-            _dirty = false;
-            rendered = true;
+            EnsureSize();
+
+            bool rendered = false;
+            if (_dirty)
+            {
+                var newRoot = _root.RenderWithHooks();      // 4 render
+                _reconciler.ReconcileRoot(newRoot, _oldRoot); // 5 reconcile
+                _oldRoot = newRoot;
+                _dirty = false;
+                rendered = true;
+            }
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            if (rendered) _layout.Run(_scene.Root);          // 6 layout
+            SceneRecorder.Record(_scene, _drawList);          // 8 record
+            _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
+                new FrameInfo(_window.ClientSizePx, _window.Scale, _clear)); // 10 submit
+            _swapchain.Present();                             // 11 present
+            long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            var effects = _root.Context.PendingEffects;       // 12 passive effects
+            if (effects.Count > 0) { foreach (var e in effects) e(); effects.Clear(); }
+
+            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered);
+            return LastStats;
         }
+        finally { _inPaint = false; }
+    }
 
-        // ── paint half (phases 6–11): target 0 managed allocations when nothing changed ──
-        long before = GC.GetAllocatedBytesForCurrentThread();
-
-        if (rendered) _layout.Run(_scene.Root);                 // 6 layout (dirty-scoped in the slice = whole tree)
-        SceneRecorder.Record(_scene, _drawList);                 // 8 record
-        _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
-            new FrameInfo(_window.ClientSizePx, _window.Scale, _clear)); // 10 submit
-        _swapchain.Present();                                    // 11 present
-
-        long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        // 12 passive effects (after present)
-        var effects = _root.Context.PendingEffects;
-        if (effects.Count > 0)
-        {
-            foreach (var e in effects) e();
-            effects.Clear();
-        }
-
-        LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered);
-        return LastStats;
+    /// <summary>Resize the swapchain to match the window's client size; force a re-layout on change.</summary>
+    private void EnsureSize()
+    {
+        var s = _window.ClientSizePx;
+        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height) return;
+        _lastSize = s;
+        _swapchain.Resize(s);
+        _dirty = true;
     }
 
     public void Dispose()

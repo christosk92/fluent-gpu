@@ -23,6 +23,7 @@ public sealed class HeadlessWindow : IPlatformWindow
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
     public Size2 ClientSizePx { get; }
     public float Scale { get; }
+    public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
 

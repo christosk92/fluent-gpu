@@ -17,7 +17,8 @@ public sealed unsafe class Win32Window : IPlatformWindow
 {
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_SIZE = 0x0005,
-                       WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202;
+                       WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202,
+                       WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014;
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -87,6 +88,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     public Size2 ClientSizePx => new(_w, _h);
     public float Scale => _scale;
     public bool IsClosed => _closed;
+    public Action? PaintRequested { get; set; }
 
     public void Show()
     {
@@ -139,7 +141,15 @@ public sealed unsafe class Win32Window : IPlatformWindow
         {
             case WM_DESTROY: _closed = true; PostQuitMessage(0); return true;
             case WM_CLOSE: _closed = true; DestroyWindow(hWnd); return true;
-            case WM_SIZE: _w = (int)(lp & 0xFFFF); _h = (int)((lp >> 16) & 0xFFFF); return true;
+            case WM_ERASEBKGND: result = (LRESULT)1; return true;   // we paint every pixel — suppress the flicker-erase
+            case WM_SIZE:
+                _w = (int)(lp & 0xFFFF); _h = (int)((lp >> 16) & 0xFFFF);
+                PaintRequested?.Invoke();   // keep the window live during the modal resize loop
+                return true;
+            case WM_PAINT:
+                PaintRequested?.Invoke();
+                ValidateRect(hWnd, null);
+                return true;
             case WM_MOUSEMOVE: _queue.Enqueue(new InputEvent(InputKind.PointerMove, MousePt(lp), 0, 0)); return true;
             case WM_LBUTTONDOWN: _queue.Enqueue(new InputEvent(InputKind.PointerDown, MousePt(lp), 0, 0)); return true;
             case WM_LBUTTONUP: _queue.Enqueue(new InputEvent(InputKind.PointerUp, MousePt(lp), 0, 0)); return true;

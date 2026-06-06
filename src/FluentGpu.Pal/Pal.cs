@@ -44,6 +44,13 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Drain queued OS input/window events into the ring (once per frame).</summary>
     int PumpInto(InputEventRing ring);
 
+    /// <summary>
+    /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
+    /// notably during the modal move/size loop (WM_SIZE/WM_PAINT), which otherwise blocks rendering until mouse-up.
+    /// The host wires this to a pump-free paint so the window stays live during a live resize.
+    /// </summary>
+    Action? PaintRequested { get; set; }
+
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);
     void Show();

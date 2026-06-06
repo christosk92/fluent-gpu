@@ -10,5 +10,6 @@
     <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
     <ProjectReference Include="..\FluentGpu.Pal.Windows\FluentGpu.Pal.Windows.csproj" />
     <ProjectReference Include="..\FluentGpu.Rhi.Gdi\FluentGpu.Rhi.Gdi.csproj" />
+    <ProjectReference Include="..\FluentGpu.Rhi.D3D12\FluentGpu.Rhi.D3D12.csproj" />
   </ItemGroup>
 </Project>
