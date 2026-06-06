@@ -118,6 +118,7 @@ static class Slice
     }
 
     static bool Near(float a, float b) => MathF.Abs(a - b) < 0.5f;
+    static bool Near(float a, float b, float tol) => MathF.Abs(a - b) < tol;
 
     static SceneStore LayoutTree(StringTable strings, Element tree)
     {
@@ -465,6 +466,56 @@ static class Slice
         Check("30. compositor: transform + cumulative opacity", parentOk && childOk, $"pOffset=({parent.Transform.Dx:0.#},{parent.Transform.Dy:0.#}) childOpacity={child.Opacity:0.00}");
     }
 
+    // Phase 2 — the generic runtime: keyframes, composite (add), springs, and scroll-driven timelines.
+    static void AnimEngineChecks(StringTable strings)
+    {
+        // eased multi-keyframe tween → composed into LocalTransform
+        var s1 = Single(strings);
+        var a1 = new AnimEngine(s1);
+        a1.Animate(s1.Root, AnimChannel.TranslateX, 0f, 100f, 100f, Easing.Linear);
+        a1.Tick(50f);
+        float mid = s1.Paint(s1.Root).LocalTransform.Dx;
+        a1.Tick(100f);
+        float end = s1.Paint(s1.Root).LocalTransform.Dx;
+        Check("31. eased keyframe tween + hold", Near(mid, 50f, 1f) && Near(end, 100f, 0.5f), $"mid={mid:0.#} end={end:0.#}");
+
+        // composite Add: two tracks on one channel combine (animation-composition: add)
+        var s2 = Single(strings);
+        var a2 = new AnimEngine(s2);
+        a2.Animate(s2.Root, AnimChannel.TranslateX, 0f, 30f, 100f, Easing.Linear, CompositeOp.Replace);
+        a2.Animate(s2.Root, AnimChannel.TranslateX, 0f, 20f, 100f, Easing.Linear, CompositeOp.Add);
+        a2.Tick(100f);
+        float add = s2.Paint(s2.Root).LocalTransform.Dx;
+        Check("32. composite add combines tracks", Near(add, 50f, 0.5f), $"dx={add:0.#}");
+
+        // spring settles to its target (semi-implicit ODE)
+        var s3 = Single(strings);
+        var a3 = new AnimEngine(s3);
+        a3.Spring(s3.Root, AnimChannel.ScaleX, 1.3f, SpringParams.FromResponse(0.2f, 1f), initial: 1.0f);
+        for (int i = 0; i < 150; i++) a3.Tick(16f);
+        float sx = s3.Paint(s3.Root).LocalTransform.M11;
+        Check("33. spring settles to target", Near(sx, 1.3f, 0.02f), $"scaleX={sx:0.###}");
+
+        // scroll-driven timeline: a value source maps to progress (animation-timeline: scroll())
+        var s4 = Single(strings);
+        var a4 = new AnimEngine(s4);
+        float scroll = 0f;
+        int clk = a4.Clocks.Register(() => scroll);
+        a4.Drive(s4.Root, AnimChannel.Opacity, [new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear)], clk, 0f, 100f);
+        scroll = 25f; a4.Tick(16f);
+        float op25 = s4.Paint(s4.Root).Opacity;
+        scroll = 100f; a4.Tick(16f);
+        float op100 = s4.Paint(s4.Root).Opacity;
+        Check("34. scroll-driven timeline", Near(op25, 0.25f, 0.02f) && Near(op100, 1f, 0.01f), $"op@25={op25:0.00} op@100={op100:0.00}");
+    }
+
+    static SceneStore Single(StringTable strings)
+    {
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl { Width = 20, Height = 20, Fill = ColorF.FromRgba(200, 0, 0) }, null);
+        return scene;
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -517,6 +568,7 @@ static class Slice
         AnimValueChecks();
         WrapChecks(strings);
         CompositorChecks(strings);
+        AnimEngineChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }
