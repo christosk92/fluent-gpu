@@ -9,17 +9,58 @@ using FluentGpu.Rhi.Gdi;
 using FluentGpu.Rhi.D3D12;
 using static FluentGpu.Dsl.Ui;
 
-// The same Counter as the headless slice — now drawn to a real Win32 window via the GDI bring-up backend.
-sealed class Counter : Component
+// Shared context channel: the parent provides the live count; nested components read it via UseContext.
+static class Demo
+{
+    public static readonly Context<int> Count = new(0);
+}
+
+// A nested, independently-rendered component that reads the count from context (no props threading).
+sealed class CountDisplay : Component
+{
+    public override Element Render() => Heading($"Count: {UseContext(Demo.Count)}");
+}
+
+// A nested component with its OWN local state — a like toggle, proving per-component state.
+sealed class LikeButton : Component
+{
+    public override Element Render()
+    {
+        var (liked, setLiked) = UseState(false);
+        return liked
+            ? Button("♥ Liked", () => setLiked(false))
+            : StandardButton("♡ Like", () => setLiked(true));
+    }
+}
+
+// The demo: flex layout + nested components + UseContext + accent/standard buttons + the system accent + Mica.
+sealed class DemoApp : Component
 {
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        return Panel(new Edges4(28, 24, 28, 28), 16,
-            Heading($"Count: {count}"),
-            HStack(8,
-                Button("-", () => setCount(count - 1)),
-                Button("+", () => setCount(count + 1))));
+        return new BoxEl
+        {
+            Direction = 1,
+            Gap = 16,
+            Padding = new Edges4(28, 24, 28, 28),
+            Children =
+            [
+                Heading("FluentGpu — Fluent demo"),
+
+                // Nested component reads the count across the component boundary via context.
+                Ctx.Provide(Demo.Count, count, Embed.Comp(() => new CountDisplay())),
+
+                // A row of controls: accent +/-, a neutral reset, and a self-stateful Like button.
+                HStack(8,
+                    Button("-", () => setCount(count - 1)),
+                    Button("+", () => setCount(count + 1)),
+                    StandardButton("Reset", () => setCount(0)),
+                    Embed.Comp(() => new LikeButton())),
+
+                Text("Accent + standard buttons · nested components · UseContext · real system accent on Mica."),
+            ],
+        };
     }
 }
 
@@ -45,7 +86,7 @@ static class WindowsApp
 
         var strings = new StringTable();
         using var app = new Win32App();
-        var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Counter", new Size2(480, 320), 1f, composited));
+        var window = (Win32Window)app.CreateWindow(new WindowDesc("FluentGpu — Demo", new Size2(560, 360), 1f, composited));
 
         // Pull the real system accent + apply dark titlebar / Mica backdrop (Windows 11).
         if (Win32Theme.Accent() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
@@ -54,7 +95,7 @@ static class WindowsApp
 
         var fonts = new GdiFontSystem(strings);   // GDI metrics drive layout for both backends (DirectWrite font system is next)
         IGpuDevice device = backend == "gdi" ? new GdiGpuDevice(strings) : new D3D12Device(strings, composited);
-        var root = new Counter();
+        var root = new DemoApp();
         using var host = new AppHost(app, window, device, fonts, strings, root);
 
         window.Show();
