@@ -160,6 +160,14 @@ public sealed class TreeReconciler
                     ii.HandlerMask &= unchecked((ushort)~InteractionInfo.ClickBit);
                     _scene.SetClickHandler(node, null);
                 }
+
+                if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
+                else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.KeyBit); _scene.SetKeyHandler(node, null); }
+
+                // Clickable or explicitly-focusable nodes participate in focus/Tab navigation.
+                ii.Focusable = b.Focusable || b.OnClick is not null;
+                ii.TabIndex = b.TabIndex;
+                if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
                 break;
             }
             case TextEl t:

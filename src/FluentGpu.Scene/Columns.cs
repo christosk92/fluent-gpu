@@ -69,7 +69,10 @@ public struct NodePaint
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 = click/pointer
+    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key
     public CursorId Cursor;
+    public bool Focusable;
+    public int TabIndex;
     public const ushort ClickBit = 1;
+    public const ushort KeyBit = 2;
 }

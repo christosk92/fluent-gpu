@@ -46,6 +46,7 @@ public sealed class SceneStore : ISceneBackend
     private InteractionInfo[] _interaction;
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
+    private Action<KeyEventArgs>?[] _keyHandler;
 
     public NodeHandle Root { get; set; }
 
@@ -67,6 +68,7 @@ public sealed class SceneStore : ISceneBackend
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
+        _keyHandler = new Action<KeyEventArgs>?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -90,6 +92,7 @@ public sealed class SceneStore : ISceneBackend
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
+        _keyHandler[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -108,6 +111,7 @@ public sealed class SceneStore : ISceneBackend
         }
         DetachFromParent(idx);
         _click[idx] = null;
+        _keyHandler[idx] = null;
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -154,6 +158,8 @@ public sealed class SceneStore : ISceneBackend
 
     public void SetClickHandler(NodeHandle h, Action? handler) => _click[h.Raw.Index] = handler;
     public Action? GetClickHandler(NodeHandle h) => _click[h.Raw.Index];
+    public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[h.Raw.Index] = handler;
+    public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[h.Raw.Index];
 
     public void Mark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] |= flags;
 
@@ -185,7 +191,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
-        Array.Resize(ref _click, n);
+        Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

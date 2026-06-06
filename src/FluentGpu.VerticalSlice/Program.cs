@@ -3,6 +3,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
 using FluentGpu.Pal;
+using FluentGpu.Input;
 using FluentGpu.Layout;
 using FluentGpu.Pal.Headless;
 using FluentGpu.Reconciler;
@@ -177,6 +178,50 @@ static class Slice
         Check("18. keyed reconcile removes only the dropped key", removed, "[c,a,b] → [a,b]");
     }
 
+    // Focus + keyboard routing: Tab cycles focus, Enter activates a clickable, keys bubble (Handled stops).
+    static void KeyboardChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var dispatcher = new InputDispatcher(scene);
+
+        bool clicked = false, innerSaw = false; int rootSaw = 0;
+        var tree = new BoxEl
+        {
+            Direction = 0,
+            OnKeyDown = a => rootSaw = a.KeyCode,                          // ancestor (bubble target)
+            Children =
+            [
+                new BoxEl { Key = "b1", Width = 20, Height = 20, OnClick = () => clicked = true },
+                new BoxEl { Key = "b2", Width = 20, Height = 20, Focusable = true,
+                    OnKeyDown = a => { innerSaw = true; if (a.KeyCode == Keys.Escape) a.Handled = true; } },
+            ],
+        };
+        recon.ReconcileRoot(tree, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+        var b1 = Child(scene, scene.Root, 0);
+        var b2 = Child(scene, scene.Root, 1);
+
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+        var f1 = dispatcher.Focused;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+        var f2 = dispatcher.Focused;
+        Check("19. Tab cycles focus through focusables", f1 == b1 && f2 == b2, "→ b1 → b2");
+
+        dispatcher.SetFocus(b1);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
+        Check("20. Enter activates the focused clickable", clicked, "OnClick fired via keyboard");
+
+        dispatcher.SetFocus(b2);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Down) });   // not handled → bubbles
+        bool bubbled = innerSaw && rootSaw == Keys.Down;
+        innerSaw = false; rootSaw = 0;
+        dispatcher.SetFocus(b2);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });  // b2 marks Handled → stops
+        bool stopped = innerSaw && rootSaw == 0;
+        Check("21. keys bubble to ancestor; Handled stops propagation", bubbled && stopped);
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -220,6 +265,7 @@ static class Slice
         FlexChecks(strings);
         HookChecks();
         KeyedChecks(strings);
+        KeyboardChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

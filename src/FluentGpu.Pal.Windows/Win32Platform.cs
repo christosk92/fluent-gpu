@@ -18,7 +18,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_SIZE = 0x0005,
                        WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202,
-                       WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014;
+                       WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -139,11 +139,11 @@ public sealed unsafe class Win32Window : IPlatformWindow
 
         nint ud = GetWindowLongPtrW(hWnd, GWLP_USERDATA);
         Win32Window? self = ud != 0 ? GCHandle.FromIntPtr(ud).Target as Win32Window : s_constructing;
-        if (self is not null && self.Handle32(hWnd, msg, lParam, out LRESULT r)) return r;
+        if (self is not null && self.Handle32(hWnd, msg, wParam, lParam, out LRESULT r)) return r;
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    private bool Handle32(HWND hWnd, uint msg, LPARAM lParam, out LRESULT result)
+    private bool Handle32(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam, out LRESULT result)
     {
         result = default;
         long lp = (long)(nint)lParam;
@@ -163,6 +163,10 @@ public sealed unsafe class Win32Window : IPlatformWindow
             case WM_MOUSEMOVE: _queue.Enqueue(new InputEvent(InputKind.PointerMove, MousePt(lp), 0, 0)); return true;
             case WM_LBUTTONDOWN: _queue.Enqueue(new InputEvent(InputKind.PointerDown, MousePt(lp), 0, 0)); return true;
             case WM_LBUTTONUP: _queue.Enqueue(new InputEvent(InputKind.PointerUp, MousePt(lp), 0, 0)); return true;
+            case WM_KEYDOWN:
+            case WM_SYSKEYDOWN:
+                _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam));
+                return true;
         }
         return false;
     }

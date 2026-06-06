@@ -16,6 +16,8 @@ public enum NodeFlags : uint
     HitTestVisible = 1u << 9,
     ClipsToBounds = 1u << 10,
     WantsPointer = 1u << 12,
+    Focusable = 1u << 13,
+    Focused = 1u << 14,
 
     // lifecycle
     NewThisFrame = 1u << 29,
