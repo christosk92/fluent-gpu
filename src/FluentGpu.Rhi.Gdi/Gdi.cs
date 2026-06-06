@@ -13,6 +13,9 @@ internal struct RECT { public int Left, Top, Right, Bottom; }
 [StructLayout(LayoutKind.Sequential)]
 internal struct SIZE { public int Cx, Cy; }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct XFORM { public float eM11, eM12, eM21, eM22, eDx, eDy; }
+
 internal static partial class Gdi32
 {
     private const string U = "user32.dll";
@@ -23,6 +26,10 @@ internal static partial class Gdi32
     public const uint DT_LEFT = 0, DT_TOP = 0, DT_SINGLELINE = 0x20, DT_NOPREFIX = 0x800, DT_NOCLIP = 0x100;
     public const int FW_NORMAL = 400, FW_BOLD = 700;
     public const uint DEFAULT_CHARSET = 1, CLEARTYPE_QUALITY = 5, DEFAULT_PITCH = 0, FF_DONTCARE = 0;
+    public const int GM_ADVANCED = 2;
+
+    [LibraryImport(G)] public static partial int SetGraphicsMode(nint hdc, int mode);
+    [LibraryImport(G)] [return: MarshalAs(UnmanagedType.Bool)] public static partial bool SetWorldTransform(nint hdc, in XFORM xform);
 
     [LibraryImport(U)] public static partial nint GetDC(nint hWnd);
     [LibraryImport(U)] public static partial int ReleaseDC(nint hWnd, nint hDC);
@@ -123,8 +130,10 @@ public sealed class GdiSwapchain : ISwapchain
         Gdi32.DeleteObject(clearBrush);
 
         Gdi32.SetBkMode(_memDc, Gdi32.TRANSPARENT);
+        Gdi32.SetGraphicsMode(_memDc, Gdi32.GM_ADVANCED);   // enable SetWorldTransform (compositor transform)
         nint nullPen = Gdi32.GetStockObject(Gdi32.NULL_PEN);
         nint oldPen = Gdi32.SelectObject(_memDc, nullPen);
+        var identity = new XFORM { eM11 = 1, eM22 = 1 };
 
         int pos = 0;
         while (pos + sizeof(int) <= cmds.Length)
@@ -137,6 +146,8 @@ public sealed class GdiSwapchain : ISwapchain
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
+                    var xf = new XFORM { eM11 = c.Transform.M11, eM12 = c.Transform.M12, eM21 = c.Transform.M21, eM22 = c.Transform.M22, eDx = c.Transform.Dx, eDy = c.Transform.Dy };
+                    Gdi32.SetWorldTransform(_memDc, in xf);   // local rect → device
                     nint brush = Gdi32.CreateSolidBrush(Gdi32.Bgr(c.Fill));
                     nint old = Gdi32.SelectObject(_memDc, brush);
                     int rad = (int)MathF.Max(c.Radii.TopLeft, 0) * 2;
@@ -151,6 +162,8 @@ public sealed class GdiSwapchain : ISwapchain
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
                     string text = strings.Resolve(c.Text);
                     if (text.Length == 0) break;
+                    var xf = new XFORM { eM11 = c.Transform.M11, eM12 = c.Transform.M12, eM21 = c.Transform.M21, eM22 = c.Transform.M22, eDx = c.Transform.Dx, eDy = c.Transform.Dy };
+                    Gdi32.SetWorldTransform(_memDc, in xf);
                     int height = -(int)MathF.Round(c.FontSize);
                     nint font = Gdi32.CreateFontW(height, 0, 0, 0, c.Bold != 0 ? Gdi32.FW_BOLD : Gdi32.FW_NORMAL,
                         0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, "Segoe UI");
@@ -166,6 +179,7 @@ public sealed class GdiSwapchain : ISwapchain
             }
         }
 
+        Gdi32.SetWorldTransform(_memDc, in identity);
         Gdi32.SelectObject(_memDc, oldPen);
     }
 

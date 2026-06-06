@@ -257,6 +257,13 @@ public sealed class TreeReconciler
                 paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;
 
+                // Composited transform (CSS order: scale → rotate → translate) + opacity.
+                var tf = Affine2D.Translation(b.OffsetX, b.OffsetY);
+                if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
+                if (b.ScaleX != 1f || b.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(b.ScaleX, b.ScaleY));
+                paint.LocalTransform = tf;
+                paint.Opacity = b.Opacity;
+
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Direction = b.Direction;
                 li.Gap = b.Gap;

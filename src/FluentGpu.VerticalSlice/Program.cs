@@ -8,6 +8,8 @@ using FluentGpu.Input;
 using FluentGpu.Layout;
 using FluentGpu.Pal.Headless;
 using FluentGpu.Reconciler;
+using FluentGpu.Render;
+using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
 using FluentGpu.Text.Headless;
@@ -439,6 +441,30 @@ static class Slice
         Check("29. flex-wrap flows children to lines", Near(c0.X, 0) && Near(c1.X, 40) && Near(c2.X, 0) && Near(c2.Y, 20), $"c2=({c2.X:0.#},{c2.Y:0.#})");
     }
 
+    // Compositor: the renderer applies a per-node world transform + cumulative opacity (CSS compositor model).
+    static void CompositorChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 200, Height = 100, OffsetX = 20, OffsetY = 30, Opacity = 0.5f,
+            Fill = ColorF.FromRgba(255, 0, 0),
+            Children = [new BoxEl { Width = 40, Height = 20, Fill = ColorF.FromRgba(0, 255, 0), Opacity = 0.5f }],
+        }, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+
+        var parent = dev.LastRects[0];   // root box
+        var child = dev.LastRects[1];    // nested box
+        bool parentOk = Near(parent.Transform.Dx, 20) && Near(parent.Transform.Dy, 30) && Near(parent.Opacity, 0.5f);
+        bool childOk = Near(child.Opacity, 0.25f) && child.Transform.Dx >= 20f;   // opacity composes 0.5*0.5; inherits parent offset
+        Check("30. compositor: transform + cumulative opacity", parentOk && childOk, $"pOffset=({parent.Transform.Dx:0.#},{parent.Transform.Dy:0.#}) childOpacity={child.Opacity:0.00}");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -490,6 +516,7 @@ static class Slice
         StyleChecks();
         AnimValueChecks();
         WrapChecks(strings);
+        CompositorChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

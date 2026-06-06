@@ -53,6 +53,13 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
 {
     public static Affine2D Identity => new(1, 0, 0, 1, 0, 0);
     public static Affine2D Translation(float dx, float dy) => new(1, 0, 0, 1, dx, dy);
+    public static Affine2D Scale(float sx, float sy) => new(sx, 0, 0, sy, 0, 0);
+    public static Affine2D Rotation(float radians)
+    {
+        float c = MathF.Cos(radians), s = MathF.Sin(radians);
+        return new(c, s, -s, c, 0, 0);
+    }
+    public bool IsIdentity => M11 == 1f && M12 == 0f && M21 == 0f && M22 == 1f && Dx == 0f && Dy == 0f;
 
     public Point2 Transform(Point2 p) => new(M11 * p.X + M21 * p.Y + Dx, M12 * p.X + M22 * p.Y + Dy);
 

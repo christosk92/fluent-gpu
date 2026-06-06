@@ -7,8 +7,9 @@ namespace FluentGpu.Render;
 public enum DrawOp : int { FillRoundRect = 1, DrawGlyphRun = 2 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
-public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, ColorF Fill);
-public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, float FontSize, int Bold);
+// Transform is the composited world transform (local→device); Opacity is the cumulative subtree opacity.
+public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, ColorF Fill, Affine2D Transform, float Opacity);
+public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, float FontSize, int Bold, Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -33,17 +34,17 @@ public sealed class DrawList
 
     public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; }
 
-    public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, ulong sortKey = 0)
+    public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
     {
         WriteOp(DrawOp.FillRoundRect);
-        WritePayload(new FillRoundRectCmd(rect, radii, fill));
+        WritePayload(new FillRoundRectCmd(rect, radii, fill, transform, opacity));
         PushSort(sortKey);
     }
 
-    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, float fontSize, int bold, ulong sortKey = 0)
+    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, float fontSize, int bold, in Affine2D transform, float opacity, ulong sortKey = 0)
     {
         WriteOp(DrawOp.DrawGlyphRun);
-        WritePayload(new DrawGlyphRunCmd(bounds, color, text, fontSize, bold));
+        WritePayload(new DrawGlyphRunCmd(bounds, color, text, fontSize, bold, transform, opacity));
         PushSort(sortKey);
     }
 

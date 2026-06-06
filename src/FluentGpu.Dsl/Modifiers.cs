@@ -17,6 +17,13 @@ public static class Modifiers
     public static BoxEl Pad(this BoxEl b, float all) => b with { Padding = Edges4.All(all) };
     public static BoxEl Pad(this BoxEl b, float left, float top, float right, float bottom) => b with { Padding = new Edges4(left, top, right, bottom) };
 
+    // Composited transform + opacity (animate without relayout)
+    public static BoxEl Offset(this BoxEl b, float dx, float dy) => b with { OffsetX = dx, OffsetY = dy };
+    public static BoxEl Scale(this BoxEl b, float s) => b with { ScaleX = s, ScaleY = s };
+    public static BoxEl Scale(this BoxEl b, float sx, float sy) => b with { ScaleX = sx, ScaleY = sy };
+    public static BoxEl Rotate(this BoxEl b, float degrees) => b with { Rotation = degrees };
+    public static BoxEl Alpha(this BoxEl b, float opacity) => b with { Opacity = opacity };
+
     // Text
     public static TextEl Foreground(this TextEl t, ColorF c) => t with { Color = c };
     public static TextEl FontSize(this TextEl t, float size) => t with { Size = size };

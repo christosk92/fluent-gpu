@@ -15,6 +15,9 @@ internal struct GlyphInstance
     public float DstX, DstY, DstW, DstH;
     public float U0, V0, U1, V1;
     public float R, G, B, A;
+    public float M11, M12, M21, M22, Dx, Dy;   // 2x3 world transform (local→device)
+    public float Opacity;
+    public float Pad;   // pad to 80 bytes: HLSL rounds structured-buffer stride up to 16 (float4 alignment)
 }
 
 internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, BearingY, Advance; }
@@ -55,29 +58,32 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int MaxGlyphs = 8192;
 
     private const string Hlsl = """
-struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; };
+struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
 StructuredBuffer<G> gInst : register(t1);
 Texture2D gAtlas : register(t0);
 SamplerState gSamp : register(s0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : TEXCOORD1; };
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 color : TEXCOORD1; float opacity : TEXCOORD2; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
     G g = gInst[iid];
-    float2 px = g.dst + corner * g.size;
-    float2 ndc = float2(px.x / gViewport.x * 2.0 - 1.0, 1.0 - px.y / gViewport.y * 2.0);
+    float2 lp = g.dst + corner * g.size;                        // local-space point
+    float2 world = float2(g.m.x * lp.x + g.m.z * lp.y + g.t.x,  // 2x3 affine: local → device
+                          g.m.y * lp.x + g.m.w * lp.y + g.t.y);
+    float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
     o.pos = float4(ndc, 0.0, 1.0);
     o.uv = lerp(g.uv0, g.uv1, corner);
     o.color = g.color;
+    o.opacity = g.opacity;
     return o;
 }
 
 float4 PSMain(VSOut i) : SV_Target
 {
     float a = gAtlas.Sample(gSamp, i.uv).r;
-    float aOut = i.color.a * a;
+    float aOut = i.color.a * a * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
 """;
@@ -198,7 +204,7 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space; rasterizes missing glyphs at physical px.</summary>
-    public void LayoutRun(string text, float size, bool bold, float originX, float topY, ColorF color, float dpiScale, List<GlyphInstance> outList)
+    public void LayoutRun(string text, float size, bool bold, float originX, float topY, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
     {
         float baseline = topY + _ascent * (size / _unitsPerEm);   // top of layout box → baseline (DIP)
         float pen = originX;                                       // DIP
@@ -214,6 +220,8 @@ float4 PSMain(VSOut i) : SV_Target
                     U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS,
                     U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
                     R = color.R, G = color.G, B = color.B, A = color.A,
+                    M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy,
+                    Opacity = opacity,
                 });
             }
             pen += g.Advance;

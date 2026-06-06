@@ -30,6 +30,15 @@ public sealed record BoxEl : Element
     public Action<KeyEventArgs>? OnKeyDown { get; init; }
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
+
+    // Composited (animate without relayout): transform (offset/scale/rotate about the node centre) + opacity, applied to this node + subtree.
+    public float OffsetX { get; init; }
+    public float OffsetY { get; init; }
+    public float ScaleX { get; init; } = 1f;
+    public float ScaleY { get; init; } = 1f;
+    public float Rotation { get; init; }   // degrees
+    public float Opacity { get; init; } = 1f;
+
     public Element[] Children { get; init; } = [];
 
     // Flexbox

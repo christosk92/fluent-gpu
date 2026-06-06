@@ -269,6 +269,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
                         RTL = c.Radii.TopLeft, RTR = c.Radii.TopRight, RBR = c.Radii.BottomRight, RBL = c.Radii.BottomLeft,
                         R = c.Fill.R, G = c.Fill.G, B = c.Fill.B, A = c.Fill.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
                     });
                     break;
                 }
@@ -278,7 +280,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
-                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _frameScale, _glyphInsts);
+                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
                     break;
                 }
                 default:

@@ -7,13 +7,16 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL <c>Inst</c> struct (48 bytes). One instanced quad per rounded rect.</summary>
+/// <summary>CPU mirror of the HLSL <c>Inst</c> struct. One instanced quad per rounded rect, with a world transform + opacity.</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct RectInstance
 {
     public float PosX, PosY, W, H;
     public float RTL, RTR, RBR, RBL;
     public float R, G, B, A;
+    public float M11, M12, M21, M22, Dx, Dy;   // 2x3 world transform (local→device)
+    public float Opacity;
+    public float Pad;   // pad to 80 bytes: HLSL rounds structured-buffer stride up to 16 (float4 alignment)
 }
 
 /// <summary>
@@ -33,23 +36,25 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 color; };
+struct Inst { float2 pos; float2 size; float4 radii; float4 color; float4 m; float2 t; float opacity; float pad; };
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; };
+struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; float opacity : TEXCOORD4; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
     Inst it = gInst[iid];
-    float2 local = corner * it.size;
-    float2 px = it.pos + local;
-    float2 ndc = float2(px.x / gViewport.x * 2.0 - 1.0, 1.0 - px.y / gViewport.y * 2.0);
+    float2 lp = it.pos + corner * it.size;                      // local-space point
+    float2 world = float2(it.m.x * lp.x + it.m.z * lp.y + it.t.x,  // 2x3 affine: local → device
+                          it.m.y * lp.x + it.m.w * lp.y + it.t.y);
+    float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
     o.pos = float4(ndc, 0.0, 1.0);
-    o.local = local - it.size * 0.5;
+    o.local = corner * it.size - it.size * 0.5;   // SDF coverage stays in local space (crisp under transform via fwidth)
     o.halfSize = it.size * 0.5;
     o.radius = it.radii.x;
     o.color = it.color;
+    o.opacity = it.opacity;
     return o;
 }
 
@@ -58,8 +63,8 @@ float4 PSMain(VSOut i) : SV_Target
     float2 q = abs(i.local) - (i.halfSize - i.radius);
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;
     float fw = max(fwidth(d), 1e-4);
-    float cov = clamp(0.5 - d / fw, 0.0, 1.0);   // crisp ~1px linear AA (was a ~2px smoothstep band)
-    float aOut = i.color.a * cov;
+    float cov = clamp(0.5 - d / fw, 0.0, 1.0);   // crisp ~1px linear AA
+    float aOut = i.color.a * cov * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
 """;
