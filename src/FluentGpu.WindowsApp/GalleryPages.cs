@@ -869,6 +869,11 @@ sealed class ImagesPage : Component
         "#6E5147", "#3D5E7A", "#7A3544", "#4F6066"
     ];
 
+    // A real, stable, distinct sample cover from a public image CDN (picsum.photos), requested ~2× the display size
+    // for crispness at high DPI. These fetch over HTTP/2, decode off-thread on the worker pool, cache to disk, and
+    // upload to GPU textures — the full FluentGpu.Media pipeline end to end.
+    static string Cover(int seed, int displayPx) => $"https://picsum.photos/seed/fluentgpu-{seed}/{displayPx * 2}/{displayPx * 2}";
+
     Element AlbumCard(int i)
     {
         return new BoxEl
@@ -883,7 +888,7 @@ sealed class ImagesPage : Component
             Corners = CornerRadius4.All(10),
             Children =
             [
-                Image($"album/{i}", 150f, 150f, 8f, AlbumPlaceholders[i % AlbumPlaceholders.Length]),
+                Image(Cover(i, 150), 150f, 150f, 8f, AlbumPlaceholders[i % AlbumPlaceholders.Length]),
                 Text($"Album {AlbumTitles[i % AlbumTitles.Length]}").Strong(),
                 Text(Artists[i % Artists.Length]).Foreground(Grey).FontSize(12f)
             ],
@@ -941,9 +946,9 @@ sealed class ImagesPage : Component
             Wrap = true,
             Children =
             [
-                LabeledTile("square (0)", Image("album/0", 80f, 80f, 0f, AlbumPlaceholders[0])),
-                LabeledTile("rounded (12)", Image("album/1", 80f, 80f, 12f, AlbumPlaceholders[1])),
-                LabeledTile("circle (40)", Image("album/2", 80f, 80f, 40f, AlbumPlaceholders[2]))
+                LabeledTile("square (0)", Image(Cover(10, 80), 80f, 80f, 0f, AlbumPlaceholders[0])),
+                LabeledTile("rounded (12)", Image(Cover(11, 80), 80f, 80f, 12f, AlbumPlaceholders[1])),
+                LabeledTile("circle (40)", Image(Cover(12, 80), 80f, 80f, 40f, AlbumPlaceholders[2]))
             ],
         };
 
@@ -955,16 +960,16 @@ sealed class ImagesPage : Component
             Wrap = true,
             Children =
             [
-                LabeledTile("48 x 48", Image("album/3", 48f, 48f, 6f, AlbumPlaceholders[3])),
-                LabeledTile("80 x 80", Image("album/4", 80f, 80f, 6f, AlbumPlaceholders[4])),
-                LabeledTile("120 x 120", Image("album/5", 120f, 120f, 6f, AlbumPlaceholders[5]))
+                LabeledTile("48 x 48", Image(Cover(20, 48), 48f, 48f, 6f, AlbumPlaceholders[3])),
+                LabeledTile("80 x 80", Image(Cover(20, 80), 80f, 80f, 6f, AlbumPlaceholders[4])),
+                LabeledTile("120 x 120", Image(Cover(20, 120), 120f, 120f, 6f, AlbumPlaceholders[5]))
             ],
         };
 
         return ScrollView(
             VStack(16f,
                 Heading("Async images (album art)"),
-                Text("Images decode off-thread into a residency-pinned, byte-budgeted cache; on-screen art is never evicted. Ready tiles render distinct album art while pending tiles keep a neutral placeholder.")
+                Text("Real cover art fetched from a web CDN over HTTP/2, decoded off-thread on a worker pool (WIC, constrained to the display size), cached to disk, and uploaded to GPU textures. The placeholder tint shows until each decode lands.")
                     .Foreground(Grey),
                 Section(
                     "Album grid",

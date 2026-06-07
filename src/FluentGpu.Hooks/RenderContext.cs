@@ -1,6 +1,7 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Hooks;
 
@@ -76,6 +77,7 @@ public sealed class RenderContext
 
     // Set by the reconciler at mount: the engine + this component's host scene node, so hooks can animate "itself".
     public AnimEngine? Anim;
+    public ImageCache? Images;   // host-injected; backs UseImage / PrefetchImage
     public NodeHandle HostNode;
 
     internal void BeginRender() => _cursor = 0;
@@ -215,6 +217,23 @@ public sealed class RenderContext
     /// <summary>Scroll/value-driven animation: a channel tracks a value source through [min,max] (animation-timeline: scroll()).</summary>
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
+
+    /// <summary>Bind an async image and observe its load state (media-pipeline.md §5): requests (or dedups) a decode at
+    /// <paramref name="decodePx"/> and returns the handle + current <see cref="ImageState"/> / failure, so a component
+    /// can render a spinner, a broken-art fallback, etc. Pair with <c>Ui.Image(src,…)</c> to actually paint it.</summary>
+    public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
+    {
+        if (Images is null || string.IsNullOrEmpty(src)) return default;
+        var h = Images.Request(src, decodePx, decodePx, priority, blurHash);
+        return new ImageBinding(h, Images.StateOf(h), Images.FailureOf(h), Images.AttemptsOf(h));
+    }
+
+    /// <summary>Warm an image the UI is about to need (the next scroll page) at <see cref="ImagePriority.Prefetch"/> so
+    /// it's resident before it scrolls in. Decoded ahead, never pinned (evictable until a node shows it).</summary>
+    public void PrefetchImage(string src, int decodePx)
+    {
+        if (Images is not null && !string.IsNullOrEmpty(src)) Images.Prefetch(src, decodePx, decodePx);
+    }
 
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
     public Ref<T> UseRef<T>(T initial)

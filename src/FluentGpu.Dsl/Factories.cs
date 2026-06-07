@@ -35,15 +35,19 @@ public static partial class Ui
     public static ScrollEl ScrollView(Element content, bool horizontal = false)
         => new() { Content = content, Horizontal = horizontal, Grow = 1f };
 
-    /// <summary>An async, cached, residency-pinned image (album art). Shows a placeholder until decoded.</summary>
-    public static ImageEl Image(string source, float width, float height, float corners = 0f, ColorF? placeholder = null)
+    /// <summary>An async, cached, residency-pinned image (album art). Shows a placeholder (flat tint, or a BlurHash LQIP
+    /// preview when <paramref name="blurHash"/> is given) until the full-res art decodes off-thread.</summary>
+    public static ImageEl Image(string source, float width, float height, float corners = 0f, ColorF? placeholder = null,
+                                string? blurHash = null, ImageTransition? transition = null)
         => new()
         {
             Source = source,
             Width = width,
             Height = height,
             Corners = CornerRadius4.All(corners),
-            Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33)
+            Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33),
+            BlurHash = blurHash,
+            Transition = transition,
         };
 
     /// <summary>An async image whose pending placeholder comes from a CSS-style hex color code.</summary>

@@ -25,7 +25,7 @@ public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, String
 public readonly record struct ClipCmd(RectF DeviceRect);
 // An image quad. <see cref="ImageId"/> is the ImageCache handle; <see cref="Ready"/>==0 ⇒ draw <see cref="Placeholder"/>
 // (decode in flight). The GPU leaf samples the uploaded texture for the handle when ready (needs-pixels).
-public readonly record struct DrawImageCmd(RectF Rect, CornerRadius4 Radii, int ImageId, int Ready, ColorF Placeholder, Affine2D Transform, float Opacity);
+public readonly record struct DrawImageCmd(RectF Rect, CornerRadius4 Radii, int ImageId, int Ready, ColorF Placeholder, Affine2D Transform, float Opacity, float CrossFade = 1f);
 // An SDF outline (focus visual). Same SDF rounded-box as FillRoundRect, but the PS draws a <see cref="StrokeWidth"/>-wide
 // band centered on the edge instead of filling. Drawn over the control; works on any fill/background.
 public readonly record struct DrawRoundRectStrokeCmd(RectF Rect, CornerRadius4 Radii, ColorF Color, float StrokeWidth, Affine2D Transform, float Opacity);
@@ -94,10 +94,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, ulong sortKey = 0)
+    public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, float crossFade = 1f, ulong sortKey = 0)
     {
         WriteOp(DrawOp.DrawImage);
-        WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity));
+        WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity, crossFade));
         PushSort(sortKey);
     }
 

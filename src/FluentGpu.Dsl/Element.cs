@@ -140,6 +140,12 @@ public sealed record ImageEl : Element
     public float Height { get; init; } = float.NaN;
     public CornerRadius4 Corners { get; init; }
     public ColorF Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);
+    /// <summary>Optional BlurHash string — a tiny blurred LQIP preview shown instantly (decoded to a small texture)
+    /// until the full-res art lands. Falls back to the flat <see cref="Placeholder"/> tint when null.</summary>
+    public string? BlurHash { get; init; }
+    /// <summary>Override the placeholder→image reveal transition (duration + easing). Null ⇒ <see cref="ImageTransition.Default"/>;
+    /// pass <see cref="ImageTransition.None"/> to disable the fade (instant).</summary>
+    public ImageTransition? Transition { get; init; }
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
 }

@@ -1,8 +1,10 @@
+using System.Buffers;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
+using FluentGpu.Media;
 using FluentGpu.Pal;
 using FluentGpu.Input;
 using FluentGpu.Layout;
@@ -175,6 +177,30 @@ sealed class ImageProbe : Component
     {
         Width = 120, Height = 120, Padding = Edges4.All(10),
         Children = [Ui.Image("album/1.jpg", 80, 80, 6f)],
+    };
+}
+
+// A component using the UseImage hook → renders a spinner while loading, the image once ready (state observability).
+sealed class UseImageProbe : Component
+{
+    public static ImageState LastState;
+    public override Element Render()
+    {
+        var b = UseImage("uimg", 64);
+        LastState = b.State;
+        return b.IsReady
+            ? Ui.Image("uimg", 64, 64)
+            : new BoxEl { Width = 64, Height = 64, Fill = ColorF.FromRgba(50, 50, 50) };   // "spinner" placeholder
+    }
+}
+
+// An image with a BlurHash → proves the LQIP preview decodes + uploads instantly (before the full-res decode).
+sealed class BlurHashProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 200, Height = 200,
+        Children = [Ui.Image("album/9.jpg", 64, 64, 4f, blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj")],
     };
 }
 
@@ -1016,6 +1042,179 @@ static class Slice
         bool placeholder = Near(cmd.Placeholder.R, 0x33 / 255f) && Near(cmd.Radii.TopLeft, 6f);
         Check("46. ImageEl: decode→ready, residency-pinned, DrawImage emitted", drawn && ready && pinned && placeholder,
             $"images={device.LastImages.Count} ready={cmd.Ready} refs={host.Images.RefsOf(h)}");
+
+        // The decode's pixels must reach the GPU backend via the UploadImage seam (media-pipeline §4.1) at the decoded
+        // bucket size — proves the decoder→cache.Pump→host sink→device texture-upload chain end to end.
+        bool uploaded = device.Uploads.Count == 1
+            && device.Uploads[0].id == cmd.ImageId && device.Uploads[0].w == 80 && device.Uploads[0].h == 80
+            && device.ResidentImages.ContainsKey(cmd.ImageId);
+        int uw = device.Uploads.Count > 0 ? device.Uploads[0].w : 0;
+        int uh = device.Uploads.Count > 0 ? device.Uploads[0].h : 0;
+        Check("46b. ImageEl: decoded pixels uploaded to the GPU backend at bucket size", uploaded,
+            $"uploads={device.Uploads.Count} dims={uw}x{uh}");
+    }
+
+    // Deterministic test codec/fetcher exercise the REAL DecodeScheduler (worker pool, channels, retry) with no network.
+    sealed class TestCodec : IImageCodec
+    {
+        readonly Action? _onDecode;
+        public TestCodec(Action? onDecode = null) => _onDecode = onDecode;
+        public bool DecodeConstrained(ReadOnlySpan<byte> encoded, int tw, int th, Span<byte> dst, out int w, out int h)
+        {
+            _onDecode?.Invoke();
+            w = tw; h = th;
+            dst.Slice(0, tw * th * 4).Fill(0xFF);
+            return true;
+        }
+    }
+
+    sealed class TestFetcher : IImageFetcher
+    {
+        readonly Func<string, FetchResult>? _map;
+        public TestFetcher(Func<string, FetchResult>? map = null) => _map = map;
+        public Task<FetchResult> FetchAsync(string source, System.Threading.CancellationToken ct)
+        {
+            if (_map != null) return Task.FromResult(_map(source));
+            return Task.FromResult(FetchResult.Pooled(ArrayPool<byte>.Shared.Rent(16), 16));
+        }
+    }
+
+    static (bool ok, ImageFailureKind fail, int att) DrainOne(DecodeScheduler sched, int id)
+    {
+        sched.Begin(id, "x", 8, 8);
+        (bool ok, ImageFailureKind fail, int att) res = (false, ImageFailureKind.None, 0);
+        bool got = false;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!got && sw.ElapsedMilliseconds < 5000)
+        {
+            sched.Pump((cid, ok, w, h, f, a) => { res = (ok, f, a); got = true; }, (cid, px, w, h) => { });
+            System.Threading.Thread.Sleep(3);
+        }
+        return res;
+    }
+
+    // The A+B asks (off-thread + parallel + non-blocking) and the robustness taxonomy, on the real scheduler.
+    static void DecodeSchedulerChecks()
+    {
+        int cur = 0, maxc = 0; object g = new();
+        var codec = new TestCodec(() =>
+        {
+            int c = System.Threading.Interlocked.Increment(ref cur);
+            lock (g) { if (c > maxc) maxc = c; }
+            System.Threading.Thread.Sleep(60);                       // hold the worker so decodes overlap
+            System.Threading.Interlocked.Decrement(ref cur);
+        });
+        int done = 0;
+        using (var sched = new DecodeScheduler(codec, new TestFetcher(), new DecodeOptions { MaxConcurrency = 4 }))
+        {
+            const int M = 8;
+            for (int i = 1; i <= M; i++) sched.Begin(i, "t" + i, 8, 8);   // non-blocking enqueues
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (done < M && sw.ElapsedMilliseconds < 5000)
+            {
+                sched.Pump((id, ok, w, h, f, a) => { if (ok) done++; }, (id, px, w, h) => { });
+                System.Threading.Thread.Sleep(3);                    // UI stays responsive while workers decode
+            }
+            Check("46c. DecodeScheduler: off-thread, parallel (N-way), non-blocking decode",
+                done == 8 && maxc >= 2, $"done={done}/8 maxConcurrent={maxc} workers={sched.WorkerCount}");
+        }
+
+        (bool ok, ImageFailureKind fail, int att) r1;
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(_ => FetchResult.Fail(ImageFailureKind.NotFound)),
+                   new DecodeOptions { MaxAttempts = 3, BackoffBase = TimeSpan.FromMilliseconds(1) }))
+            r1 = DrainOne(sched, 1);
+
+        int calls = 0;
+        var flaky = new TestFetcher(_ =>
+        {
+            int c = System.Threading.Interlocked.Increment(ref calls);
+            return c < 3 ? FetchResult.Fail(ImageFailureKind.ServerError) : FetchResult.Pooled(ArrayPool<byte>.Shared.Rent(16), 16);
+        });
+        (bool ok, ImageFailureKind fail, int att) r2;
+        using (var sched = new DecodeScheduler(new TestCodec(), flaky, new DecodeOptions { MaxAttempts = 3, BackoffBase = TimeSpan.FromMilliseconds(1) }))
+            r2 = DrainOne(sched, 1);
+
+        bool permanent = !r1.ok && r1.fail == ImageFailureKind.NotFound && r1.att == 1;   // 404 → fail fast, no retry
+        bool transient = r2.ok && r2.att == 3;                                            // 5xx ×2 then 200 → success on attempt 3
+        Check("46d. DecodeScheduler: 404 fails fast (no retry); transient 5xx retried to success",
+            permanent && transient, $"404=(ok={r1.ok} {r1.fail} att={r1.att}) flaky=(ok={r2.ok} att={r2.att})");
+    }
+
+    static void BlurHashChecks(StringTable strings)
+    {
+        // (a) the decoder produces a valid, non-uniform preview from the canonical hash.
+        Span<byte> px = stackalloc byte[8 * 8 * 4];
+        bool decoded = BlurHash.Decode("LEHV6nWB2yk8pyo0adR*.7kCMdnj", 8, 8, px);
+        bool varies = decoded && (px[0] != px[63 * 4] || px[1] != px[63 * 4 + 1] || px[2] != px[63 * 4 + 2]);
+
+        // (b) pipeline: the 32×32 LQIP is uploaded at request (before the 64×64 full-res decode in the same frame).
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("blur", new Size2(320, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new BlurHashProbe());
+        host.RunFrame();
+        bool lqipFirst = device.Uploads.Count >= 2
+            && device.Uploads[0].w == 32 && device.Uploads[0].h == 32   // blurhash preview, uploaded first
+            && device.Uploads[1].w == 64 && device.Uploads[1].h == 64;  // full-res, replaces it
+
+        Check("46e. BlurHash: decoder valid + LQIP uploaded instantly, replaced by full-res", varies && lqipFirst,
+            $"decoded={decoded} varies={varies} uploads={device.Uploads.Count}");
+    }
+
+    static void ImageTransitionChecks()
+    {
+        var cache = new ImageCache(new FakeImageDecoder());
+        var h = cache.Request("x", 16, 16);   // default reveal (220ms FluentDecelerate)
+        cache.Pump();                          // decode completes → texture appears at t=0
+        float cf0 = cache.CrossFadeOf(h);      // just appeared → ~0
+        for (int i = 0; i < 20; i++) cache.Tick(16f);   // 320ms elapsed > 220ms
+        float cf1 = cache.CrossFadeOf(h);      // settled → 1
+        bool fades = cf0 < 0.2f && cf1 >= 0.999f;
+
+        var hn = cache.Request("y", 16, 16, ImagePriority.Visible, null, ImageTransition.None);   // disabled
+        cache.Pump();
+        bool disabled = cache.CrossFadeOf(hn) >= 0.999f;   // instant, no fade
+
+        Check("46f. ImageTransition: default fade eases 0→1; None disables (instant)", fades && disabled,
+            $"cf0={cf0:0.00} cf1={cf1:0.00}");
+    }
+
+    static void ImageEvictChecks()
+    {
+        // Unpinned images over budget → LRU eviction, each freeing its GPU texture via the evict sink.
+        var evicted = new List<int>();
+        var cache = new ImageCache(new FakeImageDecoder(), budgetBytes: 50_000);
+        cache.SetEvictSink(evicted.Add);
+        for (int i = 0; i < 5; i++) cache.Request("img" + i, 64, 64);   // 5 × 16KB = 80KB > 50KB
+        cache.Pump();                                                    // decode → ready → evict unpinned LRU
+        bool freed = evicted.Count >= 1;
+
+        // Pinned (on-screen) images are NEVER evicted, regardless of budget.
+        var evicted2 = new List<int>();
+        var pinned = new ImageCache(new FakeImageDecoder(), budgetBytes: 50_000);
+        pinned.SetEvictSink(evicted2.Add);
+        for (int i = 0; i < 5; i++) pinned.Pin(pinned.Request("p" + i, 64, 64));
+        pinned.Pump();
+        bool pinnedSafe = evicted2.Count == 0;
+
+        Check("46g. Residency: evicts unpinned LRU + frees its GPU texture; never evicts pinned", freed && pinnedSafe,
+            $"evicted={evicted.Count} pinnedEvicted={evicted2.Count}");
+    }
+
+    static void UseImageChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("useimg", new Size2(200, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new UseImageProbe());
+        host.RunFrame();   // render → UseImage requests; pump completes the fake decode; status-change marks dirty
+        host.RunFrame();   // re-render: UseImage now reports Ready → the component swaps the spinner for the image
+        Check("46h. UseImage: hook surfaces load state to the component (spinner → ready)",
+            UseImageProbe.LastState == ImageState.Ready, $"state={UseImageProbe.LastState}");
     }
 
     // Controls: a slider press-sets and drag-scrubs its value; a toggle flips; an icon button clicks; a scrollbar drags.
@@ -1443,6 +1642,11 @@ static class Slice
         ZeroAllocScrollChecks(strings);
         ImageCacheChecks();
         ImageElChecks(strings);
+        DecodeSchedulerChecks();
+        BlurHashChecks(strings);
+        ImageTransitionChecks();
+        ImageEvictChecks();
+        UseImageChecks(strings);
         ControlsChecks(strings);
         NavigationChecks();
         PageHostChecks(strings);

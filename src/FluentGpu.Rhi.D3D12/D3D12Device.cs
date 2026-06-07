@@ -48,6 +48,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<RectF> _clipStack = new(16);
     private AcrylicCompositor? _acrylic;
     private GlyphRenderer? _glyphs;
+    private ImageTextureStore? _imageTextures;
+    private ImagePipeline? _imagePipe;
+    private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new();
+    private int _frameImageCount;
+    private int _frameImageSkipped;
     private readonly List<GlyphInstance> _glyphInsts = new();
     private float _frameScale = 1f;
     private int _frameRectCount;
@@ -88,6 +93,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _acrylic.Init(_device);
         _glyphs = new GlyphRenderer();
         _glyphs.Init(_device);
+        _imageTextures = new ImageTextureStore();
+        _imageTextures.Init(_device);
+        _imagePipe = new ImagePipeline();
+        _imagePipe.Init(_device);
         return new D3D12Swapchain(this);
     }
 
@@ -233,6 +242,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
+        _imageTextures?.FlushUploads(_cmdList);
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -245,10 +255,13 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameScale = ctx.Scale <= 0f ? 1f : ctx.Scale;
         _frameRectCount = 0;
         _frameGlyphInstanceCount = 0;
+        _frameImageCount = 0;
+        _frameImageSkipped = 0;
         _rectPipe!.BeginFrame();
         _shadowPipe!.BeginFrame();
         _gradPipe!.BeginFrame();
         _glyphs!.BeginFrame();
+        _imagePipe!.BeginFrame((int)_frameIndex);   // pick this frame's instance buffer (avoids the CPU↔GPU race that flickers during scroll)
         float lw = _w / _frameScale, lh = _h / _frameScale;
 
         if (StreamHasLayer(drawList))
@@ -267,6 +280,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
+        Diag.Set("d3d12", "images", _frameImageCount);
+        Diag.Set("d3d12", "imagesSkipped", _frameImageSkipped);   // >0 ⇒ a recorded image had no live texture this frame
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
 
@@ -278,11 +293,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
         SignalFrame(_frameIndex);
     }
 
-    // Texture upload/sampling is being plumbed through the portable image cache. Until the D3D12 texture path lands,
-    // ready image draw commands still use the deterministic album-art rect fallback in AddReadyImageArt.
-    public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) { }
+    // Decode completion → resident GPU texture (media-pipeline §4.1). Staged here (heap/upload only, no command list);
+    // the CopyTextureRegion is recorded by FlushUploads at the top of the next SubmitDrawList.
+    public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+        => _imageTextures?.Stage(imageId, pbgra8, w, h);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _gradInsts.Clear(); }
+    // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
+    public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
+
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); }
 
     private void Decode(ReadOnlySpan<byte> cmds)
     {
@@ -339,7 +358,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 {
                     var im = MemoryMarshal.Read<DrawImageCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawImageCmd>();
-                    if (im.Ready != 0) AddReadyImageArt(in im);
+                    // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
+                    // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
+                    if (_imageTextures!.Has(im.ImageId)) AddReadyImage(in im);
                     else AddImagePlaceholder(in im);
                     break;
                 }
@@ -436,36 +457,21 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameRectCount++;
     }
 
-    // "Ready" art: until real WIC decode + GPU texture upload lands (needs-pixels), stand in with a stable per-album
-    // tint so decoded tiles read as distinct cover art. This MUST go through the rect pipeline, NOT the gradient pass:
-    // RecordAll draws ALL gradients BENEATH ALL rects within a segment (correct for backdrops/borders), so art emitted
-    // as a gradient is occluded by the card/section background rects drawn after it — the "empty tiles" regression.
-    private void AddReadyImageArt(in DrawImageCmd im)
+    // Ready image: sample the resident GPU texture through the ImagePipeline. It draws ABOVE the card/section
+    // background rects but BELOW glyph labels (see RecordAll ordering). CrossFade=1 ⇒ full image; the placeholder→image
+    // fade (M4) just drives CrossFade 0→1 — the shader already lerps placeholder→sampled in premultiplied space.
+    private void AddReadyImage(in DrawImageCmd im)
     {
-        ColorF art = AlbumColor(im.ImageId, 0);
-        _rectInsts.Add(new RectInstance
+        _imageDraws.Add((new ImageInstance
         {
             PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
             RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
-            R = art.R, G = art.G, B = art.B, A = art.A,
             M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
-            Dx = im.Transform.Dx, Dy = im.Transform.Dy, Opacity = im.Opacity,
-        });
-        _frameRectCount++;
-    }
-
-    private static ColorF AlbumColor(int imageId, int stop)
-    {
-        uint x = unchecked((uint)imageId * 747796405u + (uint)stop * 2891336453u + 0x9E3779B9u);
-        x ^= x >> 16;
-        x *= 2246822519u;
-        x ^= x >> 13;
-        x *= 3266489917u;
-        x ^= x >> 16;
-        byte r = (byte)(44 + (x & 0x9Fu));
-        byte g = (byte)(48 + ((x >> 8) & 0x9Fu));
-        byte b = (byte)(60 + ((x >> 16) & 0x8Fu));
-        return ColorF.FromRgba(r, g, b);
+            Dx = im.Transform.Dx, Dy = im.Transform.Dy,
+            Opacity = im.Opacity, CrossFade = im.CrossFade,
+            PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
+        }, im.ImageId));
+        _frameImageCount++;
     }
 
     private void SetFullViewport()
@@ -526,6 +532,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (_shadowInsts.Count > 0) _shadowPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_shadowInsts), lw, lh);
         if (_gradInsts.Count > 0) _gradPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_gradInsts), lw, lh);
         if (_rectInsts.Count > 0) _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), lw, lh);
+        // Images composite ABOVE the card/section background rects but BELOW glyph labels — one draw per image,
+        // each binding its own texture SRV (few images on screen, so per-draw is fine).
+        if (_imageDraws.Count > 0)
+        {
+            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // bind heap/PSO/root-sig/VB once for the whole pass
+            foreach (var (inst, id) in _imageDraws)
+                if (_imageTextures.TryGet(id, out var srv, out _, out _))
+                    _imagePipe.Draw(_cmdList, srv, in inst);
+                else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
+        }
         if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
     }
 
@@ -711,6 +727,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (_dcompTarget != null) _dcompTarget->Release();
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
+        _imagePipe?.Dispose();
+        _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
         _gradPipe?.Dispose();
         _acrylic?.Dispose();

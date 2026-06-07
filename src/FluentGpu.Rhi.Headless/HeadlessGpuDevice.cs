@@ -23,6 +23,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<PushLayerCmd> _layers = new(8);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
+    private readonly List<int> _evictions = new(16);
 
     public string BackendName => "Headless";
     public int FrameCount { get; private set; }
@@ -60,6 +61,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _uploads.Add((imageId, w, h));   // never cleared: uploads are one-shot per decode, so the log is the history
         _resident[imageId] = (w, h);
     }
+
+    /// <summary>Image ids the residency manager evicted (GPU texture freed) — for eviction assertions.</summary>
+    public IReadOnlyList<int> Evictions => _evictions;
+    public void EvictImage(int imageId) { _resident.Remove(imageId); _evictions.Add(imageId); }
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {

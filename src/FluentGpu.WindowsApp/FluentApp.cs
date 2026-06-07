@@ -2,11 +2,14 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
+using FluentGpu.Media;
+using FluentGpu.Media.Codecs.Wic;
 using FluentGpu.Pal;
 using FluentGpu.Pal.Windows;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
 using FluentGpu.Rhi.Gdi;
+using FluentGpu.Scene;
 
 namespace FluentGpu;
 
@@ -38,7 +41,13 @@ public static class FluentApp
 
         var fonts = new GdiFontSystem(strings);
         IGpuDevice device = new D3D12Device(strings, composited: mica);
-        using var host = new AppHost(app, window, device, fonts, strings, root());
+
+        // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
+        using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
+        using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher);
+        var images = new ImageCache(imageDecoder);
+
+        using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
 
         window.Show();

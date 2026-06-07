@@ -274,6 +274,7 @@ public sealed class TreeReconciler
         var comp = ce.Factory();
         comp.Context.RequestRerender = RequestRerender;
         comp.Context.Anim = Anim;
+        comp.Context.Images = Images;   // UseImage / PrefetchImage in nested components
         var rendered = RenderComponent(comp);
         _comps[node] = new CompEntry { Comp = comp, Rendered = rendered, Type = ce.ComponentType };
         _live.Add(comp);
@@ -558,7 +559,7 @@ public sealed class TreeReconciler
 
                 int oldId = paint.ImageId;
                 int newId = (Images is not null && im.Source.Length > 0)
-                    ? Images.Request(im.Source, (int)im.Width, (int)im.Height).Id : 0;
+                    ? Images.Request(im.Source, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
                 if (newId != oldId)
                 {
                     if (Images is not null)   // residency: pin the new source, release the old (recycle-safe)

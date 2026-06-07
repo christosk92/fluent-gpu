@@ -158,7 +158,8 @@ public static class SceneRecorder
             case VisualKind.Image:
             {
                 bool ready = images is not null && images.StateOf(new ImageHandle(p.ImageId)) == ImageState.Ready;
-                dl.DrawImage(local, p.Corners, p.ImageId, ready, p.Fill, world, opacity, key);
+                float crossFade = images is not null ? images.CrossFadeOf(new ImageHandle(p.ImageId)) : 1f;
+                dl.DrawImage(local, p.Corners, p.ImageId, ready, p.Fill, world, opacity, crossFade, key);
                 break;
             }
         }
