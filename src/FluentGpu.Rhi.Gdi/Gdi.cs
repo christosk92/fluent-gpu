@@ -235,8 +235,9 @@ public sealed class GdiFontSystem : IFontSystem
     {
         string s = _strings.Resolve(text);
         int height = -(int)MathF.Round(style.SizeDip);
+        string family = ResolveMeasureFamily(style.FontFamily);
         nint font = Gdi32.CreateFontW(height, 0, 0, 0, style.Bold ? Gdi32.FW_BOLD : Gdi32.FW_NORMAL,
-            0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, "Segoe UI");
+            0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, family);
         nint oldF = Gdi32.SelectObject(_dc, font);
         Gdi32.GetTextExtentPoint32W(_dc, s, s.Length, out SIZE size);
         float lineH = size.Cy <= 0 ? style.SizeDip * 1.4f : size.Cy;
@@ -256,6 +257,22 @@ public sealed class GdiFontSystem : IFontSystem
         Gdi32.SelectObject(_dc, oldF);
         Gdi32.DeleteObject(font);
         return new TextMetrics(new Size2(w, h), lineH * 0.8f);
+    }
+
+    private string ResolveMeasureFamily(StringId family)
+    {
+        string fam = _strings.Resolve(family);
+        if (string.IsNullOrWhiteSpace(fam)) return "Segoe UI";
+
+        int hash = fam.IndexOf('#');
+        if (hash >= 0)
+            return hash < fam.Length - 1 ? fam[(hash + 1)..] : "Segoe UI";
+
+        if (fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) ||
+            fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
+            return "Segoe UI";
+
+        return fam;
     }
 
     /// <summary>Greedy word-wrap line count (matches the renderer's algorithm) using GDI word/space extents.</summary>

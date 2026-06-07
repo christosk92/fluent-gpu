@@ -10,6 +10,8 @@ public readonly record struct FocusVisualStyle(ColorF Outer, ColorF Inner, float
     public bool Enabled => Outer.A > 0f || Inner.A > 0f;
 }
 
+public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount);
+
 /// <summary>
 /// Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
 /// geometry is emitted in LOCAL space with a world transform (parent ∘ translate ∘ LocalTransform, scale/rotate about
@@ -18,19 +20,33 @@ public readonly record struct FocusVisualStyle(ColorF Outer, ColorF Inner, float
 /// </summary>
 public static class SceneRecorder
 {
-    public static void Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
-                              ColorF scrollThumb = default, ColorF scrollTrack = default)
+    private struct RecordAccumulator
+    {
+        public int NodesVisited;
+        public int DrawnNodeCount;
+        public int CulledNodeCount;
+
+        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount);
+    }
+
+    public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
+                                          ColorF scrollThumb = default, ColorF scrollTrack = default)
     {
         dl.Reset();
-        if (scene.Root.IsNull) return;
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack);
+        if (scene.Root.IsNull) return default;
+
+        var stats = new RecordAccumulator();
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, ref stats);
+        return stats.ToStats();
     }
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
-                             int depth, RectF clip, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack)
+                             int depth, RectF clip, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack,
+                             ref RecordAccumulator stats)
     {
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
+        stats.NodesVisited++;
 
         ref RectF b = ref scene.Bounds(node);
         ref NodePaint p = ref scene.Paint(node);
@@ -86,7 +102,15 @@ public static class SceneRecorder
             dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
-        bool drawSelf = p.VisualKind != VisualKind.None && deviceBounds.Overlaps(clip);
+        bool hasOwnVisual = p.VisualKind != VisualKind.None;
+        bool ownVisible = deviceBounds.Overlaps(clip);
+        if (hasOwnVisual)
+        {
+            if (ownVisible) stats.DrawnNodeCount++;
+            else stats.CulledNodeCount++;
+        }
+
+        bool drawSelf = hasOwnVisual && ownVisible;
         if (drawSelf)
         switch (p.VisualKind)
         {
@@ -140,7 +164,7 @@ public static class SceneRecorder
         }
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack);
+            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, ref stats);
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 

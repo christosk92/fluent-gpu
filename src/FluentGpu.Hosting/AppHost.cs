@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -13,7 +14,14 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Hosting;
 
-public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered);
+public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)
+{
+    public int NodesVisited { get; init; }
+    public int DrawNodeCount { get; init; }
+    public int CulledNodeCount { get; init; }
+    public double Fps { get; init; }
+    public double FrameMs { get; init; }
+}
 
 /// <summary>
 /// Composition root + the single-UI-thread frame loop (the 13 phases, slice subset). Drives one root Component:
@@ -42,6 +50,9 @@ public sealed class AppHost : IDisposable
     private bool _dirty = true;
     private bool _inPaint;
     private Size2 _lastSize;
+    private long _lastPaintTimestamp;
+    private double _fps;
+    private double _frameMs;
     private static ColorF Clear => Theme.WindowBackground;   // theme-driven (transparent later for Mica)
 
     public SceneStore Scene => _scene;
@@ -102,7 +113,7 @@ public sealed class AppHost : IDisposable
             int completed = _images.Pump();
             if (completed == 0)
             {
-                LastStats = new FrameStats(0, clicks, 0, Rendered: false);
+                LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
                 return LastStats;
             }
 
@@ -119,6 +130,7 @@ public sealed class AppHost : IDisposable
         _inPaint = true;
         try
         {
+            long frameStart = Stopwatch.GetTimestamp();
             EnsureSize();
             var layoutSize = ClientSizeDip();
 
@@ -127,6 +139,7 @@ public sealed class AppHost : IDisposable
             {
                 // Publish the client size as ambient context (responsive layout / NavigationView display modes) for the
                 // whole render+reconcile, without adding a tree node (so scene.Root stays the app's own root).
+                ContextStack.Push(FrameDiagnostics.Current, LastStats);
                 ContextStack.Push(FluentGpu.Hooks.Viewport.Size, layoutSize);
                 try
                 {
@@ -135,7 +148,11 @@ public sealed class AppHost : IDisposable
                     _oldRoot = newRoot;
                     _root.Context.HostNode = _scene.Root;         // root component animates itself via the scene root
                 }
-                finally { ContextStack.Pop(); }
+                finally
+                {
+                    ContextStack.Pop();
+                    ContextStack.Pop();
+                }
                 _dirty = false;
                 rendered = true;
             }
@@ -153,7 +170,7 @@ public sealed class AppHost : IDisposable
             _images.Pump();                                   // 7.5 apply finished decodes (+1-frame latency) + evict
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
-            SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
+            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                             // 11 present
@@ -161,10 +178,34 @@ public sealed class AppHost : IDisposable
 
             DrainPassiveEffects();                            // 12 passive effects (root + nested)
 
-            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered);
+            UpdateFrameTiming(frameStart);
+            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered)
+            {
+                NodesVisited = recordStats.NodesVisited,
+                DrawNodeCount = recordStats.DrawnNodeCount,
+                CulledNodeCount = recordStats.CulledNodeCount,
+                Fps = _fps,
+                FrameMs = _frameMs,
+            };
             return LastStats;
         }
         finally { _inPaint = false; }
+    }
+
+    private void UpdateFrameTiming(long frameStart)
+    {
+        long now = Stopwatch.GetTimestamp();
+        _frameMs = (now - frameStart) * 1000.0 / Stopwatch.Frequency;
+        if (_lastPaintTimestamp != 0)
+        {
+            double dt = (now - _lastPaintTimestamp) / (double)Stopwatch.Frequency;
+            if (dt > 0.0001)
+            {
+                double instant = 1.0 / dt;
+                _fps = _fps <= 0.0 ? instant : (_fps * 0.85) + (instant * 0.15);
+            }
+        }
+        _lastPaintTimestamp = now;
     }
 
     private void DrainLayoutEffects()

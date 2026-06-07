@@ -1,3 +1,4 @@
+using System.Globalization;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Dsl;
@@ -35,8 +36,55 @@ public static partial class Ui
         => new() { Content = content, Horizontal = horizontal, Grow = 1f };
 
     /// <summary>An async, cached, residency-pinned image (album art). Shows a placeholder until decoded.</summary>
-    public static ImageEl Image(string source, float width, float height, float corners = 0f)
-        => new() { Source = source, Width = width, Height = height, Corners = CornerRadius4.All(corners) };
+    public static ImageEl Image(string source, float width, float height, float corners = 0f, ColorF? placeholder = null)
+        => new()
+        {
+            Source = source,
+            Width = width,
+            Height = height,
+            Corners = CornerRadius4.All(corners),
+            Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33)
+        };
+
+    /// <summary>An async image whose pending placeholder comes from a CSS-style hex color code.</summary>
+    public static ImageEl Image(string source, float width, float height, float corners, string placeholder)
+        => Image(source, width, height, corners, ParseColorCode(placeholder, ColorF.FromRgba(0x33, 0x33, 0x33)));
+
+    public static bool TryParseColorCode(string? value, out ColorF color)
+    {
+        color = default;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        string s = value.Trim();
+        if (s.StartsWith("#", StringComparison.Ordinal)) s = s[1..];
+        else if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s[2..];
+
+        if (s.Length == 3 || s.Length == 4)
+        {
+            Span<char> expanded = stackalloc char[s.Length * 2];
+            for (int i = 0; i < s.Length; i++)
+            {
+                expanded[i * 2] = s[i];
+                expanded[i * 2 + 1] = s[i];
+            }
+            s = expanded.ToString();
+        }
+
+        if (s.Length != 6 && s.Length != 8) return false;
+        if (!uint.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint rgba)) return false;
+
+        if (s.Length == 6)
+        {
+            color = ColorF.FromRgba((byte)(rgba >> 16), (byte)(rgba >> 8), (byte)rgba);
+            return true;
+        }
+
+        color = ColorF.FromRgba((byte)(rgba >> 24), (byte)(rgba >> 16), (byte)(rgba >> 8), (byte)rgba);
+        return true;
+    }
+
+    public static ColorF ParseColorCode(string? value, ColorF fallback)
+        => TryParseColorCode(value, out var color) ? color : fallback;
 
     /// <summary>A CSS-grid of <paramref name="children"/> auto-flowed into <paramref name="columns"/> tracks.</summary>
     public static GridEl Grid(TrackSize[] columns, float colGap, float rowGap, float rowHeight, params Element[] children)

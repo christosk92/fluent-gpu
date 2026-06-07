@@ -74,9 +74,9 @@ public sealed class FlexLayout
             // The width children may occupy (content box). A stretched child in a column gets the full content width
             // (so wrapped text knows where to break); a row's children share it (an upper bound is fine for wrapping).
             float childAvail = float.IsInfinity(availW) ? availW : MathF.Max(0f, availW - li.Padding.Horizontal);
-            if (li.Wrap && !float.IsNaN(row ? li.Width : li.Height))
+            if (li.Wrap && TryWrapMainLimit(in li, row, availW, out float wrapMainLimit))
             {
-                (w, h) = MeasureWrap(node, in li, row);   // multi-line: main is fixed, cross grows with line count
+                (w, h) = MeasureWrap(node, in li, row, wrapMainLimit);   // multi-line: main is fixed, cross grows with line count
             }
             else
             {
@@ -126,7 +126,7 @@ public sealed class FlexLayout
         if (_scene.FirstChild(node).IsNull) return;
         bool row = Row(li);
 
-        if (li.Wrap && !float.IsNaN(row ? li.Width : li.Height)) { ArrangeWrap(node, finalW, finalH, in li, row); return; }
+        if (li.Wrap) { ArrangeWrap(node, finalW, finalH, in li, row); return; }
 
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
         float availCross = (row ? finalH : finalW) - (row ? li.Padding.Vertical : li.Padding.Horizontal);
@@ -486,10 +486,29 @@ public sealed class FlexLayout
         return sumRowH + (rows - 1) * g.RowGap;
     }
 
-    // Wrap: main axis is fixed (explicit size); children flow onto multiple lines, cross grows with line count.
-    private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row)
+    // Wrap: main axis is finite (explicit size or parent-provided row width); children flow onto multiple lines.
+    private static bool TryWrapMainLimit(in LayoutInput li, bool row, float availW, out float mainLimit)
     {
-        float availMain = (row ? li.Width : li.Height) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
+        float explicitMain = row ? li.Width : li.Height;
+        if (!float.IsNaN(explicitMain))
+        {
+            mainLimit = MathF.Max(0f, explicitMain);
+            return true;
+        }
+
+        if (row && !float.IsInfinity(availW))
+        {
+            mainLimit = MathF.Max(0f, availW);
+            return true;
+        }
+
+        mainLimit = 0f;
+        return false;
+    }
+
+    private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
+    {
+        float availMain = MathF.Max(0f, mainLimit - (row ? li.Padding.Horizontal : li.Padding.Vertical));
         float cursor = 0f, lineCross = 0f, totalCross = 0f;
         bool first = true, any = false;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
@@ -512,7 +531,7 @@ public sealed class FlexLayout
         }
         if (any) totalCross += lineCross;
         float crossSize = totalCross + (row ? li.Padding.Vertical : li.Padding.Horizontal);
-        float mainSize = row ? li.Width : li.Height;
+        float mainSize = mainLimit;
         return row ? (mainSize, crossSize) : (crossSize, mainSize);
     }
 

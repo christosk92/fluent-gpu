@@ -126,8 +126,7 @@ public sealed record TextEl(string Text) : Element
 
 /// <summary>
 /// An async image (album art): shows <see cref="Placeholder"/> until the decode lands, then the bitmap. Decode is
-/// off-thread + cached + residency-pinned while on screen (see <c>ImageCache</c>). The real GPU upload is needs-pixels;
-/// the placeholder tint renders everywhere meanwhile.
+/// off-thread + cached + residency-pinned while on screen (see <c>ImageCache</c>).
 /// </summary>
 public sealed record ImageEl : Element
 {

@@ -2,6 +2,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Hosting;
 using FluentGpu.Reconciler;
 using static FluentGpu.Dsl.Ui;
 
@@ -36,16 +37,21 @@ sealed class GalleryApp : Component
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
 
-    public override Element Render() => VStack(0,
-        TitleBar(),
-        Embed.Comp(() => new NavigationView
-        {
-            Header = "fluent-gpu",
-            Initial = "welcome",
-            Items = Items,
-            Content = Page,   // each page is a distinct component type → the reconciler remounts it on navigation
-        })
-    ) with { Grow = 1 };
+    public override Element Render()
+    {
+        var shell = VStack(0,
+            TitleBar(),
+            Embed.Comp(() => new NavigationView
+            {
+                Header = "fluent-gpu",
+                Initial = "welcome",
+                Items = Items,
+                Content = Page,   // each page is a distinct component type → the reconciler remounts it on navigation
+            })
+        ) with { Grow = 1 };
+
+        return ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+    }
 
     // Integrated title bar (transparent → window Mica shows through): app identity left, a centered search pill,
     // a right inset clearing the system caption buttons.
@@ -76,6 +82,15 @@ sealed class GalleryApp : Component
         ],
     };
 
+    static Element DiagnosticsOverlay() => new BoxEl
+    {
+        Direction = 0,
+        Justify = FlexJustify.End,
+        AlignItems = FlexAlign.Start,
+        Padding = new Edges4(12, 56, 152, 0),
+        Children = [Embed.Comp(() => new FrameDiagnosticsHud())],
+    };
+
     static Element Page(string key) => key switch
     {
         "typography" => Embed.Comp(() => new TypographyPage()),
@@ -93,5 +108,51 @@ sealed class GalleryApp : Component
         "state" => Embed.Comp(() => new StatePage()),
         "wavee" => Embed.Comp(() => new WaveeShell()),
         _ => Embed.Comp(() => new WelcomePage()),
+    };
+}
+
+sealed class FrameDiagnosticsHud : Component
+{
+    public override Element Render()
+    {
+        var stats = UseContext(FrameDiagnostics.Current);
+        var (tick, setTick) = UseState(0);
+        UseEffect(() => setTick((tick + 1) & 0x3FFF_FFFF), tick);
+
+        string fps = stats.Fps <= 0.0 ? "--" : stats.Fps.ToString("0");
+        string ms = stats.FrameMs <= 0.0 ? "--" : stats.FrameMs.ToString("0.0");
+
+        return new BoxEl
+        {
+            Direction = 0,
+            Gap = 10,
+            AlignItems = FlexAlign.Center,
+            Padding = new Edges4(10, 5, 10, 5),
+            MinHeight = 30,
+            Fill = ColorF.FromRgba(0x13, 0x15, 0x1A, 0xCC),
+            BorderColor = Tok.StrokeSurfaceDefault,
+            BorderWidth = 1f,
+            Corners = Radii.ControlAll,
+            Children =
+            [
+                Metric("fps", fps, Tok.AccentDefault),
+                Metric("cmd", stats.DrawCommandCount.ToString(), Tok.TextPrimary),
+                Metric("draw", stats.DrawNodeCount.ToString(), Tok.TextPrimary),
+                Metric("cull", stats.CulledNodeCount.ToString(), Tok.TextPrimary),
+                Metric("ms", ms, Tok.TextSecondary),
+            ],
+        };
+    }
+
+    static Element Metric(string label, string value, ColorF valueColor) => new BoxEl
+    {
+        Direction = 0,
+        Gap = 4,
+        AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(label) { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" },
+            new TextEl(value) { Size = 12f, Bold = true, Color = valueColor, FontFamily = "Cascadia Code" },
+        ],
     };
 }

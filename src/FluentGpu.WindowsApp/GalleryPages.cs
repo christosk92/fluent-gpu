@@ -863,6 +863,12 @@ sealed class ImagesPage : Component
         "Echo Sparrow", "Nova Reign", "Pale Fire", "Drift Theory"
     ];
 
+    static readonly string[] AlbumPlaceholders =
+    [
+        "#273E6C", "#4F776C", "#5C496D", "#254D63",
+        "#6E5147", "#3D5E7A", "#7A3544", "#4F6066"
+    ];
+
     Element AlbumCard(int i)
     {
         return new BoxEl
@@ -877,7 +883,7 @@ sealed class ImagesPage : Component
             Corners = CornerRadius4.All(10),
             Children =
             [
-                Image($"album/{i}", 150f, 150f, 8f),
+                Image($"album/{i}", 150f, 150f, 8f, AlbumPlaceholders[i % AlbumPlaceholders.Length]),
                 Text($"Album {AlbumTitles[i % AlbumTitles.Length]}").Strong(),
                 Text(Artists[i % Artists.Length]).Foreground(Grey).FontSize(12f)
             ],
@@ -935,9 +941,9 @@ sealed class ImagesPage : Component
             Wrap = true,
             Children =
             [
-                LabeledTile("square (0)", Image("album/0", 80f, 80f, 0f)),
-                LabeledTile("rounded (12)", Image("album/1", 80f, 80f, 12f)),
-                LabeledTile("circle (40)", Image("album/2", 80f, 80f, 40f))
+                LabeledTile("square (0)", Image("album/0", 80f, 80f, 0f, AlbumPlaceholders[0])),
+                LabeledTile("rounded (12)", Image("album/1", 80f, 80f, 12f, AlbumPlaceholders[1])),
+                LabeledTile("circle (40)", Image("album/2", 80f, 80f, 40f, AlbumPlaceholders[2]))
             ],
         };
 
@@ -949,16 +955,16 @@ sealed class ImagesPage : Component
             Wrap = true,
             Children =
             [
-                LabeledTile("48 x 48", Image("album/3", 48f, 48f, 6f)),
-                LabeledTile("80 x 80", Image("album/4", 80f, 80f, 6f)),
-                LabeledTile("120 x 120", Image("album/5", 120f, 120f, 6f))
+                LabeledTile("48 x 48", Image("album/3", 48f, 48f, 6f, AlbumPlaceholders[3])),
+                LabeledTile("80 x 80", Image("album/4", 80f, 80f, 6f, AlbumPlaceholders[4])),
+                LabeledTile("120 x 120", Image("album/5", 120f, 120f, 6f, AlbumPlaceholders[5]))
             ],
         };
 
         return ScrollView(
             VStack(16f,
                 Heading("Async images (album art)"),
-                Text("Images decode off-thread into a residency-pinned, byte-budgeted cache; on-screen art is never evicted. The real GPU texture upload is a needs-pixels follow-up, so each tile shows its placeholder tint here.")
+                Text("Images decode off-thread into a residency-pinned, byte-budgeted cache; on-screen art is never evicted. Ready tiles render distinct album art while pending tiles keep a neutral placeholder.")
                     .Foreground(Grey),
                 Section(
                     "Album grid",

@@ -269,7 +269,7 @@ float4 PSMain(VSOut i) : SV_Target
         if (face == null) return;
         int famId = FamilyId(family);
         float scale = size / em;
-        float lineHeight = (asc - desc) * scale;
+        float lineHeight = (asc + desc) * scale;
         if (lineHeight <= 0f) lineHeight = size * 1.3f;
         float inv = 1f / dpiScale;
         bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
