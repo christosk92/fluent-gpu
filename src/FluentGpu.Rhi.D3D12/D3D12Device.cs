@@ -282,6 +282,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("d3d12", "images", _frameImageCount);
         Diag.Set("d3d12", "imagesSkipped", _frameImageSkipped);   // >0 ⇒ a recorded image had no live texture this frame
+        Diag.Set("d3d12", "imageAtlas", _imageTextures!.AtlasImages);   // thumbnails (<=128) packed into shared atlas pages
+        Diag.Set("d3d12", "imagePool", _imageTextures.PoolImages);      // art (256/512) in reused per-bucket pool textures
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
 
@@ -538,8 +540,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
         {
             _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // bind heap/PSO/root-sig/VB once for the whole pass
             foreach (var (inst, id) in _imageDraws)
-                if (_imageTextures.TryGet(id, out var srv, out _, out _))
-                    _imagePipe.Draw(_cmdList, srv, in inst);
+                if (_imageTextures.TryGet(id, out var srv, out var uv))
+                {
+                    var d = inst;
+                    d.UvX = uv.X; d.UvY = uv.Y; d.UvW = uv.W; d.UvH = uv.H;   // resolved sub-rect (atlas cell or whole texture)
+                    _imagePipe.Draw(_cmdList, srv, in d);
+                }
                 else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
         }
         if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);

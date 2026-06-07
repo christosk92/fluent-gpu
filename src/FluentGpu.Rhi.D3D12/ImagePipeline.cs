@@ -6,9 +6,10 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL image <c>Inst</c> (80 B). Like <see cref="RectInstance"/> but sampled from a
+/// <summary>CPU mirror of the HLSL image <c>Inst</c> (96 B). Like <see cref="RectInstance"/> but sampled from a
 /// per-image texture, with a premultiplied placeholder colour + cross-fade factor for the media-pipeline §7
-/// placeholder→image blend (CrossFade=1 ⇒ full image).</summary>
+/// placeholder→image blend (CrossFade=1 ⇒ full image), and an atlas sub-rect UV (origin+size in the page; (0,0,1,1)
+/// for a standalone/whole-texture image, a cell for an atlas-packed thumbnail).</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct ImageInstance
 {
@@ -18,6 +19,7 @@ internal struct ImageInstance
     public float Dx, Dy;                       // 48 translation
     public float Opacity, CrossFade;           // 56
     public float PR, PG, PB, PA;               // 64 placeholder (premultiplied) for the cross-fade lerp
+    public float UvX, UvY, UvW, UvH;           // 80 atlas sub-rect (origin + size); (0,0,1,1) = whole texture
 }
 
 /// <summary>
@@ -40,12 +42,12 @@ internal sealed unsafe class ImagePipeline : IDisposable
     private int _active;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; };
+struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; };
 StructuredBuffer<Inst> gInst : register(t1);
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; };
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -62,12 +64,14 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.opacity = it.opacity;
     o.crossFade = it.crossFade;
     o.ph = it.ph;
+    o.atlasUv = it.atlasUv;
     return o;
 }
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float4 img = gTex.Sample(gSamp, i.uv);              // premultiplied image
+    float2 auv = i.atlasUv.xy + i.uv * i.atlasUv.zw;    // resolve the atlas sub-rect ((0,0,1,1) = whole texture)
+    float4 img = gTex.Sample(gSamp, auv);               // premultiplied image
     float4 col = lerp(i.ph, img, saturate(i.crossFade)); // placeholder→image cross-fade, premultiplied space
     float2 s = sign(i.local);
     float r = (s.x < 0.0) ? (s.y < 0.0 ? i.radii.x : i.radii.w) : (s.y < 0.0 ? i.radii.y : i.radii.z);

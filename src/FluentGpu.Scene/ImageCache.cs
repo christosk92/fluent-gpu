@@ -156,6 +156,8 @@ public sealed class ImageCache
         _byId[id] = entry;
         _totalRequested++;
         Diag.Set("media", "requested", _totalRequested);
+        // NB: the decode keeps the requested size; the GPU backend buckets INTERNALLY (pool/atlas) and samples the
+        // image's sub-rect of its bucket texture via the inset UV — so residency accounting stays on the real pixels.
 
         // LQIP: decode the blurhash once and upload it as this image's instant initial texture (replaced by the
         // full-res decode when it lands). Render-edge work, cache-miss only — never per-frame. The reveal fade starts now.
@@ -186,6 +188,9 @@ public sealed class ImageCache
 
     /// <summary>Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.</summary>
     public void Cancel(ImageHandle h) => _decoder.Cancel(h.Id);
+
+    /// <summary>Round a display size up to a decode bucket (64/128/256/512) — the texture-pool / atlas granularity.</summary>
+    public static int BucketFor(int px) => px <= 64 ? 64 : px <= 128 ? 128 : px <= 256 ? 256 : 512;
 
     /// <summary>Advance the cross-fade clock by <paramref name="dtMs"/> (call once per painted frame, before record).</summary>
     public void Tick(float dtMs) => _clockMs += dtMs;
