@@ -21,6 +21,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawGradientRectCmd> _gradients = new(16);
     private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
     private readonly List<PushLayerCmd> _layers = new(8);
+    private readonly List<(int id, int w, int h)> _uploads = new(32);
+    private readonly Dictionary<int, (int w, int h)> _resident = new(32);
 
     public string BackendName => "Headless";
     public int FrameCount { get; private set; }
@@ -46,7 +48,18 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// <summary>PushLayer/PopLayer balance check — must be 0 at end of a well-formed frame.</summary>
     public int LayerBalance { get; private set; }
 
+    /// <summary>Every <see cref="UploadImage"/> this run (one entry per decode completion) — for upload assertions.</summary>
+    public IReadOnlyList<(int id, int w, int h)> Uploads => _uploads;
+    /// <summary>Currently-resident image ids → their uploaded dims (last upload wins; for residency assertions).</summary>
+    public IReadOnlyDictionary<int, (int w, int h)> ResidentImages => _resident;
+
     public ISwapchain CreateSwapchain(in SwapchainDesc desc) => new HeadlessSwapchain(desc.SizePx);
+
+    public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+    {
+        _uploads.Add((imageId, w, h));   // never cleared: uploads are one-shot per decode, so the log is the history
+        _resident[imageId] = (w, h);
+    }
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {

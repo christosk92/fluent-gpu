@@ -19,6 +19,13 @@ public interface IGpuDevice : IDisposable
 
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
+
+    /// <summary>Hand decoded PREMULTIPLIED BGRA8 pixels for <paramref name="imageId"/> to the backend (the
+    /// media-pipeline §4.1 texture upload). The backend create-or-replaces a resident texture (or atlas page) keyed by
+    /// id and samples it from the <c>DrawImage</c> opcode. <paramref name="pbgra8"/> is valid only for this call —
+    /// the backend copies it into its texture-staging ring; it is never retained. Rows may not be 256-aligned; the
+    /// backend pads. Called once per decode completion, before <see cref="SubmitDrawList"/>.</summary>
+    void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h);
 }
 
 public interface ISwapchain : IDisposable

@@ -84,6 +84,9 @@ public sealed class GdiGpuDevice : IGpuDevice
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
         => _sc?.Render(drawList, ctx, _strings);
 
+    // The GDI fallback backend draws no textured images (placeholder tint only) — decoded pixels have nowhere to go.
+    public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) { }
+
     public void Dispose() => _sc?.Dispose();
 }
 

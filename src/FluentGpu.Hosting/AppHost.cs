@@ -96,6 +96,7 @@ public sealed class AppHost : IDisposable
         _scrollAnim.RequestRerender = () => _dirty = true;   // re-realize the virtual window on a boundary crossing
         _reconciler.Anim = _anim;          // animation hooks in nested components seed tracks on their nodes
         _reconciler.Images = _images;      // image nodes request decodes + pin residency through the cache
+        _images.SetPixelSink(_device.UploadImage);   // decode completions → GPU texture upload (runs in _images.Pump, pre-submit)
         _root.Context.Anim = _anim;
         // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
         _window.PaintRequested = () => Paint(0);

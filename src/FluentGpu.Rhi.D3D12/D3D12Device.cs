@@ -29,7 +29,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private ID3D12DescriptorHeap* _rtvHeap;
     private uint _rtvSize;
     private readonly ID3D12Resource*[] _backBuffers = new ID3D12Resource*[FRAME_COUNT];
-    private ID3D12CommandAllocator* _allocator;
+    private readonly ID3D12CommandAllocator*[] _allocators = new ID3D12CommandAllocator*[FRAME_COUNT];
+    private readonly ulong[] _frameFenceValues = new ulong[FRAME_COUNT];
     private ID3D12GraphicsCommandList* _cmdList;
     private ID3D12Fence* _fence;
     private ulong _fenceValue;
@@ -134,13 +135,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
         _queue = queue;
 
-        ID3D12CommandAllocator* alloc;
-        Check(_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT,
-            __uuidof<ID3D12CommandAllocator>(), (void**)&alloc), "CreateCommandAllocator");
-        _allocator = alloc;
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            ID3D12CommandAllocator* alloc;
+            Check(_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT,
+                __uuidof<ID3D12CommandAllocator>(), (void**)&alloc), "CreateCommandAllocator");
+            _allocators[i] = alloc;
+        }
 
         ID3D12GraphicsCommandList* list;
-        Check(_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT, _allocator, null,
+        Check(_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT, _allocators[0], null,
             __uuidof<ID3D12GraphicsCommandList>(), (void**)&list), "CreateCommandList");
         _cmdList = list;
         _cmdList->Close();   // start closed; opened each frame after Reset
@@ -225,8 +229,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
-        Check(_allocator->Reset(), "allocator.Reset");
-        Check(_cmdList->Reset(_allocator, null), "cmdList.Reset");
+        WaitForFrame(_frameIndex);
+        ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
+        Check(allocator->Reset(), "allocator.Reset");
+        Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -269,7 +275,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         _queue->ExecuteCommandLists(1, &execList);
+        SignalFrame(_frameIndex);
     }
+
+    // Texture upload/sampling is being plumbed through the portable image cache. Until the D3D12 texture path lands,
+    // ready image draw commands still use the deterministic album-art rect fallback in AddReadyImageArt.
+    public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) { }
 
     private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _gradInsts.Clear(); }
 
@@ -639,10 +650,24 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _cmdList->ResourceBarrier(1, &b);
     }
 
-    internal void PresentAndSync()
+    internal void Present()
     {
         Check(_swapChain->Present(1, 0), "Present");
-        WaitForGpu();
+    }
+
+    private void SignalFrame(uint frameIndex)
+    {
+        ulong v = ++_fenceValue;
+        Check(_queue->Signal(_fence, v), "queue.Signal");
+        _frameFenceValues[frameIndex] = v;
+    }
+
+    private void WaitForFrame(uint frameIndex)
+    {
+        ulong v = _frameFenceValues[frameIndex];
+        if (v == 0 || _fence->GetCompletedValue() >= v) return;
+        Check(_fence->SetEventOnCompletion(v, _fenceEvent), "SetEventOnCompletion");
+        WaitForSingleObject(_fenceEvent, INFINITE);
     }
 
     internal void WaitForGpu()
@@ -703,7 +728,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (_swapChain != null) _swapChain->Release();
         if (_rtvHeap != null) _rtvHeap->Release();
         if (_cmdList != null) _cmdList->Release();
-        if (_allocator != null) _allocator->Release();
+        for (uint i = 0; i < FRAME_COUNT; i++)
+            if (_allocators[i] != null) _allocators[i]->Release();
         if (_fence != null) _fence->Release();
         if (_queue != null) _queue->Release();
         if (_factory != null) _factory->Release();
@@ -718,6 +744,6 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     public D3D12Swapchain(D3D12Device device) => _device = device;
     public Size2 SizePx => _device.SizePx;
     public void Resize(Size2 px) => _device.Resize((uint)px.Width, (uint)px.Height);
-    public void Present() => _device.PresentAndSync();
+    public void Present() => _device.Present();
     public void Dispose() { }
 }

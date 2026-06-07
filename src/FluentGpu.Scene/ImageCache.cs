@@ -9,13 +9,19 @@ public readonly record struct ImageHandle(int Id)
     public static ImageHandle Null => default;
 }
 
+/// <summary>Forwards decoded PREMULTIPLIED BGRA8 pixels to the GPU backend. The span is valid only for the duration of
+/// the synchronous call (it is never stored — the backend copies it into its upload heap), so the cache need not own
+/// pixel memory: it flows decoder → cache.Pump → host sink → IGpuDevice.UploadImage in one stack.</summary>
+public delegate void ImageReadyHandler(int id, System.ReadOnlySpan<byte> bgra8, int w, int h);
+
 /// <summary>The decode seam: the portable cache asks a leaf to decode a source to a target size, off the UI thread.
 /// The Windows leaf is WIC→GPU (needs-pixels); the headless leaf is deterministic. <see cref="Pump"/> drains completions
-/// onto the UI thread (the +1-frame latency contract: a request is never ready the same frame).</summary>
+/// onto the UI thread (the +1-frame latency contract: a request is never ready the same frame), invoking
+/// <paramref name="onPixels"/> with the bucket pixels then <paramref name="onComplete"/> with the state transition.</summary>
 public interface IImageDecoder
 {
     void Begin(int id, string source, int targetW, int targetH);
-    void Pump(System.Action<int, bool, int, int> onComplete);   // (id, success, decodedW, decodedH)
+    void Pump(System.Action<int, bool, int, int> onComplete, ImageReadyHandler onPixels);   // (id, success, decodedW, decodedH) + pixels
 }
 
 /// <summary>
@@ -41,6 +47,8 @@ public sealed class ImageCache
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
     private readonly System.Action<int, bool, int, int> _onComplete;   // cached → Pump allocates nothing
+    private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
+    private ImageReadyHandler _pixelSink;
     private int _nextId = 1;
     private long _clock = 1;
     private int _pumpCompleted;
@@ -50,7 +58,12 @@ public sealed class ImageCache
         _decoder = decoder;
         _budgetBytes = budgetBytes;
         _onComplete = OnDecodeComplete;
+        _pixelSink = _noPixels;
     }
+
+    /// <summary>The host wires this to <c>IGpuDevice.UploadImage</c>; the cache forwards each decode's pixels through it
+    /// during <see cref="Pump"/> (transiently — the sink must copy, not store). Set once at composition.</summary>
+    public void SetPixelSink(ImageReadyHandler sink) => _pixelSink = sink ?? _noPixels;
 
     public long UsedBytes { get; private set; }
     public int Count => _byId.Count;
@@ -83,7 +96,7 @@ public sealed class ImageCache
     public int Pump()
     {
         _pumpCompleted = 0;
-        _decoder.Pump(_onComplete);
+        _decoder.Pump(_onComplete, _pixelSink);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
     }
@@ -114,15 +127,46 @@ public sealed class ImageCache
     }
 }
 
-/// <summary>Deterministic headless decoder: completes on the NEXT <see cref="ImageCache.Pump"/> (the +1-frame latency
-/// contract), reporting the requested target size. Proves the residency/state logic without real codecs or files.</summary>
+/// <summary>Deterministic headless/offline decoder: completes on the NEXT <see cref="ImageCache.Pump"/> (the +1-frame
+/// latency contract), reporting the requested target size and synthesizing a stable per-id BGRA pattern so the GPU
+/// upload + sample path is exercisable without real codecs or network. Proves the residency/state logic.</summary>
 public sealed class FakeImageDecoder : IImageDecoder
 {
     private readonly Queue<(int id, int w, int h)> _pending = new();
+    private byte[] _scratch = System.Array.Empty<byte>();
+
     public void Begin(int id, string source, int targetW, int targetH)
         => _pending.Enqueue((id, targetW <= 0 ? 1 : targetW, targetH <= 0 ? 1 : targetH));
-    public void Pump(System.Action<int, bool, int, int> onComplete)
+
+    public void Pump(System.Action<int, bool, int, int> onComplete, ImageReadyHandler onPixels)
     {
-        while (_pending.Count > 0) { var (id, w, h) = _pending.Dequeue(); onComplete(id, true, w, h); }
+        while (_pending.Count > 0)
+        {
+            var (id, w, h) = _pending.Dequeue();
+            int bytes = w * h * 4;
+            if (_scratch.Length < bytes) _scratch = new byte[bytes];
+            FillPattern(_scratch, id, w, h);
+            onPixels(id, _scratch.AsSpan(0, bytes), w, h);   // premultiplied BGRA (opaque ⇒ premul == straight)
+            onComplete(id, true, w, h);
+        }
+    }
+
+    // A stable per-id diagonal gradient with an id-derived hue so each decoded tile looks distinct on screen.
+    private static void FillPattern(byte[] buf, int id, int w, int h)
+    {
+        uint s = unchecked((uint)id * 2654435761u);
+        byte br = (byte)(80 + (s & 0x7F)), bg = (byte)(80 + ((s >> 7) & 0x7F)), bb = (byte)(80 + ((s >> 14) & 0x7F));
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                int i = (y * w + x) * 4;
+                float t = (x + y) / (float)(w + h);            // 0..1 corner→corner
+                buf[i + 0] = (byte)(bb * (0.45f + 0.55f * t));  // B
+                buf[i + 1] = (byte)(bg * (0.45f + 0.55f * t));  // G
+                buf[i + 2] = (byte)(br * (0.45f + 0.55f * t));  // R
+                buf[i + 3] = 255;                                // A (opaque)
+            }
+        }
     }
 }
