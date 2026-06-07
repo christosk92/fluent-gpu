@@ -20,6 +20,11 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
 /// </summary>
 public static class SceneRecorder
 {
+    // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
+    private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
+    private static int _scrollLogFrame;
+    private static bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
+
     private struct RecordAccumulator
     {
         public int NodesVisited;
@@ -35,14 +40,24 @@ public static class SceneRecorder
         dl.Reset();
         if (scene.Root.IsNull) return default;
 
+        _scrollLogFrame++;
         var stats = new RecordAccumulator();
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+
+        // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
+        // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
+        // sort places them BEHIND the live tree — the incoming/sliding content draws over them instead of under them.
+        for (int i = 0; i < scene.OrphanCount; i++)
+        {
+            var o = scene.OrphanAt(i, out float px, out float py);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+        }
         return stats.ToStats();
     }
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack,
-                             ref RecordAccumulator stats)
+                             float parentScaleX, float parentScaleY, ref RecordAccumulator stats)
     {
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
@@ -76,10 +91,28 @@ public static class SceneRecorder
                 world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-cx, -cy));
             }
         }
+        // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
+        // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).
+        float netScaleX = parentScaleX, netScaleY = parentScaleY;
+        if ((flags & NodeFlags.CounterScaled) != 0 && (MathF.Abs(parentScaleX - 1f) > 1e-4f || MathF.Abs(parentScaleY - 1f) > 1e-4f))
+        {
+            float cx = b.W * 0.5f, cy = b.H * 0.5f;
+            world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(Affine2D.Scale(1f / parentScaleX, 1f / parentScaleY)).Multiply(Affine2D.Translation(-cx, -cy));
+            netScaleX = 1f; netScaleY = 1f;
+        }
+        float childScaleX = netScaleX * p.LocalTransform.M11;   // the scale this node imposes on its children
+        float childScaleY = netScaleY * p.LocalTransform.M22;
+
         float opacity = parentOpacity * p.Opacity;
 
+        // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
+        // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
+        float pw = float.IsNaN(p.PresentedW) ? b.W : p.PresentedW;
+        float ph = float.IsNaN(p.PresentedH) ? b.H : p.PresentedH;
+        var pb = new RectF(b.X, b.Y, pw, ph);   // presented rect (== b when no reveal in flight)
+
         ulong key = (ulong)depth << 32;   // painter order ~ depth for the slice
-        var local = new RectF(0f, 0f, b.W, b.H);
+        var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor.
@@ -130,7 +163,7 @@ public static class SceneRecorder
                 {
                     dl.FillRoundRect(local, p.Corners, border, world, opacity, key);     // flat border ring (local space)
                     float bw = p.BorderWidth;
-                    var inner = new RectF(bw, bw, MathF.Max(0f, b.W - 2 * bw), MathF.Max(0f, b.H - 2 * bw));
+                    var inner = new RectF(bw, bw, MathF.Max(0f, pw - 2 * bw), MathF.Max(0f, ph - 2 * bw));
                     var ic = new CornerRadius4(
                         MathF.Max(0f, p.Corners.TopLeft - bw), MathF.Max(0f, p.Corners.TopRight - bw),
                         MathF.Max(0f, p.Corners.BottomRight - bw), MathF.Max(0f, p.Corners.BottomLeft - bw));
@@ -143,9 +176,9 @@ public static class SceneRecorder
 
                 // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ──
                 if (hasGradBorder)
-                    EmitGradientBorderRing(dl, b, p.Corners, p.BorderWidth, in bb, world, opacity, key);
+                    EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, world, opacity, key);
                 else if (hasGradFill && p.BorderWidth > 0f && border.A > 0f)
-                    EmitBorderRing(dl, local, b, p.Corners, p.BorderWidth, border, world, opacity, key);
+                    EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, border, world, opacity, key);
                 break;
             }
             case VisualKind.Text when !p.Text.IsEmpty:
@@ -165,7 +198,7 @@ public static class SceneRecorder
         }
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, ref stats);
+            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 
@@ -176,9 +209,17 @@ public static class SceneRecorder
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);
 
-        // Scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb are not chopped
-        // at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar self-gates on
-        // overflow and keeps a faint rest-rail visible (no FadeT gate here — the thumb never fully vanishes).
+        // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
+        // are not chopped at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar
+        // self-gates on overflow and FadeT.
+        if (ScrollLogNow && (flags & NodeFlags.Scrollable) != 0)
+        {
+            bool hs = scene.TryGetScroll(node, out var d);
+            Console.Error.WriteLine(
+                $"[scroll] gate n#{node.Raw.Index} bounds={b.W:0}x{b.H:0} dev=({deviceBounds.X:0},{deviceBounds.Y:0} {deviceBounds.W:0}x{deviceBounds.H:0}) " +
+                $"clip=({clip.X:0},{clip.Y:0} {clip.W:0}x{clip.H:0}) overlapClip={deviceBounds.Overlaps(clip)} thumbA={scrollThumb.A:0.00} " +
+                $"hasState={hs} contentH={(hs ? d.ContentH : 0):0} viewportH={(hs ? d.ViewportH : 0):0} offY={(hs ? d.OffsetY : 0):0} fadeT={(hs ? d.FadeT : 0):0.00} orient={(hs ? d.Orientation : 0)}");
+        }
         if (scrollThumb.A > 0f && deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
@@ -266,21 +307,27 @@ public static class SceneRecorder
         float content = horizontal ? sc.ContentW : sc.ContentH;
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
         {
-            if (content <= viewport + 0.5f) return;
+            if (content <= viewport + 0.5f)
+            {
+                if (ScrollLogNow)
+                    Console.Error.WriteLine($"[scroll]   emit SKIPPED: no overflow (content={content:0} <= viewport={viewport:0})");
+                return;
+            }
 
-            const float bar = 12f;          // ScrollBarSize
-            const float collapsed = 2f;     // panning indicator width/height
+            const float bar = 12f;          // ScrollBarSize (expanded gutter width)
+            const float collapsed = 6f;     // resting thumb width — visible (a 2px hairline was effectively invisible)
             const float thumbOffset = 2f;   // ScrollBarThumbOffset: cross-axis inset in the collapsed state
             const float minExpanded = 30f;  // ScrollBarVerticalThumbMinHeight
             const float minCollapsed = 32f; // VerticalPanningThumb.MinHeight
             const float radius = 3f;        // ScrollBarCornerRadius
 
-            // A faint thin rail is ALWAYS visible while content overflows (so the scrollbar never fully vanishes — the
-            // affordance that there's more to scroll + where you are); scroll/hover brightens it (FadeT), and hovering
-            // the bar expands it to the full gutter+track+arrows (ExpandT).
-            const float restFade = 0.40f;
-            float fade = MathF.Max(restFade, Math.Clamp(sc.FadeT, 0f, 1f));
+            float fade = Math.Clamp(sc.FadeT, 0f, 1f);
             float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
+            if (fade <= 0.01f && expand <= 0.01f)
+            {
+                if (ScrollLogNow) Console.Error.WriteLine("[scroll]   emit SKIPPED: faded out");
+                return;
+            }
 
             float axis = horizontal ? b.W : b.H;
             float cross = horizontal ? b.H : b.W;
@@ -314,6 +361,15 @@ public static class SceneRecorder
                 ? new RectF(pos, crossPos, thumbLen, thick)
                 : new RectF(crossPos, pos, thick, thumbLen);
             dl.FillRoundRect(thumbRect, CornerRadius4.All(radius), thumbCol, world, opacity, key | 0x1);
+
+            if (ScrollLogNow)
+            {
+                RectF devThumb = world.TransformBounds(thumbRect);
+                Console.Error.WriteLine(
+                    $"[scroll]   emit THUMB local=({thumbRect.X:0},{thumbRect.Y:0} {thumbRect.W:0}x{thumbRect.H:0}) " +
+                    $"device=({devThumb.X:0},{devThumb.Y:0} {devThumb.W:0}x{devThumb.H:0}) thick={thick:0.0} fade={fade:0.00} " +
+                    $"thumbAlpha={thumbCol.A:0.000} expand={expand:0.00}  (cross={cross:0} crossPos={crossPos:0})");
+            }
 
             float arrowOpacity = fade * expand;
             if (arrowOpacity > 0.04f)

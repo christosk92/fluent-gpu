@@ -31,6 +31,20 @@ public sealed class NavigationView : Component
 
     internal static readonly Context<float> IndicatorTarget = new(-1000f);
 
+    // Labels slide+fade on enter/exit; their position rides the parent item's projection. A label is a plain child —
+    // present when expanded, removed (→ exit orphan that fades out) when collapsed. No wrapper component, no context.
+    // Labels fade IN on expand; on collapse they are removed with the layout (no exit orphan) so no text ever lingers
+    // over the rail/content. The pane reveal + content slide + staying icons carry the collapse motion.
+    static readonly LayoutTransition LabelTransition = new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Spring(0.16f, 1f), SizeMode.Reveal,
+        Enter: new EnterExit(Dx: -8f, Opacity: 0f, Active: true));
+
+    // The pane's own width animates as a presented-size Reveal (translate + clip, no relayout); items reveal their
+    // background; the content frame slides via the position projection as the pane width changes.
+    static readonly LayoutTransition PaneTransition =
+        LayoutTransition.BoundsT(SizeMode.Reveal) with { Dynamics = TransitionDynamics.Spring(0.22f, 0.9f) };
+
     // DIAG: last-reported width/mode so the pane-mode log only fires on change (see Render()).
     static float _diagWidth = float.NaN;
     static PaneMode _diagMode = (PaneMode)255;
@@ -71,6 +85,11 @@ public sealed class NavigationView : Component
         // The hamburger manually collapses the full-width pane to the icon rail (WinUI title-bar toggle).
         PaneMode mode = autoMode == PaneMode.Expanded && collapsed ? PaneMode.Compact : autoMode;
         float openPaneWidth = width > 0f ? MathF.Min(PaneWidth, width) : PaneWidth;
+        bool inlinePane = autoMode == PaneMode.Expanded;
+        float paneWidth = inlinePane ? (collapsed ? CompactWidth : openPaneWidth)
+                        : paneOpen ? openPaneWidth
+                        : autoMode == PaneMode.Compact ? CompactWidth : 0f;
+        bool labelsVisible = !inlinePane || !collapsed;
 
         // DIAG: report the pane-mode decision whenever the viewport width or resulting mode changes.
         if (Diag.Enabled && (width != _diagWidth || mode != _diagMode))
@@ -88,19 +107,18 @@ public sealed class NavigationView : Component
 
         // Hamburger action by mode: at full width it collapses to the rail; from a manually-collapsed rail it expands
         // back; in adaptive compact/minimal it toggles the overlay flyout.
-        Action toggle = mode == PaneMode.Expanded ? () => setCollapsed(true)
-                      : autoMode == PaneMode.Expanded ? () => setCollapsed(false)
-                      : () => setPaneOpen(!paneOpen);
+        Action toggle = autoMode == PaneMode.Expanded
+            ? () => setCollapsed(!collapsed)
+            : () => setPaneOpen(!paneOpen);
 
         var content = ContentFrame(selected, Select, mode);
-        Element baseLayer = mode switch
+        Element baseLayer = inlinePane ? new BoxEl
         {
-            PaneMode.Expanded => new BoxEl
-            {
-                Direction = 0,
-                Grow = 1,
-                Children = [FullPane(openPaneWidth, selected, Select, toggle, overlay: false), content],
-            },
+            Direction = 0,
+            Grow = 1,
+            Children = [FullPane(paneWidth, selected, Select, toggle, overlay: false, labelsVisible: labelsVisible), content],
+        } : mode switch
+        {
             PaneMode.Compact => new BoxEl
             {
                 Direction = 0,
@@ -115,13 +133,13 @@ public sealed class NavigationView : Component
             },
         };
 
-        if (mode == PaneMode.Expanded || !paneOpen)
+        if (inlinePane || !paneOpen)
             return baseLayer;
 
         return Ui.ZStack(
             baseLayer,
-            new BoxEl { Fill = LightDismissOverlay, OnClick = () => setPaneOpen(false) },
-            FullPane(openPaneWidth, selected, Select, () => setPaneOpen(false), overlay: true)
+            new BoxEl { Fill = LightDismissOverlay, Opacity = 1f, OnClick = () => setPaneOpen(false) },
+            FullPane(openPaneWidth, selected, Select, () => setPaneOpen(false), overlay: true, labelsVisible: true)
         ) with { Grow = 1f };
     }
 
@@ -141,6 +159,10 @@ public sealed class NavigationView : Component
         {
             Direction = 1,
             Grow = 1,
+            Shrink = 1,
+            // Slide the content frame as the pane width changes (the dominant collapse motion) — position projection,
+            // compositor-only, no relayout of the (potentially huge) page subtree.
+            Animate = LayoutTransition.Slide with { Dynamics = TransitionDynamics.Spring(0.22f, 0.9f) },
             Fill = Tok.FillLayerDefault,
             BorderColor = Tok.StrokeCardDefault,
             BorderWidth = 1f,
@@ -149,10 +171,10 @@ public sealed class NavigationView : Component
         };
     }
 
-    Element FullPane(float width, string selected, Action<string> select, Action toggle, bool overlay)
+    Element FullPane(float width, string selected, Action<string> select, Action toggle, bool overlay, bool labelsVisible)
     {
-        var mainItems = BuildItems(Items, selected, select, expanded: true, ownIndicator: false);
-        var footerItems = BuildItems(Footer, selected, select, expanded: true, ownIndicator: true);
+        var mainItems = BuildItems(Items, selected, select, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible);
+        var footerItems = BuildItems(Footer, selected, select, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible);
         // Pane background, per the shipped WinUI generic.xaml: the EXPANDED (always-visible) pane =
         // NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent → FULLY TRANSPARENT, so DWM's Mica
         // window backdrop shows through. Only the transient OVERLAY (minimal/compact flyout) pane uses in-app acrylic
@@ -165,6 +187,8 @@ public sealed class NavigationView : Component
             Width = width,
             Direction = 1,
             Fill = paneFill,
+            ClipToBounds = true,
+            Animate = PaneTransition,             // presented-width Reveal (model snaps to the final width; no relayout)
             Acrylic = overlay ? AcrylicSpec.InAppDefault : null,
             BorderColor = Tok.StrokeDividerDefault,
             BorderWidth = 1f,
@@ -172,7 +196,7 @@ public sealed class NavigationView : Component
             Shadow = overlay ? Elevation.Flyout : null,
             Children =
             [
-                PaneTitleRow(toggle, expanded: true),
+                PaneTitleRow(toggle, labelsVisible),
                 // Menu items scroll (overflow → scrollbar on hover); the footer stays pinned at the bottom.
                 Ui.ScrollView(Ui.ZStack(
                     new BoxEl { Direction = 1, Children = mainItems },
@@ -183,7 +207,7 @@ public sealed class NavigationView : Component
             ],
         };
 
-        return pane;
+        return pane;   // intent lives ON the node (BoxEl.Animate) — no wrapper component, no context round-trip
     }
 
     Element CompactPane(string selected, Action<string> select, Action toggle, bool paneOpen)
@@ -195,12 +219,12 @@ public sealed class NavigationView : Component
         };
 
         foreach (var it in Items)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expanded: false, ownIndicator: true));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         children.Add(new BoxEl { Grow = 1 });
 
         foreach (var it in Footer)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expanded: false, ownIndicator: true));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         return new BoxEl
         {
@@ -238,7 +262,7 @@ public sealed class NavigationView : Component
         ],
     };
 
-    Element PaneTitleRow(Action toggle, bool expanded)
+    Element PaneTitleRow(Action toggle, bool labelsVisible)
     {
         var children = new List<Element>();
 
@@ -247,18 +271,10 @@ public sealed class NavigationView : Component
 
         children.Add(PaneToggleButton(toggle));
 
-        if (expanded && Header is { Length: > 0 } title)
-        {
-            children.Add(new BoxEl
-            {
-                Direction = 0,
-                Grow = 1,
-                Height = PaneHeaderRowHeight,
-                AlignItems = FlexAlign.Center,
-                Padding = new Edges4(4, 0, 16, 0),
-                Children = [new TextEl(title) { Size = 14f, Bold = true, Color = Tok.TextPrimary }],
-            });
-        }
+        if (Header is { Length: > 0 } title)
+            children.Add(AnimatedLabel(labelsVisible, new NavLabelSpec(
+                new TextEl(title) { Size = 14f, Bold = true, Color = Tok.TextPrimary },
+                PaneHeaderRowHeight, 1f, new Edges4(4, 0, 16, 0))));
 
         return new BoxEl
         {
@@ -277,20 +293,22 @@ public sealed class NavigationView : Component
         Height = PaneToggleHeight,
         Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
         Direction = 0,
+        Role = AutomationRole.Button,
         AlignItems = FlexAlign.Center,
         Justify = FlexJustify.Center,
         Corners = Radii.ControlAll,
         HoverFill = Tok.FillSubtleSecondary,
         PressedFill = Tok.FillSubtleTertiary,
         OnClick = onClick,
-        Children = [new TextEl(glyph) { Size = IconSize, Color = Tok.TextPrimary, FontFamily = Theme.IconFont }],
+        PressScale = 0.985f,
+        Children = [AnimatedIcon.Glyph(glyph, IconSize, Tok.TextPrimary, Theme.IconFont)],
     };
 
-    static Element[] BuildItems(NavItem[] items, string selected, Action<string> select, bool expanded, bool ownIndicator)
+    static Element[] BuildItems(NavItem[] items, string selected, Action<string> select, bool expandedLayout, bool ownIndicator, bool labelsVisible)
     {
         var result = new Element[items.Length];
         for (int i = 0; i < items.Length; i++)
-            result[i] = Item(items[i], selected, select, expanded, ownIndicator);
+            result[i] = Item(items[i], selected, select, expandedLayout, ownIndicator, labelsVisible);
 
         return result;
     }
@@ -315,62 +333,17 @@ public sealed class NavigationView : Component
         return -1000f;
     }
 
-    static Element Item(NavItem it, string selected, Action<string> select, bool expanded, bool ownIndicator)
+    static Element Item(NavItem it, string selected, Action<string> select, bool expandedLayout, bool ownIndicator, bool labelsVisible)
     {
         if (it.IsHeader)
-            return HeaderItem(it, expanded);
+            return HeaderItem(it, expandedLayout, labelsVisible);
 
         bool sel = it.Key == selected;
         var foreground = sel ? Tok.TextPrimary : Tok.TextSecondary;
-        if (!expanded)
-        {
-            return new BoxEl
-            {
-                Direction = 0,
-                Role = AutomationRole.NavigationItem,
-                Width = PaneToggleWidth,
-                Height = ItemHeight,
-                Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
-                AlignItems = FlexAlign.Center,
-                Corners = Radii.OverlayAll,
-                Fill = sel ? Tok.FillSubtleSecondary : ColorF.Transparent,
-                HoverFill = sel ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-                PressedFill = sel ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-                OnClick = () => select(it.Key),
-                Children =
-                [
-                    Ui.ZStack(
-                        new BoxEl
-                        {
-                            Width = PaneToggleWidth,
-                            Height = ItemHeight,
-                            Direction = 0,
-                            AlignItems = FlexAlign.Center,
-                            Children =
-                            [
-                                new BoxEl
-                                {
-                                    Width = IndicatorW,
-                                    Height = IndicatorH,
-                                    Corners = CornerRadius4.All(2f),
-                                    Fill = ownIndicator && sel ? Tok.AccentDefault : ColorF.Transparent,
-                                },
-                            ],
-                        },
-                        new BoxEl
-                        {
-                            Width = PaneToggleWidth,
-                            Height = ItemHeight,
-                            Direction = 0,
-                            AlignItems = FlexAlign.Center,
-                            Justify = FlexJustify.Center,
-                            Children = [new TextEl(it.Glyph) { Size = IconSize, Color = foreground, FontFamily = Theme.IconFont }],
-                        }
-                    ),
-                ],
-            };
-        }
 
+        // Uniform structure across expanded/compact: an indicator sliver + the icon column are ALWAYS present (so the
+        // keyed item node and its icon are reused, not remounted), plus the label ONLY when expanded. Collapsing removes
+        // the label → it exits (fades + slides) while the icon stays put; the item's own background width reveals.
         var children = new List<Element>
         {
             new BoxEl
@@ -388,28 +361,21 @@ public sealed class NavigationView : Component
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Children = [new TextEl(it.Glyph) { Size = IconSize, Color = foreground, FontFamily = Theme.IconFont }],
+                Children = [AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)],
             },
         };
-
-        if (expanded)
-        {
-            children.Add(new BoxEl
-            {
-                Direction = 0,
-                Grow = 1,
-                Height = ItemHeight,
-                AlignItems = FlexAlign.Center,
-                Padding = new Edges4(4, 0, 8, 0),
-                Children = [new TextEl(it.Label) { Size = 14f, Color = foreground }],
-            });
-        }
+        if (expandedLayout)
+            children.Add(AnimatedLabel(labelsVisible, new NavLabelSpec(
+                new TextEl(it.Label) { Size = 14f, Color = foreground },
+                ItemHeight, 1f, new Edges4(4, 0, 8, 0))));
 
         return new BoxEl
         {
+            Key = it.Key,                       // keyed → reused across expanded/compact (icon glides, only the label exits)
             Direction = 0,
             Role = AutomationRole.NavigationItem,
-            Width = float.NaN,
+            Animate = PaneTransition,           // reveal the item's background width as the pane collapses (position is a no-op)
+            Width = expandedLayout ? float.NaN : PaneToggleWidth,
             Height = ItemHeight,
             Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
             AlignItems = FlexAlign.Center,
@@ -422,21 +388,31 @@ public sealed class NavigationView : Component
         };
     }
 
-    static Element HeaderItem(NavItem it, bool expanded)
+    static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible)
     {
-        if (!expanded)
+        if (!expandedLayout)
             return new BoxEl { Height = 8 };
 
-        return new BoxEl
-        {
-            Height = HeaderHeight,
-            Direction = 0,
-            AlignItems = FlexAlign.Center,
-            Padding = new Edges4(16, 0, 16, 0),
-            Children = [new TextEl(it.Label) { Size = 14f, Bold = true, Color = Tok.TextSecondary }],
-        };
+        return AnimatedLabel(labelsVisible, new NavLabelSpec(
+            new TextEl(it.Label) { Size = 14f, Bold = true, Color = Tok.TextSecondary },
+            HeaderHeight, 0f, new Edges4(16, 0, 16, 0)));
     }
+
+    // A pane label: a plain child whose appearance/disappearance is the general enter/exit animation. Intent lives on the
+    // node (BoxEl.Animate) — no wrapper component, no context. The `visible` arg is kept for call-site compatibility.
+    static Element AnimatedLabel(bool visible, NavLabelSpec spec) => new BoxEl
+    {
+        Direction = 0,
+        Grow = spec.Grow,
+        Height = spec.Height,
+        AlignItems = FlexAlign.Center,
+        Padding = spec.Padding,
+        Animate = LabelTransition,
+        Children = [spec.Child],
+    };
 }
+
+internal readonly record struct NavLabelSpec(Element Child, float Height, float Grow, Edges4 Padding);
 
 internal sealed class NavIndicator : Component
 {

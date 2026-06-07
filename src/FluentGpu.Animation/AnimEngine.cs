@@ -3,8 +3,9 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Animation;
 
-/// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity → PaintDirty. None relayout.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity }
+/// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
+/// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. None relayout.</summary>
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH }
 
 // Easing (the enum + evaluator) now lives in FluentGpu.Foundation (a foundational motion primitive shared by Dsl/Scene/
 // Render + the image cross-fade). Animation imports Foundation, so `Easing` here resolves to FluentGpu.Foundation.Easing.
@@ -70,8 +71,8 @@ public sealed class AnimEngine
 
     private struct Accum
     {
-        public float Tx, Ty, Sx, Sy, Rot, Op;
-        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1 };
+        public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh;
+        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN };
         public void Fold(AnimChannel ch, float v, CompositeOp op)
         {
             bool add = op != CompositeOp.Replace;
@@ -83,6 +84,8 @@ public sealed class AnimEngine
                 case AnimChannel.ScaleY: Sy = add ? Sy * v : v; break;
                 case AnimChannel.Rotation: Rot = add ? Rot + v : v; break;
                 case AnimChannel.Opacity: Op = add ? Op * v : v; break;
+                case AnimChannel.SizeW: Sw = v; break;   // presented width (Reveal) — replace, never relayout
+                case AnimChannel.SizeH: Sh = v; break;
             }
         }
     }
@@ -90,6 +93,9 @@ public sealed class AnimEngine
     private readonly SceneStore _scene;
     private readonly List<Track> _tracks = new();
     private readonly Dictionary<NodeHandle, Accum> _scratch = new();
+    // Per-node layout-transition spec, keyed by node INDEX (not handle): slot reuse self-cleans, so the table is bounded
+    // by the slab size. The reconciler Set/Clears it from BoxEl.Animate on every reconcile; capture/apply read it.
+    private readonly Dictionary<int, LayoutTransition> _transitions = new();
     public DrivenClockTable Clocks { get; } = new();
 
     public AnimEngine(SceneStore scene) => _scene = scene;
@@ -150,6 +156,8 @@ public sealed class AnimEngine
             AnimChannel.ScaleX => p.LocalTransform.M11,
             AnimChannel.ScaleY => p.LocalTransform.M22,
             AnimChannel.Opacity => p.Opacity,
+            AnimChannel.SizeW => !float.IsNaN(p.PresentedW) ? p.PresentedW : _scene.Bounds(node).W,
+            AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
             _ => 0f,   // Rotation: not cleanly recoverable from a scaled matrix; springs from 0
         };
     }
@@ -161,6 +169,140 @@ public sealed class AnimEngine
     public void CancelAll(NodeHandle node)
     {
         for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node) _tracks.RemoveAt(i);
+    }
+
+    // ── Layout-transition side-table (node index → spec) ──────────────────────────────────────────
+    /// <summary>Attach (or replace) a node's layout-transition spec. Called by the reconciler from BoxEl.Animate.</summary>
+    public void SetTransition(NodeHandle node, in LayoutTransition t) => _transitions[(int)node.Raw.Index] = t;
+    /// <summary>Read a node's layout-transition spec (set by the reconciler this commit).</summary>
+    public bool TryGetTransition(NodeHandle node, out LayoutTransition t) => _transitions.TryGetValue((int)node.Raw.Index, out t);
+    /// <summary>Drop a node's layout-transition spec (the element stopped declaring Animate, or the slot was freed).</summary>
+    public void ClearTransition(NodeHandle node) => _transitions.Remove((int)node.Raw.Index);
+
+    // ── Layout-transition projection (continuous, retained FLIP) ──────────────────────────────────
+    /// <summary>FLIP the node from its captured presented rect to its new laid-out rect, seeding/retargeting the channels
+    /// the spec requests. Position is velocity-continuous: a running spring keeps its velocity and shifts its offset by the
+    /// layout delta (no jump on interruption); a fresh spring starts offset by the full delta and settles to 0. The host
+    /// calls this once per commit for every BoundsAnimated node that moved; Tick then advances it every frame.</summary>
+    public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    {
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if ((spec.Channels & TransitionChannels.Position) != 0)
+        {
+            ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn);
+            ReframePosition(node, AnimChannel.TranslateY, fromAbs.Y - toAbs.Y, dyn);
+        }
+        if ((spec.Channels & TransitionChannels.Size) != 0)
+        {
+            SizeMode mode = spec.Size == SizeMode.Auto ? SizeMode.Reveal : spec.Size;
+            switch (mode)
+            {
+                case SizeMode.Reveal:
+                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn);
+                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn);
+                    break;
+                case SizeMode.ScaleCorrect:   // GPU scale toward 1 (children that opt in counter-scale in the recorder)
+                    if (toAbs.W > 0.5f) ScaleReveal(node, AnimChannel.ScaleX, fromAbs.W / toAbs.W, dyn);
+                    if (toAbs.H > 0.5f) ScaleReveal(node, AnimChannel.ScaleY, fromAbs.H / toAbs.H, dyn);
+                    break;
+                case SizeMode.Relayout:        // re-solve the subtree at the interpolated size each tick (live reflow)
+                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn);
+                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn);
+                    _scene.Mark(node, NodeFlags.Relayouting);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Nodes whose presented SIZE changed this tick under SizeMode.Relayout — the host re-solves just these
+    /// subtrees (scoped layout) so their text re-wraps live. Cleared by the host after it consumes them.</summary>
+    public List<NodeHandle> IncrementalRoots { get; } = new();
+
+    // Presented-extent reveal: spring/tween the recorder's drawn size old → new (fresh starts at the old size; a running
+    // reveal retargets keeping Pos+Vel). Works for grow AND shrink — the presented size can exceed the model bounds.
+    private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn)
+    {
+        if (MathF.Abs(fromSize - toSize) < 0.5f && Find(node, ch) is null) return;   // no change and nothing in flight
+        if (dyn.Kind == DynamicsKind.Spring)
+            Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize);
+        else
+            Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing);
+    }
+
+    // ScaleCorrect: spring a scale channel from old/new → 1 (the recorder composites it about the node centre; opted-in
+    // children counter-scale to stay undistorted). Cheap + compositor-only, but distorts text/borders — chrome only.
+    private void ScaleReveal(NodeHandle node, AnimChannel ch, float fromRatio, in TransitionDynamics dyn)
+    {
+        if (MathF.Abs(fromRatio - 1f) < 0.001f && Find(node, ch) is null) return;
+        if (dyn.Kind == DynamicsKind.Spring)
+            Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio);
+        else
+            Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing);
+    }
+
+    // ── enter / exit (appearing & disappearing nodes) ────────────────────────────────────────────
+    /// <summary>An inserted node animates FROM the enter terminal (offset/scale/opacity) TO identity.</summary>
+    public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+    {
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity);
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy);
+    }
+
+    /// <summary>A removed node (now an Exiting orphan) animates FROM its current state TO the exit terminal; when all its
+    /// tracks settle (<see cref="HasTracks"/> == false) the host reclaims it.</summary>
+    public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+    {
+        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn);
+    }
+
+    private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null)
+    {
+        if (dyn.Kind == DynamicsKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial);
+        else
+            Animate(node, ch, initial ?? CurrentValue(node, ch), to, dyn.DurationMs, dyn.Easing);
+    }
+
+    /// <summary>True while any track targets this node (used by the host to detect a settled exit orphan).</summary>
+    public bool HasTracks(NodeHandle node)
+    {
+        for (int i = 0; i < _tracks.Count; i++) if (_tracks[i].Node == node) return true;
+        return false;
+    }
+
+    /// <summary>A default-constructed spec (all-zero dynamics) means "use the defaults" — fill them in.</summary>
+    private static TransitionDynamics Normalize(in TransitionDynamics d)
+        => d.Kind == DynamicsKind.Spring
+            ? (d.Response > 0f ? d : TransitionDynamics.Default)
+            : (d.DurationMs > 0f ? d : TransitionDynamics.Tween(200f, d.Easing));
+
+    private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn)
+    {
+        if (dyn.Kind == DynamicsKind.Spring)
+        {
+            var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
+            Track? ex = Find(node, ch);
+            if (ex is { Mode: IntegrationMode.Spring })
+            {
+                ex.Pos += delta;              // coordinate frame shifted by the layout move → shift offset, keep velocity
+                ex.Target = 0f; ex.Spring = sp; ex.Done = false;
+            }
+            else Spring(node, ch, 0f, sp, initial: delta);   // fresh: presented stays put, the offset springs delta → 0
+        }
+        else
+        {
+            float cur = CurrentValue(node, ch);
+            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing);   // tween: interruption restarts (spring is default)
+        }
     }
 
     private Track Find(NodeHandle node, AnimChannel ch)
@@ -253,13 +395,31 @@ public sealed class AnimEngine
             if (acc.Sx != 1f || acc.Sy != 1f) tf = tf.Multiply(Affine2D.Scale(acc.Sx, acc.Sy));
             p.LocalTransform = tf;
             p.Opacity = acc.Op;
+            // Presented extent: Reveal draws the fill + child-clip at this size (no layout). Relayout instead feeds it to
+            // the host, which writes it to LayoutInput and re-solves the subtree (live reflow).
+            if (!float.IsNaN(acc.Sw)) p.PresentedW = acc.Sw;
+            if (!float.IsNaN(acc.Sh)) p.PresentedH = acc.Sh;
             _scene.Mark(kv.Key, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if ((!float.IsNaN(acc.Sw) || !float.IsNaN(acc.Sh)) && (_scene.Flags(kv.Key) & NodeFlags.Relayouting) != 0)
+                IncrementalRoots.Add(kv.Key);
         }
 
         // free finished tracks (eased non-loop completion / settled springs). Driven + loop tracks persist.
-        // The final value was just applied above; it stays in NodePaint until a re-render re-establishes the target.
+        // A settled Reveal resets its presented extent to NaN so the recorder falls back to the (equal) layout size —
+        // otherwise a later model resize without a reveal would draw at the stale presented size.
         for (int i = _tracks.Count - 1; i >= 0; i--)
-            if (_tracks[i].Done) _tracks.RemoveAt(i);
+        {
+            Track t = _tracks[i];
+            if (!t.Done) continue;
+            if ((t.Channel == AnimChannel.SizeW || t.Channel == AnimChannel.SizeH) && _scene.IsLive(t.Node))
+            {
+                ref NodePaint p = ref _scene.Paint(t.Node);
+                if (t.Channel == AnimChannel.SizeW) { p.PresentedW = float.NaN; _scene.Unmark(t.Node, NodeFlags.Relayouting); }
+                else p.PresentedH = float.NaN;
+                _scene.Mark(t.Node, NodeFlags.PaintDirty);
+            }
+            _tracks.RemoveAt(i);
+        }
     }
 
     private void Fold(Track t)

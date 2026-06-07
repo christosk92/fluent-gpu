@@ -5,6 +5,18 @@ namespace FluentGpu.Scene;
 
 public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3 }
 
+/// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
+/// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
+/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.</summary>
+public struct TextMeasureCache
+{
+    public bool Valid;
+    public StringId Text;
+    public TextStyle Style;
+    public float MaxW;
+    public Size2 Size;
+}
+
 /// <summary>Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).</summary>
 public struct LayoutInput
 {
@@ -50,6 +62,10 @@ public struct NodePaint
 {
     public Affine2D LocalTransform;
     public float Opacity;
+    // Presented extent (a layout-transition "Reveal"): when not NaN, the recorder draws this node's fill + clips its
+    // children to PresentedW/PresentedH instead of the laid-out Bounds — so a size change animates without relayout,
+    // and the presented size may exceed the model bounds (shrink reveals). Written by AnimEngine (AnimChannel.SizeW/H).
+    public float PresentedW, PresentedH;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
     public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
@@ -65,6 +81,8 @@ public struct NodePaint
     {
         LocalTransform = Affine2D.Identity,
         Opacity = 1f,
+        PresentedW = float.NaN,
+        PresentedH = float.NaN,
         Fill = ColorF.Transparent,
         VisualKind = VisualKind.None,
     };

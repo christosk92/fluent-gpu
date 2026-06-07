@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -75,6 +76,65 @@ public static partial class Slider
                             Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
                             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
+                            Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+
+    /// <summary>
+    /// Signals-native slider (the "even better than React" path): the value is a <see cref="FloatSignal"/> bound straight
+    /// to the value-fill's composited ScaleX and the thumb's composited OffsetX. A drag writes the signal, which updates
+    /// exactly those two node transforms on the compositor fast path — <b>zero render, zero reconcile, zero relayout</b>
+    /// per pointer-move (the slider-tank fix). <paramref name="onChange"/> is invoked for side effects (e.g. a value
+    /// readout that takes its own scoped re-render); pass null for a purely-visual scrub.
+    /// </summary>
+    public static BoxEl Bind(FloatSignal value, Action<float>? onChange = null, float width = 200f, float height = 24f, Style? style = null)
+    {
+        var s = style ?? DefaultStyle;
+        float thumbD = s.ThumbDiameter;
+        void Set(Point2 p) { float v = Math.Clamp(p.X / MathF.Max(width, 1f), 0f, 1f); value.Value = v; onChange?.Invoke(v); }
+
+        return new BoxEl
+        {
+            Width = width, Height = height, ZStack = true, Role = AutomationRole.Slider,
+            OnPointerDown = Set, OnDrag = Set,
+            Children =
+            [
+                // rail + value fill (full width, grown from the left by a composited ScaleX bound to the signal — no layout)
+                new BoxEl
+                {
+                    ZStack = true, Width = width, Height = height,
+                    Children =
+                    [
+                        new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.RailFill, OffsetY = (height - s.TrackHeight) * 0.5f },
+                        new BoxEl
+                        {
+                            Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.ValueFill, OffsetY = (height - s.TrackHeight) * 0.5f,
+                            TransformBind = () =>
+                            {
+                                float v = MathF.Max(Math.Clamp(value.Value, 0f, 1f), 1e-4f);
+                                return Affine2D.Translation(-width * (1f - v) * 0.5f, 0f).Multiply(Affine2D.Scale(v, 1f));   // grow from the left
+                            },
+                        },
+                    ],
+                },
+                // thumb at x=0, slid to the value by a composited OffsetX bound to the signal (no leading spacer, no layout)
+                new BoxEl
+                {
+                    Direction = 0, Width = width, Height = height, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Width = thumbD, Height = thumbD,
+                            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
+                            BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
+                            HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
+                            TransformBind = () => Affine2D.Translation(Math.Clamp(value.Value * width - thumbD * 0.5f, 0f, MathF.Max(0f, width - thumbD)), 0f),
                             Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
                         },
                     ],

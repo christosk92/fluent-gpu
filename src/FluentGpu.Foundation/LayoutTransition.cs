@@ -1,0 +1,81 @@
+namespace FluentGpu.Foundation;
+
+/// <summary>
+/// The general layout-transition spec — the entire authoring surface for "animate this node's layout changes".
+/// A plain POD (no closures) so it is hot-path safe, and it lives in Foundation (below the AnimEngine, which reads it
+/// and converts the dynamics to its internal spring/tween). It attaches to a node via <c>BoxEl.Animate</c> (or
+/// <c>RenderContext.UseLayoutAnimation</c>); the host diffs the node's presented rect vs its new laid-out rect each
+/// commit and drives the presented geometry toward target through these channels/dynamics — no relayout, no per-frame
+/// re-render, and zero control-type knowledge.
+/// </summary>
+[Flags]
+public enum TransitionChannels : byte
+{
+    None = 0,
+    Position = 1,                 // translate the node from its old presented origin to the new layout origin (FLIP)
+    Size = 2,                     // animate a size change per SizeMode (clip-reveal / scale-correct / relayout)
+    Opacity = 4,                  // cross-fade on appearance/disappearance or paint change
+    Bounds = Position | Size,
+}
+
+/// <summary>How a SIZE change is animated. <see cref="Auto"/> picks per node: pure-chrome leaf → <see cref="ScaleCorrect"/>;
+/// a text/wrapping subtree under budget → <see cref="Relayout"/>; everything else → <see cref="Reveal"/>.</summary>
+public enum SizeMode : byte
+{
+    Reveal,        // lay out at final size immediately; ease a clip window + translate. Crisp, compositor-only (the default).
+    ScaleCorrect,  // GPU scale toward 1 with child counter-scale (Framer-Motion projection). Chrome only — distorts text/borders.
+    Relayout,      // re-solve the subtree at the interpolated size each tick so text re-wraps live. Correct, costs scoped layout.
+    Auto,
+}
+
+/// <summary>Spring (velocity-carrying, interruptible — the default) or an eased fixed-duration tween.</summary>
+public enum DynamicsKind : byte { Spring, Tween }
+
+/// <summary>
+/// The dynamics of a transition. Springs are the default (interruptible, jump-free retarget): <c>Response</c> ≈ the
+/// settle time in seconds, <c>DampingRatio</c> 1 = critical (no overshoot), &lt;1 = bouncy. A tween is opt-in:
+/// fixed <c>DurationMs</c> + <c>Easing</c>. Stored as scalars (not the AnimEngine's <c>SpringParams</c>) so the spec
+/// can live in Foundation; the engine converts at seed time. A <c>default</c> value (all zero) is normalized by the
+/// engine to the spring defaults.
+/// </summary>
+public readonly record struct TransitionDynamics(
+    DynamicsKind Kind = DynamicsKind.Spring,
+    float Response = 0.30f,
+    float DampingRatio = 0.85f,
+    float DurationMs = 0f,
+    Easing Easing = Easing.FluentDecelerate)
+{
+    public static TransitionDynamics Spring(float response = 0.30f, float dampingRatio = 0.85f)
+        => new(DynamicsKind.Spring, response, dampingRatio);
+    public static TransitionDynamics Tween(float durationMs, Easing easing = Easing.FluentDecelerate)
+        => new(DynamicsKind.Tween, 0f, 0f, durationMs, easing);
+    public static TransitionDynamics Default => new();
+}
+
+/// <summary>Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
+/// (offset + scale + opacity), relative to its laid-out rect. <c>Active</c>=false ⇒ the node simply snaps in/out.</summary>
+public readonly record struct EnterExit(
+    float Dx = 0f, float Dy = 0f, float Sx = 1f, float Sy = 1f, float Opacity = 1f, bool Active = false);
+
+/// <summary>The whole authoring surface (interned POD). Channels × dynamics × size-mode × enter/exit compose
+/// orthogonally — translate / scale / rotate / opacity / clip-reveal all fall out, with no per-control special cases.</summary>
+public readonly record struct LayoutTransition(
+    TransitionChannels Channels,
+    TransitionDynamics Dynamics = default,
+    SizeMode Size = SizeMode.Auto,
+    EnterExit Enter = default,
+    EnterExit Exit = default,
+    ushort CustomCurveId = 0)
+{
+    /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
+    public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);
+
+    /// <summary>Cross-fade only (no geometry).</summary>
+    public static LayoutTransition Fade => new(TransitionChannels.Opacity, TransitionDynamics.Default);
+
+    /// <summary>Position + size, the size animated via <paramref name="size"/> (Reveal = translate + clip, no distortion).</summary>
+    public static LayoutTransition BoundsT(SizeMode size) => new(TransitionChannels.Bounds, TransitionDynamics.Default, size);
+
+    /// <summary>The catch-all: position + size (Auto) + opacity. "Animate my layout, figure out the rest."</summary>
+    public static LayoutTransition AutoAll => new(TransitionChannels.Bounds | TransitionChannels.Opacity, TransitionDynamics.Default);
+}

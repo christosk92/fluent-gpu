@@ -36,6 +36,13 @@ public sealed class SceneStore : ISceneBackend
     private int _freeHead;
     private int _high = 1;     // index 0 reserved = null
 
+    // Exit-animation orphans: nodes removed from the logical tree but kept LIVE (drawing) until their exit animation
+    // settles, then reclaimed. Detached from their parent (so reconcile + layout skip them) and drawn by a separate
+    // recorder pass at their FROZEN parent-world origin. Bounded by MaxOrphans (overflow instant-frees the oldest).
+    private struct OrphanEntry { public NodeHandle Node; public float Px, Py; }
+    private readonly List<OrphanEntry> _orphans = new();
+    private const int MaxOrphans = 64;
+
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;
 
@@ -65,6 +72,8 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
+    // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
+    private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
 
     public NodeHandle Root { get; set; }
 
@@ -147,6 +156,7 @@ public sealed class SceneStore : ISceneBackend
         _gradients.Remove(idx);
         _borderBrushes.Remove(idx);
         _acrylics.Remove(idx);
+        _measureCache.Remove(idx);
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -181,6 +191,45 @@ public sealed class SceneStore : ISceneBackend
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
         _parent[c] = _prevSib[c] = _nextSib[c] = 0;
+    }
+
+    // ── exit-animation orphans ────────────────────────────────────────────────────────────────────
+    /// <summary>Remove a node from the logical tree but keep it LIVE and drawing: detach from its parent (so reconcile +
+    /// layout no longer see it), freeze its parent-world origin, flag it Exiting. The recorder draws it via the orphan
+    /// pass at that frozen origin while its opacity/transform animate out; <see cref="ReclaimOrphan"/> frees it on settle.</summary>
+    public void Orphan(NodeHandle node)
+    {
+        if (!IsLive(node)) return;
+        if (_orphans.Count >= MaxOrphans) { var o = _orphans[0]; _orphans.RemoveAt(0); FreeSubtree(o.Node); }  // budget: instant-free oldest
+        RectF abs = AbsoluteRect(node);
+        int idx = (int)node.Raw.Index;
+        float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
+        DetachFromParent(idx);
+        _flags[idx] |= NodeFlags.Exiting;
+        _orphans.Add(new OrphanEntry { Node = node, Px = px, Py = py });
+    }
+
+    /// <summary>Free a settled exit orphan (the deferred <see cref="FreeSubtree"/> — gen bump → handle dead).</summary>
+    public void ReclaimOrphan(NodeHandle node)
+    {
+        for (int i = _orphans.Count - 1; i >= 0; i--)
+            if (_orphans[i].Node == node) { _orphans.RemoveAt(i); break; }
+        FreeSubtree(node);
+    }
+
+    public bool IsOrphan(NodeHandle node)
+    {
+        for (int i = 0; i < _orphans.Count; i++) if (_orphans[i].Node == node) return true;
+        return false;
+    }
+
+    /// <summary>Count of exit orphans currently animating out (the host keeps painting while &gt; 0).</summary>
+    public int OrphanCount => _orphans.Count;
+
+    /// <summary>The i-th orphan node + its frozen parent-world origin (for the recorder's orphan draw pass).</summary>
+    public NodeHandle OrphanAt(int i, out float px, out float py)
+    {
+        var e = _orphans[i]; px = e.Px; py = e.Py; return e.Node;
     }
 
     // ── column accessors (re-fetch after any CreateNode that may grow) ─────────────
@@ -230,7 +279,26 @@ public sealed class SceneStore : ISceneBackend
         _dynamicTextCount--;
     }
 
-    public void Mark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] |= flags;
+    // Arena-backed dirty worklist (layout.md §4.4): the nodes marked LayoutDirty this frame, so scoped relayout is
+    // O(dirty) — the host walks each up to its layout boundary and re-solves just that subtree.
+    private readonly List<NodeHandle> _layoutDirty = new();
+    /// <summary>Set once any node is marked <see cref="NodeFlags.LayoutDirty"/> this frame (cheap host gate for scoped relayout).</summary>
+    public bool AnyLayoutDirty => _layoutDirty.Count > 0;
+    /// <summary>The nodes marked LayoutDirty this frame (the scoped-relayout worklist).</summary>
+    public IReadOnlyList<NodeHandle> LayoutDirtyNodes => _layoutDirty;
+    /// <summary>Cleared by the host after it runs (scoped) layout — clears the worklist and the per-node LayoutDirty bits.</summary>
+    public void ClearLayoutDirty()
+    {
+        for (int i = 0; i < _layoutDirty.Count; i++) { var h = _layoutDirty[i]; if (IsLive(h)) _flags[h.Raw.Index] &= ~NodeFlags.LayoutDirty; }
+        _layoutDirty.Clear();
+    }
+
+    public void Mark(NodeHandle h, NodeFlags flags)
+    {
+        int idx = (int)h.Raw.Index;
+        if ((flags & NodeFlags.LayoutDirty) != 0 && (_flags[idx] & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
+        _flags[idx] |= flags;
+    }
     public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
 
     // ── scroll/virtual side-table (sparse; only viewport nodes have an entry) ──
@@ -285,6 +353,10 @@ public sealed class SceneStore : ISceneBackend
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
+
+    /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
+    public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
+        => ref CollectionsMarshal.GetValueRefOrAddDefault(_measureCache, (int)h.Raw.Index, out _);
 
     public NodeHandle FirstChild(NodeHandle h) => Wrap(_firstChild[h.Raw.Index]);
     public NodeHandle NextSibling(NodeHandle h) => Wrap(_nextSib[h.Raw.Index]);

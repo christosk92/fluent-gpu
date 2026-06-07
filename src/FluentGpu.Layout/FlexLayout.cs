@@ -41,12 +41,35 @@ public sealed class FlexLayout
         Arrange(root, 0f, 0f, w, h);
     }
 
+    /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
+    /// LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick). The parent
+    /// already placed this node, so this cannot propagate upward — a scoped, per-frame-affordable relayout for live reflow.</summary>
+    public void RunSubtree(NodeHandle node)
+    {
+        if (node.IsNull) return;
+        ref LayoutInput li = ref _scene.Layout(node);
+        ref RectF b = ref _scene.Bounds(node);
+        float w = float.IsNaN(li.Width) ? b.W : li.Width;
+        float h = float.IsNaN(li.Height) ? b.H : li.Height;
+        Measure(node, w);
+        Arrange(node, b.X, b.Y, w, h);
+    }
+
     private static bool Row(in LayoutInput li) => li.Direction == 0;
     private static float Clamp(float v, float min, float max)
     {
         if (!float.IsNaN(min) && v < min) v = min;
         if (!float.IsNaN(max) && v > max) v = max;
         return v;
+    }
+
+    private static float DefiniteWidth(in LayoutInput li, float availW)
+    {
+        float w = !float.IsNaN(li.Width) ? li.Width : availW;
+        if (!float.IsNaN(li.MaxW) && !float.IsInfinity(w)) w = MathF.Min(w, li.MaxW);
+        else if (!float.IsNaN(li.MaxW) && float.IsInfinity(w)) w = li.MaxW;
+        if (!float.IsNaN(li.MinW) && !float.IsInfinity(w)) w = MathF.Max(w, li.MinW);
+        return w;
     }
 
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
@@ -59,33 +82,66 @@ public sealed class FlexLayout
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
-        if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li);
+        if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
 
         float w, h;
         if (paint.VisualKind == VisualKind.Text)
         {
-            float maxW = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(availW) ? MathF.Max(0f, availW) : float.PositiveInfinity;
-            var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
-            w = m.Size.Width; h = m.Size.Height;
+            float measureW = DefiniteWidth(in li, availW);
+            float maxW = li.TextStyle.Wrap != Foundation.TextWrap.NoWrap && !float.IsInfinity(measureW) ? MathF.Max(0f, measureW) : float.PositiveInfinity;
+            // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
+            // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
+            ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
+            if (mc.Valid && mc.Text == paint.Text && mc.MaxW == maxW && mc.Style == li.TextStyle)
+            {
+                w = mc.Size.Width; h = mc.Size.Height;
+            }
+            else
+            {
+                var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
+                w = m.Size.Width; h = m.Size.Height;
+                mc = new TextMeasureCache { Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h) };
+            }
         }
         else
         {
             bool row = Row(li);
             // The width children may occupy (content box). A stretched child in a column gets the full content width
             // (so wrapped text knows where to break); a row's children share it (an upper bound is fine for wrapping).
-            float childAvail = float.IsInfinity(availW) ? availW : MathF.Max(0f, availW - li.Padding.Horizontal);
+            float measureW = DefiniteWidth(in li, availW);
+            float childAvail = float.IsInfinity(measureW) ? measureW : MathF.Max(0f, measureW - li.Padding.Horizontal);
             if (li.Wrap && TryWrapMainLimit(in li, row, availW, out float wrapMainLimit))
             {
                 (w, h) = MeasureWrap(node, in li, row, wrapMainLimit);   // multi-line: main is fixed, cross grows with line count
             }
             else
             {
+                // In a ROW with a definite width, a flex-grow child's real width is (childAvail − the fixed siblings),
+                // not the whole row. Measure its (possibly wrapping) content against THAT — otherwise a fixed pane +
+                // grow content wraps to the entire window and overflows. (A column already stretches children to its
+                // full width, so this only matters for the row's main axis.) NoWrap content ignores the bound, so this
+                // is a no-op except where it's needed.
+                float growAvail = childAvail;
+                if (row && !float.IsInfinity(childAvail))
+                {
+                    float fixedMain = 0f; int cc = 0; bool anyGrow = false;
+                    for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+                    {
+                        ref LayoutInput cli2 = ref _scene.Layout(c);
+                        cc++;
+                        if (cli2.FlexGrow > 0f) { anyGrow = true; continue; }
+                        float cm = !float.IsNaN(cli2.FlexBasis) ? cli2.FlexBasis : Measure(c, childAvail).Width;
+                        fixedMain += cm + MarginMain(cli2, row);
+                    }
+                    if (anyGrow) growAvail = MathF.Max(0f, childAvail - fixedMain - (cc > 1 ? li.Gap * (cc - 1) : 0f));
+                }
+
                 float main = 0f, cross = 0f;
                 int n = 0;
                 for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
                 {
-                    var cs = Measure(c, childAvail);
                     ref LayoutInput cli = ref _scene.Layout(c);
+                    var cs = Measure(c, row && cli.FlexGrow > 0f ? growAvail : childAvail);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
                     if (!float.IsNaN(cli.FlexBasis)) cMain = cli.FlexBasis;
@@ -132,6 +188,25 @@ public sealed class FlexLayout
         float availCross = (row ? finalH : finalW) - (row ? li.Padding.Vertical : li.Padding.Horizontal);
         float padMainStart = row ? li.Padding.Left : li.Padding.Top;
         float padCrossStart = row ? li.Padding.Top : li.Padding.Left;
+
+        // A column's final cross-size is often only known during arrange (for example, a NavigationView content
+        // frame after its fixed pane has consumed 320px). Re-measure stretch children against that final width before
+        // computing main sizes, otherwise wrapped text can keep its single-line measured height/width and drag the
+        // page wider than the actual frame.
+        if (!row && !float.IsInfinity(availCross))
+        {
+            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            {
+                ref LayoutInput cli = ref _scene.Layout(c);
+                FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+                float crossMargin = MarginCross(cli, row);
+                bool hasExplicitCross = !float.IsNaN(cli.Width);
+                float childW = (align == FlexAlign.Stretch && !hasExplicitCross)
+                    ? MathF.Max(0f, availCross - crossMargin)
+                    : (!float.IsNaN(cli.Width) ? cli.Width : MathF.Max(0f, availCross - crossMargin));
+                Measure(c, childW);
+            }
+        }
 
         // First pass: base main sizes + counts.
         int n = 0; float usedMain = 0f, totalGrow = 0f, totalShrinkScaled = 0f;
@@ -182,6 +257,9 @@ public sealed class FlexLayout
             ref RectF cb = ref _scene.Bounds(c);
 
             float fMain = finalMain[idx];
+            if (row && fMain > 0f && !float.IsInfinity(fMain))
+                Measure(c, fMain);
+
             FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
             float crossMargin = MarginCross(cli, row);
             float baseCross = row ? cb.H : cb.W;
@@ -336,12 +414,14 @@ public sealed class FlexLayout
 
     // ── Z-stack: children overlay at the origin (each filling the box unless explicitly sized), painted in order ──
 
-    private Size2 MeasureZStack(NodeHandle node, in LayoutInput li)
+    private Size2 MeasureZStack(NodeHandle node, in LayoutInput li, float availW)
     {
+        float childAvail = DefiniteWidth(in li, availW);
+        if (!float.IsInfinity(childAvail)) childAvail = MathF.Max(0f, childAvail - li.Padding.Horizontal);
         float maxW = 0f, maxH = 0f;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var cs = Measure(c);
+            var cs = Measure(c, childAvail);
             maxW = MathF.Max(maxW, cs.Width); maxH = MathF.Max(maxH, cs.Height);
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;

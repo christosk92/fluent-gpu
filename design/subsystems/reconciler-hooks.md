@@ -30,6 +30,50 @@ contracts owned elsewhere:
 
 ---
 
+## 0bis. AS-BUILT (2026-06): the runtime is **signals-first** (Solid-style), implemented
+
+> The shipped `FluentGpu.Reconciler`/`FluentGpu.Hooks` runtime was built on a **fine-grained reactive (signals)
+> core** rather than the React-style re-render-from-root + lane model the rest of this doc describes. The control
+> flow below (keyed diff, hook cells, effect timing, context propagation) is preserved; what changed is the
+> **update mechanism**: there is no full-tree re-render and no global dirty flag. This section is the authority for
+> the as-built model; the lane/`UpdateQueue` sections (P1/P2a) remain the design target for concurrency and are not
+> yet wired.
+
+- **Reactive core** (`FluentGpu.Signals`, shipped in the `FluentGpu.Foundation` assembly): `Signal<T>`/`FloatSignal`
+  (observable cells, auto-tracked on read), `Memo<T>` (lazy derived), `Effect`/`Computation` (re-runs on dep change),
+  `ReactiveRuntime` (per-`AppHost` scheduler: `Schedule`/`Flush`/`Batch`, `FrameRequested` wakes the loop). Files:
+  `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs`. AOT-clean (delegates, no reflection);
+  the set→notify path is allocation-free (subscriptions are wired once at mount).
+- **A component is a reactive computation.** `UseState`/`UseReducer` return a `Signal<T>` value; reading it in
+  `Render()` subscribes the component's **render-effect**. A setState writes the signal → schedules ONLY that
+  component's render-effect → on the next `ReactiveRuntime.Flush` (phase 3) it re-renders and reconciles **just its
+  own subtree** (granular; no app-wide re-render, no global dirty bool). `ReactiveComponent.Setup()` is the
+  run-once (signals-native) variant whose body is untracked, so it never re-renders — reactivity comes purely from
+  bindings/`For`/`Show` inside.
+- **Fine-grained bindings.** `BoxEl.TransformBind/OpacityBind/FillBind/WidthBind/HeightBind` and
+  `TextEl.TextBind/ColorBind` are thunks the reconciler turns into effects at mount; a bound signal change writes
+  ONE scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text →
+  scoped relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
+  `Slider.Bind(FloatSignal)`, scroll offset) updates the exact node with **zero render/reconcile/layout** — the
+  "slider tank" fix (vertical-slice check #60).
+- **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
+  and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
+  parent re-render (`src/FluentGpu.Hooks/ControlFlow.cs`, check #61).
+- **Context = signals.** A `ContextProviderEl` stores a `Signal<object?>` per provider node; `UseContext` resolves
+  the nearest provider by walking ancestors (`SceneStore.Parent`) and subscribes — so a value change re-renders
+  exactly the consumers, and a scoped re-render needs no context-stack reconstruction. Ambient contexts
+  (`Viewport.Size`, `FrameDiagnostics.Current`) are host-published signals.
+- **Scoped relayout** (`src/FluentGpu.Layout/LayoutInvalidator.cs`): a `LayoutDirty` worklist on `SceneStore`; each
+  dirty node walks UP to the nearest **layout boundary** (fixed-size, non-flexing, clip-to-bounds, or a scroll
+  viewport, or root) and only that subtree is re-solved (`FlexLayout.RunSubtree`) — the firewall from `layout.md
+  §4`. Full layout only on first frame / resize / DPI / root-structural change. (A text measure-cache is a tracked
+  perf follow-up; correctness is identical without it.)
+- **Frame loop** (`AppHost`): pump → input → `ReactiveRuntime.Flush` (re-render dirty components + run bindings) →
+  scoped relayout → record → present. A frame with only Transform/Paint binding writes does no render/reconcile/
+  layout (`FrameStats.Rendered == false`).
+
+---
+
 ## 0. The one-sentence thesis
 
 > Keep React's programming model and Reactor's diffing **control flow** verbatim, but **(a)** retarget the patch

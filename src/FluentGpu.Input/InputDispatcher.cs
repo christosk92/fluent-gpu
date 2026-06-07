@@ -466,13 +466,16 @@ public sealed class InputDispatcher
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
         float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
+        var rect = new RectF(ax, ay, b.W, b.H);
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !rect.Contains(p)) return NodeHandle.Null;
+
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
             var r = HitAny(c, ax, ay, p);
             if (!r.IsNull) result = r;
         }
-        if (result.IsNull && new RectF(ax, ay, b.W, b.H).Contains(p))
+        if (result.IsNull && rect.Contains(p))
             result = node;
         return result;
     }
@@ -486,6 +489,8 @@ public sealed class InputDispatcher
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
         float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
+        var rect = new RectF(ax, ay, b.W, b.H);
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !rect.Contains(p)) return NodeHandle.Null;
 
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
@@ -496,7 +501,6 @@ public sealed class InputDispatcher
 
         if (result.IsNull)
         {
-            var rect = new RectF(ax, ay, b.W, b.H);
             ref InteractionInfo ii = ref _scene.Interaction(node);
             if ((ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
                 rect.Contains(p))
