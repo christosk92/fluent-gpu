@@ -205,18 +205,18 @@ float4 PSMain(VSOut i) : SV_Target
     private void BuildBuffers(ID3D12Device* device)
     {
         float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8);
+        _quad = CreateUpload(device, sizeof(float) * 8, "Shadow.QuadUpload");
         void* qp; _quad->Map(0, null, &qp);
         Buffer.MemoryCopy(quad, qp, sizeof(float) * 8, sizeof(float) * 8);
         _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = sizeof(float) * 8, StrideInBytes = sizeof(float) * 2 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(ShadowInstance) * MaxInstances));
+        _instances = CreateUpload(device, (uint)(sizeof(ShadowInstance) * MaxInstances), "Shadow.InstanceUpload");
         void* ip; _instances->Map(0, null, &ip);
         _mapped = (ShadowInstance*)ip;
     }
 
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes)
+    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default;
         hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
@@ -232,6 +232,7 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12Resource* res;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Shadow.CreateCommittedResource");
+        D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }
 
@@ -258,8 +259,8 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); _instances->Release(); }
-        if (_quad != null) _quad->Release();
+        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Shadow.InstanceUpload"); _instances->Release(); _instances = null; }
+        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Shadow.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
     }

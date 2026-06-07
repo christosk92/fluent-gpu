@@ -58,7 +58,7 @@ public sealed class FlexLayout
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li);
-        if (_scene.HasGrid(node)) return MeasureGrid(node, in li);
+        if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li);
 
         float w, h;
@@ -368,12 +368,17 @@ public sealed class FlexLayout
 
     // ── CSS Grid — distinct true-tracks (Pixel/Star/Auto) + row-major auto-flow (layout.md §7) ──
 
-    private Size2 MeasureGrid(NodeHandle node, in LayoutInput li)
+    private Size2 MeasureGrid(NodeHandle node, in LayoutInput li, float availW)
     {
         _scene.TryGetGrid(node, out var g);
         int count = g.Columns?.Length ?? 0;
         float padH = li.Padding.Horizontal, padV = li.Padding.Vertical;
-        float w = float.IsNaN(li.Width) ? 0f : li.Width;
+        // Border-box width: explicit, else the width the parent will stretch us to (availW). A CSS grid is block-level —
+        // it fills the available inline size, and star tracks NEED that concrete width to divide. Without availW a
+        // stretch-width grid measured to height 0, so the parent column stacked the next sibling over its overflow.
+        float w = !float.IsNaN(li.Width) ? li.Width
+                : float.IsInfinity(availW) ? 0f
+                : MathF.Max(0f, availW);
         float h;
         if (w > 0f && count > 0)
         {

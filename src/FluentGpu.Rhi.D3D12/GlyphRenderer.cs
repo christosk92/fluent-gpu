@@ -384,8 +384,9 @@ float4 PSMain(VSOut i) : SV_Target
         Check(device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex), "CreateTexture");
         _tex = tex;
+        D3D12MemoryDiagnostics.Track(_tex, $"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", (ulong)ATLAS * ATLAS);
 
-        _texUpload = CreateUpload(device, ATLAS * ATLAS);
+        _texUpload = CreateUpload(device, ATLAS * ATLAS, "Glyph.AtlasUpload");
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -514,11 +515,11 @@ float4 PSMain(VSOut i) : SV_Target
         vs->Release(); ps->Release();
 
         float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8);
+        _quad = CreateUpload(device, sizeof(float) * 8, "Glyph.QuadUpload");
         void* qp; _quad->Map(0, null, &qp); Buffer.MemoryCopy(quad, qp, 32, 32); _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = 32, StrideInBytes = 8 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs));
+        _instances = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
         void* ip; _instances->Map(0, null, &ip); _mapped = (GlyphInstance*)ip;
     }
 
@@ -545,7 +546,7 @@ float4 PSMain(VSOut i) : SV_Target
         cmd->DrawInstanced(4, (uint)count, 0, 0);
     }
 
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes)
+    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC rd = default;
@@ -556,18 +557,19 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12Resource* res;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "CreateCommittedResource");
+        D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); _instances->Release(); }
-        if (_quad != null) _quad->Release();
+        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Glyph.InstanceUpload"); _instances->Release(); _instances = null; }
+        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) _srvHeap->Release();
-        if (_texUpload != null) _texUpload->Release();
-        if (_tex != null) _tex->Release();
+        if (_texUpload != null) { D3D12MemoryDiagnostics.Release(_texUpload, "Glyph.AtlasUpload"); _texUpload->Release(); _texUpload = null; }
+        if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
         foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();
         _faces.Clear();
         if (_dw != null) _dw->Release();

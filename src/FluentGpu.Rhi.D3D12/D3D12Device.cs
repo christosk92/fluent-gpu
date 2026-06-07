@@ -214,6 +214,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             ID3D12Resource* buf;
             Check(_swapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
             _backBuffers[i] = buf;
+            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {_w}x{_h}", (ulong)_w * _h * 4UL);
             _device->CreateRenderTargetView(buf, null, rtv);
             rtv.ptr += _rtvSize;
         }
@@ -622,7 +623,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (w == _w && h == _h) return;
         WaitForGpu();
-        for (uint i = 0; i < FRAME_COUNT; i++) { if (_backBuffers[i] != null) { _backBuffers[i]->Release(); _backBuffers[i] = null; } }
+        D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            if (_backBuffers[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                _backBuffers[i]->Release();
+                _backBuffers[i] = null;
+            }
+        }
         Check(_swapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, 0), "ResizeBuffers");
         _w = w; _h = h;
         CreateRtvs();
@@ -642,7 +652,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _gradPipe?.Dispose();
         _acrylic?.Dispose();
         _rectPipe?.Dispose();
-        for (uint i = 0; i < FRAME_COUNT; i++) if (_backBuffers[i] != null) _backBuffers[i]->Release();
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            if (_backBuffers[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                _backBuffers[i]->Release();
+                _backBuffers[i] = null;
+            }
+        }
+        D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         if (_swapChain != null) _swapChain->Release();
         if (_rtvHeap != null) _rtvHeap->Release();
         if (_cmdList != null) _cmdList->Release();

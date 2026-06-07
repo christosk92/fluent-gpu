@@ -20,6 +20,13 @@ public sealed class InputDispatcher
     private NodeHandle _pressed;
     private NodeHandle _dragTarget;
     private NodeHandle _scrollHovered;
+    private NodeHandle _scrollDragNode;
+    private float _scrollDragGrab;
+
+    private const float ScrollbarSize = 12f;
+    private const float ScrollbarMinExpandedThumb = 30f;
+    private const float ScrollbarMinCollapsedThumb = 32f;
+    private const float ScrollbarSmallChange = 48f;
 
     public InputDispatcher(SceneStore scene) => _scene = scene;
 
@@ -50,6 +57,7 @@ public sealed class InputDispatcher
         if (!_pressed.IsNull && !_scene.IsLive(_pressed)) _pressed = NodeHandle.Null;
         if (!_dragTarget.IsNull && !_scene.IsLive(_dragTarget)) _dragTarget = NodeHandle.Null;
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
+        if (!_scrollDragNode.IsNull && !_scene.IsLive(_scrollDragNode)) _scrollDragNode = NodeHandle.Null;
 
         int handled = 0;
         foreach (ref readonly var e in events)
@@ -59,6 +67,11 @@ public sealed class InputDispatcher
                 case InputKind.PointerMove:
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
                     UpdateScrollHover(e.PositionPx);
+                    if (DragScrollbar(e.PositionPx))
+                    {
+                        handled++;
+                        break;
+                    }
                     if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))   // drag updates while held (slider/scrollbar)
                     {
                         _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
@@ -67,6 +80,14 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.PointerDown:
+                    if (TryScrollbarPointerDown(e.PositionPx))
+                    {
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        _down = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+
                     _down = HitTest(e.PositionPx);
                     SetState(ref _pressed, _down, NodeFlags.Pressed);
                     if (!_down.IsNull)
@@ -79,6 +100,13 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.PointerUp:
+                    if (!_scrollDragNode.IsNull)
+                    {
+                        _scrollDragNode = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+
                     var up = HitTest(e.PositionPx);
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     if (!up.IsNull && up == _down)
@@ -132,17 +160,9 @@ public sealed class InputDispatcher
 
     private bool PointerInScrollbarLane(NodeHandle n, Point2 p)
     {
-        ref ScrollState sc = ref _scene.ScrollRef(n);
-        bool horizontal = sc.Orientation == 1;
-        float content = horizontal ? sc.ContentW : sc.ContentH;
-        float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
-        if (content <= viewport + 0.5f) return false;
-
-        const float scrollBarSize = 12f; // WinUI ScrollBarSize from generic.xaml
-        var r = _scene.AbsoluteRect(n);
-        return horizontal
-            ? p.Y >= r.Bottom - scrollBarSize && p.Y < r.Bottom
-            : p.X >= r.Right - scrollBarSize && p.X < r.Right;
+        if (!TryGetScrollbarMetrics(n, out var m)) return false;
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        return InScrollbarLane(local, in m);
     }
 
     private bool ScrollAt(Point2 p, float delta)
@@ -158,11 +178,16 @@ public sealed class InputDispatcher
 
     private bool TryScrollNode(NodeHandle n, float delta)
     {
+        return ScrollBy(n, delta, SmoothScroll);
+    }
+
+    private bool ScrollBy(NodeHandle n, float delta, bool smooth)
+    {
         ref ScrollState sc = ref _scene.ScrollRef(n);
         bool horizontal = sc.Orientation == 1;
         float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
 
-        if (SmoothScroll)
+        if (smooth)
         {
             // Set the target; the ScrollAnimator eases the live offset toward it (+ virtualization re-realize + fade).
             float curTarget = horizontal ? sc.TargetX : sc.TargetY;
@@ -175,10 +200,28 @@ public sealed class InputDispatcher
         }
 
         float old = horizontal ? sc.OffsetX : sc.OffsetY;
-        float next = Math.Clamp(old + delta, 0f, max);
-        if (next == old) return false;
-        if (horizontal) sc.OffsetX = next; else sc.OffsetY = next;
+        return SetScrollOffset(n, old + delta);
+    }
 
+    private bool SetScrollOffset(NodeHandle n, float offset)
+    {
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float max = horizontal ? MathF.Max(0f, sc.ContentW - sc.ViewportW) : MathF.Max(0f, sc.ContentH - sc.ViewportH);
+        float old = horizontal ? sc.OffsetX : sc.OffsetY;
+        float next = Math.Clamp(offset, 0f, max);
+        float target = horizontal ? sc.TargetX : sc.TargetY;
+        if (next == old && target == next) return false;
+        if (horizontal) { sc.OffsetX = next; sc.TargetX = next; }
+        else { sc.OffsetY = next; sc.TargetY = next; }
+        sc.IdleMs = 0f;
+        ApplyScrollPosition(n, ref sc, horizontal, old, next);
+        OnScrollArmed?.Invoke(n);
+        return true;
+    }
+
+    private void ApplyScrollPosition(NodeHandle n, ref ScrollState sc, bool horizontal, float old, float next)
+    {
         // Layout-free scroll: the -ScrollOffset is the content child's LocalTransform (TransformDirty only).
         var content = sc.ContentNode;
         if (!content.IsNull && _scene.IsLive(content))
@@ -207,7 +250,125 @@ public sealed class InputDispatcher
             else { oldFirst = newFirst = 0; }
             if (oldFirst != newFirst) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
         }
+    }
+
+    private bool TryScrollbarPointerDown(Point2 p)
+    {
+        var n = ScrollableUnder(p);
+        if (n.IsNull || !TryGetScrollbarMetrics(n, out var m)) return false;
+
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        if (!InScrollbarLane(local, in m)) return false;
+
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        sc.PointerOver = true;
+        sc.PointerOverScrollbar = true;
+        sc.IdleMs = 0f;
+        if (sc.FadeT < 0.2f) sc.FadeT = 0.2f;
+        OnScrollArmed?.Invoke(n);
+
+        float axis = AxisPos(local, in m);
+        if (axis >= m.ThumbStart && axis <= m.ThumbStart + m.ThumbLen)
+        {
+            _scrollDragNode = n;
+            _scrollDragGrab = Math.Clamp(axis - m.ThumbStart, 0f, m.ThumbLen);
+            return true;
+        }
+
+        float delta;
+        if (m.Button > 1f && axis < m.Button) delta = -ScrollbarSmallChange;
+        else if (m.Button > 1f && axis >= m.Axis - m.Button) delta = ScrollbarSmallChange;
+        else
+        {
+            float page = MathF.Max(ScrollbarSmallChange, m.Viewport * 0.875f);
+            delta = axis < m.ThumbStart ? -page : page;
+        }
+        ScrollBy(n, delta, SmoothScroll);
         return true;
+    }
+
+    private bool DragScrollbar(Point2 p)
+    {
+        if (_scrollDragNode.IsNull) return false;
+        if (!TryGetScrollbarMetrics(_scrollDragNode, out var m))
+        {
+            _scrollDragNode = NodeHandle.Null;
+            return false;
+        }
+
+        var local = new Point2(p.X - m.Bounds.X, p.Y - m.Bounds.Y);
+        float axis = AxisPos(local, in m);
+        float thumbStart = Math.Clamp(axis - _scrollDragGrab, m.TrackStart, m.TrackStart + m.Travel);
+        float fraction = Math.Clamp((thumbStart - m.TrackStart) / MathF.Max(1f, m.Travel), 0f, 1f);
+        SetScrollOffset(_scrollDragNode, fraction * m.Max);
+
+        ref ScrollState sc = ref _scene.ScrollRef(_scrollDragNode);
+        sc.PointerOver = true;
+        sc.PointerOverScrollbar = true;
+        sc.IdleMs = 0f;
+        return true;
+    }
+
+    private bool TryGetScrollbarMetrics(NodeHandle n, out ScrollbarMetrics m)
+    {
+        m = default;
+        if (n.IsNull || !_scene.HasScroll(n)) return false;
+
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        bool horizontal = sc.Orientation == 1;
+        float content = horizontal ? sc.ContentW : sc.ContentH;
+        float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+        float max = MathF.Max(0f, content - viewport);
+        if (max <= 0.5f) return false;
+
+        var bounds = _scene.AbsoluteRect(n);
+        float axis = horizontal ? bounds.W : bounds.H;
+        float cross = horizontal ? bounds.H : bounds.W;
+        if (axis <= 1f || cross <= 1f) return false;
+
+        float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
+        float button = ScrollbarSize * expand;
+        float trackStart = button;
+        float trackLen = MathF.Max(1f, axis - 2f * button);
+        float fraction = Math.Clamp(viewport / content, 0.08f, 1f);
+        float minThumb = ScrollbarMinCollapsedThumb + (ScrollbarMinExpandedThumb - ScrollbarMinCollapsedThumb) * expand;
+        float thumbLen = MathF.Min(trackLen, MathF.Max(minThumb, fraction * trackLen));
+        float travel = MathF.Max(1f, trackLen - thumbLen);
+        float off = horizontal ? sc.OffsetX : sc.OffsetY;
+        float thumbStart = trackStart + Math.Clamp(off / MathF.Max(max, 1f), 0f, 1f) * travel;
+
+        m = new ScrollbarMetrics
+        {
+            Bounds = bounds,
+            Horizontal = horizontal,
+            Axis = axis,
+            Cross = cross,
+            Viewport = viewport,
+            Max = max,
+            Button = button,
+            TrackStart = trackStart,
+            ThumbStart = thumbStart,
+            ThumbLen = thumbLen,
+            Travel = travel,
+        };
+        return true;
+    }
+
+    private static bool InScrollbarLane(Point2 local, in ScrollbarMetrics m)
+    {
+        float cross = m.Horizontal ? local.Y : local.X;
+        float laneStart = m.Cross - ScrollbarSize;
+        return cross >= laneStart && cross < m.Cross;
+    }
+
+    private static float AxisPos(Point2 local, in ScrollbarMetrics m) => m.Horizontal ? local.X : local.Y;
+
+    private struct ScrollbarMetrics
+    {
+        public RectF Bounds;
+        public bool Horizontal;
+        public float Axis, Cross, Viewport, Max;
+        public float Button, TrackStart, ThumbStart, ThumbLen, Travel;
     }
 
     /// <summary>Move a single-node interaction flag (hover/pressed) from the old node to <paramref name="next"/>.</summary>

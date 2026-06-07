@@ -213,6 +213,27 @@ sealed class GridProbe : Component
         => Ui.UniformGrid(3, 10f, 50f, Cell(), Cell(), Cell(), Cell(), Cell()) with { Width = 320, Height = 400 };
 }
 
+// A STRETCH-width grid (no explicit Width) inside a column, followed by a sibling — the gallery shape (a UniformGrid
+// is the body of a Section/card). The grid must MEASURE to its real content height so the column stacks the next
+// sibling below it; if Measure can't see the available width it collapses to 0 and the sibling overlaps the grid's
+// overflowing rows (the "messed-up layout" on the Images / CSS-Grid pages).
+sealed class GridStretchProbe : Component
+{
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    public override Element Render()
+        => new BoxEl
+        {
+            Direction = 1,
+            Gap = 10f,
+            Width = 420f,   // the column has a width; the grid inside has none → it stretches to fill it
+            Children =
+            [
+                Ui.UniformGrid(4, 12f, 90f, Cell(), Cell(), Cell(), Cell(), Cell(), Cell(), Cell(), Cell()),
+                new TextEl("after") { Size = 14f, Color = ColorF.FromRgba(255, 255, 255) }
+            ],
+        };
+}
+
 // The Wavee skeleton: a shell composing EVERY subsystem — sidebar nav → PageHost back stack; a Home page (album-art
 // card Grid in a ScrollView) and a Playlist page (5,000-row virtualized track list with art thumbs); a now-playing
 // PlayerBar (image + Slider + transport IconButtons + ToggleButton). This is the acceptance test for "can host Wavee".
@@ -1102,6 +1123,30 @@ static class Slice
             $"cols x={b0.X:0},{b1.X:0},{b2.X:0} w={b0.W:0}; row2 y={b3.Y:0}");
     }
 
+    // Regression: a stretch-width grid (no explicit Width) must measure its real content height so a following
+    // sibling stacks below it instead of overlapping. 8 cells / 4 cols = 2 rows × 90 + one 12 row-gap = 192.
+    static void GridStretchChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gridstretch", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new GridStretchProbe());
+        host.RunFrame();
+
+        var root = host.Scene.Root;
+        var grid = Child(host.Scene, root, 0);
+        var after = Child(host.Scene, root, 1);
+        var gb = host.Scene.Bounds(grid);
+        var ab = host.Scene.Bounds(after);
+        bool gridHeight = Near(gb.H, 192f, 1f);          // grid measured its 2 real rows (not 0)
+        bool gridWidth = Near(gb.W, 420f, 1f);           // stretched to fill the 420-wide column
+        bool noOverlap = ab.Y >= 192f - 0.5f;            // sibling below the grid's real content, not on top of it
+        Check("51b. Grid: stretch-width grid measures content height (sibling doesn't overlap)",
+            gridHeight && gridWidth && noOverlap, $"gridW={gb.W:0} gridH={gb.H:0} afterY={ab.Y:0}");
+    }
+
     // The Wavee skeleton acceptance test: the shell composes nav + grid + images + controls; navigating to the
     // playlist renders a VIRTUALIZED 5,000-row list (first track realized, last track NOT) — all subsystems at once.
     static void WaveeSkeletonChecks(StringTable strings)
@@ -1366,6 +1411,7 @@ static class Slice
         NavigationChecks();
         PageHostChecks(strings);
         GridChecks(strings);
+        GridStretchChecks(strings);
         VirtualGridChecks(strings);
         ZStackRepeaterChecks(strings);
         NavigationViewChecks(strings);

@@ -225,12 +225,13 @@ float4 PSMain(V i) : SV_Target
     {
         w = Math.Max(1, w); h = Math.Max(1, h);
         if (w == _w && h == _h && _canvas != null) return;
+        D3D12MemoryDiagnostics.Resize("Acrylic.Targets", w, h);
         ReleaseTextures();
         _w = w; _h = h; _qw = Math.Max(1, w / 4); _qh = Math.Max(1, h / 4);
 
-        _canvas = CreateTarget(_w, _h); _canvasState = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _q0 = CreateTarget(_qw, _qh); _q0State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _q1 = CreateTarget(_qw, _qh); _q1State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        _canvas = CreateTarget(_w, _h, "Acrylic.Canvas"); _canvasState = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        _q0 = CreateTarget(_qw, _qh, "Acrylic.Q0"); _q0State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        _q1 = CreateTarget(_qw, _qh, "Acrylic.Q1"); _q1State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
         var rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
         _device->CreateRenderTargetView(_canvas, null, rtv); rtv.ptr += _rtvInc;
@@ -243,7 +244,7 @@ float4 PSMain(V i) : SV_Target
         CreateSrv(_q1, srv);
     }
 
-    private ID3D12Resource* CreateTarget(uint w, uint h)
+    private ID3D12Resource* CreateTarget(uint w, uint h, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd = default;
@@ -256,6 +257,7 @@ float4 PSMain(V i) : SV_Target
         ID3D12Resource* res;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv, __uuidof<ID3D12Resource>(), (void**)&res), "Acrylic.CreateTarget");
+        D3D12MemoryDiagnostics.Track(res, $"{name} {w}x{h}", (ulong)w * h * 4UL);
         return res;
     }
 
@@ -379,9 +381,9 @@ float4 PSMain(V i) : SV_Target
 
     private void ReleaseTextures()
     {
-        if (_canvas != null) { _canvas->Release(); _canvas = null; }
-        if (_q0 != null) { _q0->Release(); _q0 = null; }
-        if (_q1 != null) { _q1->Release(); _q1 = null; }
+        if (_canvas != null) { D3D12MemoryDiagnostics.Release(_canvas, "Acrylic.Canvas"); _canvas->Release(); _canvas = null; }
+        if (_q0 != null) { D3D12MemoryDiagnostics.Release(_q0, "Acrylic.Q0"); _q0->Release(); _q0 = null; }
+        if (_q1 != null) { D3D12MemoryDiagnostics.Release(_q1, "Acrylic.Q1"); _q1->Release(); _q1 = null; }
     }
 
     public void Dispose()
