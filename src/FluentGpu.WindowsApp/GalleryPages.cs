@@ -1066,12 +1066,16 @@ sealed class VirtualizationPage : Component
 
     static ColorF TileTint(int i)
     {
-        // A stable, repeating palette so the recycled tiles look distinct.
+        // A stable, repeating palette — used as each row's placeholder tint until its thumbnail decodes.
         byte r = (byte)(70 + (i * 53) % 160);
         byte g = (byte)(70 + (i * 97) % 160);
         byte b = (byte)(90 + (i * 31) % 150);
         return ColorF.FromRgba(r, g, b, 255);
     }
+
+    // Cycle a fixed set of real CDN thumbnails so scrolling 100k rows recycles → re-requests → atlas-repacks, WITHOUT
+    // hammering the CDN with 100k unique downloads. 32px display → bucket 64 → these pack into the small-image atlas.
+    static string Cover(int i) => $"https://picsum.photos/seed/fgrow{i % 120}/80/80";
 
     Element Row(int i)
     {
@@ -1091,13 +1095,7 @@ sealed class VirtualizationPage : Component
                     Width = 64f,
                     Children = [new TextEl($"{i + 1}") { Size = 13f, Color = IndexGrey }],
                 },
-                new BoxEl
-                {
-                    Width = 32f,
-                    Height = 32f,
-                    Fill = TileTint(i),
-                    Corners = CornerRadius4.All(8f),
-                },
+                Image(Cover(i), 32f, 32f, 8f, TileTint(i)),   // real thumbnail; tint shows until it decodes, then cross-fades in
                 new BoxEl
                 {
                     Direction = 1,
@@ -1125,7 +1123,7 @@ sealed class VirtualizationPage : Component
             Children =
             [
                 Heading("List virtualization"),
-                Text("100,000 rows — only the ~visible window is realized and recycled over a slab free-list, so memory stays flat. Wheel to scroll."),
+                Text("100,000 rows, each with a real CDN thumbnail — only the ~visible window is realized and recycled over a slab free-list. As rows recycle, their images request/decode off-thread, pack into the small-image atlas, and evict off-screen, so both node and GPU memory stay flat. Wheel to scroll."),
                 Virtual.List(
                     100000,
                     48f,
