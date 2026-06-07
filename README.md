@@ -4,7 +4,7 @@
 
 > **Status (June 2026): architecture complete; engine scaffold + a *running* vertical slice in [`src/`](./src/README.md).** The full design corpus is in [`design/`](./design/README.md); the 18-assembly solution builds on **.NET 10 / C# 14 / NativeAOT-ready**, and the minimum vertical slice passes the architecture's acceptance test on the headless backends. The on-screen Direct3D 12 backend is the next milestone.
 
-<img width="598" height="490" alt="image" src="https://github.com/user-attachments/assets/1ade10ec-26ed-4921-a3ac-39466ad57f88" />
+<img width="1064" height="687" alt="image" src="https://github.com/user-attachments/assets/097d8df5-56db-4b2e-80c4-0dbb9e1b919c" />
 
 ---
 
