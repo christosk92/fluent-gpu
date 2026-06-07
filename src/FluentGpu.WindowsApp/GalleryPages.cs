@@ -1123,7 +1123,8 @@ sealed class VirtualizationPage : Component
             Children =
             [
                 Heading("List virtualization"),
-                Text("100,000 rows, each with a real CDN thumbnail — only the ~visible window is realized and recycled over a slab free-list. As rows recycle, their images request/decode off-thread, pack into the small-image atlas, and evict off-screen, so both node and GPU memory stay flat. Wheel to scroll."),
+                Text("100,000 rows with real CDN thumbnails — only the visible window is realized and recycled over a slab free-list; images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.")
+                    with { Wrap = TextWrap.Wrap },   // wraps to the content-frame width (the layout measures grow children against availW − fixed siblings)
                 Virtual.List(
                     100000,
                     48f,

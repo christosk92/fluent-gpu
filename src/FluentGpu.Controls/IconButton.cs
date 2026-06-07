@@ -22,6 +22,8 @@ public static partial class IconButton
         public ColorF PressedFill { get; init; }
         public float HoverScale { get; init; } = 1f;                // icon buttons don't grow by default
         public float PressScale { get; init; } = 1f;
+        public float IconHoverScale { get; init; } = 1.08f;
+        public float IconPressScale { get; init; } = 0.88f;
     }
 
     public static Style? StyleOverride;
@@ -43,7 +45,7 @@ public static partial class IconButton
             Fill = s.Fill, HoverFill = s.HoverFill, PressedFill = s.PressedFill,
             HoverScale = s.HoverScale, PressScale = s.PressScale,
             OnClick = onClick,
-            Children = [new TextEl(glyph) { Size = s.GlyphSize, Color = s.Foreground, FontFamily = s.IconFont }],
+            Children = [AnimatedIcon.Glyph(glyph, s.GlyphSize, s.Foreground, s.IconFont, s.IconHoverScale, s.IconPressScale)],
         };
     }
 }

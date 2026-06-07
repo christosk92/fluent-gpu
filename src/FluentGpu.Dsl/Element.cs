@@ -58,11 +58,39 @@ public sealed record BoxEl : Element
     public float HoverScale { get; init; } = 1f;
     public float PressScale { get; init; } = 1f;
 
+    // ── Fine-grained reactive bindings (signals-first). A bind is a thunk that READS signals; the reconciler turns it
+    // into an effect at mount that writes only this node's channel + marks the matching dirty axis, so a signal change
+    // updates exactly this node with no component re-render / no reconcile. Transform/Opacity/Fill are compositor-only
+    // (no relayout); Width/Height bind layout and trigger a scoped relayout. Null = static (the default).
+    public Func<Affine2D>? TransformBind { get; init; }   // → LocalTransform (TransformDirty | PaintDirty)
+    public Func<float>? OpacityBind { get; init; }        // → Opacity      (PaintDirty)
+    public Func<ColorF>? FillBind { get; init; }          // → Fill         (PaintDirty)
+    public Func<float>? WidthBind { get; init; }          // → LayoutInput.Width  (LayoutDirty → scoped relayout)
+    public Func<float>? HeightBind { get; init; }         // → LayoutInput.Height (LayoutDirty → scoped relayout)
+
+    /// <summary>Called once when this box is realized into the scene, with its node handle — for a control factory to
+    /// capture the handle (e.g. to wire a signal binding that needs the live node). Fires at mount only.</summary>
+    public Action<NodeHandle>? OnRealized { get; init; }
+
     public Element[] Children { get; init; } = [];
 
     /// <summary>Z-stack: children overlay at this box's origin (each filling it unless sized), painted in order
     /// (last on top) — for overlays, scrims, flyouts, the NavigationView Minimal pane. (A flexbox container otherwise.)</summary>
     public bool ZStack { get; init; }
+    public bool ClipToBounds { get; init; }
+
+    /// <summary>Opt this box into general layout-change animation: the host diffs its presented rect vs its new
+    /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
+    /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
+    public LayoutTransition? Animate { get; init; }
+
+    /// <summary>Optional shared-element key: a node with the same MorphId across reconciles morphs from the old node's
+    /// rect to the new one (matched-geometry / Hero). Reserved for v1.1.</summary>
+    public string? MorphId { get; init; }
+
+    /// <summary>Opt this child OUT of a <see cref="FluentGpu.Foundation.SizeMode.ScaleCorrect"/> ancestor's scale: the
+    /// recorder applies the inverse scale so the child stays undistorted (Framer-Motion projection correction).</summary>
+    public bool CounterScale { get; init; }
 
     // Flexbox
     public float Width { get; init; } = float.NaN;
@@ -114,6 +142,10 @@ public sealed record TextEl(string Text) : Element
 {
     public override ushort ElementTypeId => 2;
 
+    // Fine-grained reactive bindings: a thunk reading signals → updates just this text node when the signal changes.
+    public Func<string>? TextBind { get; init; }   // → text content (LayoutDirty → scoped relayout if metrics change)
+    public Func<ColorF>? ColorBind { get; init; }  // → text color  (PaintDirty)
+
     public float Size { get; init; } = 14f;
     public bool Bold { get; init; }
     public ColorF Color { get; init; } = ColorF.FromRgba(0xE6, 0xE6, 0xE6);
@@ -125,6 +157,20 @@ public sealed record TextEl(string Text) : Element
     public TextTrim Trim { get; init; } = TextTrim.None;
     /// <summary>Cap the visible line count (0 = unlimited); the last line trims per <see cref="Trim"/>.</summary>
     public int MaxLines { get; init; }
+
+    // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
+    // constrained by their container instead of contributing their full single-line width to parent measure.
+    public float Width { get; init; } = float.NaN;
+    public float Height { get; init; } = float.NaN;
+    public float MinWidth { get; init; } = float.NaN;
+    public float MinHeight { get; init; } = float.NaN;
+    public float MaxWidth { get; init; } = float.NaN;
+    public float MaxHeight { get; init; } = float.NaN;
+    public float Grow { get; init; }
+    public float Shrink { get; init; }
+    public float Basis { get; init; } = float.NaN;
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    public Edges4 Margin { get; init; }
 }
 
 /// <summary>

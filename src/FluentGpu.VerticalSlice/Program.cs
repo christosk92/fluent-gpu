@@ -15,6 +15,7 @@ using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 using FluentGpu.Text.Headless;
 using static FluentGpu.Dsl.Ui;
 
@@ -358,6 +359,68 @@ sealed class WaveeShell : Component
     };
 }
 
+// ── Signals-first probes: granular re-render, the compositor bypass, reactive control-flow ──
+static class Gran { public static int[] Counts = new int[2]; public static int Parent; }
+
+sealed class GranChild : Component
+{
+    private readonly int _id;
+    public GranChild(int id) => _id = id;
+    public override Element Render()
+    {
+        Gran.Counts[_id]++;
+        var (n, setN) = UseState(0);
+        return new BoxEl { Width = 100, Height = 30, OnClick = () => setN(n + 1), Children = [Text($"c{_id}:{n}")] };
+    }
+}
+
+sealed class GranParent : Component
+{
+    public override Element Render()
+    {
+        Gran.Parent++;
+        return new BoxEl { Direction = 1, Children = [Embed.Comp(() => new GranChild(0)), Embed.Comp(() => new GranChild(1))] };
+    }
+}
+
+// A signal bound straight to the slider — a drag updates node transforms only (no re-render / reconcile / layout).
+sealed class SliderSignalProbe : Component
+{
+    public static int Renders;
+    public FloatSignal? Sig;
+    public override Element Render()
+    {
+        Renders++;
+        var sig = UseFloatSignal(0.3f);
+        Sig = sig;
+        return Slider.Bind(sig, onChange: null, width: 200f, height: 24f);
+    }
+}
+
+// Reactive control-flow: For (keyed list) + Show (conditional) update structure with NO parent re-render.
+sealed class FlowProbe : Component
+{
+    public static int Renders;
+    public Signal<int>? Count;
+    public Signal<bool>? Toggle;
+    public override Element Render()
+    {
+        Renders++;
+        var count = UseSignal(3);
+        var show = UseSignal(true);
+        Count = count; Toggle = show;
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                Flow.For(() => count.Value, i => new BoxEl { Key = "r" + i, Width = 40, Height = 12, Children = [Text("row" + i)] }),
+                Flow.Show(() => show.Value, new BoxEl { Width = 40, Height = 12, Children = [Text("SHOWN")] }, new BoxEl { Width = 40, Height = 12, Children = [Text("HIDDEN")] }),
+            ],
+        };
+    }
+}
+
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
 static class Slice
 {
@@ -447,8 +510,7 @@ static class Slice
         var r1 = p.RefBox;
         bool ok1 = p.State == 0 && p.Memo == 10 && p.MemoRuns == 1 && r1!.Value == 7;
 
-        p.Dispatch!(5); p.Dispatch!(3);   // fold: 0+5=5, +3=8
-        p.Context.FlushPending();
+        p.Dispatch!(5); p.Dispatch!(3);   // fold: 0+5=5, +3=8 (a reducer dispatch applies to the signal immediately)
         r1!.Value = 42;
 
         p.RenderWithHooks();   // frame 2 (same dep)
@@ -567,6 +629,213 @@ static class Slice
         Check("23. translate timeline marks TransformDirty only", transOk, $"@25ms dx={dx:0.0}");
     }
 
+    // General layout-transition projection (continuous FLIP): the side-table plumbing, the spring that drives a moved
+    // node's presented offset → 0, and the velocity-continuous reframe that keeps an interrupted move from jumping.
+    static void ProjectionChecks(StringTable strings)
+    {
+        // 23a — BoxEl.Animate wires the BoundsAnimated flag + the per-node transition side-table (Phase 0 plumbing).
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            recon.ReconcileRoot(new BoxEl { Animate = LayoutTransition.Slide, Width = 50, Height = 20 }, null);
+            var root = scene.Root;
+            bool flagSet = (scene.Flags(root) & NodeFlags.BoundsAnimated) != 0;
+            bool roundTrip = engine.TryGetTransition(root, out var spec) && spec.Channels == TransitionChannels.Position;
+            // dropping Animate clears both
+            recon.ReconcileRoot(new BoxEl { Width = 50, Height = 20 }, new BoxEl { Animate = LayoutTransition.Slide, Width = 50, Height = 20 });
+            bool cleared = (scene.Flags(root) & NodeFlags.BoundsAnimated) == 0 && !engine.TryGetTransition(root, out _);
+            Check("23a. BoxEl.Animate ↔ BoundsAnimated + transition side-table (set/clear)", flagSet && roundTrip && cleared);
+        }
+
+        // 23b — a moved node FLIPs: the presented offset springs old→new monotonically and settles, never relaying out.
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 200, 50, 20);   // final laid-out position
+            var engine = new AnimEngine(scene);
+            scene.Flags(n) &= ~(NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
+            var crit = new LayoutTransition(TransitionChannels.Position, TransitionDynamics.Spring(0.18f, 1.0f));  // critically damped → no overshoot
+            engine.AnimateBounds(n, new RectF(0, 100, 50, 20), new RectF(0, 200, 50, 20), crit);  // was at y=100, now laid out at y=200
+
+            bool monotonic = true; float prev = -1e9f; int settledAt = -1;
+            for (int i = 0; i < 80 && settledAt < 0; i++)
+            {
+                engine.Tick(16f);
+                float dy = scene.Paint(n).LocalTransform.Dy;
+                if (i > 0 && dy < prev - 0.6f) monotonic = false;   // offset climbs -100 → 0
+                prev = dy;
+                if (!engine.HasActive) settledAt = i;
+            }
+            var f = scene.Flags(n);
+            bool noRelayout = (f & NodeFlags.LayoutDirty) == 0 && (f & NodeFlags.TransformDirty) != 0;
+            bool settledZero = settledAt >= 0 && MathF.Abs(scene.Paint(n).LocalTransform.Dy) < 0.5f;
+            Check("23b. projection FLIPs a moved node (offset springs → 0, settles, no relayout)",
+                monotonic && settledZero && noRelayout, $"settled@{settledAt}");
+        }
+
+        // 23c — interruption is velocity-continuous: re-projecting mid-flight must NOT snap the presented position
+        // (the old code overwrote the transform, losing the in-flight offset → the visible jump).
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 200, 50, 20);
+            var engine = new AnimEngine(scene);
+            // a slow spring keeps per-tick motion tiny (~3px), so the continuity test isolates the reframe (≈3px) from
+            // the old overwrite bug (which loses the in-flight offset → a ~90px snap).
+            var spring = new LayoutTransition(TransitionChannels.Position, TransitionDynamics.Spring(1.0f, 1.0f));
+            engine.AnimateBounds(n, new RectF(0, 100, 50, 20), new RectF(0, 200, 50, 20), spring);
+            for (int i = 0; i < 5; i++) engine.Tick(16f);
+            float d = scene.Paint(n).LocalTransform.Dy;     // in-flight offset (large for a slow spring)
+            float presentedBefore = nb.Y + d;               // its on-screen Y this instant
+            // it moves again to y=300; layout snaps Bounds, the transform is unchanged → toAbs = 300 + d
+            nb = new RectF(0, 300, 50, 20);
+            engine.AnimateBounds(n, new RectF(0, presentedBefore, 50, 20), new RectF(0, 300f + d, 50, 20), spring);
+            engine.Tick(16f);
+            float presentedAfter = 300f + scene.Paint(n).LocalTransform.Dy;
+            bool continuous = MathF.Abs(presentedAfter - presentedBefore) < 15f;
+            Check("23c. projection reframes on interruption (velocity-continuous, no jump)",
+                continuous, $"presented {presentedBefore:0.0}→{presentedAfter:0.0}");
+        }
+
+        // 23d — Reveal (size): the presented extent springs old→new with NO relayout (model Bounds stay final), and
+        // resets to NaN on settle so the recorder falls back to the layout size. This replaces the deleted Width channel.
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 0, 48, 600);   // final (collapsed) model width
+            scene.Flags(n) &= ~NodeFlags.LayoutDirty;
+            var engine = new AnimEngine(scene);
+            var reveal = LayoutTransition.BoundsT(SizeMode.Reveal) with { Dynamics = TransitionDynamics.Spring(0.18f, 1.0f) };
+            engine.AnimateBounds(n, new RectF(0, 0, 320, 600), new RectF(0, 0, 48, 600), reveal);  // collapsing 320 → 48
+            engine.Tick(16f);
+            float firstW = scene.Paint(n).PresentedW;                    // presented starts near 320 (not snapped to 48)
+            bool startedWide = firstW > 200f;
+            bool noRelayout = (scene.Flags(n) & NodeFlags.LayoutDirty) == 0;
+            bool modelFinal = Near(scene.Bounds(n).W, 48f);              // only the presented extent animates
+            int settledAt = -1;
+            for (int i = 0; i < 90 && settledAt < 0; i++) { engine.Tick(16f); if (!engine.HasActive) settledAt = i; }
+            bool resetNaN = float.IsNaN(scene.Paint(n).PresentedW);      // on settle, falls back to the (final) layout size
+            Check("23d. Reveal springs presented size (no relayout, model final, resets on settle)",
+                startedWide && noRelayout && modelFinal && resetNaN && settledAt >= 0, $"firstW={firstW:0} settled@{settledAt}");
+        }
+    }
+
+    // Enter/exit lifecycle: a removed node with Exit.Active is kept live (an orphan) and drawn while it fades, then
+    // deferred-freed on settle; a mounted node with Enter.Active appears from its enter terminal.
+    static void EnterExitChecks(StringTable strings)
+    {
+        // 23e — exit orphan: removing the child keeps it live + drawing until its fade settles, then reclaims (gen bump).
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var exit = new LayoutTransition(TransitionChannels.Opacity, TransitionDynamics.Spring(0.12f, 1f),
+                Exit: new EnterExit(Opacity: 0f, Active: true));
+            Element Tree(bool present) => new BoxEl
+            {
+                Width = 100, Height = 100,
+                Children = present ? [new BoxEl { Key = "x", Width = 50, Height = 20, Animate = exit }] : [],
+            };
+            var old = Tree(true);
+            recon.ReconcileRoot(old, null);
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var child = Child(scene, scene.Root, 0);
+            bool mountedLive = scene.IsLive(child);
+
+            recon.ReconcileRoot(Tree(false), old);                       // remove → orphan + seed exit
+            bool orphaned = scene.IsOrphan(child) && scene.IsLive(child) && scene.OrphanCount == 1;
+
+            int settledAt = -1;
+            for (int i = 0; i < 90 && settledAt < 0; i++)
+            {
+                engine.Tick(16f);
+                for (int k = scene.OrphanCount - 1; k >= 0; k--)        // host's ReclaimSettledOrphans
+                { var o = scene.OrphanAt(k, out _, out _); if (!engine.HasTracks(o)) scene.ReclaimOrphan(o); }
+                if (scene.OrphanCount == 0) settledAt = i;
+            }
+            bool reclaimed = settledAt >= 0 && !scene.IsLive(child);     // deferred free → handle dead
+            Check("23e. exit orphan stays live while fading, then reclaims (deferred free)",
+                mountedLive && orphaned && reclaimed, $"settled@{settledAt}");
+        }
+
+        // 23f — enter: a mounted node with Enter.Active starts at the enter terminal (opacity 0) and springs to 1.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var enter = new LayoutTransition(TransitionChannels.Opacity, TransitionDynamics.Spring(0.15f, 1f),
+                Enter: new EnterExit(Opacity: 0f, Active: true));
+            recon.ReconcileRoot(new BoxEl { Width = 100, Height = 100, Children = [new BoxEl { Width = 50, Height = 20, Animate = enter }] }, null);
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var child = Child(scene, scene.Root, 0);
+            engine.Tick(16f);
+            float a1 = scene.Paint(child).Opacity;                      // entering: near 0
+            for (int i = 0; i < 90; i++) engine.Tick(16f);
+            float a2 = scene.Paint(child).Opacity;                      // settled to 1
+            Check("23f. enter animates a mounted node from the enter terminal (opacity 0 → 1)",
+                a1 < 0.5f && Near(a2, 1f), $"opacity {a1:0.00}→{a2:0.00}");
+        }
+    }
+
+    // The opt-in size modes: ScaleCorrect (GPU scale → 1, compositor-only) and Relayout (re-solve the subtree at the
+    // interpolated size each tick → live text reflow), both via the same general AnimateBounds entry point.
+    static void SizeModeChecks(StringTable strings)
+    {
+        // 23g — ScaleCorrect: a grown node starts scaled-down and springs its scale to 1, never relaying out.
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 0, 200, 100);
+            scene.Flags(n) &= ~NodeFlags.LayoutDirty;
+            var engine = new AnimEngine(scene);
+            var sc = LayoutTransition.BoundsT(SizeMode.ScaleCorrect) with { Dynamics = TransitionDynamics.Spring(0.2f, 1f) };
+            engine.AnimateBounds(n, new RectF(0, 0, 100, 100), new RectF(0, 0, 200, 100), sc);  // width 100→200 ⇒ scaleX 0.5→1
+            engine.Tick(16f);
+            float m11a = scene.Paint(n).LocalTransform.M11;
+            bool noRelayout = (scene.Flags(n) & NodeFlags.LayoutDirty) == 0;
+            int settledAt = -1;
+            for (int i = 0; i < 90 && settledAt < 0; i++) { engine.Tick(16f); if (!engine.HasActive) settledAt = i; }
+            float m11b = scene.Paint(n).LocalTransform.M11;
+            Check("23g. ScaleCorrect springs the node scale → 1 (compositor-only, no relayout)",
+                m11a > 0.3f && m11a < 0.7f && Near(m11b, 1f, 0.02f) && noRelayout && settledAt >= 0, $"M11 {m11a:0.00}→{m11b:0.00}");
+        }
+
+        // 23h — Relayout: the node's MODEL width interpolates via scoped RunSubtree (so its content re-solves live).
+        {
+            var scene = new SceneStore();
+            var fonts = new HeadlessFontSystem(strings);
+            var engine = new AnimEngine(scene);
+            var layout = new FlexLayout(scene, fonts);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var rel = LayoutTransition.BoundsT(SizeMode.Relayout) with { Dynamics = TransitionDynamics.Spring(0.2f, 1f) };
+            recon.ReconcileRoot(new BoxEl { Width = 100, Height = 200, Animate = rel,
+                Children = [new TextEl("the quick brown fox jumps over the lazy dog") { Wrap = TextWrap.Wrap }] }, null);
+            layout.Run(scene.Root, new Size2(400, 200));
+            var panel = scene.Root;
+            engine.AnimateBounds(panel, new RectF(0, 0, 300, 200), new RectF(0, 0, 100, 200), rel);   // 300 → 100
+            bool relayouting = (scene.Flags(panel) & NodeFlags.Relayouting) != 0;
+            float midW = -1f; int runs = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                engine.Tick(16f);
+                runs += engine.IncrementalRoots.Count;                // exactly one root re-solves per tick (scoped, not full-tree)
+                foreach (var r in engine.IncrementalRoots)
+                {
+                    ref LayoutInput li = ref scene.Layout(r);
+                    ref NodePaint pp = ref scene.Paint(r);
+                    if (!float.IsNaN(pp.PresentedW)) li.Width = pp.PresentedW;
+                    layout.RunSubtree(r);
+                }
+                engine.IncrementalRoots.Clear();
+                if (i == 1) midW = scene.Bounds(panel).W;
+            }
+            bool interpolated = midW > 105f && midW < 300f;          // model width genuinely moved through the range
+            Check("23h. Relayout re-solves only the subtree at the interpolated size (live reflow)",
+                relayouting && interpolated && runs >= 2, $"midW={midW:0} runs={runs}");
+        }
+    }
+
     // Nested stateful component: renders, owns its own UseState, and re-renders on its own setState.
     static void NestedChecks(StringTable strings)
     {
@@ -674,7 +943,15 @@ static class Slice
         var modded = Button.Accent("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
         bool overridden = modded.Fill == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
 
-        Check("27. controls are user-styleable (ButtonStyle + modifiers)", styled && overridden, "custom style + .Background().Rounded()");
+        var animatedButton = Button.Standard("z", () => { });
+        var animatedIcon = IconButton.Create("i", () => { });
+        bool animation = animatedButton.PressScale < 1f
+            && animatedIcon.Children[0] is BoxEl iconGlyph
+            && iconGlyph.HoverScale > 1f
+            && iconGlyph.PressScale < 1f;
+
+        Check("27. controls are user-styleable + animated (ButtonStyle, modifiers, AnimatedIcon)", styled && overridden && animation,
+            "custom style + .Background().Rounded() + press/icon scale");
     }
 
     // UseAnimatedValue eases toward a changed target across renders, then settles (React/framer-style transition).
@@ -707,6 +984,62 @@ static class Slice
         var c1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
         var c2 = scene.AbsoluteRect(Child(scene, scene.Root, 2));
         Check("29. flex-wrap flows children to lines", Near(c0.X, 0) && Near(c1.X, 40) && Near(c2.X, 0) && Near(c2.Y, 20), $"c2=({c2.X:0.#},{c2.Y:0.#})");
+    }
+
+    // Regression for the gallery shell shape: a root overlay (ZStack) contains a fixed nav pane + grow content. The
+    // content page has a wrapped caption followed by a grow virtual list. The overlay must pass the finite window width
+    // into measure, and wrapping text must measure against the content frame width, not its full single-line width.
+    static void ConstrainedWrapChecks(StringTable strings)
+    {
+        const string caption =
+            "100,000 rows with real CDN thumbnails - only the visible window is realized and recycled over a slab free-list; " +
+            "images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.";
+
+        var tree = Ui.ZStack(new BoxEl
+        {
+            Direction = 0,
+            Children =
+            [
+                new BoxEl { Width = 320f, Direction = 1 },
+                new BoxEl
+                {
+                    Direction = 1,
+                    Grow = 1f,
+                    Gap = 16f,
+                    Padding = Edges4.All(24f),
+                    Children =
+                    [
+                        new TextEl("List virtualization") { Size = 28f, Bold = true },
+                        new TextEl(caption) { Size = 14f, Wrap = TextWrap.Wrap },
+                        Virtual.List(100000, 48f, _ => new BoxEl { Height = 48f }, keyOf: i => "r" + i) with { Grow = 1f },
+                    ],
+                },
+            ],
+        });
+
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(tree, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root, new Size2(900f, 720f));
+
+        NodeHandle captionNode = default, listNode = default;
+        void Visit(NodeHandle n)
+        {
+            if (n.IsNull) return;
+            ref var paint = ref scene.Paint(n);
+            if (paint.VisualKind == VisualKind.Text && strings.Resolve(paint.Text) == caption) captionNode = n;
+            if (scene.TryGetScroll(n, out var sc) && sc.ItemCount == 100000) listNode = n;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) Visit(c);
+        }
+        Visit(scene.Root);
+
+        var cap = scene.AbsoluteRect(captionNode);
+        var list = scene.AbsoluteRect(listNode);
+        bool captionWrapped = cap.H > 30f;                 // > one 14px line in the headless font system
+        bool listConstrained = Near(list.X, 344f) && Near(list.W, 532f) && list.Right <= 900f;
+
+        Check("29a. wrapping text in fixed-pane + grow content is measured to the content frame",
+            captionWrapped && listConstrained,
+            $"caption={cap.W:0}x{cap.H:0} list=({list.X:0},{list.W:0},right={list.Right:0})");
     }
 
     // Compositor: the renderer applies a per-node world transform + cumulative opacity (CSS compositor model).
@@ -876,24 +1209,20 @@ static class Slice
         {
             if (!LaneRect(rect, out var r)) continue;
             collapsedGutter |= r.W >= 10f && r.H >= 190f;
-            collapsedThumb |= r.W <= 3.5f && r.H >= 30f;
+            collapsedThumb |= r.W <= 7f && r.H >= 30f;   // resting thumb is a visible 6px (was a 2px hairline)
         }
 
         for (int i = 0; i < 90; i++) host.RunFrame();
 
-        // Fully idle: the thumb does NOT vanish — a faint thin rest-rail stays (the affordance that there's more to
-        // scroll + where you are), with no expanded gutter. (It only fully hid before; that read as "no scrollbar".)
-        bool restRail = false, restGutter = false;
+        bool anyScrollbar = false;
         foreach (var rect in device.LastRects)
         {
-            if (!LaneRect(rect, out var r)) continue;
-            restRail |= r.W <= 3.5f && r.H >= 30f;      // thin collapsed thumb still present
-            restGutter |= r.W >= 10f && r.H >= 190f;    // but no expanded gutter
+            anyScrollbar |= LaneRect(rect, out _);
         }
 
-        Check("38a. overlay scrollbar expands, collapses thin, then rests as a faint rail (never fully hides)",
-            expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && restRail && !restGutter,
-            $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) rest=(rail={restRail},gutter={restGutter})");
+        Check("38a. overlay scrollbar expands, collapses to a visible thumb, then auto-hides",
+            expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && !anyScrollbar,
+            $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
     }
 
     static void VirtualChecks(StringTable strings)
@@ -1479,6 +1808,69 @@ static class Slice
             $"rootW={dpiComp.rootW:0.#} label={dpiComp.label}");
     }
 
+    static void NavigationViewAnimationChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("navanim", new Size2(1200, 700), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new NavProbe());
+        host.RunFrame();
+
+        NodeHandle FindTopLeftButton()
+        {
+            NodeHandle best = default;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull || !best.IsNull) return;
+                var role = host.Scene.Interaction(n).Role;
+                var r = host.Scene.AbsoluteRect(n);
+                if (role == AutomationRole.Button && r.X < 64f && r.Y < 64f && r.W >= 36f && r.W <= 52f && r.H >= 36f && r.H <= 52f)
+                {
+                    best = n;
+                    return;
+                }
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+            }
+            Visit(host.Scene.Root);
+            return best;
+        }
+
+        // The content frame's presented LEFT edge slides 320 → 48 as the pane collapses. AbsoluteRect includes the
+        // in-flight LocalTransform, so this reads the ANIMATING value (the model x snaps; the projection animates it).
+        float ContentLeft()
+        {
+            float best = 1e9f;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                var r = host.Scene.AbsoluteRect(n);
+                if (r.W > 400f && r.H > 600f && r.X > 30f && r.X < 340f) best = MathF.Min(best, r.X);
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+            }
+            Visit(host.Scene.Root);
+            return best > 1e8f ? -1f : best;
+        }
+
+        float x0 = ContentLeft();                 // expanded: content frame at ~320
+        var toggle = FindTopLeftButton();
+        var tr = host.Scene.AbsoluteRect(toggle);
+        var center = new Point2(tr.X + tr.W * 0.5f, tr.Y + tr.H * 0.5f);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        host.RunFrame();                          // reconcile: collapse → seed the content slide + label exits
+        var compositorFrame = host.RunFrame();    // next frame advances the springs with NO reconcile / NO relayout
+        bool compositorOnly = !compositorFrame.Rendered && host.Animation.HasActive;
+        float x1 = ContentLeft();                 // mid-slide: strictly between 48 and 320
+        for (int i = 0; i < 30; i++) host.RunFrame();
+        float x2 = ContentLeft();                 // settled: ~48
+
+        Check("54b. NavigationView collapse slides content via compositor-only projection (no re-render ticks)",
+            !toggle.IsNull && x0 > 300f && x1 < x0 - 4f && x1 > 48f && Near(x2, 48f, 3f) && compositorOnly,
+            $"contentX={x0:0}->{x1:0}->{x2:0} compositorOnly={compositorOnly}");
+    }
+
     // ZStack overlays children at the origin (last on top); ItemsRepeater builds (Inline) or virtualizes (Stack).
     static void ZStackRepeaterChecks(StringTable strings)
     {
@@ -1586,6 +1978,90 @@ static class Slice
         return scene;
     }
 
+    // Granular re-render: a nested component's setState re-renders ONLY that component — not its sibling, not the app.
+    static void GranularityChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gran", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        Gran.Counts[0] = 0; Gran.Counts[1] = 0; Gran.Parent = 0;
+        using var host = new AppHost(app, window, device, fonts, strings, new GranParent());
+        host.RunFrame();
+        int p0 = Gran.Parent, a0 = Gran.Counts[0], b0 = Gran.Counts[1];
+
+        var child0 = Child(host.Scene, host.Scene.Root, 0);     // GranChild(0) anchor
+        var box0 = Child(host.Scene, child0, 0);                // its rendered clickable box
+        var r = host.Scene.AbsoluteRect(box0);
+        var c = new Point2(r.X + r.W / 2f, r.Y + r.H / 2f);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+        var f = host.RunFrame();
+
+        bool only0 = Gran.Counts[0] == a0 + 1 && Gran.Counts[1] == b0 && Gran.Parent == p0;
+        Check("59. setState re-renders ONLY the owning component (granular, not the app)",
+            only0 && f.ComponentsRendered == 1 && HasGlyph(device, strings, "c0:1"),
+            $"c0+{Gran.Counts[0] - a0} c1+{Gran.Counts[1] - b0} parent+{Gran.Parent - p0} componentsRendered={f.ComponentsRendered}");
+    }
+
+    // The slider tank, fixed: a signal-bound slider drag updates the thumb/fill transforms with no render/reconcile/layout.
+    static void SliderSignalChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("slidersig", new Size2(320, 120), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        SliderSignalProbe.Renders = 0;
+        var root = new SliderSignalProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        int renders0 = SliderSignalProbe.Renders;
+
+        var thumbRow = Child(host.Scene, host.Scene.Root, 1);
+        var thumb = Child(host.Scene, thumbRow, 0);
+        float dx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
+
+        root.Sig!.Value = 0.7f;          // a drag would do exactly this
+        var f = host.RunFrame();
+        float dx1 = host.Scene.Paint(thumb).LocalTransform.Dx;
+
+        bool moved = MathF.Abs(dx1 - dx0) > 50f;                  // ~0.4 * 200 = 80px
+        bool noRerender = SliderSignalProbe.Renders == renders0;  // the owning component did NOT re-render
+        bool compositorOnly = !f.Rendered;                        // no reconcile + no layout this frame
+        Check("60. signal-bound slider: value→transform, NO re-render/reconcile/layout (the slider tank, fixed)",
+            moved && noRerender && compositorOnly,
+            $"thumbDx {dx0:0}→{dx1:0} renders+{SliderSignalProbe.Renders - renders0} rendered={f.Rendered}");
+    }
+
+    // Reactive control-flow: For (keyed list) + Show (conditional) restructure the tree with NO parent re-render.
+    static void FlowChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("flow", new Size2(320, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        FlowProbe.Renders = 0;
+        var root = new FlowProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        int r0 = FlowProbe.Renders;
+        bool init = HasGlyph(device, strings, "row0") && HasGlyph(device, strings, "row2") && !HasGlyph(device, strings, "row3") && HasGlyph(device, strings, "SHOWN");
+
+        root.Count!.Value = 5;
+        host.RunFrame();
+        bool grew = HasGlyph(device, strings, "row4") && FlowProbe.Renders == r0;
+
+        root.Toggle!.Value = false;
+        host.RunFrame();
+        bool toggled = HasGlyph(device, strings, "HIDDEN") && !HasGlyph(device, strings, "SHOWN") && FlowProbe.Renders == r0;
+
+        Check("61. reactive For/Show restructure the tree with NO parent re-render", init && grew && toggled,
+            $"init={init} grew={grew} toggled={toggled} parentRenders+{FlowProbe.Renders - r0}");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -1631,12 +2107,16 @@ static class Slice
         KeyedChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
+        ProjectionChecks(strings);
+        EnterExitChecks(strings);
+        SizeModeChecks(strings);
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
         StyleChecks();
         AnimValueChecks();
         WrapChecks(strings);
+        ConstrainedWrapChecks(strings);
         CompositorChecks(strings);
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
@@ -1662,10 +2142,16 @@ static class Slice
         VirtualGridChecks(strings);
         ZStackRepeaterChecks(strings);
         NavigationViewChecks(strings);
+        NavigationViewAnimationChecks(strings);
         FontFamilyChecks(strings);
         GradientBorderChecks(strings);
         CrossfadeChecks(strings);
         WaveeSkeletonChecks(strings);
+
+        // Signals-first model: granular re-render, the compositor bypass (slider tank), reactive control-flow.
+        GranularityChecks(strings);
+        SliderSignalChecks(strings);
+        FlowChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

@@ -123,6 +123,8 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 
 | Hook | Authority |
 |------|-----------|
+| **Signals reactive core** (`Signal<T>`/`FloatSignal`/`Memo<T>`/`Effect`/`ReactiveRuntime`; AS-BUILT signals-first runtime, shipped in `FluentGpu.Foundation`) | reconciler-hooks.md §0bis |
+| UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show + the *Bind reactive element props | reconciler-hooks.md §0bis |
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |

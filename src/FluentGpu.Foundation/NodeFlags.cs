@@ -30,6 +30,12 @@ public enum NodeFlags : uint
     VirtualRangeDirty = 1u << 18, // virtual list crossed an item boundary → re-realize the window next render
     StickyPinned = 1u << 19,      // a sticky header pinned by a phase-7 transform (excluded from clean-span reuse)
     ZStack = 1u << 20,            // z-stack container: children overlay at the origin, painted in order (last on top)
+    BoundsAnimated = 1u << 21,    // carries a LayoutTransition: capture presented rect, diff vs target, project the residual
+
+    // layout-transition presentation / lifecycle
+    CounterScaled = 1u << 23,     // recorder post-applies the inverse of the nearest BoundsAnimated ancestor's animated scale
+    Exiting = 1u << 24,           // removed node kept alive (orphan) until its exit animation settles, then reclaimed
+    Relayouting = 1u << 25,       // SizeMode.Relayout size animation in flight → AppHost re-solves this subtree each tick
 
     // lifecycle
     NewThisFrame = 1u << 29,

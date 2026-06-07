@@ -4,14 +4,17 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 using FluentGpu.Text;
 
 namespace FluentGpu.Reconciler;
 
 /// <summary>
-/// Patches the retained SceneStore from an immutable Element tree. Slice algorithm: positional + type-keyed diff
-/// (same type at a position ⇒ update-in-place + recurse; any structural change at a level ⇒ rebuild that level).
-/// The full engine is the re-authored keyed-LIS over arena scratch. State-loss-on-type-change is intentional.
+/// Patches the retained SceneStore from an immutable Element tree. Signals-first: every component is a reactive
+/// render-effect (re-renders + reconciles ONLY its own subtree when its state/context changes — granular, never the
+/// whole app); fine-grained bindings (TransformBind/OpacityBind/…) and reactive control-flow (<see cref="ShowEl"/>/
+/// <see cref="ForEl"/>) are effects too. The keyed positional+type diff is retained as the STRUCTURAL engine (used on
+/// re-render and behind For/Show); a reused component on a parent re-render is a no-op (it is autonomous).
 /// </summary>
 public sealed class TreeReconciler
 {
@@ -19,34 +22,84 @@ public sealed class TreeReconciler
     private readonly StringTable _strings;
 
     // Mounted child components, keyed by their host node (the ComponentEl anchor).
-    private sealed class CompEntry { public Component Comp = null!; public Element Rendered = null!; public Type Type = null!; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
+    private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
 
     // The previously-realized window per virtual-list viewport (the keyed-diff's oldKids). Rented from ArrayPool.
-    private sealed class VirtualEntry { public Element[]? Prev; public int PrevLen; }
+    private sealed class VirtualEntry { public Element[]? Prev; public int PrevLen; public VirtualListEl? El; }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
-    /// <summary>Live nested components — the host flushes their state and drains their effects each frame.</summary>
+    // Context provider value signals, keyed by provider node index (a consumer resolves by walking ancestors).
+    private readonly Dictionary<int, (object Channel, Signal<object?> Sig)> _providerSig = new();
+    // Host-published ambient contexts (Viewport.Size, FrameDiagnostics.Current), keyed by channel.
+    private readonly Dictionary<object, Signal<object?>> _ambient = new();
+
+    // Per-node reactive bindings + control-flow effects, disposed when the node is unmounted.
+    private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
+    private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
+    private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
+    private readonly List<NodeHandle> _dirtyVirtualScratch = new();
+
+    private Component? _root;
+    private Element? _oldRoot;
+    private Effect? _rootEffect;
+    private bool _reconciled;   // set when any structural/column change happened → the host runs (scoped) layout
+    private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
+
+    /// <summary>True (and reset) if any mount/update/remove happened since the last call — the host's "layout needed" gate.</summary>
+    public bool ConsumeReconciled() { var r = _reconciled; _reconciled = false; return r; }
+
+    /// <summary>Number of component render-effects that ran since the last call (proves granular re-render in tests).</summary>
+    public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
+
+    /// <summary>The reactive scheduler — one per host; signals schedule render-effects/bindings here, the host flushes it.</summary>
+    public ReactiveRuntime Runtime { get; }
+
+    /// <summary>Live nested components — the host drains their effects each frame.</summary>
     public List<Component> LiveComponents => _live;
-    /// <summary>Set by the host; a nested component's setState calls this to request the next frame.</summary>
-    public Action RequestRerender { get; set; } = static () => { };
     /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
     public AnimEngine? Anim { get; set; }
-
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
     public ImageCache? Images { get; set; }
+    /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
+    public IReadSignal<int>? ImageEpoch { get; set; }
 
-    public TreeReconciler(SceneStore scene, StringTable strings)
+    public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
     {
         _scene = scene;
         _strings = strings;
+        Runtime = runtime ?? new ReactiveRuntime();
     }
 
-    /// <summary>Reconcile the whole tree from a freshly-rendered root Element against the previous one.</summary>
-    public void ReconcileRoot(Element newRoot, Element? oldRoot)
+    /// <summary>Publish an ambient context (e.g. Viewport.Size) as a host-owned signal consumers can read.</summary>
+    public void SetAmbient(object channel, Signal<object?> sig) => _ambient[channel] = sig;
+
+    // ── Root ──────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Mount a root COMPONENT as a reactive render-effect (the host path): it renders into <c>Scene.Root</c> and
+    /// re-renders itself (only) when its own state/context changes.</summary>
+    public void MountRoot(Component root)
     {
-        if (_scene.Root.IsNull || oldRoot is null || oldRoot.ElementTypeId != newRoot.ElementTypeId)
+        _root = root;
+        InjectContext(root.Context, NodeHandle.Null);   // root resolves ambient contexts only
+        var effect = new Effect(Runtime, () => RunRoot(root), owner: null, runNow: false);
+        _rootEffect = effect;
+        root.Context.RequestRerender = effect.Schedule;
+        effect.RunNow();
+    }
+
+    private void RunRoot(Component root)
+    {
+        _renderCount++;
+        Element newRoot = root.RunsOnce ? Reactive.Untrack(root.RenderWithHooks) : root.RenderWithHooks();
+        RenderRootDiff(newRoot);
+    }
+
+    private void RenderRootDiff(Element newRoot)
+    {
+        if (_scene.Root.IsNull || _oldRoot is null || _oldRoot.ElementTypeId != newRoot.ElementTypeId)
         {
             if (!_scene.Root.IsNull) Remove(_scene.Root);
             var node = _scene.CreateNode(newRoot.ElementTypeId);
@@ -55,18 +108,68 @@ public sealed class TreeReconciler
         }
         else
         {
-            Update(_scene.Root, newRoot, oldRoot);
+            Update(_scene.Root, newRoot, _oldRoot);
         }
+        _oldRoot = newRoot;
+        if (_root is not null) _root.Context.HostNode = _scene.Root;
     }
+
+    /// <summary>Imperative full reconcile of an explicit element tree (tests / non-host callers).</summary>
+    public void ReconcileRoot(Element newRoot, Element? oldRoot)
+    {
+        _oldRoot = oldRoot;
+        RenderRootDiff(newRoot);
+    }
+
+    /// <summary>Re-realize any virtual-list windows flagged <see cref="NodeFlags.VirtualRangeDirty"/> (scroll boundary
+    /// crossing) — granular, no component re-render. Called by the host each frame.</summary>
+    public bool ReRealizeVirtuals()
+    {
+        if (_virtuals.Count == 0) return false;
+        _dirtyVirtualScratch.Clear();
+        foreach (var kv in _virtuals)
+            if (_scene.IsLive(kv.Key) && (_scene.Flags(kv.Key) & NodeFlags.VirtualRangeDirty) != 0 && kv.Value.El is not null)
+                _dirtyVirtualScratch.Add(kv.Key);
+        for (int i = 0; i < _dirtyVirtualScratch.Count; i++)
+        {
+            var node = _dirtyVirtualScratch[i];
+            if (_virtuals.TryGetValue(node, out var e) && e.El is { } el) RealizeWindow(node, el);
+        }
+        return _dirtyVirtualScratch.Count > 0;
+    }
+
+    private void InjectContext(RenderContext ctx, NodeHandle anchor)
+    {
+        ctx.Runtime = Runtime;
+        ctx.Anim = Anim;
+        ctx.Images = Images;
+        ctx.AnchorNode = anchor;
+        ctx.ResolveContextSignal = ResolveContext;
+        ctx.ImageEpoch = ImageEpoch;
+    }
+
+    private Signal<object?>? ResolveContext(NodeHandle anchor, object channel)
+    {
+        for (var n = anchor.IsNull ? NodeHandle.Null : _scene.Parent(anchor); !n.IsNull; n = _scene.Parent(n))
+            if (_providerSig.TryGetValue((int)n.Raw.Index, out var e) && ReferenceEquals(e.Channel, channel))
+                return e.Sig;
+        return _ambient.TryGetValue(channel, out var asig) ? asig : null;
+    }
+
+    // ── Mount ─────────────────────────────────────────────────────────────────────────────────────
 
     private void Mount(NodeHandle node, Element el)
     {
+        _reconciled = true;
         if (el is ComponentEl ce) { MountComponent(node, ce); return; }
         if (el is ContextProviderEl cp) { MountProvider(node, cp); return; }
         if (el is ScrollEl se) { MountScroll(node, se); return; }
         if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
+        if (el is ShowEl sh) { MountShow(node, sh); return; }
+        if (el is ForEl fe) { MountFor(node, fe); return; }
 
         WriteColumns(node, el, isMount: true);
+        BindNode(node, el);
         foreach (var childEl in ChildrenOf(el))
         {
             var child = _scene.CreateNode(childEl.ElementTypeId);
@@ -83,39 +186,18 @@ public sealed class TreeReconciler
         _ => [],
     };
 
+    // ── Update ────────────────────────────────────────────────────────────────────────────────────
+
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
         if (newEl is ComponentEl nce)
         {
-            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.TryGetValue(node, out var entry))
-            {
-                // Reuse the instance (state preserved): re-render and reconcile its single output child.
-                var newRendered = RenderComponent(entry.Comp);
-                var childNode = _scene.FirstChild(node);
-                if (childNode.IsNull)
-                {
-                    childNode = _scene.CreateNode(newRendered.ElementTypeId);
-                    _scene.AppendChild(node, childNode);
-                    Mount(childNode, newRendered);
-                }
-                else if (entry.Rendered.ElementTypeId == newRendered.ElementTypeId)
-                {
-                    Update(childNode, newRendered, entry.Rendered);
-                }
-                else
-                {
-                    Remove(childNode);
-                    var nc = _scene.CreateNode(newRendered.ElementTypeId);
-                    _scene.AppendChild(node, nc);
-                    Mount(nc, newRendered);
-                }
-                MirrorParticipation(node, _scene.FirstChild(node));
-                entry.Rendered = newRendered;
-            }
-            else
-            {
-                ReplaceComponent(node, nce);   // different component type at this position
-            }
+            // Reuse → the component is AUTONOMOUS: it re-renders via its own effect on its own state/context. A parent
+            // re-render does NOT re-render it (props are carried by signals/context, not the factory closure). Type
+            // change → replace.
+            if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node))
+                return;
+            ReplaceComponent(node, nce);
             return;
         }
 
@@ -141,41 +223,39 @@ public sealed class TreeReconciler
                 _scene.AppendChild(node, content);
                 Mount(content, nse.Content);
             }
-            _scene.ScrollRef(node).ContentNode = content;   // preserves OffsetX/Y (scroll position survives re-render)
+            _scene.ScrollRef(node).ContentNode = content;
             return;
         }
 
         if (newEl is VirtualListEl nve)
         {
             WriteColumns(node, nve, isMount: false);
-            RealizeWindow(node, nve);   // re-realize the window against the committed scroll offset
+            RealizeWindow(node, nve);
             return;
+        }
+
+        if (newEl is ShowEl nsh)
+        {
+            // The boundary effect manages its own child reactively; nothing to do on a parent re-render.
+            return;
+        }
+
+        if (newEl is ForEl nfe)
+        {
+            return;   // autonomous reactive list boundary
         }
 
         if (newEl is ContextProviderEl np)
         {
-            ContextStack.Push(np.Channel, np.Value);
-            var oldChild = (oldEl as ContextProviderEl)?.Child;
-            var childNode = _scene.FirstChild(node);
-            if (childNode.IsNull)
-            {
-                var nc = _scene.CreateNode(np.Child.ElementTypeId);
-                _scene.AppendChild(node, nc);
-                Mount(nc, np.Child);
-            }
-            else if (oldChild is not null && oldChild.ElementTypeId == np.Child.ElementTypeId)
-            {
-                Update(childNode, np.Child, oldChild);
-            }
+            int idx = (int)node.Raw.Index;
+            if (_providerSig.TryGetValue(idx, out var e) && ReferenceEquals(e.Channel, np.Channel))
+                e.Sig.Value = np.Value;                                  // notify consumers iff changed
             else
-            {
-                Remove(childNode);
-                var nc = _scene.CreateNode(np.Child.ElementTypeId);
-                _scene.AppendChild(node, nc);
-                Mount(nc, np.Child);
-            }
+                _providerSig[idx] = (np.Channel, new Signal<object?>(np.Value));
+
+            var oldChild = (oldEl as ContextProviderEl)?.Child;
+            ReconcileSingleChild(node, np.Child, oldChild);
             MirrorParticipation(node, _scene.FirstChild(node));
-            ContextStack.Pop();
             return;
         }
 
@@ -183,53 +263,218 @@ public sealed class TreeReconciler
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
 
+    /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).</summary>
+    private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
+    {
+        var child = _scene.FirstChild(parent);
+        if (newChild is null)
+        {
+            if (!child.IsNull) Remove(child);
+            return;
+        }
+        if (child.IsNull)
+        {
+            var c = _scene.CreateNode(newChild.ElementTypeId);
+            _scene.AppendChild(parent, c);
+            Mount(c, newChild);
+            _scene.Mark(parent, NodeFlags.LayoutDirty);
+        }
+        else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
+        {
+            Update(child, newChild, oldChild);
+        }
+        else
+        {
+            Remove(child);
+            var c = _scene.CreateNode(newChild.ElementTypeId);
+            _scene.AppendChild(parent, c);
+            Mount(c, newChild);
+            _scene.Mark(parent, NodeFlags.LayoutDirty);
+        }
+    }
+
+    // ── Components (render-effects) ──────────────────────────────────────────────────────────────
+
+    private void MountComponent(NodeHandle node, ComponentEl ce)
+    {
+        var comp = ce.Factory();
+        InjectContext(comp.Context, node);
+        var entry = new CompEntry { Comp = comp, Type = ce.ComponentType };
+        _comps[node] = entry;
+        _anchorOf[comp] = node;
+        _live.Add(comp);
+
+        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: null, runNow: false);
+        entry.Effect = effect;
+        comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
+        effect.RunNow();                                  // first render + child mount
+    }
+
+    private void RunComponent(NodeHandle node, CompEntry entry)
+    {
+        if (!_scene.IsLive(node)) return;
+        _renderCount++;
+        var comp = entry.Comp;
+        Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+        ReconcileSingleChild(node, newRendered, entry.Rendered);
+        MirrorParticipation(node, _scene.FirstChild(node));
+        comp.Context.HostNode = _scene.FirstChild(node);
+        entry.Rendered = newRendered;
+        // Scoped relayout: a re-render may have changed this component's subtree size/structure → mark its rendered
+        // subtree dirty; the LayoutInvalidator walks up to the nearest layout boundary and re-solves just that subtree.
+        var child = _scene.FirstChild(node);
+        if (!child.IsNull) _scene.Mark(child, NodeFlags.LayoutDirty);
+    }
+
+    private void MountProvider(NodeHandle node, ContextProviderEl cp)
+    {
+        _providerSig[(int)node.Raw.Index] = (cp.Channel, new Signal<object?>(cp.Value));
+        var child = _scene.CreateNode(cp.Child.ElementTypeId);
+        _scene.AppendChild(node, child);
+        Mount(child, cp.Child);
+        MirrorParticipation(node, child);   // a provider is layout-transparent
+    }
+
+    /// <summary>
+    /// A component anchor is layout-transparent: it must participate in its parent's flex/grid exactly as its rendered
+    /// child would. We mirror the child's sizing/participation onto the anchor each (re)render. (layout.md §2.2.)
+    /// </summary>
+    private void MirrorParticipation(NodeHandle anchor, NodeHandle child)
+    {
+        if (child.IsNull) return;
+        ref LayoutInput a = ref _scene.Layout(anchor);
+        ref LayoutInput c = ref _scene.Layout(child);
+        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf;
+        a.Width = c.Width; a.Height = c.Height;
+        a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
+    }
+
+    private void ReplaceComponent(NodeHandle node, ComponentEl ce)
+    {
+        var kids = new List<NodeHandle>();
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
+        foreach (var k in kids) Remove(k);
+        if (_comps.Remove(node, out var old)) { old.Effect?.Dispose(); old.Comp.Unmount(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        MountComponent(node, ce);
+    }
+
+    // ── Reactive control-flow (Show / For) ──────────────────────────────────────────────────────
+
+    private void MountShow(NodeHandle node, ShowEl se)
+    {
+        // The boundary node is a layout-transparent container; an effect mounts/updates the active branch reactively.
+        _showState[(int)node.Raw.Index] = null;
+        var eff = new Effect(Runtime, () =>
+        {
+            if (!_scene.IsLive(node)) return;
+            Element? desired = se.When() ? se.Then : se.Else;
+            int idx = (int)node.Raw.Index;
+            _showState.TryGetValue(idx, out var last);
+            ReconcileSingleChild(node, desired, last);
+            _showState[idx] = desired;
+            MirrorParticipation(node, _scene.FirstChild(node));
+        }, owner: null, runNow: true);
+        AddBinding(node, eff);
+    }
+
+    private void MountFor(NodeHandle node, ForEl fe)
+    {
+        var eff = new Effect(Runtime, () =>
+        {
+            if (!_scene.IsLive(node)) return;
+            int n = fe.Count();
+            var cur = n == 0 ? Array.Empty<Element>() : new Element[n];
+            for (int i = 0; i < n; i++)
+            {
+                var el = fe.ItemAt(i);
+                string key = fe.KeyOf?.Invoke(i) ?? ("#" + i);
+                cur[i] = el with { Key = key };
+            }
+            int idx = (int)node.Raw.Index;
+            var prev = _forState.TryGetValue(idx, out var p) ? p : (Array.Empty<Element>(), 0);
+            ReconcileChildren(node, cur.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
+            _forState[idx] = (cur, n);
+        }, owner: null, runNow: true);
+        AddBinding(node, eff);
+    }
+
+    // ── Fine-grained bindings (signal → scene node, no re-render) ────────────────────────────────
+
+    private void AddBinding(NodeHandle node, Computation c)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_nodeBindings.TryGetValue(idx, out var list)) { list = new List<Computation>(2); _nodeBindings[idx] = list; }
+        list.Add(c);
+    }
+
+    private void BindNode(NodeHandle node, Element el)
+    {
+        if (el is BoxEl b)
+        {
+            if (b.TransformBind is { } tb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).LocalTransform = tb(); _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            if (b.OpacityBind is { } ob)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Opacity = ob(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            if (b.FillBind is { } fb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            if (b.WidthBind is { } wb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Width = wb(); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            if (b.HeightBind is { } hb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Height = hb(); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            b.OnRealized?.Invoke(node);
+        }
+        else if (el is TextEl t)
+        {
+            if (t.TextBind is { } txb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Text = _strings.Intern(txb()); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            if (t.ColorBind is { } cb)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+        }
+    }
+
+    // ── Scroll / Virtualization (unchanged behavior) ────────────────────────────────────────────
+
     private void MountScroll(NodeHandle node, ScrollEl se)
     {
-        WriteColumns(node, se, isMount: true);          // viewport columns + ClipsToBounds + ScrollState orientation
+        WriteColumns(node, se, isMount: true);
         var content = _scene.CreateNode(se.Content.ElementTypeId);
         _scene.AppendChild(node, content);
         Mount(content, se.Content);
-        _scene.ScrollRef(node).ContentNode = content;   // the child that carries the -ScrollOffset LocalTransform
+        _scene.ScrollRef(node).ContentNode = content;
     }
 
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
     {
-        WriteColumns(node, ve, isMount: true);          // viewport columns + ClipsToBounds + ScrollState item params
-        var content = _scene.CreateNode(1);             // synthetic content container (holds the realized rows)
+        WriteColumns(node, ve, isMount: true);
+        var content = _scene.CreateNode(1);
         _scene.AppendChild(node, content);
         _scene.ScrollRef(node).ContentNode = content;
-        _virtuals[node] = new VirtualEntry();
+        _virtuals[node] = new VirtualEntry { El = ve };
         RealizeWindow(node, ve);
     }
 
-    /// <summary>
-    /// Realize the visible window [first,last)+overscan as keyed children of the content node, handing it to the
-    /// existing keyed-LIS diff (so recycling IS CreateNode/FreeNode over the slab free-list). Uniform fast path:
-    /// the window is O(1) arithmetic over the committed scroll offset (virtualization.md §3.1/§6.1).
-    /// </summary>
     private void RealizeWindow(NodeHandle node, VirtualListEl ve)
     {
         if (!_virtuals.TryGetValue(node, out var entry)) { entry = new VirtualEntry(); _virtuals[node] = entry; }
+        entry.El = ve;
         _scene.TryGetScroll(node, out var sc);
         var content = sc.ContentNode;
         if (content.IsNull) return;
 
         bool horizontal = ve.Horizontal;
         float offset = horizontal ? sc.OffsetX : sc.OffsetY;
-        // Viewport extent: last frame's published size if known, else the explicit hint, else a generous default
-        // (over-realizing on frame 1 is harmless — extra rows are clip-culled — and self-corrects next layout).
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
         if (viewport <= 0f) viewport = horizontal ? Hint(ve.Width) : Hint(ve.Height);
 
         int count = ve.ItemCount;
         int first, last;
-        if (ve.Layout is not null)   // pluggable fixed-geometry layout (stack/grid/custom) — pure arithmetic
+        if (ve.Layout is not null)
         {
             float cross = horizontal ? (sc.ViewportH > 0f ? sc.ViewportH : Hint(ve.Height))
                                      : (sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
             ve.Layout.Window(count, cross, viewport, offset, ve.Overscan, out first, out last);
         }
-        else                         // variable path — Fenwick offset↔index (O(log n)), estimate-then-correct
+        else
         {
             var table = _scene.ExtentTableFor(node, count, ve.EstimatedExtent);
             first = Math.Max(0, table.IndexAt(offset) - ve.Overscan);
@@ -243,7 +488,7 @@ public sealed class TreeReconciler
         {
             int idx = first + i;
             var el = ve.RenderItem(idx);
-            string key = ve.KeyOf?.Invoke(idx) ?? ("#" + idx);     // positional key when no stable identity supplied
+            string key = ve.KeyOf?.Invoke(idx) ?? ("#" + idx);
             cur[i] = el with { Key = key };
         }
 
@@ -259,97 +504,13 @@ public sealed class TreeReconciler
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
 
-    private void MountProvider(NodeHandle node, ContextProviderEl cp)
-    {
-        ContextStack.Push(cp.Channel, cp.Value);
-        var child = _scene.CreateNode(cp.Child.ElementTypeId);
-        _scene.AppendChild(node, child);
-        Mount(child, cp.Child);
-        MirrorParticipation(node, child);   // a provider is layout-transparent too
-        ContextStack.Pop();
-    }
+    // ── Keyed child reconcile (the structural engine, retained) ──────────────────────────────────
 
-    private void MountComponent(NodeHandle node, ComponentEl ce)
-    {
-        var comp = ce.Factory();
-        comp.Context.RequestRerender = RequestRerender;
-        comp.Context.Anim = Anim;
-        comp.Context.Images = Images;   // UseImage / PrefetchImage in nested components
-        var rendered = RenderComponent(comp);
-        _comps[node] = new CompEntry { Comp = comp, Rendered = rendered, Type = ce.ComponentType };
-        _live.Add(comp);
-
-        var child = _scene.CreateNode(rendered.ElementTypeId);
-        comp.Context.HostNode = child;   // animation hooks (queued during render) read this when they run in phase 6.5
-        _scene.AppendChild(node, child);
-        Mount(child, rendered);
-        MirrorParticipation(node, child);
-    }
-
-    /// <summary>
-    /// A component anchor is layout-transparent: it must participate in its parent's flex/grid exactly as its rendered
-    /// child would (so a child with <c>Grow=1</c> makes the anchor grow, and the anchor's own arrange re-grows the child
-    /// to fill). We mirror the child's sizing/participation onto the anchor each (re)render. (layout.md §2.2 passthrough.)
-    /// </summary>
-    private void MirrorParticipation(NodeHandle anchor, NodeHandle child)
-    {
-        if (child.IsNull) return;
-        ref LayoutInput a = ref _scene.Layout(anchor);
-        ref LayoutInput c = ref _scene.Layout(child);
-        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf;
-        a.Width = c.Width; a.Height = c.Height;
-        a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
-    }
-
-    private void ReplaceComponent(NodeHandle node, ComponentEl ce)
-    {
-        if (_comps.Remove(node, out var old)) { old.Comp.Unmount(); _live.Remove(old.Comp); }
-        var kids = new List<NodeHandle>();
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
-        foreach (var k in kids) Remove(k);
-        MountComponent(node, ce);
-    }
-
-    private Element RenderComponent(Component comp)
-    {
-        try { return comp.RenderWithHooks(); }
-        catch (Exception ex) { Diag.Event("reconciler", "component render threw: " + ex.Message); return new BoxEl(); }
-    }
-
-    /// <summary>Remove a subtree: run component effect-cleanups within it, then free the nodes.</summary>
-    private void Remove(NodeHandle node)
-    {
-        UnmountSubtree(node);
-        _scene.FreeSubtree(node);
-    }
-
-    private void UnmountSubtree(NodeHandle node)
-    {
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
-        if (Images is not null)   // release image residency so scrolled-away album art becomes evictable
-        {
-            ref NodePaint paint = ref _scene.Paint(node);
-            if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) Images.Unpin(new ImageHandle(paint.ImageId));
-        }
-        if (_comps.Remove(node, out var e)) { e.Comp.Unmount(); _live.Remove(e.Comp); }
-        if (_virtuals.Remove(node, out var v) && v.Prev is not null)
-        {
-            Array.Clear(v.Prev, 0, v.PrevLen);
-            ArrayPool<Element>.Shared.Return(v.Prev);
-        }
-    }
-
-    /// <summary>
-    /// Keyed child reconcile: match old↔new by Key (else by position+type), update matches in place (state preserved),
-    /// mount new, free removed, then reorder the sibling chain to the new order via O(1) detach+append. (LIS move-
-    /// minimization is a perf follow-up; correctness + identity preservation are here.)
-    /// </summary>
     internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids)
     {
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
-        // Snapshot old child handles in order.
         var oldNodes = oldN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[oldN];
         if (oldN > 0)
         {
@@ -357,13 +518,13 @@ public sealed class TreeReconciler
             for (var c = _scene.FirstChild(node); !c.IsNull && i < oldN; c = _scene.NextSibling(c)) oldNodes[i++] = c;
         }
 
-        // Key → old index map.
         Dictionary<string, int>? keyMap = null;
         for (int j = 0; j < oldN; j++)
             if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
 
         var used = oldN == 0 ? Array.Empty<bool>() : new bool[oldN];
         var newNodes = newN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[newN];
+        bool structural = false;
 
         for (int i = 0; i < newN; i++)
         {
@@ -380,25 +541,69 @@ public sealed class TreeReconciler
             {
                 used[match] = true;
                 newNodes[i] = oldNodes[match];
-                Update(oldNodes[match], nk, oldKids[match]);   // reuse → state preserved
+                Update(oldNodes[match], nk, oldKids[match]);
             }
             else
             {
                 var child = _scene.CreateNode(nk.ElementTypeId);
                 Mount(child, nk);
                 newNodes[i] = child;
+                structural = true;
             }
         }
 
         for (int j = 0; j < oldN; j++)
-            if (!used[j]) Remove(oldNodes[j]);   // removed (runs nested component cleanups first)
+            if (!used[j]) { Remove(oldNodes[j]); structural = true; }
 
-        for (int i = 0; i < newN; i++)                       // reorder to new order
+        for (int i = 0; i < newN; i++)
         {
             _scene.Detach(newNodes[i]);
             _scene.AppendChild(node, newNodes[i]);
         }
+
+        // Structural change to the child set → relayout this container's subtree (scoped to its boundary).
+        if (structural || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty);
     }
+
+    // ── Removal / unmount (dispose reactive effects) ────────────────────────────────────────────
+
+    private void Remove(NodeHandle node)
+    {
+        _reconciled = true;
+        if (Anim is { } anim && anim.TryGetTransition(node, out var spec) && spec.Exit.Active)
+        {
+            UnmountSubtree(node);
+            _scene.Orphan(node);
+            anim.SeedExit(node, spec.Exit, spec);
+            return;
+        }
+        UnmountSubtree(node);
+        _scene.FreeSubtree(node);
+    }
+
+    private void UnmountSubtree(NodeHandle node)
+    {
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
+
+        int idx = (int)node.Raw.Index;
+        if (Images is not null)
+        {
+            ref NodePaint paint = ref _scene.Paint(node);
+            if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) Images.Unpin(new ImageHandle(paint.ImageId));
+        }
+        if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
+        _providerSig.Remove(idx);
+        _showState.Remove(idx);
+        _forState.Remove(idx);
+        if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
+        if (_virtuals.Remove(node, out var v) && v.Prev is not null)
+        {
+            Array.Clear(v.Prev, 0, v.PrevLen);
+            ArrayPool<Element>.Shared.Return(v.Prev);
+        }
+    }
+
+    // ── Column writes (POD → scene) ─────────────────────────────────────────────────────────────
 
     private void WriteColumns(NodeHandle node, Element el, bool isMount)
     {
@@ -408,7 +613,8 @@ public sealed class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 bool hasSurface = b.Fill.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
-                                  || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null;
+                                  || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null
+                                  || b.FillBind is not null;
                 paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
                 paint.Fill = b.Fill;
                 paint.HoverFill = b.HoverFill;
@@ -417,25 +623,22 @@ public sealed class TreeReconciler
                 paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;
 
-                // Optional rich paint → sparse side-tables (O(decorated nodes)). Clear on update if the prop went away.
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
 
-                // Composited transform (CSS order: scale → rotate → translate) + opacity. Only write when the element
-                // declares a STATIC transform/opacity — otherwise leave these for the animation engine to own (else a
-                // re-render every frame would reset the animated value to identity and the animation would never show).
-                if (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f)
+                // Static transform/opacity ONLY when the element declares one AND there's no transform binding/animation
+                // owning the channel (else a re-render would reset the bound/animated value to identity each frame).
+                if (b.TransformBind is null && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f))
                 {
                     var tf = Affine2D.Translation(b.OffsetX, b.OffsetY);
                     if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
                     if (b.ScaleX != 1f || b.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(b.ScaleX, b.ScaleY));
                     paint.LocalTransform = tf;
                 }
-                if (b.Opacity != 1f) paint.Opacity = b.Opacity;
+                if (b.OpacityBind is null && b.Opacity != 1f) paint.Opacity = b.Opacity;
 
-                // Interaction-driven scale targets → the eased side-table (recorder composites them by HoverT/PressT).
                 if (b.HoverScale != 1f || b.PressScale != 1f)
                 {
                     ref InteractionAnim ia = ref _scene.InteractRef(node);
@@ -459,6 +662,15 @@ public sealed class TreeReconciler
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
+                if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
+                if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
+                if (b.Animate is { } at && Anim is { } anim)
+                {
+                    anim.SetTransition(node, at);
+                    _scene.Mark(node, NodeFlags.BoundsAnimated);
+                    if (isMount && at.Enter.Active) anim.SeedEnter(node, at.Enter, at);
+                }
+                else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
@@ -493,7 +705,6 @@ public sealed class TreeReconciler
                     _scene.SetDrag(node, null);
                 }
 
-                // Clickable or explicitly-focusable nodes participate in focus/Tab navigation.
                 ii.Focusable = b.Focusable || b.OnClick is not null;
                 ii.TabIndex = b.TabIndex;
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
@@ -515,7 +726,7 @@ public sealed class TreeReconciler
                 li.FlexGrow = s.Grow; li.FlexShrink = s.Shrink; li.FlexBasis = s.Basis;
                 li.AlignSelf = s.AlignSelf;
 
-                _scene.Mark(node, NodeFlags.ClipsToBounds);     // the viewport clips its overflowing content
+                _scene.Mark(node, NodeFlags.ClipsToBounds);
                 _scene.ScrollRef(node).Orientation = s.Horizontal ? (byte)1 : (byte)0;
                 break;
             }
@@ -554,7 +765,7 @@ public sealed class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Image;
-                paint.Fill = im.Placeholder;     // shown until the decode lands
+                paint.Fill = im.Placeholder;
                 paint.Corners = im.Corners;
 
                 int oldId = paint.ImageId;
@@ -562,7 +773,7 @@ public sealed class TreeReconciler
                     ? Images.Request(im.Source, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
                 if (newId != oldId)
                 {
-                    if (Images is not null)   // residency: pin the new source, release the old (recycle-safe)
+                    if (Images is not null)
                     {
                         if (oldId != 0) Images.Unpin(new ImageHandle(oldId));
                         if (newId != 0) Images.Pin(new ImageHandle(newId));
@@ -586,10 +797,15 @@ public sealed class TreeReconciler
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.TextStyle = new TextStyle(_strings.Intern(t.FontFamily), t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);
+                li.Margin = t.Margin;
+                li.Width = t.Width; li.Height = t.Height;
+                li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
+                li.FlexGrow = t.Grow; li.FlexShrink = t.Shrink; li.FlexBasis = t.Basis;
+                li.AlignSelf = t.AlignSelf;
                 break;
             }
         }
 
-        if (!isMount) _scene.Mark(node, NodeFlags.PaintDirty);
+        if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
     }
 }

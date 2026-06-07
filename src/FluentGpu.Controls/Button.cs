@@ -25,6 +25,8 @@ public static partial class Button
         public Edges4 Padding { get; init; } = new(11, 5, 11, 6);    // ButtonPadding
         public float FontSize { get; init; } = 14f;                  // ControlContentThemeFontSize
         public float MinHeight { get; init; } = 32f;                 // effective WinUI button height
+        public float HoverScale { get; init; } = 1f;
+        public float PressScale { get; init; } = 0.985f;
         public bool Bold { get; init; }
     }
 
@@ -70,6 +72,8 @@ public static partial class Button
         BorderBrush = s.BorderBrush,
         BorderWidth = s.BorderWidth,
         Corners = CornerRadius4.All(s.CornerRadius),
+        HoverScale = s.HoverScale,
+        PressScale = s.PressScale,
         OnClick = onClick,
         Children = [new TextEl(label) { Size = s.FontSize, Bold = s.Bold, Color = s.Foreground }],
     };

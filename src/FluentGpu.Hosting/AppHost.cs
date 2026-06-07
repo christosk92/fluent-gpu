@@ -11,6 +11,7 @@ using FluentGpu.Reconciler;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 using FluentGpu.Text;
 
 namespace FluentGpu.Hosting;
@@ -22,11 +23,14 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int CulledNodeCount { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
+    public int ComponentsRendered { get; init; }
 }
 
 /// <summary>
-/// Composition root + the single-UI-thread frame loop (the 13 phases, slice subset). Drives one root Component:
-/// pump → input → hook-flush → render → reconcile → layout → record → submit → present → effects.
+/// Composition root + the single-UI-thread frame loop. Signals-first: a setState writes a signal that schedules ONLY
+/// the owning component's render-effect (granular), and a bound high-frequency scalar (slider/scroll) writes a node
+/// channel directly — a compositor-only frame with no render/reconcile/layout. The host drains the reactive runtime
+/// once per frame (phase 3), runs (scoped) layout only when a reconcile/layout-bind changed something, then records.
 /// </summary>
 public sealed class AppHost : IDisposable
 {
@@ -37,8 +41,10 @@ public sealed class AppHost : IDisposable
     private readonly StringTable _strings;
 
     private readonly SceneStore _scene = new();
+    private readonly ReactiveRuntime _runtime = new();
     private readonly TreeReconciler _reconciler;
     private readonly FlexLayout _layout;
+    private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
@@ -46,9 +52,18 @@ public sealed class AppHost : IDisposable
     private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;
     private readonly ImageCache _images;
+    private readonly Dictionary<NodeHandle, RectF> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
 
-    private Element? _oldRoot;
-    private bool _dirty = true;
+    // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
+    private readonly Signal<object?> _viewportSig = new(default(Size2));
+    private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
+    private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
+    private Size2 _lastViewportDip;
+
+    private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
+    private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
+    private bool _needFullLayout = true;     // first frame / resize / DPI / root structural change
+    private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
     private bool _inPaint;
     private Size2 _lastSize;
     private readonly long[] _presentTimes = new long[240];
@@ -57,12 +72,13 @@ public sealed class AppHost : IDisposable
     private double _fps;
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
-    private static ColorF Clear => Theme.WindowBackground;   // theme-driven (transparent later for Mica)
+    private static ColorF Clear => Theme.WindowBackground;
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
-    public bool HasActiveWork => _dirty || _scene.HasDynamicText || _anim.HasActive || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades;
+    public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
+        || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -78,43 +94,56 @@ public sealed class AppHost : IDisposable
         _strings = strings;
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
-        _reconciler = new TreeReconciler(_scene, strings);
+        _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _layout = new FlexLayout(_scene, fonts);
+        _invalidator = new LayoutInvalidator(_scene, _layout);
         _dispatcher = new InputDispatcher(_scene);
         _anim = new AnimEngine(_scene);
         _interact = new InteractionAnimator(_scene);
         _scrollAnim = new ScrollAnimator(_scene);
         _lastSize = window.ClientSizePx;
-        _root.Context.RequestRerender = () => _dirty = true;
-        _reconciler.RequestRerender = () => _dirty = true;   // a nested component's setState requests the next frame
-        _dispatcher.RequestRerender = () => _dirty = true;   // a virtual list crossing an item boundary on scroll
-        _dispatcher.OnHoverChanged = _interact.SetHover;     // ease the brush transition on pointer enter/leave
+
+        // A reactive write (anywhere) requests a frame.
+        _runtime.FrameRequested = WakeFrame;
+        _dispatcher.RequestRerender = WakeFrame;   // virtual list crossing an item boundary on scroll
+        _scrollAnim.RequestRerender = WakeFrame;   // re-realize the virtual window on a boundary crossing
+        _dispatcher.OnHoverChanged = _interact.SetHover;
         _dispatcher.OnPressChanged = _interact.SetPress;
-        _dispatcher.OnScrollArmed = _scrollAnim.Arm;         // smooth scroll: arm the viewport for easing
-        _dispatcher.OnScrollHover = _scrollAnim.Hover;       // reveal/collapse the WinUI-style scrollbar indicator
+        _dispatcher.OnScrollArmed = _scrollAnim.Arm;
+        _dispatcher.OnScrollHover = _scrollAnim.Hover;
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
-        _scrollAnim.RequestRerender = () => _dirty = true;   // re-realize the virtual window on a boundary crossing
-        _reconciler.Anim = _anim;          // animation hooks in nested components seed tracks on their nodes
-        _reconciler.Images = _images;      // image nodes request decodes + pin residency through the cache
-        _root.Context.Images = _images;    // UseImage / PrefetchImage in the root component
-        _images.SetPixelSink(_device.UploadImage);   // decode completions → GPU texture upload (runs in _images.Pump, pre-submit)
-        _images.SetEvictSink(_device.EvictImage);     // residency evictions → free the GPU texture (deferred behind the fence)
-        _images.ImageStatusChanged += (_, _, _, _) => _dirty = true;   // ready/failed → re-render so UseImage components update
-        _root.Context.Anim = _anim;
-        // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
+
+        _reconciler.Anim = _anim;
+        _reconciler.Images = _images;
+        _reconciler.ImageEpoch = _imageEpoch;
+        _images.SetPixelSink(_device.UploadImage);
+        _images.SetEvictSink(_device.EvictImage);
+        _images.ImageStatusChanged += (_, _, _, _) => { if (_imageEpoch.HasSubscribers) _imageEpoch.Value = _imageEpoch.Peek() + 1; WakeFrame(); };
+
+        // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.
+        _lastViewportDip = ClientSizeDip();
+        _viewportSig.Value = _lastViewportDip;
+        _reconciler.SetAmbient(Viewport.Size, _viewportSig);
+        _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
+
         _window.PaintRequested = () => Paint(0);
+
+        // Mount the root component as a reactive render-effect (initial render builds the scene).
+        _reconciler.MountRoot(_root);
     }
 
-    /// <summary>Run one full frame: pump + input + hook-flush, then paint.</summary>
+    private void WakeFrame()
+    {
+        if (_inPaint) _frameAfterPaint = true;
+        else _frameNeeded = true;
+    }
+
+    /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
     {
         _ring.Clear();
         _window.PumpInto(_ring);              // 1 pump
-        int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch
-
-        bool changed = _root.Context.FlushPending();        // 3 hook-state flush (root + all nested components)
-        foreach (var c in _reconciler.LiveComponents) changed |= c.Context.FlushPending();
-        if (changed) _dirty = true;
+        int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch (handlers write signals → schedule effects)
 
         if (!HasActiveWork)
         {
@@ -124,82 +153,162 @@ public sealed class AppHost : IDisposable
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
                 return LastStats;
             }
-
-            _dirty = true;
+            _frameNeeded = true;
         }
 
         return Paint(clicks);
     }
 
-    /// <summary>Phases 6–12 (+ resize): re-layout if dirty, record, submit, present, effects. No pump — safe to call from WndProc.</summary>
+    /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.</summary>
     public FrameStats Paint(int clicks = 0)
     {
-        if (_inPaint) return LastStats;       // re-entrancy guard (WM_SIZE during the pump)
+        if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
         try
         {
             long frameStart = Stopwatch.GetTimestamp();
             EnsureSize();
             var layoutSize = ClientSizeDip();
+            PublishViewport(layoutSize);
 
-            bool rendered = false;
-            if (_dirty)
+            // FLIP "First": capture presented rects of layout-animated nodes BEFORE the reconcile/relayout that moves them.
+            // Skip on the very first layout — freshly-mounted nodes are unmeasured (0-size), so FLIPping them would animate
+            // a spurious 0→full reveal that clips content. (Nodes mounted on later frames are created during Flush, AFTER
+            // this capture, so they're correctly never captured.)
+            bool willReconcile = _runtime.HasPending || _needFullLayout;
+            bool capturedProjections = false;
+            if (willReconcile && _everLaidOut && !_scene.Root.IsNull)
             {
-                // Publish the client size as ambient context (responsive layout / NavigationView display modes) for the
-                // whole render+reconcile, without adding a tree node (so scene.Root stays the app's own root).
-                ContextStack.Push(FrameDiagnostics.Current, LastStats);
-                ContextStack.Push(FluentGpu.Hooks.Viewport.Size, layoutSize);
-                try
-                {
-                    var newRoot = _root.RenderWithHooks();      // 4 render
-                    _reconciler.ReconcileRoot(newRoot, _oldRoot); // 5 reconcile
-                    _oldRoot = newRoot;
-                    _root.Context.HostNode = _scene.Root;         // root component animates itself via the scene root
-                }
-                finally
-                {
-                    ContextStack.Pop();
-                    ContextStack.Pop();
-                }
-                _dirty = false;
-                rendered = true;
+                _projectBefore.Clear();
+                CaptureProjections(_scene.Root);
+                capturedProjections = _projectBefore.Count > 0;
             }
 
             long before = GC.GetAllocatedBytesForCurrentThread();
-            if (rendered) _layout.Run(_scene.Root, layoutSize);             // 6 layout (root fills the window in DIPs)
 
-            DrainLayoutEffects();                             // 6.5 layout effects (root + nested; Bounds valid)
+            _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+            bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+            bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
 
-            if (rendered) DumpSceneOnce(layoutSize);          // DIAG: one-shot post-layout scene tree dump
+            bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
+            if (layoutNeeded && !_scene.Root.IsNull)
+            {
+                if (_needFullLayout || !_everLaidOut)
+                {
+                    _layout.Run(_scene.Root, layoutSize);      // 6 full layout: first frame / resize / DPI / root change
+                    _needFullLayout = false;
+                    _everLaidOut = true;
+                }
+                else
+                {
+                    _invalidator.RunDirty(layoutSize);         // 6 scoped relayout: only dirty subtrees, firewalled at boundaries
+                }
+                _scene.ClearLayoutDirty();
+            }
 
-            _anim.Tick(16f);                                  // 7 animation (writes Opacity/transform; never LayoutDirty)
-            _interact.Tick(16f);                              // 7 eased hover/press brush transitions
-            _scrollAnim.Tick(16f);                            // 7 smooth scroll + scrollbar fade
-            _images.Pump();                                   // 7.5 apply finished decodes (+1-frame latency) + evict
-            _images.Tick(16f);                                // 7.5 advance the placeholder→image reveal clock
+            DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
+            if (reconciled) DumpSceneOnce(layoutSize);
+
+            if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
+            _anim.Tick(16f);                                   // 7 animation (transform/opacity/presented-size — never relayout)
+            RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
+            ReclaimSettledOrphans();                           // 7 free settled exit orphans
+            _interact.Tick(16f);                               // 7 eased hover/press
+            _scrollAnim.Tick(16f);                             // 7 smooth scroll + scrollbar fade
+            _images.Pump();                                    // 7.5 apply finished decodes + evict
+            _images.Tick(16f);
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             UpdateDynamicDiagnosticsText();
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
-            _swapchain.Present();                             // 11 present
+            _swapchain.Present();                              // 11 present
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
 
-            DrainPassiveEffects();                            // 12 passive effects (root + nested)
+            DrainPassiveEffects();                             // 12 passive effects
 
             UpdateFrameTiming(frameStart);
-            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, rendered)
+            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 NodesVisited = recordStats.NodesVisited,
                 DrawNodeCount = recordStats.DrawnNodeCount,
                 CulledNodeCount = recordStats.CulledNodeCount,
                 Fps = _fps,
                 FrameMs = _frameMs,
+                ComponentsRendered = _reconciler.ConsumeRenderCount(),
             };
+            PublishFrameStats(LastStats);
             return LastStats;
         }
-        finally { _inPaint = false; }
+        finally
+        {
+            _frameNeeded = false;
+            if (_frameAfterPaint) { _frameNeeded = true; _frameAfterPaint = false; }
+            _inPaint = false;
+        }
+    }
+
+    private void PublishViewport(Size2 dip)
+    {
+        if (dip.Width == _lastViewportDip.Width && dip.Height == _lastViewportDip.Height) return;
+        _lastViewportDip = dip;
+        _viewportSig.Value = dip;   // schedules consumers (NavigationView display modes) granularly
+    }
+
+    private void PublishFrameStats(FrameStats stats)
+    {
+        if (_frameStatsSig.HasSubscribers) _frameStatsSig.Value = stats;   // box only when a consumer (HUD) reads it
+    }
+
+    // FLIP "First" capture — every BoundsAnimated node's presented absolute rect, snapshotted BEFORE this commit.
+    private void CaptureProjections(NodeHandle n)
+    {
+        if (n.IsNull) return;
+        if ((_scene.Flags(n) & NodeFlags.BoundsAnimated) != 0)
+            _projectBefore[n] = _scene.AbsoluteRect(n);
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
+            CaptureProjections(c);
+    }
+
+    private void ApplyProjections()
+    {
+        bool reduced = Motion.ReducedMotion;
+        foreach (var kv in _projectBefore)
+        {
+            var n = kv.Key;
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            if (!_anim.TryGetTransition(n, out var spec)) continue;
+            if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
+            _anim.AnimateBounds(n, kv.Value, _scene.AbsoluteRect(n), spec);
+        }
+        _projectBefore.Clear();
+    }
+
+    private void RunIncrementalLayout()
+    {
+        var roots = _anim.IncrementalRoots;
+        if (roots.Count == 0) return;
+        for (int i = 0; i < roots.Count; i++)
+        {
+            var r = roots[i];
+            if (!_scene.IsLive(r)) continue;
+            ref NodePaint p = ref _scene.Paint(r);
+            ref LayoutInput li = ref _scene.Layout(r);
+            if (!float.IsNaN(p.PresentedW)) li.Width = p.PresentedW;
+            if (!float.IsNaN(p.PresentedH)) li.Height = p.PresentedH;
+            _layout.RunSubtree(r);
+        }
+        roots.Clear();
+    }
+
+    private void ReclaimSettledOrphans()
+    {
+        for (int i = _scene.OrphanCount - 1; i >= 0; i--)
+        {
+            var o = _scene.OrphanAt(i, out _, out _);
+            if (!_anim.HasTracks(o)) _scene.ReclaimOrphan(o);
+        }
     }
 
     private void UpdateFrameTiming(long frameStart)
@@ -262,8 +371,6 @@ public sealed class AppHost : IDisposable
         q.Clear();
     }
 
-    // ── DIAG: dump the retained scene tree with post-layout bounds, so we can see WHERE a node went (missing pane etc.).
-    // Disabled by default; set FG_DUMP=1 for one dump or FG_DUMP=all to dump every rendered frame.
     private bool _dumped;
     private void DumpSceneOnce(Size2 layoutSize)
     {
@@ -303,14 +410,14 @@ public sealed class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
-    /// <summary>Resize the swapchain to match the window's client size; force a re-layout on change.</summary>
+    /// <summary>Resize the swapchain to match the window's client size; force a full re-layout on change.</summary>
     private void EnsureSize()
     {
         var s = _window.ClientSizePx;
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height) return;
         _lastSize = s;
         _swapchain.Resize(s);
-        _dirty = true;
+        _needFullLayout = true;
     }
 
     private Size2 ClientSizeDip()

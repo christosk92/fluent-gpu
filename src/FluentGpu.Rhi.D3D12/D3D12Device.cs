@@ -19,6 +19,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 public sealed unsafe class D3D12Device : IGpuDevice
 {
+    // Back buffers == per-frame allocators == frames-in-flight. Canon (budgets.md): 2 (FLIP_DISCARD); configurable 2–3.
+    // Every site below keys off this, so 3 (more CPU run-ahead slack, +1 frame latency, +VRAM) is a one-line change.
     private const uint FRAME_COUNT = 2;
     private const uint INFINITE = 0xFFFFFFFF;
 
@@ -35,6 +37,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private ID3D12Fence* _fence;
     private ulong _fenceValue;
     private HANDLE _fenceEvent;
+    private HANDLE _frameLatencyWaitable;   // signaled when the swapchain can accept a new frame — bounds queued-frame latency
+    private bool _hasLatencyWaitable;
+    private uint _swapChainFlags;           // flags the swapchain was created with (must be preserved across ResizeBuffers)
+    private bool _tearingSupported;         // DXGI_FEATURE_PRESENT_ALLOW_TEARING (hwnd, vsync-off path only)
+    private bool _vsync = true;             // Present sync-interval 1 when true; interval 0 + ALLOW_TEARING when false
 
     private HWND _hwnd;
     private uint _w, _h;
@@ -188,7 +195,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
         sd.Scaling = _composited ? DXGI_SCALING.DXGI_SCALING_STRETCH : DXGI_SCALING.DXGI_SCALING_STRETCH;
         sd.SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_DISCARD;
         sd.AlphaMode = _composited ? DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED : DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;
-        sd.Flags = 0;
+
+        // Latency-waitable swapchain (canon: pal-rhi.md §5.1 / budgets.md) — lets us bound queued frames and wait efficiently
+        // for present-readiness instead of blocking deep on the GPU fence. ALLOW_TEARING (hwnd + vsync-off only) needs both the
+        // swapchain flag here AND the matching present flag, gated by factory support.
+        _tearingSupported = !_composited && CheckTearingSupport();
+        uint flags = (uint)DXGI_SWAP_CHAIN_FLAG.DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+        if (_tearingSupported) flags |= (uint)DXGI_SWAP_CHAIN_FLAG.DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        _swapChainFlags = flags;
+        sd.Flags = flags;
 
         IDXGISwapChain1* sc1;
         if (_composited)
@@ -200,6 +215,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3");
         sc1->Release();
         _swapChain = sc3;
+
+        // IDXGISwapChain3 : IDXGISwapChain2 — cap the queued frames and grab the latency waitable (created above via the flag).
+        Check(_swapChain->SetMaximumFrameLatency(FRAME_COUNT - 1), "SetMaximumFrameLatency");
+        _frameLatencyWaitable = _swapChain->GetFrameLatencyWaitableObject();
+        _hasLatencyWaitable = _frameLatencyWaitable != HANDLE.NULL;
 
         if (_composited)
         {
@@ -237,6 +257,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
+        WaitForLatency();   // bound queued-frame latency before starting this frame's production
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         WaitForFrame(_frameIndex);
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
@@ -286,6 +307,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "imagePool", _imageTextures.PoolImages);      // art (256/512) in reused per-bucket pool textures
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
+        Diag.Set("text.run", "cachedRuns", _glyphs.CachedRuns);      // shaped runs held across frames
+        Diag.Set("text.run", "runsCached", _glyphs.RunsCached);      // this frame: runs served from the shaped-run cache
+        Diag.Set("text.run", "runsShaped", _glyphs.RunsShaped);      // this frame: runs (re)shaped — should be ~0 in steady state
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
         Check(_cmdList->Close(), "cmdList.Close");
@@ -341,7 +365,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     if (s.Length > 0)
                     {
                         int before = _glyphInsts.Count;
-                        _glyphs!.LayoutRun(s, _strings.Resolve(g.Family), g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
+                        _glyphs!.LayoutRun(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                     }
                     break;
@@ -672,9 +696,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _cmdList->ResourceBarrier(1, &b);
     }
 
+    internal bool Vsync { get => _vsync; set => _vsync = value; }
+
     internal void Present()
     {
-        Check(_swapChain->Present(1, 0), "Present");
+        // ALLOW_TEARING is valid only with sync-interval 0 on a tearing-capable (non-composited) swapchain.
+        uint interval = _vsync ? 1u : 0u;
+        uint flags = (!_vsync && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
+        Check(_swapChain->Present(interval, flags), "Present");
     }
 
     private void SignalFrame(uint frameIndex)
@@ -690,6 +719,23 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (v == 0 || _fence->GetCompletedValue() >= v) return;
         Check(_fence->SetEventOnCompletion(v, _fenceEvent), "SetEventOnCompletion");
         WaitForSingleObject(_fenceEvent, INFINITE);
+    }
+
+    // Block until the swapchain is ready to accept a new frame (bounds present-queue depth → lower latency, efficient wait).
+    // Bounded timeout so a lost device can't hang the loop. No-op if the waitable wasn't created (older DXGI / failure).
+    private void WaitForLatency()
+    {
+        if (_hasLatencyWaitable) WaitForSingleObject(_frameLatencyWaitable, 1000);
+    }
+
+    private bool CheckTearingSupport()
+    {
+        IDXGIFactory5* f5;
+        if ((int)_factory->QueryInterface(__uuidof<IDXGIFactory5>(), (void**)&f5) < 0) return false;
+        int allow = 0;
+        HRESULT hr = f5->CheckFeatureSupport(DXGI_FEATURE.DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allow, sizeof(int));
+        f5->Release();
+        return (int)hr >= 0 && allow != 0;
     }
 
     internal void WaitForGpu()
@@ -718,7 +764,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 _backBuffers[i] = null;
             }
         }
-        Check(_swapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, 0), "ResizeBuffers");
+        Check(_swapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, _swapChainFlags), "ResizeBuffers");
         _w = w; _h = h;
         CreateRtvs();
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
