@@ -21,6 +21,9 @@ internal struct GlyphInstance
 }
 
 internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, BearingY, Advance; }
+internal struct FaceMetrics { public ushort Em; public short Asc, Desc; }
+/// <summary>Glyph-atlas cache key: family + size + dpi-scale + weight + codepoint (value type → no alloc).</summary>
+internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold, int Ch);
 
 /// <summary>
 /// DirectWrite glyph atlas + textured-quad pipeline (design/subsystems/text.md, gpu-renderer.md DrawGlyphRun). Glyphs are
@@ -33,10 +36,11 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int ATLAS = 1024;
 
     private IDWriteFactory* _dw;
-    private IDWriteFontFace* _faceRegular;
-    private IDWriteFontFace* _faceBold;
-    private ushort _unitsPerEm;
-    private short _ascent, _descent;
+    private const string DefaultFamily = "Segoe UI";
+    // Per-(family, weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
+    private readonly Dictionary<(string fam, bool bold), nint> _faces = new();
+    private readonly Dictionary<(string fam, bool bold), FaceMetrics> _faceMetrics = new();
+    private readonly Dictionary<string, int> _famIds = new();
 
     private readonly byte[] _cpu = new byte[ATLAS * ATLAS];
     private ID3D12Resource* _tex;
@@ -47,7 +51,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private bool _texInitialized;
     private int _shelfX = 1, _shelfY = 1, _shelfH;
 
-    private readonly Dictionary<long, GlyphEntry> _cache = new();
+    private readonly Dictionary<GlyphKey, GlyphEntry> _cache = new();
 
     private ID3D12RootSignature* _rootSig;
     private ID3D12PipelineState* _pso;
@@ -56,6 +60,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private ID3D12Resource* _instances;
     private GlyphInstance* _mapped;
     private const int MaxGlyphs = 8192;
+    private int _cursor;
 
     private const string Hlsl = """
 struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
@@ -109,26 +114,65 @@ float4 PSMain(VSOut i) : SV_Target
         IDWriteFactory* f;
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
-        _faceRegular = CreateFace(DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL);
-        _faceBold = CreateFace(DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD);
-
-        DWRITE_FONT_METRICS m;
-        _faceRegular->GetMetrics(&m);
-        _unitsPerEm = m.designUnitsPerEm;
-        _ascent = (short)m.ascent;
-        _descent = (short)m.descent;
+        // warm the default face so the atlas has metrics from frame 1
+        ResolveFace(DefaultFamily, false, out _, out _, out _);
     }
 
-    private IDWriteFontFace* CreateFace(DWRITE_FONT_WEIGHT weight)
+    // A small per-family integer used in the glyph-cache key (so the same codepoint in two fonts caches separately).
+    private int FamilyId(string family)
+    {
+        if (string.IsNullOrEmpty(family)) family = DefaultFamily;
+        if (_famIds.TryGetValue(family, out int id)) return id;
+        id = _famIds.Count + 1; _famIds[family] = id; return id;
+    }
+
+    /// <summary>Resolve (and cache) a font face for a family + weight. Family is a system name ("Segoe UI",
+    /// "Segoe Fluent Icons") or a custom file "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
+    private IDWriteFontFace* ResolveFace(string family, bool bold, out ushort em, out short asc, out short desc)
+    {
+        if (string.IsNullOrEmpty(family)) family = DefaultFamily;
+        var key = (family, bold);
+        if (_faces.TryGetValue(key, out var cached))
+        {
+            var m0 = _faceMetrics[key]; em = m0.Em; asc = m0.Asc; desc = m0.Desc;
+            return (IDWriteFontFace*)cached;
+        }
+
+        IDWriteFontFace* face;
+        try { face = CreateFaceFor(family, bold); }
+        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
+        if (face == null) { em = 2048; asc = 1500; desc = 500; return null; }
+
+        DWRITE_FONT_METRICS m; face->GetMetrics(&m);
+        var fm = new FaceMetrics { Em = m.designUnitsPerEm, Asc = (short)m.ascent, Desc = (short)m.descent };
+        _faces[key] = (nint)face; _faceMetrics[key] = fm;
+        em = fm.Em; asc = fm.Asc; desc = fm.Desc;
+        return face;
+    }
+
+    private IDWriteFontFace* CreateFaceFor(string family, bool bold)
+    {
+        int hash = family.IndexOf('#');
+        string path = hash >= 0 ? family.Substring(0, hash) : family;
+        bool isFile = path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
+        return isFile ? CreateFaceFromFile(path, bold) : CreateSystemFace(family, bold);
+    }
+
+    private IDWriteFontFace* CreateSystemFace(string familyName, bool bold)
     {
         IDWriteFontCollection* coll;
         Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
         uint index; BOOL exists;
-        fixed (char* pn = "Segoe UI")
-            Check(coll->FindFamilyName(pn, &index, &exists), "FindFamilyName");
+        fixed (char* pn = familyName) Check(coll->FindFamilyName(pn, &index, &exists), "FindFamilyName");
+        if (!exists)   // unknown family → fall back to the default
+        {
+            coll->Release();
+            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, bold);
+        }
         IDWriteFontFamily* family;
         Check(coll->GetFontFamily(index, &family), "GetFontFamily");
         IDWriteFont* font;
+        var weight = bold ? DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL;
         Check(family->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
         IDWriteFontFace* face;
         Check(font->CreateFontFace(&face), "CreateFontFace");
@@ -136,13 +180,27 @@ float4 PSMain(VSOut i) : SV_Target
         return face;
     }
 
-    // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
-    private GlyphEntry GetGlyph(char ch, float size, bool bold, float dpiScale)
+    // Load a face directly from a .ttf/.otf file (custom icon fonts). Bold is synthesized when requested.
+    private IDWriteFontFace* CreateFaceFromFile(string path, bool bold)
     {
-        IDWriteFontFace* face = bold ? _faceBold : _faceRegular;
+        IDWriteFontFile* file;
+        fixed (char* p = path) Check(_dw->CreateFontFileReference(p, null, &file), "CreateFontFileReference");
+        BOOL supported; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE faceType; uint numFaces;
+        Check(file->Analyze(&supported, &ft, &faceType, &numFaces), "Analyze(font)");
+        IDWriteFontFile** files = &file;
+        var sim = bold ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
+        IDWriteFontFace* face;
+        Check(_dw->CreateFontFace(faceType, 1, files, 0, sim, &face), "CreateFontFace(file)");
+        file->Release();
+        return face;
+    }
+
+    // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
+    private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale)
+    {
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        long key = ((long)scaleQ << 44) | ((long)(bold ? 1 : 0) << 43) | ((long)sizeQ << 24) | ch;
+        var key = new GlyphKey(famId, sizeQ, scaleQ, bold, ch);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         uint cp = ch;
@@ -151,7 +209,7 @@ float4 PSMain(VSOut i) : SV_Target
 
         DWRITE_GLYPH_METRICS gm;
         face->GetDesignGlyphMetrics(&gi, 1, &gm, BOOL.FALSE);
-        float advance = gm.advanceWidth * (size / _unitsPerEm);   // advance in DIP (scale-independent)
+        float advance = gm.advanceWidth * (size / em);            // advance in DIP (scale-independent)
         float physEm = size * dpiScale;                            // rasterize at physical pixels
 
         float zeroAdvance = 0f;
@@ -203,29 +261,114 @@ float4 PSMain(VSOut i) : SV_Target
         if (h > _shelfH) _shelfH = h;
     }
 
-    /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space; rasterizes missing glyphs at physical px.</summary>
-    public void LayoutRun(string text, float size, bool bold, float originX, float topY, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
+    /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space; rasterizes missing glyphs at physical px.
+    /// <paramref name="family"/> selects the face (system name or "path.ttf#Family"); empty = the default body font.</summary>
+    public void LayoutRun(string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
     {
-        float baseline = topY + _ascent * (size / _unitsPerEm);   // top of layout box → baseline (DIP)
-        float pen = originX;                                       // DIP
-        float inv = 1f / dpiScale;                                 // physical atlas px → DIP
-        foreach (char ch in text)
+        var face = ResolveFace(family, bold, out ushort em, out short asc, out short desc);
+        if (face == null) return;
+        int famId = FamilyId(family);
+        float scale = size / em;
+        float lineHeight = (asc - desc) * scale;
+        if (lineHeight <= 0f) lineHeight = size * 1.3f;
+        float inv = 1f / dpiScale;
+        bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
+        bool doTrim = trim != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
+        int maxL = maxLines > 0 ? maxLines : int.MaxValue;
+        float baseline = topY + asc * scale;
+        int i = 0, n = text.Length, line = 0;
+
+        if (!doWrap && !doTrim && maxLines <= 0)   // fast path: the original single-line layout
         {
-            var g = GetGlyph(ch, size, bold, dpiScale);
-            if (g.W > 0 && g.H > 0)
-            {
-                outList.Add(new GlyphInstance
-                {
-                    DstX = pen + g.BearingX * inv, DstY = baseline + g.BearingY * inv, DstW = g.W * inv, DstH = g.H * inv,
-                    U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS,
-                    U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
-                    R = color.R, G = color.G, B = color.B, A = color.A,
-                    M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy,
-                    Opacity = opacity,
-                });
-            }
-            pen += g.Advance;
+            float p = originX;
+            for (int k = 0; k < n; k++) p = Emit(face, em, famId, text[k], size, bold, dpiScale, p, baseline, inv, color, world, opacity, outList);
+            return;
         }
+
+        float ellipsisW = doTrim ? GetGlyph(face, em, famId, '…', size, bold, dpiScale).Advance : 0f;
+        while (i < n && line < maxL)
+        {
+            bool lastLine = line == maxL - 1;
+            int lineStart = i, end;
+            bool ellipsize = false;
+
+            if (!doWrap)
+            {
+                end = n; for (int k = i; k < n; k++) if (text[k] == '\n') { end = k; break; }
+                if (doTrim && MeasureRange(face, em, famId, text, lineStart, end, size, bold, dpiScale) > maxWidth)
+                { end = FitEllipsis(face, em, famId, text, lineStart, end, size, bold, dpiScale, maxWidth, ellipsisW); ellipsize = true; }
+            }
+            else
+            {
+                end = WrapEnd(face, em, famId, text, lineStart, n, size, bold, dpiScale, maxWidth, wrap);
+                if (lastLine && SkipSpaces(text, end) < n && doTrim)
+                { end = FitEllipsis(face, em, famId, text, lineStart, end, size, bold, dpiScale, maxWidth, ellipsisW); ellipsize = true; }
+            }
+
+            float pen = originX;
+            for (int k = lineStart; k < end; k++)
+                pen = Emit(face, em, famId, text[k], size, bold, dpiScale, pen, baseline, inv, color, world, opacity, outList);
+            if (ellipsize)
+                Emit(face, em, famId, '…', size, bold, dpiScale, pen, baseline, inv, color, world, opacity, outList);
+
+            i = end;
+            if (i < n && text[i] == '\n') i++;
+            else if (doWrap) i = SkipSpaces(text, i);
+            baseline += lineHeight;
+            line++;
+            if (ellipsize) break;
+        }
+    }
+
+    private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale, float pen, float baseline, float inv, ColorF color, Affine2D world, float opacity, List<GlyphInstance> outList)
+    {
+        var g = GetGlyph(face, em, famId, ch, size, bold, dpiScale);
+        if (g.W > 0 && g.H > 0)
+            outList.Add(new GlyphInstance
+            {
+                DstX = pen + g.BearingX * inv, DstY = baseline + g.BearingY * inv, DstW = g.W * inv, DstH = g.H * inv,
+                U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS, U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
+                R = color.R, G = color.G, B = color.B, A = color.A,
+                M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
+            });
+        return pen + g.Advance;
+    }
+
+    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale)
+    {
+        float p = 0f; for (int k = s; k < e; k++) p += GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; return p;
+    }
+
+    private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale, float maxWidth, float ellipsisW)
+    {
+        float p = 0f; int k = s;
+        while (k < e) { float a = GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; if (p + a + ellipsisW > maxWidth && k > s) break; p += a; k++; }
+        return k;
+    }
+
+    private static int SkipSpaces(string text, int i) { while (i < text.Length && text[i] == ' ') i++; return i; }
+
+    /// <summary>Greedy line break: the exclusive end index of the line starting at <paramref name="start"/> that fits within
+    /// <paramref name="maxWidth"/> (breaking at word boundaries; inside an over-long word only when wrap == Wrap).</summary>
+    private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, bool bold, float dpiScale, float maxWidth, int wrap)
+    {
+        float pen = 0f; int i = start;
+        while (i < n)
+        {
+            if (text[i] == '\n') return i;
+            int ws = i; float wordW = 0f;
+            while (i < n && text[i] != ' ' && text[i] != '\n') { wordW += GetGlyph(face, em, famId, text[i], size, bold, dpiScale).Advance; i++; }
+            if (pen > 0f && pen + wordW > maxWidth) return ws;        // break before this word
+            if (wordW > maxWidth && pen == 0f && wrap == 1)           // a single word longer than the line → break inside (Wrap only)
+            {
+                float p2 = 0f;
+                for (int k = ws; k < i; k++) { float a = GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; if (p2 + a > maxWidth && k > ws) return k; p2 += a; }
+                return i;
+            }
+            pen += wordW;
+            while (i < n && text[i] == ' ') { pen += GetGlyph(face, em, famId, text[i], size, bold, dpiScale).Advance; i++; }
+        }
+        return n;
     }
 
     // ── GPU resources ─────────────────────────────────────────────────────────
@@ -241,8 +384,9 @@ float4 PSMain(VSOut i) : SV_Target
         Check(device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex), "CreateTexture");
         _tex = tex;
+        D3D12MemoryDiagnostics.Track(_tex, $"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", (ulong)ATLAS * ATLAS);
 
-        _texUpload = CreateUpload(device, ATLAS * ATLAS);
+        _texUpload = CreateUpload(device, ATLAS * ATLAS, "Glyph.AtlasUpload");
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -371,19 +515,23 @@ float4 PSMain(VSOut i) : SV_Target
         vs->Release(); ps->Release();
 
         float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8);
+        _quad = CreateUpload(device, sizeof(float) * 8, "Glyph.QuadUpload");
         void* qp; _quad->Map(0, null, &qp); Buffer.MemoryCopy(quad, qp, 32, 32); _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = 32, StrideInBytes = 8 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs));
+        _instances = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
         void* ip; _instances->Map(0, null, &ip); _mapped = (GlyphInstance*)ip;
     }
 
+    public void BeginFrame() => _cursor = 0;
+
     public void Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH)
     {
-        int count = Math.Min(instances.Count, MaxGlyphs);
+        int start = _cursor;
+        int count = Math.Min(instances.Count, MaxGlyphs - start);
         if (count == 0) return;
-        for (int i = 0; i < count; i++) _mapped[i] = instances[i];
+        for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
+        _cursor += count;
 
         ID3D12DescriptorHeap* heap = _srvHeap;
         cmd->SetDescriptorHeaps(1, &heap);
@@ -392,13 +540,13 @@ float4 PSMain(VSOut i) : SV_Target
         float* vp = stackalloc float[2] { vpW, vpH };
         cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
         cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
-        cmd->SetGraphicsRootShaderResourceView(2, _instances->GetGPUVirtualAddress());
+        cmd->SetGraphicsRootShaderResourceView(2, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
     }
 
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes)
+    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC rd = default;
@@ -409,20 +557,21 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12Resource* res;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "CreateCommittedResource");
+        D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); _instances->Release(); }
-        if (_quad != null) _quad->Release();
+        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Glyph.InstanceUpload"); _instances->Release(); _instances = null; }
+        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) _srvHeap->Release();
-        if (_texUpload != null) _texUpload->Release();
-        if (_tex != null) _tex->Release();
-        if (_faceBold != null) _faceBold->Release();
-        if (_faceRegular != null) _faceRegular->Release();
+        if (_texUpload != null) { D3D12MemoryDiagnostics.Release(_texUpload, "Glyph.AtlasUpload"); _texUpload->Release(); _texUpload = null; }
+        if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
+        foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();
+        _faces.Clear();
         if (_dw != null) _dw->Release();
     }
 }

@@ -20,6 +20,16 @@ public enum NodeFlags : uint
     Focused = 1u << 14,
     Hovered = 1u << 15,
     Pressed = 1u << 16,
+    FocusVisual = 1u << 22,   // focus arrived via keyboard (Tab/arrows) → draw the focus ring; pointer focus does NOT set it
+
+    // scroll / virtualization
+    // (The virtualization spec names VirtualRangeDirty=1<<13 / StickyPinned=1<<14, but those bits are already
+    //  taken by Focusable/Focused in this map — see architecture-spec §2 vs the live NodeFlags column. We honor
+    //  the *semantics* (distinct bits, NOT the Realized bit) at free positions in the live map.)
+    Scrollable = 1u << 17,        // node is a scroll viewport (carries a ScrollState row; Input may scroll it)
+    VirtualRangeDirty = 1u << 18, // virtual list crossed an item boundary → re-realize the window next render
+    StickyPinned = 1u << 19,      // a sticky header pinned by a phase-7 transform (excluded from clean-span reuse)
+    ZStack = 1u << 20,            // z-stack container: children overlay at the origin, painted in order (last on top)
 
     // lifecycle
     NewThisFrame = 1u << 29,

@@ -65,6 +65,7 @@ clean-span+epoch rule) is owned by **scene-memory.md**, which references **gpu-r
 | FillRoundRectCmd / FillRoundRectStrokeCmd | gpu-renderer.md |
 | DrawShadowCmd | gpu-renderer.md |
 | FillPathCmd / StrokePathCmd / FillGradientCmd | gpu-renderer.md |
+| **DrawGradientStrokeCmd** (= 11, SHIPPED) — gradient-tinted SDF outline (the WinUI (Accent)ControlElevationBorder); reuses the GradientPipeline (`GradientInstance.Stroke` spare-pad field; 160-byte stride unchanged); carried by the sparse `_borderBrushes` side-table, driven by `BoxEl.BorderBrush` (`GradientSpec?`) | gpu-renderer.md §3.1a (struct shape + raster) / scene-memory.md §4.1 (`DrawGradientStroke` enum registration + `_borderBrushes` side-table column) |
 | Push/PopLayerCmd, Push/PopClipRectCmd, Push/PopStencilClipCmd, Push/PopTransformCmd | gpu-renderer.md |
 | PushLayerCmd **{Effect}** authoring (effect-chain recording semantics) | backdrop-effects-animation.md |
 | DrawGlyphRunCmd — **emission** (device-space, visual order, late-UV) | text.md |
@@ -164,7 +165,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | FluentGpu.Theme | theming.md |
 | FluentGpu.Validation (CI-only) | validation.md |
 | **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`) | validation.md |
-| **FluentGpu.Controls** (portable leaf control kit; apps + Dsl's `Ui` re-export reference it; pay-per-reference trim) | controls.md (content) / dsl-aot.md (assembly-graph + trim placement) |
+| **FluentGpu.Controls** (the SDK controls layer; apps + Dsl's `Ui` re-export reference it; pay-per-reference trim). **Deps (as-shipped):** Foundation, Dsl, Hooks, **Animation, Scene, Reconciler** — *not* "Dsl/Hooks/Foundation only" (ratification: NavigationView/PageHost are `Component`s and Repeater/`Virtual` need Reconciler types; `IVirtualLayout` is in Scene). Stays **acyclic** — Reconciler references only `VirtualListEl`, so `Controls → Reconciler` is one-way. | controls.md (content) / dsl-aot.md (assembly-graph + trim placement) |
 | **FluentGpu.Devtools** (dev-only live inspector; `EnableDevtools`-gated, 0 bytes release) | devtools.md (content) / dsl-aot.md (EnableDevtools FeatureSwitch + trim placement) |
 | **FluentGpu.Localization** (CLDR slices; dropped in `Invariant` mode) | dsl-aot.md (build placement) / text.md (ILocaleFormatter consumer) |
 | FluentGpu.SourceGen | dsl-aot.md |

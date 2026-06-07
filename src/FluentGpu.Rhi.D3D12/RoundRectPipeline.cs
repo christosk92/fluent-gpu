@@ -16,7 +16,7 @@ internal struct RectInstance
     public float R, G, B, A;
     public float M11, M12, M21, M22, Dx, Dy;   // 2x3 world transform (local→device)
     public float Opacity;
-    public float Pad;   // pad to 80 bytes: HLSL rounds structured-buffer stride up to 16 (float4 alignment)
+    public float StrokeWidth;   // 0 = filled; >0 = an SDF outline (focus ring / border) of this width. Keeps the 80-byte stride.
 }
 
 /// <summary>
@@ -34,12 +34,13 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     private ID3D12Resource* _instances;     // structured buffer of RectInstance (upload heap, persistently mapped)
     private RectInstance* _mapped;
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
+    private int _cursor;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 color; float4 m; float2 t; float opacity; float pad; };
+struct Inst { float2 pos; float2 size; float4 radii; float4 color; float4 m; float2 t; float opacity; float stroke; };
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; float opacity : TEXCOORD4; };
+struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; float opacity : TEXCOORD4; float stroke : TEXCOORD5; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -55,15 +56,20 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.radius = it.radii.x;
     o.color = it.color;
     o.opacity = it.opacity;
+    o.stroke = it.stroke;
     return o;
 }
 
 float4 PSMain(VSOut i) : SV_Target
 {
     float2 q = abs(i.local) - (i.halfSize - i.radius);
-    float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;
+    float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;   // signed distance to the rounded-box edge
     float fw = max(fwidth(d), 1e-4);
-    float cov = clamp(0.5 - d / fw, 0.0, 1.0);   // crisp ~1px linear AA
+    float cov;
+    if (i.stroke > 0.0)
+        cov = clamp(0.5 - (abs(d) - i.stroke * 0.5) / fw, 0.0, 1.0);   // outline: a band of width 'stroke' centred on the edge
+    else
+        cov = clamp(0.5 - d / fw, 0.0, 1.0);                            // fill: crisp ~1px linear AA
     float aOut = i.color.a * cov * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
@@ -185,18 +191,18 @@ float4 PSMain(VSOut i) : SV_Target
     {
         // unit quad (triangle strip): (0,0)(1,0)(0,1)(1,1)
         float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8);
+        _quad = CreateUpload(device, sizeof(float) * 8, "RoundRect.QuadUpload");
         void* qp; _quad->Map(0, null, &qp);
         Buffer.MemoryCopy(quad, qp, sizeof(float) * 8, sizeof(float) * 8);
         _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = sizeof(float) * 8, StrideInBytes = sizeof(float) * 2 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances));
+        _instances = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances), "RoundRect.InstanceUpload");
         void* ip; _instances->Map(0, null, &ip);
         _mapped = (RectInstance*)ip;   // persistently mapped
     }
 
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes)
+    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
     {
         D3D12_HEAP_PROPERTIES hp = default;
         hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
@@ -213,20 +219,25 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12Resource* res;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "CreateCommittedResource");
+        D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }
 
+    public void BeginFrame() => _cursor = 0;
+
     public void Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH)
     {
-        int count = Math.Min(instances.Length, MaxInstances);
+        int start = _cursor;
+        int count = Math.Min(instances.Length, MaxInstances - start);
         if (count == 0) return;
-        for (int i = 0; i < count; i++) _mapped[i] = instances[i];
+        for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
+        _cursor += count;
 
         float* vp = stackalloc float[2] { vpW, vpH };
         cmd->SetGraphicsRootSignature(_rootSig);
         cmd->SetPipelineState(_pso);
         cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootShaderResourceView(1, _instances->GetGPUVirtualAddress());
+        cmd->SetGraphicsRootShaderResourceView(1, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
             cmd->IASetVertexBuffers(0, 1, qv);
@@ -235,8 +246,8 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); _instances->Release(); }
-        if (_quad != null) _quad->Release();
+        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "RoundRect.InstanceUpload"); _instances->Release(); _instances = null; }
+        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "RoundRect.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
     }

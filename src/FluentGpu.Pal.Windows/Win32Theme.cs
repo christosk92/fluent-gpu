@@ -29,6 +29,12 @@ public static partial class Win32Theme
     [LibraryImport("dwmapi.dll")]
     private static partial int DwmSetWindowAttribute(nint hwnd, uint attr, in int value, uint size);
 
+    [LibraryImport("dwmapi.dll")]
+    private static partial int DwmExtendFrameIntoClientArea(nint hwnd, in MARGINS margins);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MARGINS { public int cxLeftWidth, cxRightWidth, cyTopHeight, cyBottomHeight; }
+
     /// <summary>The Settings &gt; Colors accent (registry AccentColorMenu), falling back to the DWM colorization color.</summary>
     public static (byte R, byte G, byte B)? Accent()
     {
@@ -67,5 +73,15 @@ public static partial class Win32Theme
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
         int backdrop = mica ? DWMSBT_MAINWINDOW : DWMSBT_TRANSIENTWINDOW;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, in backdrop, sizeof(int));
+
+        if (mica)
+        {
+            // Sheet-of-glass: extend the DWM frame across the ENTIRE client area so the Mica system backdrop composites
+            // behind the transparent (DirectComposition) client pixels. Without this, the system-backdrop attribute
+            // applies to the frame but the transparent client shows the opaque window surface (the white pane), because
+            // DWM only fills the backdrop where the frame is extended. Margins of -1 = full-window glass.
+            MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
+            DwmExtendFrameIntoClientArea(hwnd, in m);
+        }
     }
 }

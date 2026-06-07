@@ -722,7 +722,13 @@ Dependency direction: arrows point to dependencies. NO cycles. Impls depend INWA
        │              │                          │ ISceneBackend│  Layout, Foundation, Dsl
        │              │                          └──────┬───────┘
        │              │                                 ▼
-       │              │            ┌────────────┐ ┌──────────────┐  ┌──────────────┐
+       │              │                          ┌──────────────┐
+       │              │                          │ .Controls    │  SDK controls layer; depends:
+       │              │                          │ Button/Slider│  Foundation, Dsl, Hooks,
+       │              │                          │ Nav/Repeater │  Animation, Scene, Reconciler
+       │              │                          └──────┬───────┘  (Reconciler refs only VirtualListEl
+       │              │                                 │           → Controls→Reconciler one-way)
+       │              │            ┌────────────┐ ┌─────┴────────┐  ┌──────────────┐
        │              │            │ .Hooks     │ │ .Dsl         │  │ .Animation   │
        │              │            │ RenderCtx  │ │ Element recs,│  │ Curve, track │
        │              │            └─────┬──────┘ │ factories,   │  └──────┬───────┘
@@ -765,6 +771,7 @@ Assembly list (one assembly per box; trimmable, AOT):
 - `FluentGpu.Dsl` — Element records, factories, modifiers (Reactor model verbatim, decoupled). Dep: Foundation.
 - `FluentGpu.Hooks` — RenderContext, hook states, Context. Dep: Dsl, Foundation.
 - `FluentGpu.Reconciler` — ISceneBackend, reconciler, ChildReconciler (Reactor reuse). Dep: Scene, Render, Layout, Hooks, Dsl, Foundation.
+- `FluentGpu.Controls` — the SDK controls layer (Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView + Navigator/PageHost/Route/Nav + Repeater + the `Virtual` factory + `Icons`). Top of the graph; refs Foundation, Dsl, Hooks, Animation, Scene, Reconciler. **Acyclic**: Reconciler references only `VirtualListEl` (which stays in Reconciler), so `Controls → Reconciler` is one-way. Content owned by `subsystems/controls.md`. (Aspirational lookless `ControlTemplate`/`ControlTheme`/`VisualState` kit is the stated future target; as-shipped Phase 0 is the composition-factory hoist + per-control `Style` records — see `subsystems/controls.md`.)
 - `FluentGpu.Accessibility` — optional UIA bridge. Dep: Scene, Pal(iface), Foundation.
 - `FluentGpu.Hosting` — composition root; binds impls to seams; owns frame loop. Dep: all interface assemblies + selected impls.
 - `FluentGpu.SourceGen` — Roslyn analyzer; build-time; no runtime dep.
@@ -804,7 +811,7 @@ ChildReconciler LIS algorithm (Reactor, host-agnostic) and RenderContext hooks a
 5. PAL + RHI are **interface-only**; D3D12 + Win32 + DComp are reference impls in leaf assemblies; DrawList POD is the swap line.
 6. Text seam: IFontSystem/IFontFace/ITextShaper(→spans)/IGlyphRasterizer/IGlyphAtlas; DWrite now, CoreText later; no `string` on paint path.
 7. Frame phases fixed (input→hookflush→render→reconcile→layout→anim→record→batch→submit→present→effects→arenaswap); single UI thread v1; effects after present.
-8. 18 assemblies, acyclic, impls are leaves referenced only by `Hosting`; `Foundation` is the root with no deps.
+8. The design-core acyclic graph (now incl. `Animation`, `Hooks`, and the top-of-graph `FluentGpu.Controls`) plus OS/test-leaf assemblies — **27 projects** in the repo; acyclic, impls are leaves referenced only by `Hosting`; `Foundation` is the root with no deps. (The old "18 assemblies" count predated the `Animation`/`Hooks`/`Controls` splits and the test/leaf growth; restated consistently with `architecture-spec.md` §3 and `design/README.md`. `FluentGpu.Controls` sits above `Reconciler` — see §7.)
 9. Hook deps = `ReadOnlySpan<DepKey>` (not `params object[]`); source-gen'd. Reactor Element/Hooks/ChildReconciler reused verbatim; reconciler bridges via `ISceneBackend`.
 10. ComputeSharp: vendor `ComPtr<T>` + DXGI/D3D12 bindings + pools + source-gen + AOT config into `Rhi.D3D12`; author DWrite + DComp + graphics-PSO/swapchain ourselves; do NOT take D2D1 for core; D3D12MA optional.
 ```

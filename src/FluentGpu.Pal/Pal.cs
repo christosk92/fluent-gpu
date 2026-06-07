@@ -2,10 +2,14 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Pal;
 
-public enum InputKind : byte { PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4 }
+public enum InputKind : byte { PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5 }
 
-/// <summary>POD input event drained from the host-owned ring once per frame (no C# events across the seam).</summary>
-public readonly record struct InputEvent(InputKind Kind, Point2 PositionPx, int Button, int KeyCode);
+/// <summary>
+/// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
+/// <paramref name="ScrollDelta"/> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
+/// (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+/// </summary>
+public readonly record struct InputEvent(InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f);
 
 /// <summary>Drained by the host each frame; the window writes POD events into it (move-coalesced).</summary>
 public sealed class InputEventRing
@@ -44,6 +48,12 @@ public interface IPlatformWindow : IDisposable
 
     /// <summary>Drain queued OS input/window events into the ring (once per frame).</summary>
     int PumpInto(InputEventRing ring);
+
+    /// <summary>
+    /// Block until platform work arrives or <paramref name="timeoutMs"/> elapses. Negative timeout means wait indefinitely.
+    /// Real windows use this for event-driven idle; headless implementations may return immediately.
+    /// </summary>
+    void WaitForWork(int timeoutMs);
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —

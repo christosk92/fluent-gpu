@@ -60,7 +60,81 @@ The hardest correctness facts this doc commits to:
 
 | Concern | Assembly | Deps | Thread | COM? |
 |---|---|---|---|---|
-| The control kit + control-template/styling system + per-control components | **`FluentGpu.Controls`** (portable) | `Dsl`, `Hooks`, `Foundation`; and **through portable seams only** `Input`(iface), `Text`(iface), `Layout`(iface), `Animation`(iface), `Theme`(iface), `Scene`(read via hooks) | UI thread, phases 4–6.5 | **none** |
+| The control kit + control-template/styling system + per-control components | **`FluentGpu.Controls`** (portable) | **As-shipped (Phase 0):** Foundation, Dsl, Hooks, **Animation, Scene, Reconciler** (ratified — see §1.1 + below). *Aspirational lookless kit (future target):* `Dsl`, `Hooks`, `Foundation` + the portable Input/Text/Layout/Animation/Theme seams. | UI thread, phases 4–6.5 | **none** |
+
+> **Dependency-claim ratification (the one genuine architectural delta).** This doc previously placed
+> `FluentGpu.Controls` as an "app-like leaf" referencing **only** `Dsl`/`Hooks`/`Foundation`. The **shipped**
+> assembly **also** references **`Reconciler`** (NavigationView/PageHost are `Component`s; the Repeater/`Virtual`
+> factory needs Reconciler types), **`Scene`** (`IVirtualLayout`), and **`Animation`**. It stays **acyclic**:
+> `Reconciler` references only `VirtualListEl` (which stays in `Reconciler`), so `Controls → Reconciler` is
+> one-way. The corrected dependency set is mirrored in `subsystems/README.md` §2.6 and `dsl-aot.md` §3.4. The
+> body below (§3–§13) still describes the aspirational lookless kit — see **§1.1** for what actually shipped.
+
+### 1.1 As-shipped (Phase 0): the composition-factory hoist + per-control `Style` records
+
+The shipped `FluentGpu.Controls` is **smaller** than the lookless `ControlTemplate`/`ControlTheme`/`VisualState`
+kit the rest of this doc specifies. Phase 0 is a **composition-factory hoist** of the controls that already
+existed (formerly split between `Dsl` and `Reconciler`) into one top-of-graph assembly, plus a **per-control
+`Style` record** styling pattern. The lookless kit (§3) remains the **stated future target**, not yet built.
+
+**What moved into `FluentGpu.Controls`** (all under `namespace FluentGpu.Controls`):
+
+| Control / type | Form | Notes |
+|---|---|---|
+| `Button` (+ nested `Button.Style`) | static class; `.Accent`/`.Standard` + `.Create` | the old `ButtonStyle` is now nested `Button.Style` |
+| `IconButton` | static class; `.Create` + nested `Style`/`StyleOverride`/`DefaultStyle` | rounded-square r4 (NOT a circle), 16px glyph |
+| `ToggleButton` | static class; `.Create` + `Style` | corner 4, padding (11,5,11,6) |
+| `Slider` | static class; `.Create` + `Style` | real thumb (ring + accent inner dot); Component-backed internally for hover-grow |
+| `ScrollBar` | static class; `.Create` + `Style` | thumb = `FillControlStrong`, min length 30, radius 3; Component-backed internally |
+| `NavigationView` (+ `NavItem`, `PaneMode`, internal `NavIndicator`) | stateful `Component` | keeps **public properties** for config (idiomatic) + a `Style` for dimensions/colors — NOT a nested `Style`-only record |
+| `Navigator`, `Route`, `PageHost`, `Nav` | navigation Components/factories | moved from `Reconciler/Navigation.cs` |
+| `Repeater` (+ `RepeatLayout`, `RepeatKind`) | factory | moved from `Reconciler/Repeater.cs` |
+| `Virtual` (factory) | factory that builds `VirtualListEl` | **`VirtualListEl` record STAYS in `Reconciler`** (the reconciler diffs it directly, ElementTypeId 6) — only the `Virtual` factory moved |
+| `Icons` (glyph constants) | static class | **moved `Dsl → Controls`** |
+
+The old `Controls` static facade was **deleted** (no `Controls.IconButton(...)` stutter; each control is its own
+class with `.Create`). `IVirtualLayout`/`StackVirtualLayout`/`GridVirtualLayout` stay in `Scene` (unchanged).
+
+**The shipped `Style` pattern (Phase 0).** Each **stateless visual control** exposes a five-part shape:
+a nested `Style` record (tailored knobs; structural defaults) + a static `StyleOverride` (global hook) + a
+computed `DefaultStyle` (colors resolved from `Tok` so a theme swap re-themes) + a `.Create(content+callbacks,
+Style? style = null)` factory. Three override layers, increasing locality: **per-instance** (pass a `Style`,
+build via `with`), **global** (set `StyleOverride`), **ad-hoc** (chain modifiers). **Border is ONE knob:**
+`BorderBrush` (a `GradientSpec?`) — solid via `GradientSpec.Solid(color)`, gradient via
+`GradientSpec.Vertical(a,b)` or the elevation-border token helpers (`Tok.ControlElevationBorder` /
+`Tok.AccentControlElevationBorder`, theming.md). **`NavigationView` is the exception** — being a stateful
+`Component`, it keeps **public properties** for content/behavior config (idiomatic) plus a `Style` for the
+dimensional/color config, rather than a nested-`Style`-record-only shape.
+
+**Accessibility role (SHIPPED, new).** A control is a `BoxEl`, not a nominal type, so it announces its kind via
+a new `AutomationRole` enum (in **Foundation**) surfaced through `BoxEl.Role` → the `InteractionInfo.Role` scene
+column (input-a11y.md owns the column semantics). Control factories set it: Button/IconButton → `Button`,
+ToggleButton → `ToggleButton`, Slider → `Slider`, ScrollBar → `ScrollBar`, NavigationView items →
+`NavigationItem`. This is how the future UIA layer / devtools / UI tests read a control's type.
+
+**WinUI fidelity notes (SHIPPED; sourced from the shipped WinUI `generic.xaml` + microsoft-ui-xaml).**
+ToggleButton corner 4 + padding (11,5,11,6); IconButton is a rounded-square r4 (NOT a circle) with subtle fills
++ a 16px glyph; Slider has a real thumb (18px ring of `ControlSolidFillColorDefault` + a 1px elevation border +
+a 12px accent inner dot); ScrollBar thumb = `ControlStrongFillColorDefault`, min length 30, radius 3;
+NavigationView item corner radius = `OverlayCornerRadius` (8).
+
+**Compositor additions (SHIPPED).**
+- **WinUI 83ms hover/press brush cross-fade is now correct:** `ColorF.LerpLinear` (linear-light interpolation,
+  honoring the linear-blend color contract — SPEC-INDEX §2 color row) is used by `SceneRecorder.ResolveSurface`;
+  the `InteractionAnimator` is tuned to ~83ms (WinUI `ControlFasterAnimationDuration`).
+- **Interaction-driven composited SCALE:** new `BoxEl.HoverScale`/`PressScale` + `InteractionAnim.HoverScale`/
+  `PressScale`; the recorder scales a node about its centre by the eased hover/press of its nearest **interactive
+  ancestor** (a slider/scrollbar thumb grows on control hover). **Composited only** — never changes layout or
+  hit-test (HitTest reads `Bounds`, never `LocalTransform`).
+
+**Honest constraint (acrylic vs. system Mica).** The engine's in-app acrylic (`AcrylicSpec`) renders the whole
+frame through an **opaque** canvas RT, which overrides window transparency and **kills the DWM Mica window
+backdrop**. So the NavigationView **EXPANDED (always-visible) pane uses a TRANSPARENT fill** (matching the
+shipped WinUI `NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent`) so Mica shows
+through; engine acrylic is used only for the **transient OVERLAY/flyout pane** (matching
+`NavigationViewDefaultPaneBackground = AcrylicInAppFillColorDefaultBrush`). Real per-node acrylic does not
+compose with the system Mica backdrop in this engine — a known limitation, recorded honestly per the project's
+honesty discipline.
 | Author-facing control entry points (the `Ui.*` factories) | re-exported via `FluentGpu.Dsl` `Ui` partial (so app code writes `Ui.Button(...)` next to `Ui.VStack(...)`) | `Controls` | UI thread, phase 4 | none |
 
 `FluentGpu.Controls` carries `[assembly: DisableRuntimeMarshalling]` (100% blittable composition; no source-gen COM —
@@ -730,8 +804,19 @@ generational handles, and the portable seam interfaces.
 - **The per-control five-tuple contract** (composition / UIA pattern+ControlType / keyboard / name-role / motion-
   cursor-RTL) and the universal control contract (§4) that validation.md gates.
 
-**Explicitly NOT owned here (referenced):** SceneStore columns + opcode registration (scene-memory.md); DrawList
-opcode shapes `DrawFocusRingCmd`/`DrawSelectionRectCmd`/`DrawScrimCmd`/`FillRoundRectCmd` (gpu-renderer.md §3.1/§3.6);
+**As-shipped (Phase 0) ownership note.** The shipped assembly (§1.1) owns: the shipped control classes (`Button`/
+`IconButton`/`ToggleButton`/`Slider`/`ScrollBar`/`NavigationView`+`NavItem`+`PaneMode`, `Navigator`/`Route`/
+`PageHost`/`Nav`, `Repeater`+`RepeatLayout`+`RepeatKind`, the `Virtual` factory, `Icons`), each control's nested
+`Style` record + `StyleOverride` + `DefaultStyle`, and the `Style`-override layering. The work also **drove** (but
+does NOT own) the new opcode **`DrawGradientStroke`** (owned by scene-memory.md §4.1 / gpu-renderer.md §3.1a) +
+the `_borderBrushes` side-table (scene-memory.md) + the `BoxEl.BorderBrush` DSL field, the `AutomationRole` enum
+(Foundation) + `InteractionInfo.Role` column (input-a11y.md), `ColorF.LerpLinear` (Foundation/Geometry), and the
+`BoxEl.HoverScale`/`PressScale` composited-scale recorder behaviour — registered in their owning docs, referenced
+here. `VirtualListEl` stays in `Reconciler`.
+
+**Explicitly NOT owned here (referenced):** SceneStore columns + opcode registration incl. `DrawGradientStroke` +
+`_borderBrushes` + `InteractionInfo.Role` (scene-memory.md / input-a11y.md); DrawList
+opcode shapes `DrawGradientStrokeCmd`/`DrawFocusRingCmd`/`DrawSelectionRectCmd`/`DrawScrimCmd`/`FillRoundRectCmd` (gpu-renderer.md §3.1/§3.1a/§3.6);
 gesture arena / overlay manager / cursor resolver / edge-autoscroll / UIA providers / `ITextRangeProvider` CCW
 (input-a11y.md); `SelectionState`/`ITextDocument`/`ITextReadSide`/`ILocaleFormatter` (text.md); RTL resolution +
 `OverlayPlacement` geometry + virtualization layout (layout.md); `UseVirtual`/`Suspense`/`UseTransition`/

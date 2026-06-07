@@ -8,6 +8,7 @@ using FluentGpu.Input;
 using FluentGpu.Layout;
 using FluentGpu.Pal.Headless;
 using FluentGpu.Reconciler;
+using FluentGpu.Controls;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
@@ -99,6 +100,223 @@ sealed class HookProbe : Component
         State = s; Dispatch = d; Memo = m; RefBox = r;
         return Ui.Text("probe");
     }
+}
+
+// A 200×200 ScrollView over a 20×40px=800px-tall column → proves layout-free scroll + clip culling.
+sealed class ScrollProbe : Component
+{
+    public override Element Render()
+    {
+        var items = new Element[20];
+        for (int i = 0; i < items.Length; i++)
+            items[i] = new BoxEl { Width = 180, Height = 40, Fill = ColorF.FromRgba(40, 40, 40) };
+        return new ScrollEl
+        {
+            Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+            Content = new BoxEl { Direction = 1, Children = items },
+        };
+    }
+}
+
+// A 10,000-row virtualized list (40px uniform rows) in a 400px viewport → proves windowing + recycle at scale.
+sealed class VirtualProbe : Component
+{
+    public const int N = 10_000;
+    public override Element Render()
+        => Virtual.List(N, 40f,
+               renderItem: i => new BoxEl
+               {
+                   Height = 40, Fill = ColorF.FromRgba(30, 30, 30),
+                   Children = [new TextEl($"row {i}") { Size = 12f }],
+               },
+               keyOf: i => "r" + i)
+           with { Width = 300, Height = 400 };
+}
+
+// A NavigationView with 3 items + a footer → proves adaptive Expanded/Compact/Minimal display modes.
+sealed class NavProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new NavigationView
+    {
+        Items = [new NavItem("home", "H", "Home"), new NavItem("search", "S", "Search"), new NavItem("lib", "L", "Library")],
+        Footer = [new NavItem("settings", "G", "Settings")],
+        Header = "Wavee",
+        Content = key => new BoxEl { Children = [new TextEl("PAGE:" + key)] },
+    });
+}
+
+// A 1,000-item virtualized 4-column card grid → proves 2-D (VirtualGrid) windowing + recycle.
+sealed class VGridProbe : Component
+{
+    public const int N = 1000;
+    public override Element Render()
+        => Virtual.Grid(N, columns: 4, itemHeight: 100f, gap: 12f,
+               renderItem: i => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40), Children = [new TextEl($"#{i}") { Size = 12f }] },
+               keyOf: i => "g" + i)
+           with { Width = 520, Height = 400 };
+}
+
+// A 200-row variable-height list (heights 40/60/80) in a 300px viewport → proves the Fenwick extent table + anchoring.
+sealed class VarProbe : Component
+{
+    public const int N = 200;
+    public static float H(int i) => 40f + (i % 3) * 20f;   // 40, 60, 80, 40, …
+    public override Element Render()
+        => Virtual.VariableList(N, 50f,
+               renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
+               keyOf: i => "v" + i)
+           with { Width = 300, Height = 300 };
+}
+
+// An async image (album art) inside a box → proves the decode→ready→draw pipeline + residency pinning.
+sealed class ImageProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 120, Height = 120, Padding = Edges4.All(10),
+        Children = [Ui.Image("album/1.jpg", 80, 80, 6f)],
+    };
+}
+
+// Slider + ToggleButton + IconButton + ScrollBar driven by state → proves controlled controls + pointer drag input.
+sealed class ControlsProbe : Component
+{
+    public float SliderVal, ScrollPos;
+    public bool Toggled;
+    public int IconClicks;
+
+    public override Element Render()
+    {
+        var (sv, setSv) = UseState(0f);
+        var (on, setOn) = UseState(false);
+        var (sp, setSp) = UseState(0f);
+        SliderVal = sv; Toggled = on; ScrollPos = sp;
+        return new BoxEl
+        {
+            Direction = 1, Gap = 0,
+            Children =
+            [
+                Slider.Create(sv, setSv, 200f, 24f),
+                ToggleButton.Create("Shuffle", on, () => setOn(!on)),
+                IconButton.Create("▶", () => IconClicks++),
+                ScrollBar.Create(0.25f, sp, setSp, 200f),
+            ],
+        };
+    }
+}
+
+// A 3-column uniform (Star) grid of 5 cells → proves track sizing + row-major auto-flow.
+sealed class GridProbe : Component
+{
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    public override Element Render()
+        => Ui.UniformGrid(3, 10f, 50f, Cell(), Cell(), Cell(), Cell(), Cell()) with { Width = 320, Height = 400 };
+}
+
+// A STRETCH-width grid (no explicit Width) inside a column, followed by a sibling — the gallery shape (a UniformGrid
+// is the body of a Section/card). The grid must MEASURE to its real content height so the column stacks the next
+// sibling below it; if Measure can't see the available width it collapses to 0 and the sibling overlaps the grid's
+// overflowing rows (the "messed-up layout" on the Images / CSS-Grid pages).
+sealed class GridStretchProbe : Component
+{
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    public override Element Render()
+        => new BoxEl
+        {
+            Direction = 1,
+            Gap = 10f,
+            Width = 420f,   // the column has a width; the grid inside has none → it stretches to fill it
+            Children =
+            [
+                Ui.UniformGrid(4, 12f, 90f, Cell(), Cell(), Cell(), Cell(), Cell(), Cell(), Cell(), Cell()),
+                new TextEl("after") { Size = 14f, Color = ColorF.FromRgba(255, 255, 255) }
+            ],
+        };
+}
+
+// The Wavee skeleton: a shell composing EVERY subsystem — sidebar nav → PageHost back stack; a Home page (album-art
+// card Grid in a ScrollView) and a Playlist page (5,000-row virtualized track list with art thumbs); a now-playing
+// PlayerBar (image + Slider + transport IconButtons + ToggleButton). This is the acceptance test for "can host Wavee".
+sealed class WaveeShell : Component
+{
+    readonly Navigator _nav = new(new Route("home"));
+    public Navigator Nav => _nav;
+
+    public override Element Render()
+    {
+        var (playing, setPlaying) = UseState(false);
+        var (seek, setSeek) = UseState(0.3f);
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl   // top: sidebar + page host
+                {
+                    Direction = 0, Grow = 1,
+                    Children = [Sidebar(), Embed.Comp(() => new PageHost(_nav, Page))],
+                },
+                PlayerBar(playing, setPlaying, seek, setSeek),
+            ],
+        };
+    }
+
+    Element Sidebar() => new BoxEl
+    {
+        Width = 200, Direction = 1, Gap = 4, Padding = Edges4.All(12), Fill = ColorF.FromRgba(0x0E, 0x0E, 0x0E),
+        Children = [NavItem("Home", "home"), NavItem("Search", "search"), NavItem("Your Library", "playlist")],
+    };
+    Element NavItem(string label, string route) => new BoxEl
+    {
+        Padding = new Edges4(10, 8, 10, 8), Corners = CornerRadius4.All(6), HoverFill = ColorF.FromRgba(0x22, 0x22, 0x22),
+        OnClick = () => _nav.Push(route), Children = [new TextEl(label)],
+    };
+
+    Element Page(Route r) => r.Name == "playlist" ? Playlist() : Home();
+
+    Element Home() => Ui.ScrollView(Ui.UniformGrid(4, 16f, 210f, AlbumCards()));
+    Element[] AlbumCards()
+    {
+        var a = new Element[12];
+        for (int i = 0; i < a.Length; i++) a[i] = AlbumCard(i);
+        return a;
+    }
+    Element AlbumCard(int i) => new BoxEl
+    {
+        Direction = 1, Gap = 8, Padding = Edges4.All(8), Corners = CornerRadius4.All(8),
+        HoverFill = ColorF.FromRgba(0x1E, 0x1E, 0x1E), OnClick = () => _nav.Push("playlist", "p" + i),
+        Children = [Ui.Image("album/" + i, 150, 150, 6f), new TextEl("Album " + i) { Bold = true }, new TextEl("Artist") { Size = 12 }],
+    };
+
+    Element Playlist() => Virtual.List(5000, 56f, TrackRow, keyOf: i => "t" + i) with { Grow = 1f };
+    Element TrackRow(int i) => new BoxEl
+    {
+        Direction = 0, Height = 56, Gap = 12, AlignItems = FlexAlign.Center, Padding = new Edges4(16, 8, 16, 8),
+        HoverFill = ColorF.FromRgba(0x22, 0x22, 0x22), OnClick = () => { },
+        Children =
+        [
+            new TextEl((i + 1).ToString()) { Size = 12 },
+            Ui.Image("art/" + i, 40, 40, 4f),
+            new BoxEl { Direction = 1, Grow = 1, Children = [new TextEl("Track " + i), new TextEl("Artist") { Size = 12 }] },
+            new TextEl("3:21") { Size = 12 },
+        ],
+    };
+
+    Element PlayerBar(bool playing, Action<bool> setPlaying, float seek, Action<float> setSeek) => new BoxEl
+    {
+        Direction = 0, Height = 80, AlignItems = FlexAlign.Center, Gap = 16, Padding = new Edges4(16, 0, 16, 0),
+        Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
+        Children =
+        [
+            Ui.Image("nowplaying", 56, 56, 4f),
+            new BoxEl { Direction = 1, Width = 150, Children = [new TextEl("Now Playing") { Bold = true }, new TextEl("Artist") { Size = 12 }] },
+            IconButton.Create("⏮", () => { }),
+            IconButton.Create(playing ? "⏸" : "▶", () => setPlaying(!playing)),
+            IconButton.Create("⏭", () => { }),
+            Slider.Create(seek, setSeek, 220f),
+            ToggleButton.Create("Shuffle", false, () => { }),
+        ],
+    };
 }
 
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
@@ -401,7 +619,7 @@ static class Slice
     // Controls are barebone + a default Fluent style on top, overrideable per-instance (ButtonStyle) or via modifiers.
     static void StyleChecks()
     {
-        var s = new ButtonStyle
+        var s = new Button.Style
         {
             Background = ColorF.FromRgba(10, 20, 30),
             Foreground = ColorF.FromRgba(40, 50, 60),
@@ -539,6 +757,587 @@ static class Slice
         Check("35. UseSpring hook seeds + drives the node", !host.IsNull && Near(sx, 1.2f, 0.03f), $"scaleX={sx:0.###}");
     }
 
+    // ScrollView: layout publishes ContentSize, the viewport clips overflow, and a wheel scrolls via a transform
+    // (layout-free) clamped to the content — no relayout, offscreen rows culled.
+    static void ScrollChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scroll", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ScrollProbe());
+
+        host.RunFrame();   // mount + layout → ContentSize published
+        var vp = host.Scene.Root;
+        host.Scene.TryGetScroll(vp, out var sc0);
+        bool sized = Near(sc0.ContentH, 800) && Near(sc0.ViewportH, 200);
+
+        // a 200px viewport over 40px rows shows ~5 of 20 — the rest are clip-culled; clip is balanced.
+        int drawnAtTop = device.LastRects.Count;
+        bool clipped = device.LastClips.Count >= 1 && device.ClipBalance == 0 && drawnAtTop is >= 5 and < 20;
+
+        // wheel down 100 → offset 100, content transform −100, NO re-render (transform-only frame)
+        var center = new Point2(100, 100);
+        window.QueueInput(new InputEvent(InputKind.Wheel, center, 0, 0, 100f));
+        var f = host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var sc1);
+        bool scrolled = Near(sc1.OffsetY, 100)
+            && Near(host.Scene.Paint(sc1.ContentNode).LocalTransform.Dy, -100)
+            && !f.Rendered;
+
+        // fling past the end → clamp to ContentH − ViewportH = 600
+        window.QueueInput(new InputEvent(InputKind.Wheel, center, 0, 0, 10000f));
+        host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var sc2);
+        bool clamped = Near(sc2.OffsetY, 600);
+
+        Check("36. ScrollView publishes ContentSize + clips overflow", sized && clipped, $"content={sc0.ContentH:0} drawn={drawnAtTop} clips={device.LastClips.Count}");
+        Check("37. wheel scrolls via transform (layout-free) + clamps", scrolled && clamped, $"off→{sc1.OffsetY:0}, clamp={sc2.OffsetY:0}");
+    }
+
+    // Virtualization: a 10k-row list realizes only the viewport window; scrolling recycles via the slab free-list
+    // (bounded live nodes, no leak); a sub-extent scroll is a transform-only frame (no realize / no relayout).
+    // Overlay scrollbar visual states: hover over the lane shows the full WinUI gutter; leaving collapses to a thin
+    // indicator; after the idle timeout it auto-hides to no scrollbar draw.
+    static void ScrollOverlayChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scrollbar", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ScrollProbe());
+
+        static RectF DeviceRect(FillRoundRectCmd cmd) => cmd.Transform.TransformBounds(cmd.Rect);
+        static bool LaneRect(FillRoundRectCmd cmd, out RectF r)
+        {
+            r = DeviceRect(cmd);
+            return r.X >= 186f && r.X <= 200.5f && r.W <= 13.5f && r.H > 20f;
+        }
+
+        host.RunFrame();
+
+        window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
+        for (int i = 0; i < 18; i++) host.RunFrame();
+
+        bool expandedGutter = false, expandedThumb = false;
+        foreach (var rect in device.LastRects)
+        {
+            if (!LaneRect(rect, out var r)) continue;
+            expandedGutter |= r.W >= 10f && r.H >= 190f;
+            expandedThumb |= r.W >= 10f && r.H >= 30f && r.H < 190f;
+        }
+
+        window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(260f, 260f), 0, 0));
+        for (int i = 0; i < 30; i++) host.RunFrame();
+
+        bool collapsedGutter = false, collapsedThumb = false;
+        foreach (var rect in device.LastRects)
+        {
+            if (!LaneRect(rect, out var r)) continue;
+            collapsedGutter |= r.W >= 10f && r.H >= 190f;
+            collapsedThumb |= r.W <= 3.5f && r.H >= 30f;
+        }
+
+        for (int i = 0; i < 90; i++) host.RunFrame();
+
+        bool anyScrollbar = false;
+        foreach (var rect in device.LastRects)
+            anyScrollbar |= LaneRect(rect, out _);
+
+        Check("38a. overlay scrollbar expands, collapses thin, then auto-hides",
+            expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && !anyScrollbar,
+            $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
+    }
+
+    static void VirtualChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("virt", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new VirtualProbe());
+
+        host.RunFrame();
+        var vp = host.Scene.Root;
+        host.Scene.TryGetScroll(vp, out var sc0);
+        var content = sc0.ContentNode;
+        int realized = host.Scene.ChildCount(content);
+        bool windowed = realized >= 10 && realized < 40;
+        bool contentSize = Near(sc0.ContentH, VirtualProbe.N * 40f);
+        Check("38. virtualizes 10k rows to a small window", windowed && contentSize, $"realized={realized}/{VirtualProbe.N} content={sc0.ContentH:0}");
+
+        // in-window (sub-extent) scroll = transform-only frame: no re-render, window unchanged, content shifted.
+        int firstA = sc0.FirstRealized;
+        var ptr = new Point2(150, 200);
+        window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 10f));
+        var f1 = host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var sc1);
+        bool transformOnly = !f1.Rendered && sc1.FirstRealized == firstA
+            && Near(host.Scene.Paint(content).LocalTransform.Dy, -10f);
+        Check("39. in-window scroll is transform-only (no realize/relayout)", transformOnly, $"rendered={f1.Rendered} first={sc1.FirstRealized}");
+
+        // boundary-crossing fling to the end: window re-realizes directly; recycle keeps live nodes bounded (no leak).
+        long live0 = host.Scene.LiveCount;
+        for (int s = 0; s < 60; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 7000f)); host.RunFrame(); }
+        host.Scene.TryGetScroll(vp, out var sc2);
+        long liveEnd = host.Scene.LiveCount;
+        bool reachedEnd = sc2.FirstRealized > 9000;
+        bool bounded = liveEnd < 90 && Math.Abs(liveEnd - live0) < 40;
+        Check("40. fling recycles via free-list (bounded live nodes, no leak)", reachedEnd && bounded, $"first={sc2.FirstRealized} live {live0}→{liveEnd}");
+    }
+
+    // The Fenwick extent table: O(log n) prefix-sum (OffsetOf) + binary-lift (IndexAt) + O(log n) correction.
+    static void ExtentTableChecks()
+    {
+        var t = new ExtentTable(5, 10f);   // 5 items × 10 = 50
+        bool init = Near((float)t.Total, 50) && Near(t.OffsetOf(0), 0) && Near(t.OffsetOf(2), 20) && Near(t.OffsetOf(5), 50);
+        bool indexAt = t.IndexAt(0) == 0 && t.IndexAt(15) == 1 && t.IndexAt(25) == 2 && t.IndexAt(49) == 4;
+        t.SetExtent(2, 30f);   // correct item 2: 10 → 30 (total 50 → 70)
+        bool corrected = Near((float)t.Total, 70) && Near(t.OffsetOf(3), 50) && t.IndexAt(45) == 2 && t.IndexAt(55) == 3;
+        Check("41. extent table: O(log n) offset↔index + correction", init && indexAt && corrected, $"total={t.Total:0}");
+    }
+
+    // Variable-height virtualization: rows are positioned by their measured extents (the corrected Fenwick table),
+    // and a scroll anchors on the visible item (the offset stays inside the anchor item's band; clamped to content).
+    static void VariableChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("var", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new VarProbe());
+
+        host.RunFrame();
+        var vp = host.Scene.Root;
+        host.Scene.TryGetScroll(vp, out var sc);
+        var content = sc.ContentNode;
+
+        // rows positioned by cumulative measured heights (OffsetOf), and the extent table corrected for the window
+        var r0 = Child(host.Scene, content, 0);
+        var r1 = Child(host.Scene, content, 1);
+        var r2 = Child(host.Scene, content, 2);
+        var r3 = Child(host.Scene, content, 3);
+        bool positions = Near(host.Scene.Bounds(r0).Y, 0)
+            && Near(host.Scene.Bounds(r1).Y, VarProbe.H(0))
+            && Near(host.Scene.Bounds(r2).Y, VarProbe.H(0) + VarProbe.H(1))
+            && Near(host.Scene.Bounds(r3).Y, VarProbe.H(0) + VarProbe.H(1) + VarProbe.H(2));
+        host.Scene.TryGetExtents(vp, out var table);
+        bool measured = table is not null && Near(table.ExtentAt(0), VarProbe.H(0)) && Near(table.ExtentAt(2), VarProbe.H(2));
+        Check("42. variable rows positioned by measured extents", positions && measured, $"y0..3={host.Scene.Bounds(r0).Y:0},{host.Scene.Bounds(r1).Y:0},{host.Scene.Bounds(r2).Y:0},{host.Scene.Bounds(r3).Y:0}");
+
+        // scroll into the middle → anchor tracks the visible item; offset stays in its band and clamped to content
+        for (int s = 0; s < 6; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 150), 0, 0, 350f)); host.RunFrame(); }
+        host.Scene.TryGetScroll(vp, out var sc2);
+        host.Scene.TryGetExtents(vp, out var t2);
+        int anchor = t2!.IndexAt(sc2.OffsetY);
+        float band0 = t2.OffsetOf(anchor), band1 = t2.OffsetOf(anchor + 1);
+        bool anchored = sc2.AnchorIndex == anchor
+            && sc2.OffsetY >= band0 - 0.5f && sc2.OffsetY < band1 + 0.5f
+            && sc2.OffsetY <= sc2.ContentH - sc2.ViewportH + 1f && sc2.FirstRealized > 0;
+        Check("43. variable scroll anchors on the visible item (in-band, clamped)", anchored, $"anchor={anchor} off={sc2.OffsetY:0} content={sc2.ContentH:0} first={sc2.FirstRealized}");
+    }
+
+    // The central virtualization claim: an in-window (sub-extent) scroll is a transform-only frame with ZERO managed
+    // allocation on the paint half (no realize, no reconcile, no relayout — just re-record the shifted window).
+    static void ZeroAllocScrollChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("zalloc", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new VirtualProbe());
+
+        host.RunFrame();   // mount
+        var ptr = new Point2(150, 200);
+        // warm: several sub-extent (5px) scrolls — all stay within item 0 (5×5 = 25 < 40px row) → transform-only
+        for (int i = 0; i < 5; i++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 2f)); host.RunFrame(); }
+        window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 2f));
+        var fz = host.RunFrame();
+        bool zero = !fz.Rendered && fz.HotPhaseAllocBytes == 0;
+        Check("44. in-window scroll: 0 managed alloc on the paint half", zero, $"{fz.HotPhaseAllocBytes} bytes, rendered={fz.Rendered}");
+    }
+
+    // ImageCache: state machine (Pending→Ready), source dedup, and liveness-pinned LRU eviction (pinned = on screen,
+    // never evicted — the single biggest real-world image-cache bug per the research).
+    static void ImageCacheChecks()
+    {
+        var cache = new ImageCache(new FakeImageDecoder(), budgetBytes: 1000);   // tiny budget to force eviction
+        var a = cache.Request("a", 10, 10);                                      // 10×10×4 = 400 bytes when ready
+        bool pending = cache.StateOf(a) == ImageState.Pending;
+        cache.Pump();
+        bool ready = cache.StateOf(a) == ImageState.Ready && cache.SizeOf(a) == (10, 10);
+        bool dedup = cache.Request("a", 10, 10).Id == a.Id;
+
+        cache.Pin(a);                                                            // a is "on screen"
+        var b = cache.Request("b", 10, 10);
+        var c = cache.Request("c", 10, 10);
+        cache.Pump();                                                           // a+b+c = 1200 > 1000 → evict LRU unpinned (b)
+        bool keptPinned = cache.StateOf(a) == ImageState.Ready;                  // pinned survived eviction
+        bool withinBudget = cache.UsedBytes <= 1000;
+        Check("45. ImageCache: states, dedup, liveness-pinned LRU evict", pending && ready && dedup && keptPinned && withinBudget,
+            $"used={cache.UsedBytes} ready={cache.ReadyCount} aRefs={cache.RefsOf(a)}");
+    }
+
+    // ImageEl end-to-end: the reconciler requests the decode + pins residency, the cache completes it (Pump), and the
+    // recorder emits a DrawImage carrying the handle + ready flag + placeholder.
+    static void ImageElChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("img", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ImageProbe());
+
+        host.RunFrame();
+        bool drawn = device.LastImages.Count == 1;
+        var cmd = drawn ? device.LastImages[0] : default;
+        var h = new ImageHandle(cmd.ImageId);
+        bool ready = drawn && cmd.Ready == 1 && cmd.ImageId != 0 && host.Images.StateOf(h) == ImageState.Ready;
+        bool pinned = host.Images.RefsOf(h) == 1;
+        bool placeholder = Near(cmd.Placeholder.R, 0x33 / 255f) && Near(cmd.Radii.TopLeft, 6f);
+        Check("46. ImageEl: decode→ready, residency-pinned, DrawImage emitted", drawn && ready && pinned && placeholder,
+            $"images={device.LastImages.Count} ready={cmd.Ready} refs={host.Images.RefsOf(h)}");
+    }
+
+    // Controls: a slider press-sets and drag-scrubs its value; a toggle flips; an icon button clicks; a scrollbar drags.
+    static void ControlsChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("ctl", new Size2(480, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new ControlsProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        NodeHandle Kid(int i) => Child(host.Scene, host.Scene.Root, i);
+        void Press(NodeHandle n, float lx, float ly)
+        {
+            var r = host.Scene.AbsoluteRect(n);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(r.X + lx, r.Y + ly), 0, 0));
+        }
+
+        // slider: press at x=100/200 → 0.5
+        Press(Kid(0), 100f, 12f);
+        host.RunFrame();
+        bool press = Near(probe.SliderVal, 0.5f);
+        // drag to x=160 → 0.8 (the drag target survives the in-place re-render)
+        var sr = host.Scene.AbsoluteRect(Kid(0));
+        window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(sr.X + 160f, sr.Y + 12f), 0, 0));
+        host.RunFrame();
+        bool drag = Near(probe.SliderVal, 0.8f);
+        window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(sr.X + 160f, sr.Y + 12f), 0, 0));
+        host.RunFrame();
+        Check("47. Slider press-sets + drag-scrubs value", press && drag, $"press={probe.SliderVal:0.0} (0.5→0.8)");
+
+        // toggle: click flips on
+        var tr = host.Scene.AbsoluteRect(Kid(1));
+        window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(tr.X + tr.W / 2, tr.Y + tr.H / 2), 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(tr.X + tr.W / 2, tr.Y + tr.H / 2), 0, 0));
+        host.RunFrame();
+        bool toggled = probe.Toggled;
+
+        // icon button: click increments
+        var ir = host.Scene.AbsoluteRect(Kid(2));
+        window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ir.X + ir.W / 2, ir.Y + ir.H / 2), 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ir.X + ir.W / 2, ir.Y + ir.H / 2), 0, 0));
+        host.RunFrame();
+        bool iconClicked = probe.IconClicks == 1;
+
+        // scrollbar: drag the thumb to ~bottom → position near 1
+        Press(Kid(3), 5f, 190f);
+        host.RunFrame();
+        bool scrolled = probe.ScrollPos > 0.5f;
+
+        Check("48. Toggle flips, IconButton clicks, ScrollBar drags", toggled && iconClicked && scrolled,
+            $"toggled={probe.Toggled} icon={probe.IconClicks} scrollPos={probe.ScrollPos:0.0}");
+    }
+
+    // Navigation as serializable state: push/pop/depth + round-trip serialize for deep-link / cold-launch restore.
+    static void NavigationChecks()
+    {
+        var nav = new Navigator(new Route("home"));
+        bool d1 = nav.Current.Name == "home" && !nav.CanGoBack && nav.Depth == 1;
+        nav.Push("playlist", "p1");
+        bool d2 = nav.Current is { Name: "playlist", Arg: "p1" } && nav.CanGoBack && nav.Depth == 2;
+        string ser = nav.Serialize();
+        nav.Pop();
+        bool d3 = nav.Current.Name == "home" && !nav.CanGoBack;
+        var restored = Navigator.Deserialize(ser);
+        bool d4 = restored.Depth == 2 && restored.Current is { Name: "playlist", Arg: "p1" };
+        Check("49. Navigator: push/pop/depth + serialize round-trip", d1 && d2 && d3 && d4, ser);
+    }
+
+    // PageHost renders the top route and re-renders the view tree on push/pop (the back stack drives the UI).
+    static void PageHostChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("nav", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var nav = new Navigator(new Route("home"));
+        Element View(Route r) => r.Name == "home"
+            ? new BoxEl { Children = [new TextEl("HOME PAGE")] }
+            : new BoxEl { Children = [new TextEl("PLAYLIST " + r.Arg)] };
+        using var host = new AppHost(app, window, device, fonts, strings, new PageHost(nav, View));
+
+        host.RunFrame();
+        bool onHome = HasGlyph(device, strings, "HOME PAGE");
+        nav.Push("playlist", "x1");
+        host.RunFrame();
+        bool onDetail = HasGlyph(device, strings, "PLAYLIST x1");
+        nav.Pop();
+        host.RunFrame();
+        bool backHome = HasGlyph(device, strings, "HOME PAGE");
+        Check("50. PageHost renders + navigates the back stack", onHome && onDetail && backHome, "home → playlist → back");
+    }
+
+    // Grid: 3 equal Star tracks across 320 (gaps 10) → 100px columns; 5 cells flow row-major into 2 rows.
+    static void GridChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("grid", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new GridProbe());
+        host.RunFrame();
+
+        var grid = host.Scene.Root;
+        var b0 = host.Scene.Bounds(Child(host.Scene, grid, 0));
+        var b1 = host.Scene.Bounds(Child(host.Scene, grid, 1));
+        var b2 = host.Scene.Bounds(Child(host.Scene, grid, 2));
+        var b3 = host.Scene.Bounds(Child(host.Scene, grid, 3));
+        var b4 = host.Scene.Bounds(Child(host.Scene, grid, 4));
+        bool cols = Near(b0.X, 0) && Near(b1.X, 110) && Near(b2.X, 220) && Near(b0.W, 100);
+        bool rows = Near(b3.X, 0) && Near(b3.Y, 60) && Near(b4.X, 110) && Near(b4.Y, 60);
+        Check("51. Grid: star tracks split width + row-major auto-flow", cols && rows,
+            $"cols x={b0.X:0},{b1.X:0},{b2.X:0} w={b0.W:0}; row2 y={b3.Y:0}");
+    }
+
+    // Regression: a stretch-width grid (no explicit Width) must measure its real content height so a following
+    // sibling stacks below it instead of overlapping. 8 cells / 4 cols = 2 rows × 90 + one 12 row-gap = 192.
+    static void GridStretchChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gridstretch", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new GridStretchProbe());
+        host.RunFrame();
+
+        var root = host.Scene.Root;
+        var grid = Child(host.Scene, root, 0);
+        var after = Child(host.Scene, root, 1);
+        var gb = host.Scene.Bounds(grid);
+        var ab = host.Scene.Bounds(after);
+        bool gridHeight = Near(gb.H, 192f, 1f);          // grid measured its 2 real rows (not 0)
+        bool gridWidth = Near(gb.W, 420f, 1f);           // stretched to fill the 420-wide column
+        bool noOverlap = ab.Y >= 192f - 0.5f;            // sibling below the grid's real content, not on top of it
+        Check("51b. Grid: stretch-width grid measures content height (sibling doesn't overlap)",
+            gridHeight && gridWidth && noOverlap, $"gridW={gb.W:0} gridH={gb.H:0} afterY={ab.Y:0}");
+    }
+
+    // The Wavee skeleton acceptance test: the shell composes nav + grid + images + controls; navigating to the
+    // playlist renders a VIRTUALIZED 5,000-row list (first track realized, last track NOT) — all subsystems at once.
+    static void WaveeSkeletonChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("wavee", new Size2(1100, 720), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var shell = new WaveeShell();
+        using var host = new AppHost(app, window, device, fonts, strings, shell);
+
+        host.RunFrame();
+        bool home = HasGlyph(device, strings, "Album 0") && HasGlyph(device, strings, "Home");
+        bool playerBar = HasGlyph(device, strings, "Now Playing") && HasGlyph(device, strings, "Shuffle");
+        bool artRequested = host.Images.Count >= 12;   // 12 album cards + now-playing art all requested + pinned
+
+        shell.Nav.Push("playlist", "p0");
+        host.RunFrame();
+        long liveOnPlaylist = host.Scene.LiveCount;
+        bool virtualized = HasGlyph(device, strings, "Track 0")
+            && !HasGlyph(device, strings, "Track 4999")     // last row never realized → virtualization holds in the shell
+            && liveOnPlaylist < 600;                         // 5,000 rows × multiple nodes would be ≫ this if not virtualized
+
+        bool back = false;
+        if (shell.Nav.Pop()) { host.RunFrame(); back = HasGlyph(device, strings, "Album 0"); }   // back-stack returns Home
+
+        Check("52. Wavee skeleton: shell composes nav + grid + images + controls + virtualized list", home && playerBar && artRequested && virtualized && back,
+            $"home={home} player={playerBar} art={host.Images.Count} liveOnList={liveOnPlaylist} back={back}");
+    }
+
+    // VirtualGrid (2-D): a 1,000-item, 4-column grid realizes only the visible row-window and positions items in cells.
+    static void VirtualGridChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("vgrid", new Size2(800, 600), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new VGridProbe());
+        host.RunFrame();
+
+        var vp = host.Scene.Root;
+        host.Scene.TryGetScroll(vp, out var sc);
+        var content = sc.ContentNode;
+        int realized = host.Scene.ChildCount(content);
+        bool windowed = realized >= 16 && realized < 80;                 // ~visible rows × 4 cols, not 1000
+        // ContentExtent = 250 rows × 100 + 249 gaps × 12 = 27,988
+        bool contentSize = Near(sc.ContentH, 27988f, 2f);
+        // colW = (520 − 3×12)/4 = 121; item 0 at (0,0), item 1 at (133,0), item 4 at (0,112)
+        var b0 = host.Scene.Bounds(Child(host.Scene, content, 0));
+        var b1 = host.Scene.Bounds(Child(host.Scene, content, 1));
+        var b4 = host.Scene.Bounds(Child(host.Scene, content, 4));
+        bool cells = Near(b0.X, 0) && Near(b0.W, 121, 1f) && Near(b1.X, 133, 1f) && Near(b4.X, 0) && Near(b4.Y, 112, 1f);
+
+        long live0 = host.Scene.LiveCount;
+        for (int s = 0; s < 40; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(200, 200), 0, 0, 4000f)); host.RunFrame(); }
+        long liveEnd = host.Scene.LiveCount;
+        bool recycled = liveEnd < 120 && Math.Abs(liveEnd - live0) < 40;
+
+        Check("53. VirtualGrid: 2-D row-window + cell positions + recycle", windowed && contentSize && cells && recycled,
+            $"realized={realized} content={sc.ContentH:0} cell0w={b0.W:0} live {live0}→{liveEnd}");
+    }
+
+    // NavigationView adapts its pane to available width: Expanded (labels) → Compact (icon rail) → Minimal (hamburger).
+    static (bool label, bool content, float rootW) NavAt(StringTable strings, int width, float scale = 1f)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("nav", new Size2(width, 700), scale));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new NavProbe());
+        host.RunFrame();
+        return (HasGlyph(device, strings, "Home"), HasGlyph(device, strings, "PAGE:home"), host.Scene.AbsoluteRect(host.Scene.Root).W);
+    }
+
+    static void NavigationViewChecks(StringTable strings)
+    {
+        var exp = NavAt(strings, 1200);   // ≥1008 → Expanded (labels visible)
+        var comp = NavAt(strings, 760);   // 641..1008 → Compact (icon rail, no labels)
+        var min = NavAt(strings, 520);    // <641 → Minimal (hamburger, no rail labels)
+        var dpiComp = NavAt(strings, 1200, 1.5f);
+        bool modes = exp.label && !comp.label && !min.label;
+        bool content = exp.content && comp.content && min.content;
+        Check("54. NavigationView adapts Expanded/Compact/Minimal by width", modes && content,
+            $"labels exp={exp.label} comp={comp.label} min={min.label}; content={content}");
+        Check("54a. AppHost lays out scaled windows in DIPs", !dpiComp.label && Near(dpiComp.rootW, 800f),
+            $"rootW={dpiComp.rootW:0.#} label={dpiComp.label}");
+    }
+
+    // ZStack overlays children at the origin (last on top); ItemsRepeater builds (Inline) or virtualizes (Stack).
+    static void ZStackRepeaterChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, Ui.ZStack(
+            new BoxEl { Width = 120, Height = 40, Fill = ColorF.FromRgba(200, 0, 0) },
+            new BoxEl { Width = 60, Height = 20, Fill = ColorF.FromRgba(0, 200, 0) }) with { Width = 200, Height = 100 });
+        var z0 = scene.AbsoluteRect(Child(scene, scene.Root, 0));
+        var z1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
+        bool zstack = Near(z0.X, 0) && Near(z0.Y, 0) && Near(z1.X, 0) && Near(z1.Y, 0) && Near(z0.W, 120) && Near(z1.W, 60);
+
+        var inlineEl = Repeater.ItemsRepeater(5, i => new BoxEl { Width = 10, Height = 10 }, RepeatLayout.Inline(gap: 2f), keyOf: i => "k" + i);
+        bool inlineN = inlineEl is BoxEl box && box.Children.Length == 5 && box.Children[0].Key == "k0";
+        bool stackVirtual = Repeater.ItemsRepeater(1000, i => new BoxEl(), RepeatLayout.Stack(40f)) is VirtualListEl;
+
+        Check("55. ZStack overlays at origin; ItemsRepeater builds (Inline) / virtualizes (Stack)", zstack && inlineN && stackVirtual,
+            $"z0=({z0.X:0},{z0.Y:0}) z1=({z1.X:0},{z1.Y:0}) inlineN={inlineN} stackVirt={stackVirtual}");
+    }
+
+    // Per-run font family threads from TextEl → TextStyle → DrawGlyphRun (the renderer resolves the face by family);
+    // Ui.Icon renders a glyph from the icon font. (Real glyph rendering is needs-pixels; the threading is verified here.)
+    static void FontFamilyChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(
+            new BoxEl { Direction = 1, Children = [new TextEl("hi") { FontFamily = "Segoe Fluent Icons" }, new TextEl("plain")] }, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+
+        bool hiFam = false, plainEmpty = false;
+        foreach (var g in dev.LastGlyphs)
+        {
+            string t = strings.Resolve(g.Text), fam = strings.Resolve(g.Family);
+            if (t == "hi") hiFam = fam == "Segoe Fluent Icons";
+            if (t == "plain") plainEmpty = fam.Length == 0;
+        }
+        var icon = Ui.Icon(Icons.Play, 20f);
+        bool iconFactory = icon.FontFamily == Theme.IconFont && icon.Text == Icons.Play && icon.Size == 20f;
+        Check("56. per-run font family threads to the glyph cmd; Ui.Icon uses the icon font", hiFam && plainEmpty && iconFactory,
+            $"hiFam={hiFam} plainEmpty={plainEmpty} iconFont='{icon.FontFamily}'");
+    }
+
+    // Gradient elevation border (WinUI ControlElevationBorderBrush): a BoxEl with a 2-stop vertical BorderBrush emits a
+    // DrawGradientStroke band (inset by bw/2, the gradient PS sampled vertically) on top of the solid fill.
+    static void GradientBorderChecks(StringTable strings)
+    {
+        var brush = Ui.LinearGradient(90f,
+            new GradientStop(0.33f, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18)),
+            new GradientStop(1f, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12)));
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Width = 120, Height = 40, Corners = CornerRadius4.All(4f), Fill = ColorF.FromRgba(20, 20, 20),
+            BorderBrush = brush, BorderWidth = 1f,
+        });
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+
+        bool oneStroke = dev.LastGradientStrokes.Count == 1;
+        var gs = oneStroke ? dev.LastGradientStrokes[0] : default;
+        bool band = oneStroke && Near(gs.StrokeWidth, 1f) && gs.StopCount == 2
+            && Near(gs.Rect.X, 0.5f) && Near(gs.Rect.W, 119f);          // ring inset by bw/2, width = bounds − bw
+        bool solidFill = dev.LastRects.Count == 1;                      // the fill drew once (full bounds), border is the gradient stroke
+        Check("57. gradient elevation border emits a DrawGradientStroke band", oneStroke && band && solidFill,
+            $"strokes={dev.LastGradientStrokes.Count} w={gs.StrokeWidth:0.0} stops={gs.StopCount} ring=({gs.Rect.X:0.0},{gs.Rect.W:0.0})");
+    }
+
+    // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
+    // (the WinUI ~83ms BackgroundTransition) — it must ease through an intermediate value, not snap, then settle.
+    static void CrossfadeChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Width = 100, Height = 40, Fill = ColorF.FromRgba(0, 0, 0), HoverFill = ColorF.FromRgba(255, 255, 255),
+        });
+        var node = scene.Root;
+        var ia = new InteractionAnimator(scene);
+        ia.SetHover(node, true);
+
+        var dl = new DrawList();
+        var dev = new HeadlessGpuDevice();
+        float Grey()
+        {
+            dl.Reset(); SceneRecorder.Record(scene, dl);
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(200, 100), 1f, ColorF.Transparent));
+            return dev.LastRects[0].Fill.R;
+        }
+
+        ia.Tick(4f);                                   // small step → partway, not snapped
+        float mid = Grey();
+        bool eased = mid > 0.02f && mid < 0.98f;
+        for (int i = 0; i < 16; i++) ia.Tick(16f);     // run past 83ms → settle
+        float settled = Grey();
+        bool done = settled > 0.99f && !ia.HasActive;
+        Check("58. hover cross-fade eases in linear light, then settles", eased && done, $"mid={mid:0.00} settled={settled:0.00}");
+    }
+
     static SceneStore Single(StringTable strings)
     {
         var scene = new SceneStore();
@@ -562,7 +1361,7 @@ static class Slice
         // Frame 1 — mount: window→clear→two button rects (SDF) + three text runs, flex-laid-out.
         var f1 = host.RunFrame();
         Check("1. window + GPU clear + present", device.FrameCount == 1, $"backend={device.BackendName}, clear=#{device.LastClear.R:0.0},{device.LastClear.G:0.0},{device.LastClear.B:0.0}");
-        Check("2. rounded-rect primitives (2 buttons × border ring + fill)", device.LastRects.Count == 4, $"rects={device.LastRects.Count}");
+        Check("2. rounded-rect primitives (2 accent buttons × fill + gradient elevation border)", device.LastRects.Count == 2 && device.LastGradientStrokes.Count == 2, $"rects={device.LastRects.Count} gradBorders={device.LastGradientStrokes.Count}");
         Check("3. text runs (heading + 2 labels)", device.LastGlyphs.Count == 3, $"glyphs={device.LastGlyphs.Count}");
         Check("4. flex layout produced bounds", host.Scene.AbsoluteRect(host.Scene.Root).W > 0, $"rootW={host.Scene.AbsoluteRect(host.Scene.Root).W:0.#}");
         Check("5. reconciler + UseState (initial render)", f1.Rendered && HasGlyph(device, strings, "Count: 0"));
@@ -600,6 +1399,26 @@ static class Slice
         CompositorChecks(strings);
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
+        ScrollChecks(strings);
+        ScrollOverlayChecks(strings);
+        VirtualChecks(strings);
+        ExtentTableChecks();
+        VariableChecks(strings);
+        ZeroAllocScrollChecks(strings);
+        ImageCacheChecks();
+        ImageElChecks(strings);
+        ControlsChecks(strings);
+        NavigationChecks();
+        PageHostChecks(strings);
+        GridChecks(strings);
+        GridStretchChecks(strings);
+        VirtualGridChecks(strings);
+        ZStackRepeaterChecks(strings);
+        NavigationViewChecks(strings);
+        FontFamilyChecks(strings);
+        GradientBorderChecks(strings);
+        CrossfadeChecks(strings);
+        WaveeSkeletonChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

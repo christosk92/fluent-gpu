@@ -38,9 +38,17 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private uint _frameIndex;
     private RoundRectPipeline? _rectPipe;
     private readonly List<RectInstance> _rectInsts = new();
+    private ShadowPipeline? _shadowPipe;
+    private readonly List<ShadowInstance> _shadowInsts = new();
+    private GradientPipeline? _gradPipe;
+    private readonly List<GradientInstance> _gradInsts = new();
+    private readonly List<RectF> _clipStack = new(16);
+    private AcrylicCompositor? _acrylic;
     private GlyphRenderer? _glyphs;
     private readonly List<GlyphInstance> _glyphInsts = new();
     private float _frameScale = 1f;
+    private int _frameRectCount;
+    private int _frameGlyphInstanceCount;
     private readonly StringTable _strings;
     private readonly bool _composited;
 
@@ -69,6 +77,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
         InitSwapChain();
         _rectPipe = new RoundRectPipeline();
         _rectPipe.Init(_device);
+        _shadowPipe = new ShadowPipeline();
+        _shadowPipe.Init(_device);
+        _gradPipe = new GradientPipeline();
+        _gradPipe.Init(_device);
+        _acrylic = new AcrylicCompositor();
+        _acrylic.Init(_device);
         _glyphs = new GlyphRenderer();
         _glyphs.Init(_device);
         return new D3D12Swapchain(this);
@@ -200,6 +214,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             ID3D12Resource* buf;
             Check(_swapChain->GetBuffer(i, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer");
             _backBuffers[i] = buf;
+            D3D12MemoryDiagnostics.Track(buf, $"Swapchain.BackBuffer[{i}] {_w}x{_h}", (ulong)_w * _h * 4UL);
             _device->CreateRenderTargetView(buf, null, rtv);
             rtv.ptr += _rtvSize;
         }
@@ -216,31 +231,36 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
         rtv.ptr += _frameIndex * _rtvSize;
-        _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
-
-        float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
-        _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
-
-        D3D12_VIEWPORT vpd = new() { TopLeftX = 0, TopLeftY = 0, Width = _w, Height = _h, MinDepth = 0, MaxDepth = 1 };
-        _cmdList->RSSetViewports(1, &vpd);
-        RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
-        _cmdList->RSSetScissorRects(1, &scd);
 
         // DPI: render at native resolution but map DIP coordinates via a LOGICAL viewport (= physical / scale),
         // while glyphs are rasterized at physical px → crisp + correctly sized at high DPI.
         _frameScale = ctx.Scale <= 0f ? 1f : ctx.Scale;
+        _frameRectCount = 0;
+        _frameGlyphInstanceCount = 0;
+        _rectPipe!.BeginFrame();
+        _shadowPipe!.BeginFrame();
+        _gradPipe!.BeginFrame();
+        _glyphs!.BeginFrame();
         float lw = _w / _frameScale, lh = _h / _frameScale;
 
-        Decode(drawList);
-        Diag.Set("d3d12", "rects", _rectInsts.Count);
-        Diag.Set("d3d12", "glyphInstances", _glyphInsts.Count);
+        if (StreamHasLayer(drawList))
+        {
+            // Acrylic path: render the scene into an engine-owned canvas, blur+composite at each layer, blit to the back buffer.
+            _acrylic!.EnsureSize(_w, _h);
+            SubmitWithLayers(drawList, ctx, lw, lh, rtv);
+        }
+        else
+        {
+            _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
+            float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
+            _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
+            SetFullViewport();
+            SubmitStreaming(drawList, lw, lh);
+        }
+        Diag.Set("d3d12", "rects", _frameRectCount);
+        Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
-        _glyphs.UploadIfDirty(_cmdList);   // copy newly-rasterized glyphs into the GPU atlas (before sampling)
-        if (_rectInsts.Count > 0)
-            _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), lw, lh);
-        if (_glyphInsts.Count > 0)
-            _glyphs.Record(_cmdList, _glyphInsts, lw, lh);
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
         Check(_cmdList->Close(), "cmdList.Close");
@@ -249,17 +269,21 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _queue->ExecuteCommandLists(1, &execList);
     }
 
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _gradInsts.Clear(); }
+
     private void Decode(ReadOnlySpan<byte> cmds)
     {
-        _rectInsts.Clear();
-        _glyphInsts.Clear();
+        ClearInsts();
         int pos = 0;
-        while (pos + sizeof(int) <= cmds.Length)
+        while (pos + sizeof(int) <= cmds.Length) pos = DecodeOne(cmds, pos);
+    }
+
+    private int DecodeOne(ReadOnlySpan<byte> cmds, int pos)
+    {
+        int op = MemoryMarshal.Read<int>(cmds.Slice(pos));
+        pos += sizeof(int);
+        switch ((DrawOp)op)
         {
-            int op = MemoryMarshal.Read<int>(cmds.Slice(pos));
-            pos += sizeof(int);
-            switch ((DrawOp)op)
-            {
                 case DrawOp.FillRoundRect:
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
@@ -272,6 +296,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
                     });
+                    _frameRectCount++;
                     break;
                 }
                 case DrawOp.DrawGlyphRun:
@@ -280,14 +305,288 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
-                        _glyphs!.LayoutRun(s, g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
+                    {
+                        int before = _glyphInsts.Count;
+                        _glyphs!.LayoutRun(s, _strings.Resolve(g.Family), g.FontSize, g.Bold != 0, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
+                        _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                    }
                     break;
                 }
+                case DrawOp.PushClip:
+                    // Tier-1 scissor clip. The headless path is the verified source of truth for clip *semantics*;
+                    // wiring it onto the GPU (RSSetScissorRects between clip-broken batches, or a per-instance
+                    // shader discard) is the needs-pixels follow-up (BUILD-ROADMAP step 27). For now D3D12 consumes
+                    // the opcode so the stream stays well-formed and rendering is unchanged (nothing overdraws yet
+                    // because scroll content is bounded by layout). TODO(step-27): apply the scissor.
+                    pos += Unsafe.SizeOf<ClipCmd>();
+                    break;
+                case DrawOp.PopClip:
+                    break;
+                case DrawOp.DrawImage:
+                {
+                    // Until WIC decode + texture upload lands (needs-pixels, step 34), draw the placeholder tint as a
+                    // rounded tile so album art is visible. TODO(step-34): sample the uploaded texture when Ready.
+                    var im = MemoryMarshal.Read<DrawImageCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawImageCmd>();
+                    _rectInsts.Add(new RectInstance
+                    {
+                        PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
+                        RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
+                        R = im.Placeholder.R, G = im.Placeholder.G, B = im.Placeholder.B, A = im.Placeholder.A,
+                        M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
+                        Dx = im.Transform.Dx, Dy = im.Transform.Dy, Opacity = im.Opacity,
+                    });
+                    _frameRectCount++;
+                    break;
+                }
+                case DrawOp.DrawRoundRectStroke:
+                {
+                    var c = MemoryMarshal.Read<DrawRoundRectStrokeCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
+                    _rectInsts.Add(new RectInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        RTL = c.Radii.TopLeft, RTR = c.Radii.TopRight, RBR = c.Radii.BottomRight, RBL = c.Radii.BottomLeft,
+                        R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, StrokeWidth = c.StrokeWidth,
+                    });
+                    _frameRectCount++;
+                    break;
+                }
+                case DrawOp.DrawShadow:
+                {
+                    var c = MemoryMarshal.Read<DrawShadowCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    _shadowInsts.Add(new ShadowInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
+                        Blur = c.Blur, Spread = c.Spread, OffX = c.OffsetX, OffY = c.OffsetY,
+                    });
+                    break;
+                }
+                case DrawOp.DrawGradientRect:
+                {
+                    var c = MemoryMarshal.Read<DrawGradientRectCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawGradientRectCmd>();
+                    _gradInsts.Add(new GradientInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        StartX = c.Start.X, StartY = c.Start.Y, EndX = c.End.X, EndY = c.End.Y,
+                        C0R = c.C0.R, C0G = c.C0.G, C0B = c.C0.B, C0A = c.C0.A,
+                        C1R = c.C1.R, C1G = c.C1.G, C1B = c.C1.B, C1A = c.C1.A,
+                        C2R = c.C2.R, C2G = c.C2.G, C2B = c.C2.B, C2A = c.C2.A,
+                        C3R = c.C3.R, C3G = c.C3.G, C3B = c.C3.B, C3A = c.C3.A,
+                        O0 = c.O0, O1 = c.O1, O2 = c.O2, O3 = c.O3,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
+                        Shape = c.Shape, StopCount = c.StopCount,
+                    });
+                    break;
+                }
+                case DrawOp.DrawGradientStroke:
+                {
+                    var c = MemoryMarshal.Read<DrawGradientStrokeCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
+                    _gradInsts.Add(new GradientInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        StartX = c.Start.X, StartY = c.Start.Y, EndX = c.End.X, EndY = c.End.Y,
+                        C0R = c.C0.R, C0G = c.C0.G, C0B = c.C0.B, C0A = c.C0.A,
+                        C1R = c.C1.R, C1G = c.C1.G, C1B = c.C1.B, C1A = c.C1.A,
+                        C2R = c.C2.R, C2G = c.C2.G, C2B = c.C2.B, C2A = c.C2.A,
+                        C3R = c.C3.R, C3G = c.C3.G, C3B = c.C3.B, C3A = c.C3.A,
+                        O0 = c.O0, O1 = c.O1, O2 = c.O2, O3 = c.O3,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
+                        Shape = c.Shape, StopCount = c.StopCount, Stroke = c.StrokeWidth,
+                    });
+                    break;
+                }
+                case DrawOp.PushLayer:
+                    pos += Unsafe.SizeOf<PushLayerCmd>();         // wired to the backdrop subsystem (phase 5)
+                    break;
+                case DrawOp.PopLayer:
+                    pos += Unsafe.SizeOf<PopLayerCmd>();
+                    break;
                 default:
                     pos = cmds.Length;
                     break;
+        }
+        return pos;
+    }
+
+    private void SetFullViewport()
+    {
+        D3D12_VIEWPORT vpd = new() { TopLeftX = 0, TopLeftY = 0, Width = _w, Height = _h, MinDepth = 0, MaxDepth = 1 };
+        _cmdList->RSSetViewports(1, &vpd);
+        SetFullScissor();
+    }
+
+    private void SetFullScissor()
+    {
+        RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
+        _cmdList->RSSetScissorRects(1, &scd);
+    }
+
+    private RECT ToScissor(in RectF r)
+    {
+        float s = _frameScale <= 0f ? 1f : _frameScale;
+        int left = (int)MathF.Floor(r.X * s);
+        int top = (int)MathF.Floor(r.Y * s);
+        int right = (int)MathF.Ceiling((r.X + r.W) * s);
+        int bottom = (int)MathF.Ceiling((r.Y + r.H) * s);
+        int maxW = (int)_w;
+        int maxH = (int)_h;
+        left = Math.Clamp(left, 0, maxW);
+        top = Math.Clamp(top, 0, maxH);
+        right = Math.Clamp(right, left, maxW);
+        bottom = Math.Clamp(bottom, top, maxH);
+        return new RECT { left = left, top = top, right = right, bottom = bottom };
+    }
+
+    private void SetScissor(in RectF r)
+    {
+        RECT sc = ToScissor(r);
+        _cmdList->RSSetScissorRects(1, &sc);
+    }
+
+    private void PushScissor(in RectF r)
+    {
+        _clipStack.Add(r);
+        SetScissor(r);
+    }
+
+    private void PopScissor()
+    {
+        if (_clipStack.Count > 0) _clipStack.RemoveAt(_clipStack.Count - 1);
+        ApplyCurrentScissor();
+    }
+
+    private void ApplyCurrentScissor()
+    {
+        if (_clipStack.Count == 0) SetFullScissor();
+        else SetScissor(_clipStack[^1]);
+    }
+
+    private void RecordAll(float lw, float lh)
+    {
+        if (_shadowInsts.Count > 0) _shadowPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_shadowInsts), lw, lh);
+        if (_gradInsts.Count > 0) _gradPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_gradInsts), lw, lh);
+        if (_rectInsts.Count > 0) _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), lw, lh);
+        if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
+    }
+
+    private void FlushSegment(float lw, float lh)
+    {
+        _glyphs!.UploadIfDirty(_cmdList);
+        RecordAll(lw, lh);
+        ClearInsts();
+    }
+
+    private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh)
+    {
+        ClearInsts();
+        _clipStack.Clear();
+        int pos = 0;
+        while (pos + sizeof(int) <= drawList.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(drawList.Slice(pos));
+            if (op == DrawOp.PushClip)
+            {
+                pos += sizeof(int);
+                var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<ClipCmd>();
+                FlushSegment(lw, lh);
+                PushScissor(clip.DeviceRect);
+                continue;
+            }
+            if (op == DrawOp.PopClip)
+            {
+                pos += sizeof(int);
+                FlushSegment(lw, lh);
+                PopScissor();
+                continue;
+            }
+            pos = DecodeOne(drawList, pos);
+        }
+        FlushSegment(lw, lh);
+        _clipStack.Clear();
+        SetFullScissor();
+    }
+
+    // Acrylic path: render the scene into the canvas, processing the stream in order so each PushLayer blurs the
+    // backdrop drawn so far, then composites the acrylic and lets the layer's content draw on top.
+    private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    {
+        _acrylic!.BeginCanvas(_cmdList, ctx.Clear);
+        ClearInsts();
+        _clipStack.Clear();
+        int pos = 0;
+        while (pos + sizeof(int) <= drawList.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(drawList.Slice(pos));
+            if (op == DrawOp.PushClip)
+            {
+                pos += sizeof(int);
+                var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<ClipCmd>();
+                FlushSegment(lw, lh);
+                PushScissor(clip.DeviceRect);
+                continue;
+            }
+            if (op == DrawOp.PopClip)
+            {
+                pos += sizeof(int);
+                FlushSegment(lw, lh);
+                PopScissor();
+                continue;
+            }
+            if (op == DrawOp.PushLayer)
+            {
+                int p2 = pos + sizeof(int);
+                var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
+                pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
+                FlushSegment(lw, lh);                       // draw the backdrop-so-far into the canvas
+                _acrylic.BlurAndComposite(_cmdList, L, lw, lh);  // blur + acrylic composite (re-binds canvas + full viewport)
+                ApplyCurrentScissor();
+                continue;
+            }
+            if (op == DrawOp.PopLayer) { pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>(); continue; }
+            pos = DecodeOne(drawList, pos);
+        }
+        FlushSegment(lw, lh);
+        _clipStack.Clear();
+        _acrylic.BlitToBackBuffer(_cmdList, backRtv);
+    }
+
+    private static bool StreamHasLayer(ReadOnlySpan<byte> cmds)
+    {
+        int pos = 0;
+        while (pos + sizeof(int) <= cmds.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+            pos += sizeof(int);
+            switch (op)
+            {
+                case DrawOp.FillRoundRect: pos += Unsafe.SizeOf<FillRoundRectCmd>(); break;
+                case DrawOp.DrawGlyphRun: pos += Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+                case DrawOp.PushClip: pos += Unsafe.SizeOf<ClipCmd>(); break;
+                case DrawOp.PopClip: break;
+                case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;
+                case DrawOp.DrawRoundRectStroke: pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
+                case DrawOp.DrawShadow: pos += Unsafe.SizeOf<DrawShadowCmd>(); break;
+                case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
+                case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
+                case DrawOp.PushLayer: return true;
+                case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); break;
+                default: return false;
             }
         }
+        return false;
     }
 
     private void Barrier(ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -324,7 +623,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (w == _w && h == _h) return;
         WaitForGpu();
-        for (uint i = 0; i < FRAME_COUNT; i++) { if (_backBuffers[i] != null) { _backBuffers[i]->Release(); _backBuffers[i] = null; } }
+        D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            if (_backBuffers[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                _backBuffers[i]->Release();
+                _backBuffers[i] = null;
+            }
+        }
         Check(_swapChain->ResizeBuffers(FRAME_COUNT, w, h, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, 0), "ResizeBuffers");
         _w = w; _h = h;
         CreateRtvs();
@@ -340,8 +648,20 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (_dcompTarget != null) _dcompTarget->Release();
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
+        _shadowPipe?.Dispose();
+        _gradPipe?.Dispose();
+        _acrylic?.Dispose();
         _rectPipe?.Dispose();
-        for (uint i = 0; i < FRAME_COUNT; i++) if (_backBuffers[i] != null) _backBuffers[i]->Release();
+        for (uint i = 0; i < FRAME_COUNT; i++)
+        {
+            if (_backBuffers[i] != null)
+            {
+                D3D12MemoryDiagnostics.Release(_backBuffers[i], $"Swapchain.BackBuffer[{i}]");
+                _backBuffers[i]->Release();
+                _backBuffers[i] = null;
+            }
+        }
+        D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         if (_swapChain != null) _swapChain->Release();
         if (_rtvHeap != null) _rtvHeap->Release();
         if (_cmdList != null) _cmdList->Release();

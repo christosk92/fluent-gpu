@@ -3,30 +3,33 @@ using FluentGpu.Foundation;
 namespace FluentGpu.Dsl;
 
 /// <summary>
-/// Process-wide visual theme (slice). Colors mirror WinUI 3 Fluent dark resources; <see cref="Accent"/> is set from the
-/// OS by the host at startup. The full engine bakes Light/Dark blobs delivered through RenderContext + HighContrast via PAL.
+/// Back-compat facade over the semantic token table (<see cref="Tok"/>). The flat names here mirror what existing call
+/// sites use; each forwards to the active <see cref="TokenSet"/>, so a theme swap (<see cref="Tok.Use"/>) re-themes them
+/// too. New code should prefer <see cref="Tok"/> / <see cref="Type"/> directly. The host still injects the OS accent +
+/// Mica background through the <see cref="Accent"/>/<see cref="WindowBackground"/> setters.
 /// </summary>
 public static class Theme
 {
-    public static bool Dark = true;
+    public static bool Dark
+    {
+        get => Tok.Theme == ThemeKind.Dark;
+        set => Tok.Use(value ? ThemeKind.Dark : ThemeKind.Light);
+    }
 
-    // Accent (dark theme): fill = SystemAccentColorLight2 (set from the OS AccentPalette; default ≈ Light2 of #0078D4).
-    // TextOnAccentFillColorPrimary in DARK theme is BLACK (light fill → dark text). Hover/Pressed = same shade @ .9/.8.
-    public static ColorF Accent = ColorF.FromRgba(0x60, 0xCD, 0xFF);              // SystemAccentColorLight2 (default)
-    public static ColorF AccentText = ColorF.FromRgba(0x00, 0x00, 0x00);         // TextOnAccentFillColorPrimary (dark)
-    public static ColorF AccentBorder = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23); // AccentControlElevation top stop
+    public static ColorF Accent { get => Tok.AccentDefault; set => Tok.SetAccent(value); }
+    public static ColorF AccentText => Tok.TextOnAccentPrimary;
+    public static ColorF AccentBorder => Tok.StrokeControlOnAccentDefault;
 
-    // Neutral control (standard button) — exact WinUI dark ControlFillColor* / ControlStrokeColor* / TextFillColor*.
-    public static ColorF ControlFill = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F);          // ControlFillColorDefault
-    public static ColorF ControlFillHover = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15);     // ControlFillColorSecondary
-    public static ColorF ControlFillPressed = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08);   // ControlFillColorTertiary
-    public static ColorF ControlBorder = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18);        // ControlStrokeColorSecondary
-    public static ColorF ControlText = ColorF.FromRgba(0xFF, 0xFF, 0xFF);                // TextFillColorPrimary
+    public static ColorF ControlFill => Tok.FillControlDefault;
+    public static ColorF ControlFillHover => Tok.FillControlSecondary;
+    public static ColorF ControlFillPressed => Tok.FillControlTertiary;
+    public static ColorF ControlBorder => Tok.StrokeControlSecondary;
+    public static ColorF ControlText => Tok.TextPrimary;
 
-    // Window surface (SolidBackgroundFillColorBase).
-    public static ColorF WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20);
-    public static ColorF WindowText = ColorF.FromRgba(0xF2, 0xF2, 0xF2);
+    public static ColorF WindowBackground { get => Tok.WindowBackground; set => Tok.SetWindowBackground(value); }
+    public static ColorF WindowText => Tok.TextPrimary;
 
-    // Theme holds design TOKENS only. Control default styles live with each control (e.g. Button.AccentStyle),
-    // built from these tokens and overrideable there.
+    // Fonts. BodyFont is the default text face; IconFont is the symbol face for Icon()/IconButton/NavigationView.
+    public static string BodyFont = "Segoe UI";
+    public static string IconFont = "Segoe Fluent Icons";
 }

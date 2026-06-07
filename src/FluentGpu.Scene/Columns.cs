@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3 }
 
 /// <summary>Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).</summary>
 public struct LayoutInput
@@ -58,6 +58,7 @@ public struct NodePaint
     public CornerRadius4 Corners;
     public ColorF TextColor;
     public StringId Text;
+    public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
     public VisualKind VisualKind;
 
     public static NodePaint Default => new()
@@ -69,13 +70,78 @@ public struct NodePaint
     };
 }
 
+/// <summary>
+/// Scroll + virtualization state for a viewport node (marked <c>NodeFlags.Scrollable</c>). There are O(viewports)
+/// of these — not one per node — so the store keeps them in a sparse side-table keyed by node index, not a parallel
+/// column. Ownership (layout.md §6 / architecture-spec §5.5): <b>Input</b> owns <c>Offset*</c> (clamped to the
+/// published content); <b>Layout</b> publishes <c>Content*</c>/<c>Viewport*</c>; the <b>virtualizer</b> owns the
+/// <c>Item*</c> / realized-range / anchor fields. Scroll is layout-free: the <c>-ScrollOffset</c> translation is the
+/// <see cref="ContentNode"/>'s <c>LocalTransform</c>, never a relayout.
+/// </summary>
+public struct ScrollState
+{
+    public float OffsetX, OffsetY;        // Input-owned scroll position (DIP) — the live (eased) offset
+    public float TargetX, TargetY;        // smooth-scroll destination (the offset eases toward it; == Offset when idle)
+    public float ContentW, ContentH;      // Layout-published full content extent (DIP)
+    public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
+    public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
+    public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
+    public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
+    public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
+    public bool PointerOver;              // pointer is inside this scroll viewport
+    public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter
+
+    // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
+    public int   ItemCount;
+    public IVirtualLayout? Layout;        // pluggable fixed-geometry layout (stack/grid/custom); null ⇒ variable (extent table)
+    public int   Overscan;                // rows realized beyond the viewport on each side
+    public int   FirstRealized, LastRealized;
+    public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
+    public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform
+
+    // Scroll anchoring (variable path): keep the topmost-visible item visually fixed across extent corrections.
+    public int   AnchorIndex;
+    public StringId AnchorKey;
+    public float AnchorViewportDelta;
+
+    public static ScrollState Default => new() { ExtentTableRef = -1 };
+}
+
+/// <summary>
+/// Grid layout spec for a grid container node (sparse side-table, O(grids)). The reconciler writes it from a
+/// <c>GridEl</c>; the layout engine resolves column tracks at the final width and auto-flows the cells row-major.
+/// </summary>
+public struct GridSpec
+{
+    public TrackSize[] Columns;   // managed ref is fine in the dict-backed side-table
+    public float ColGap, RowGap;
+    public float RowHeight;       // NaN ⇒ auto (max child height per row)
+}
+
+/// <summary>
+/// Eased interaction progress for a node (sparse side-table, O(interacted nodes)). The InteractionAnimator eases
+/// <c>HoverT</c>/<c>PressT</c> toward their targets on pointer enter/leave/press; the recorder lerps Fill/Border with them
+/// for the WinUI ~83ms brush transition (instead of the instant flag switch).
+/// </summary>
+public struct InteractionAnim
+{
+    public float HoverT, HoverTarget, PressT, PressTarget;
+    // Record-time composited scale targets (1 = none). The recorder scales the node about its centre by
+    // lerp(lerp(1,HoverScale,HoverT),PressScale,PressT) — e.g. a slider/scrollbar thumb that grows on hover, shrinks on
+    // press. Composited only: it never changes layout or hit-testing (HitTest reads Bounds, not the world transform).
+    public float HoverScale, PressScale;
+    public static InteractionAnim Default => new() { HoverScale = 1f, PressScale = 1f };
+}
+
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
     public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key
     public CursorId Cursor;
+    public AutomationRole Role;   // semantic control role (set by control factories) → UIA ControlType / devtools / tests
     public bool Focusable;
     public int TabIndex;
     public const ushort ClickBit = 1;
     public const ushort KeyBit = 2;
+    public const ushort PointerBit = 4;   // position-aware press/drag (slider/scrollbar)
 }

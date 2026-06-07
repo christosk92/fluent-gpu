@@ -165,16 +165,38 @@ public sealed class GdiSwapchain : ISwapchain
                     var xf = new XFORM { eM11 = c.Transform.M11, eM12 = c.Transform.M12, eM21 = c.Transform.M21, eM22 = c.Transform.M22, eDx = c.Transform.Dx, eDy = c.Transform.Dy };
                     Gdi32.SetWorldTransform(_memDc, in xf);
                     int height = -(int)MathF.Round(c.FontSize);
+                    string fam = strings.Resolve(c.Family);   // system family by name; custom .ttf files fall back (no AddFontResource here)
+                    if (fam.Length == 0 || fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)) fam = "Segoe UI";
                     nint font = Gdi32.CreateFontW(height, 0, 0, 0, c.Bold != 0 ? Gdi32.FW_BOLD : Gdi32.FW_NORMAL,
-                        0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, "Segoe UI");
+                        0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, fam);
                     nint oldF = Gdi32.SelectObject(_memDc, font);
                     Gdi32.SetTextColor(_memDc, Gdi32.Bgr(c.Color));
-                    var tr = new RECT { Left = (int)c.Bounds.X, Top = (int)c.Bounds.Y, Right = (int)c.Bounds.Right + 2, Bottom = (int)c.Bounds.Bottom + 2 };
-                    Gdi32.DrawTextW(_memDc, text, text.Length, ref tr, Gdi32.DT_LEFT | Gdi32.DT_TOP | Gdi32.DT_SINGLELINE | Gdi32.DT_NOPREFIX | Gdi32.DT_NOCLIP);
+                    var tr = new RECT { Left = (int)c.Bounds.X, Top = (int)c.Bounds.Y, Right = (int)c.Bounds.Right + (c.Wrap != 0 ? 0 : 2), Bottom = (int)c.Bounds.Bottom + 2 };
+                    uint dtFlags = Gdi32.DT_LEFT | Gdi32.DT_TOP | Gdi32.DT_NOPREFIX;
+                    if (c.Wrap != 0) dtFlags |= 0x10u;                                  // DT_WORDBREAK
+                    else dtFlags |= Gdi32.DT_SINGLELINE | Gdi32.DT_NOCLIP;
+                    if (c.Trim != 0) dtFlags |= 0x8000u;                                // DT_END_ELLIPSIS
+                    Gdi32.DrawTextW(_memDc, text, text.Length, ref tr, dtFlags);
                     Gdi32.SelectObject(_memDc, oldF);
                     Gdi32.DeleteObject(font);
                     break;
                 }
+                case DrawOp.PushClip:
+                    pos += Unsafe.SizeOf<ClipCmd>(); break;   // experimental GDI path consumes clip ops (no scissor yet)
+                case DrawOp.PopClip:
+                    break;
+                case DrawOp.DrawImage:
+                    pos += Unsafe.SizeOf<DrawImageCmd>(); break;   // experimental GDI path skips images for now
+                case DrawOp.DrawRoundRectStroke:
+                    pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;   // experimental GDI path: no focus ring yet
+                case DrawOp.DrawShadow:
+                    pos += Unsafe.SizeOf<DrawShadowCmd>(); break;           // experimental GDI path: no shadows
+                case DrawOp.DrawGradientRect:
+                    pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;     // experimental GDI path: no gradients
+                case DrawOp.PushLayer:
+                    pos += Unsafe.SizeOf<PushLayerCmd>(); break;            // experimental GDI path: no acrylic
+                case DrawOp.PopLayer:
+                    pos += Unsafe.SizeOf<PopLayerCmd>(); break;
                 default: pos = cmds.Length; break;
             }
         }
@@ -209,7 +231,7 @@ public sealed class GdiFontSystem : IFontSystem
         _dc = Gdi32.CreateCompatibleDC(0);
     }
 
-    public TextMetrics Measure(StringId text, in TextStyle style)
+    public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
     {
         string s = _strings.Resolve(text);
         int height = -(int)MathF.Round(style.SizeDip);
@@ -217,10 +239,46 @@ public sealed class GdiFontSystem : IFontSystem
             0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, "Segoe UI");
         nint oldF = Gdi32.SelectObject(_dc, font);
         Gdi32.GetTextExtentPoint32W(_dc, s, s.Length, out SIZE size);
+        float lineH = size.Cy <= 0 ? style.SizeDip * 1.4f : size.Cy;
+        float fullW = size.Cx <= 0 ? s.Length * style.SizeDip * 0.55f : size.Cx;
+
+        float w, h;
+        if (style.Wrap == TextWrap.NoWrap || float.IsInfinity(maxWidth) || fullW <= maxWidth)
+        {
+            w = fullW; h = lineH;
+        }
+        else
+        {
+            int lines = GreedyLineCount(s, maxWidth, style.Wrap);
+            if (style.MaxLines > 0) lines = Math.Min(lines, style.MaxLines);
+            w = maxWidth; h = lines * lineH;
+        }
         Gdi32.SelectObject(_dc, oldF);
         Gdi32.DeleteObject(font);
-        float w = size.Cx <= 0 ? s.Length * style.SizeDip * 0.55f : size.Cx;
-        float h = size.Cy <= 0 ? style.SizeDip * 1.4f : size.Cy;
-        return new TextMetrics(new Size2(w, h), h * 0.8f);
+        return new TextMetrics(new Size2(w, h), lineH * 0.8f);
+    }
+
+    /// <summary>Greedy word-wrap line count (matches the renderer's algorithm) using GDI word/space extents.</summary>
+    int GreedyLineCount(string s, float maxWidth, TextWrap wrap)
+    {
+        Gdi32.GetTextExtentPoint32W(_dc, " ", 1, out SIZE sp);
+        float spaceW = sp.Cx;
+        int lines = 1; float pen = 0f; int i = 0, n = s.Length;
+        while (i < n)
+        {
+            int ws = i; while (i < n && s[i] != ' ') i++;
+            int wlen = i - ws;
+            float wordW = 0f;
+            if (wlen > 0) { Gdi32.GetTextExtentPoint32W(_dc, s.Substring(ws, wlen), wlen, out SIZE wsz); wordW = wsz.Cx; }
+            int spaces = 0; while (i < n && s[i] == ' ') { i++; spaces++; }
+            if (pen > 0f && pen + wordW > maxWidth) { lines++; pen = 0f; }
+            if (wordW > maxWidth && wrap == TextWrap.Wrap)   // a single word longer than the line breaks inside
+            {
+                int extra = (int)(wordW / maxWidth);
+                lines += extra; pen = wordW - extra * maxWidth + spaces * spaceW;
+            }
+            else pen += wordW + spaces * spaceW;
+        }
+        return lines;
     }
 }
