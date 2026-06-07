@@ -187,11 +187,13 @@ public sealed class AppHost : IDisposable
     }
 
     // ── DIAG: dump the retained scene tree with post-layout bounds, so we can see WHERE a node went (missing pane etc.).
-    // One-shot by default; set FG_DUMP=all to dump every rendered frame.
+    // Disabled by default; set FG_DUMP=1 for one dump or FG_DUMP=all to dump every rendered frame.
     private bool _dumped;
     private void DumpSceneOnce(Size2 layoutSize)
     {
-        bool all = Environment.GetEnvironmentVariable("FG_DUMP") == "all";
+        string? dumpMode = Environment.GetEnvironmentVariable("FG_DUMP");
+        if (string.IsNullOrWhiteSpace(dumpMode) || !Diag.EnvFlag("FG_DUMP")) return;
+        bool all = dumpMode.Equals("all", StringComparison.OrdinalIgnoreCase);
         if (_dumped && !all) return;
         _dumped = true;
         Console.Error.WriteLine($"=== SCENE DUMP (post-layout, window {layoutSize.Width:0}x{layoutSize.Height:0} DIP) ===");

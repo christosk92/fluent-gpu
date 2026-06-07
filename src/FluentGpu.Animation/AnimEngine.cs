@@ -114,7 +114,7 @@ public sealed class AnimEngine
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
         t.Loop = loop; t.DrivenRef = -1; t.Done = false;
-        Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
+        if (Diag.Enabled) Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
     }
 
     /// <summary>Scroll/value-driven track: progress comes from a DrivenClock source mapped through [domainMin,domainMax].</summary>
@@ -134,7 +134,7 @@ public sealed class AnimEngine
         Track? existing = Find(node, channel);
         if (existing is { Mode: IntegrationMode.Spring })
         {
-            Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
+            if (Diag.Enabled) Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
             existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite;
             return;   // keep Pos + Vel → smooth handoff
         }
@@ -142,7 +142,7 @@ public sealed class AnimEngine
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
         // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
         t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false;
-        Diag.Event("anim", $"spring SEED {channel} from={t.Pos:0.###} → {to:0.###} (k={spring.Stiffness:0} c={spring.Damping:0})");
+        if (Diag.Enabled) Diag.Event("anim", $"spring SEED {channel} from={t.Pos:0.###} → {to:0.###} (k={spring.Stiffness:0} c={spring.Damping:0})");
     }
 
     /// <summary>The node's current value on a channel (read from its composited paint) — the spring's natural start point.</summary>
@@ -191,7 +191,7 @@ public sealed class AnimEngine
     {
         if (_tracks.Count == 0) return;   // steady frame: zero work / zero alloc
         _scratch.Clear();
-        Diag.Event("anim", $"── tick dt={dtMs:0.#}ms tracks={_tracks.Count} ──");
+        if (Diag.Enabled) Diag.Event("anim", $"── tick dt={dtMs:0.#}ms tracks={_tracks.Count} ──");
 
         // pass 0: advance every track, compute its value (sets Done on eased completion / spring rest)
         for (int i = _tracks.Count - 1; i >= 0; i--)
@@ -235,8 +235,11 @@ public sealed class AnimEngine
                 t.Value = Sample(t.Keys, u);
             }
 
-            Diag.Event("anim", $"  {t.Channel} {t.Mode} val={t.Value:0.###}" +
-                (t.Mode == IntegrationMode.Spring ? $" vel={t.Vel:0.##} tgt={t.Target:0.###} done={t.Done}" : $" elapsed={t.ElapsedMs:0}ms done={t.Done}"));
+            if (Diag.Enabled)
+            {
+                Diag.Event("anim", $"  {t.Channel} {t.Mode} val={t.Value:0.###}" +
+                    (t.Mode == IntegrationMode.Spring ? $" vel={t.Vel:0.##} tgt={t.Target:0.###} done={t.Done}" : $" elapsed={t.ElapsedMs:0}ms done={t.Done}"));
+            }
             if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.Default;
         }
 

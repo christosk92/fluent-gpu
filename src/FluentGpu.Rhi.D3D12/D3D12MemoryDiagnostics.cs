@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 
 namespace FluentGpu.Rhi.D3D12;
@@ -14,6 +15,7 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static int _createCount;
     private static int _releaseCount;
     private static int _resizeCount;
+    private static readonly bool LogEnabled = Diag.EnvFlag("FG_D3D_MEM") || Diag.EnvFlag("FG_DIAG");
 
     public static void Track(ID3D12Resource* resource, string name, ulong bytes)
     {
@@ -80,7 +82,10 @@ internal static unsafe class D3D12MemoryDiagnostics
         return $"{bytes} B";
     }
 
-    private static void Log(string message) => Console.WriteLine("[d3d-mem] " + message);
+    private static void Log(string message)
+    {
+        if (LogEnabled) Console.WriteLine("[d3d-mem] " + message);
+    }
 
     private readonly record struct Entry(string Name, ulong Bytes);
 }

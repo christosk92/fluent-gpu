@@ -23,8 +23,8 @@ public static class Diag
     public const bool CompiledIn = false;
 #endif
 
-    /// <summary>Runtime gate (only consulted when compiled in). Defaults on in diag builds; AppContext switch overrides.</summary>
-    public static bool Enabled = CompiledIn;
+    /// <summary>Runtime gate (only consulted when compiled in). Defaults off unless FG_DIAG is set; AppContext switch overrides.</summary>
+    public static bool Enabled = CompiledIn && EnvFlag("FG_DIAG");
 
     /// <summary>Where <see cref="Event"/>/<see cref="Dump"/> output goes (e.g. Console.WriteLine, the devtools panel, a log).</summary>
     public static Action<string>? Sink;
@@ -36,6 +36,16 @@ public static class Diag
     static Diag()
     {
         if (CompiledIn && AppContext.TryGetSwitch("FluentGpu.Diagnostics", out bool on)) Enabled = on;
+    }
+
+    public static bool EnvFlag(string name)
+    {
+        string? value = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        return !value.Equals("0", StringComparison.OrdinalIgnoreCase)
+            && !value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            && !value.Equals("off", StringComparison.OrdinalIgnoreCase)
+            && !value.Equals("no", StringComparison.OrdinalIgnoreCase);
     }
 
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]

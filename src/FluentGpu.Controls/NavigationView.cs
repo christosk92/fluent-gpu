@@ -73,10 +73,10 @@ public sealed class NavigationView : Component
         float openPaneWidth = width > 0f ? MathF.Min(PaneWidth, width) : PaneWidth;
 
         // DIAG: report the pane-mode decision whenever the viewport width or resulting mode changes.
-        if (width != _diagWidth || mode != _diagMode)
+        if (Diag.Enabled && (width != _diagWidth || mode != _diagMode))
         {
             _diagWidth = width; _diagMode = mode;
-            Console.Error.WriteLine($"[NavView] viewport.width={width:0.#} autoMode={autoMode} mode={mode} collapsed={collapsed} paneOpen={paneOpen} items={Items.Length} paneW={openPaneWidth:0.#}");
+            Diag.Event("NavView", $"viewport.width={width:0.#} autoMode={autoMode} mode={mode} collapsed={collapsed} paneOpen={paneOpen} items={Items.Length} paneW={openPaneWidth:0.#}");
         }
 
         void Select(string key)
