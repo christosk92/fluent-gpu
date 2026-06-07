@@ -881,13 +881,19 @@ static class Slice
 
         for (int i = 0; i < 90; i++) host.RunFrame();
 
-        bool anyScrollbar = false;
+        // Fully idle: the thumb does NOT vanish — a faint thin rest-rail stays (the affordance that there's more to
+        // scroll + where you are), with no expanded gutter. (It only fully hid before; that read as "no scrollbar".)
+        bool restRail = false, restGutter = false;
         foreach (var rect in device.LastRects)
-            anyScrollbar |= LaneRect(rect, out _);
+        {
+            if (!LaneRect(rect, out var r)) continue;
+            restRail |= r.W <= 3.5f && r.H >= 30f;      // thin collapsed thumb still present
+            restGutter |= r.W >= 10f && r.H >= 190f;    // but no expanded gutter
+        }
 
-        Check("38a. overlay scrollbar expands, collapses thin, then auto-hides",
-            expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && !anyScrollbar,
-            $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
+        Check("38a. overlay scrollbar expands, collapses thin, then rests as a faint rail (never fully hides)",
+            expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && restRail && !restGutter,
+            $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) rest=(rail={restRail},gutter={restGutter})");
     }
 
     static void VirtualChecks(StringTable strings)

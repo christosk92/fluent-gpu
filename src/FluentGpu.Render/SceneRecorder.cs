@@ -176,10 +176,11 @@ public static class SceneRecorder
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);
 
-        // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
-        // are not chopped at the viewport edge, while still positioning them inside the viewport bounds.
+        // Scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb are not chopped
+        // at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar self-gates on
+        // overflow and keeps a faint rest-rail visible (no FadeT gate here — the thumb never fully vanishes).
         if (scrollThumb.A > 0f && deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
-            scene.TryGetScroll(node, out var scb) && scb.FadeT > 0.01f)
+            scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
     }
 
@@ -274,9 +275,12 @@ public static class SceneRecorder
             const float minCollapsed = 32f; // VerticalPanningThumb.MinHeight
             const float radius = 3f;        // ScrollBarCornerRadius
 
-            float fade = Math.Clamp(sc.FadeT, 0f, 1f);
+            // A faint thin rail is ALWAYS visible while content overflows (so the scrollbar never fully vanishes — the
+            // affordance that there's more to scroll + where you are); scroll/hover brightens it (FadeT), and hovering
+            // the bar expands it to the full gutter+track+arrows (ExpandT).
+            const float restFade = 0.40f;
+            float fade = MathF.Max(restFade, Math.Clamp(sc.FadeT, 0f, 1f));
             float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
-            if (fade <= 0.01f) return;
 
             float axis = horizontal ? b.W : b.H;
             float cross = horizontal ? b.H : b.W;
