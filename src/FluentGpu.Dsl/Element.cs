@@ -38,6 +38,7 @@ public sealed record BoxEl : Element
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    public bool HitTestVisible { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
@@ -92,6 +93,7 @@ public sealed record GridEl : Element
     public float ColGap { get; init; }
     public float RowGap { get; init; }
     public float RowHeight { get; init; } = float.NaN;   // NaN = auto (tallest cell in the row)
+    public float MinColWidth { get; init; }              // > 0 = auto-fill: as many 1fr columns as fit at this min width (Columns ignored)
     public Element[] Children { get; init; } = [];
 
     // sizing/participation
@@ -116,6 +118,7 @@ public sealed record TextEl(string Text) : Element
     public bool Bold { get; init; }
     public ColorF Color { get; init; } = ColorF.FromRgba(0xE6, 0xE6, 0xE6);
     public string? FontFamily { get; init; }
+    public DynamicTextKind DynamicText { get; init; }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>
     public TextWrap Wrap { get; init; } = TextWrap.NoWrap;
     /// <summary>Overflow trimming (WinUI TextTrimming): None / Clip / CharacterEllipsis / WordEllipsis.</summary>

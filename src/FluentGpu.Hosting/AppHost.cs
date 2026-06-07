@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -50,15 +51,18 @@ public sealed class AppHost : IDisposable
     private bool _dirty = true;
     private bool _inPaint;
     private Size2 _lastSize;
-    private long _lastPaintTimestamp;
+    private readonly long[] _presentTimes = new long[240];
+    private int _presentTimeNext;
+    private int _presentTimeCount;
     private double _fps;
     private double _frameMs;
+    private const double FpsWindowSeconds = 1.0;
     private static ColorF Clear => Theme.WindowBackground;   // theme-driven (transparent later for Mica)
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
-    public bool HasActiveWork => _dirty || _anim.HasActive || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0;
+    public bool HasActiveWork => _dirty || _scene.HasDynamicText || _anim.HasActive || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -170,6 +174,7 @@ public sealed class AppHost : IDisposable
             _images.Pump();                                   // 7.5 apply finished decodes (+1-frame latency) + evict
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
+            UpdateDynamicDiagnosticsText();
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
@@ -196,16 +201,41 @@ public sealed class AppHost : IDisposable
     {
         long now = Stopwatch.GetTimestamp();
         _frameMs = (now - frameStart) * 1000.0 / Stopwatch.Frequency;
-        if (_lastPaintTimestamp != 0)
+        _presentTimes[_presentTimeNext] = now;
+        _presentTimeNext = (_presentTimeNext + 1) % _presentTimes.Length;
+        if (_presentTimeCount < _presentTimes.Length) _presentTimeCount++;
+        if (_presentTimeCount < 2) return;
+
+        int newest = (_presentTimeNext - 1 + _presentTimes.Length) % _presentTimes.Length;
+        long newestTime = _presentTimes[newest];
+        long oldestTime = newestTime;
+        int intervals = 0;
+        long windowTicks = (long)(FpsWindowSeconds * Stopwatch.Frequency);
+        for (int i = 1; i < _presentTimeCount; i++)
         {
-            double dt = (now - _lastPaintTimestamp) / (double)Stopwatch.Frequency;
-            if (dt > 0.0001)
-            {
-                double instant = 1.0 / dt;
-                _fps = _fps <= 0.0 ? instant : (_fps * 0.85) + (instant * 0.15);
-            }
+            int index = (newest - i + _presentTimes.Length) % _presentTimes.Length;
+            long candidate = _presentTimes[index];
+            if (newestTime - candidate > windowTicks && intervals > 0) break;
+            oldestTime = candidate;
+            intervals = i;
         }
-        _lastPaintTimestamp = now;
+
+        double elapsed = (newestTime - oldestTime) / (double)Stopwatch.Frequency;
+        if (elapsed > 0.0001) _fps = intervals / elapsed;
+    }
+
+    private void UpdateDynamicDiagnosticsText()
+    {
+        if (!_scene.HasDynamicText) return;
+        _scene.UpdateDynamicText(kind => _strings.Intern(kind switch
+        {
+            DynamicTextKind.FrameFps => _fps <= 0.0 ? "--" : _fps.ToString("0", CultureInfo.InvariantCulture),
+            DynamicTextKind.FrameCommandCount => LastStats.DrawCommandCount.ToString(CultureInfo.InvariantCulture),
+            DynamicTextKind.FrameDrawCount => LastStats.DrawNodeCount.ToString(CultureInfo.InvariantCulture),
+            DynamicTextKind.FrameCullCount => LastStats.CulledNodeCount.ToString(CultureInfo.InvariantCulture),
+            DynamicTextKind.FrameMs => _frameMs <= 0.0 ? "--" : _frameMs.ToString("0.0", CultureInfo.InvariantCulture),
+            _ => "",
+        }));
     }
 
     private void DrainLayoutEffects()

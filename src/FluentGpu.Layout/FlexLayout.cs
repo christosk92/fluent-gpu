@@ -358,7 +358,6 @@ public sealed class FlexLayout
         float padL = li.Padding.Left, padT = li.Padding.Top;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            Measure(c);
             ref LayoutInput cli = ref _scene.Layout(c);
             float cw = float.IsNaN(cli.Width) ? innerW : cli.Width;     // explicit child size, else fill the stack
             float ch = float.IsNaN(cli.Height) ? innerH : cli.Height;
@@ -371,7 +370,6 @@ public sealed class FlexLayout
     private Size2 MeasureGrid(NodeHandle node, in LayoutInput li, float availW)
     {
         _scene.TryGetGrid(node, out var g);
-        int count = g.Columns?.Length ?? 0;
         float padH = li.Padding.Horizontal, padV = li.Padding.Vertical;
         // Border-box width: explicit, else the width the parent will stretch us to (availW). A CSS grid is block-level —
         // it fills the available inline size, and star tracks NEED that concrete width to divide. Without availW a
@@ -379,6 +377,7 @@ public sealed class FlexLayout
         float w = !float.IsNaN(li.Width) ? li.Width
                 : float.IsInfinity(availW) ? 0f
                 : MathF.Max(0f, availW);
+        int count = GridColCount(in g, w - padH);   // auto-fill resolves the count from the (now known) width
         float h;
         if (w > 0f && count > 0)
         {
@@ -397,10 +396,10 @@ public sealed class FlexLayout
     private void ArrangeGrid(NodeHandle node, float finalW, float finalH, in LayoutInput li)
     {
         _scene.TryGetGrid(node, out var g);
-        int count = g.Columns?.Length ?? 0;
-        if (count == 0 || _scene.FirstChild(node).IsNull) return;
         float padL = li.Padding.Left, padT = li.Padding.Top;
         float innerW = finalW - li.Padding.Horizontal;
+        int count = GridColCount(in g, innerW);   // same width Measure saw → same count, so rows/height stay consistent
+        if (count == 0 || _scene.FirstChild(node).IsNull) return;
 
         Span<float> colW = count <= 64 ? stackalloc float[count] : new float[count];
         Span<float> colX = count <= 64 ? stackalloc float[count] : new float[count];
@@ -431,8 +430,28 @@ public sealed class FlexLayout
         }
     }
 
+    // Effective column count. Fixed grids use their declared track list; an auto-fill grid (MinColWidth > 0) packs as
+    // many equal 1fr columns as fit at >= MinColWidth, so the tracks always fill the width and the count reflows with it
+    // (CSS repeat(auto-fill, minmax(MinColWidth, 1fr))). Width unknown (0 / ∞) ⇒ assume a single column.
+    private static int GridColCount(in GridSpec g, float innerW)
+    {
+        if (g.MinColWidth > 0f)
+            return innerW > 0f && !float.IsInfinity(innerW)
+                ? Math.Max(1, (int)((innerW + g.ColGap) / (g.MinColWidth + g.ColGap)))
+                : 1;
+        return g.Columns?.Length ?? 0;
+    }
+
     private void ResolveColumns(NodeHandle node, in GridSpec g, int count, float availW, Span<float> colW)
     {
+        if (g.MinColWidth > 0f)   // auto-fill: 'count' equal (1fr) tracks share the width evenly → flush fill, no ragged edge
+        {
+            float starGaps = count > 1 ? (count - 1) * g.ColGap : 0f;
+            float each = count > 0 ? MathF.Max(0f, (availW - starGaps) / count) : 0f;
+            for (int j = 0; j < count; j++) colW[j] = each;
+            return;
+        }
+
         Span<float> autoW = count <= 64 ? stackalloc float[count] : new float[count];
         bool anyAuto = false;
         for (int j = 0; j < count; j++) if (g.Columns[j].Kind == TrackKind.Auto) { anyAuto = true; break; }

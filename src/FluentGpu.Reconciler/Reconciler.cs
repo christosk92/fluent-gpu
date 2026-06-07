@@ -458,6 +458,7 @@ public sealed class TreeReconciler
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
+                if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 ii.Role = b.Role;
@@ -545,7 +546,7 @@ public sealed class TreeReconciler
                 li.Width = g.Width; li.Height = g.Height;
                 li.FlexGrow = g.Grow; li.FlexShrink = g.Shrink; li.FlexBasis = g.Basis;
                 li.AlignSelf = g.AlignSelf; li.Margin = g.Margin; li.Padding = g.Padding;
-                _scene.SetGrid(node, new GridSpec { Columns = g.Columns, ColGap = g.ColGap, RowGap = g.RowGap, RowHeight = g.RowHeight });
+                _scene.SetGrid(node, new GridSpec { Columns = g.Columns, ColGap = g.ColGap, RowGap = g.RowGap, RowHeight = g.RowHeight, MinColWidth = g.MinColWidth });
                 break;
             }
             case ImageEl im:
@@ -578,6 +579,7 @@ public sealed class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
                 paint.TextColor = t.Color;
+                _scene.SetDynamicText(node, t.DynamicText);
                 var newText = _strings.Intern(t.Text);
                 if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
 

@@ -98,6 +98,12 @@ public static partial class Ui
         return new() { Columns = tracks, ColGap = gap, RowGap = gap, RowHeight = rowHeight, Children = children };
     }
 
+    /// <summary>A responsive auto-fill grid: packs as many equal (1fr) columns as fit at ≥ <paramref name="minColWidth"/>,
+    /// stretched to fill the width with no ragged edge, reflowing the column count as the width changes — CSS
+    /// <c>repeat(auto-fill, minmax(minColWidth, 1fr))</c>. Cells flow row-major; <paramref name="gap"/> applies on both axes.</summary>
+    public static GridEl AutoGrid(float minColWidth, float gap, float rowHeight, params Element[] children)
+        => new() { MinColWidth = minColWidth, ColGap = gap, RowGap = gap, RowHeight = rowHeight, Children = children };
+
     // ── Fluent surfaces (semantic tokens) ────────────────────────────────────────────────────────
 
     /// <summary>A Fluent card surface: CardBackground fill + CardStroke 1px border + OverlayCornerRadius + a resting

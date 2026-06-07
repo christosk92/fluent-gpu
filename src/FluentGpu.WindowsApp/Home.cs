@@ -50,7 +50,8 @@ sealed class WelcomePage : Component
             [
                 Embed.Comp(() => new HomeHero()),
                 new BoxEl { Margin = new Edges4(36, 8, 36, 12), Children = [SelectorBar(tab, setTab)] },
-                new BoxEl { Direction = 0, Wrap = true, Gap = 12, Padding = new Edges4(36, 0, 36, 36), Children = cards },
+                // Responsive: as many equal columns as fit at >=280 DIP, stretched to fill the width (reflows on resize).
+                AutoGrid(280f, 12f, 88f, cards) with { Padding = new Edges4(36, 0, 36, 36) },
             ],
         });
     }
@@ -111,7 +112,7 @@ sealed class SampleCard : Component
         this.UseEntrance(key: Index);
         return new BoxEl
         {
-            Width = 280, Height = 88, Direction = 0, Gap = 14, AlignItems = FlexAlign.Center, Padding = Edges4.All(14),
+            Height = 88, Direction = 0, Gap = 14, AlignItems = FlexAlign.Center, Padding = Edges4.All(14),   // width = the grid column (responsive)
             Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
             HoverFill = Tok.FillCardSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = OnOpen,
             Children =

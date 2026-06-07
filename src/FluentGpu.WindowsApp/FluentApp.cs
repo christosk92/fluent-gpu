@@ -49,7 +49,8 @@ public static class FluentApp
             host.RunFrame();
             n++;
             if (frames > 0 && n >= frames) break;
-            window.WaitForWork(host.HasActiveWork ? 8 : -1);
+            // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
+            window.WaitForWork(host.HasActiveWork ? 0 : -1);
         }
     }
 

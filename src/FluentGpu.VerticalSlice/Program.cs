@@ -234,6 +234,19 @@ sealed class GridStretchProbe : Component
         };
 }
 
+// An auto-fill responsive grid (CSS repeat(auto-fill, minmax(120, 1fr))) in a 520-wide box: it must pack as many equal
+// 1fr columns as fit at >=120 and stretch them to FILL the width (no ragged edge), reflowing the count with the width.
+sealed class AutoGridProbe : Component
+{
+    static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
+    public override Element Render()
+    {
+        var cells = new Element[7];
+        for (int i = 0; i < cells.Length; i++) cells[i] = Cell();
+        return Ui.AutoGrid(120f, 10f, 50f, cells) with { Width = 520f };
+    }
+}
+
 // The Wavee skeleton: a shell composing EVERY subsystem — sidebar nav → PageHost back stack; a Home page (album-art
 // card Grid in a ScrollView) and a Playlist page (5,000-row virtualized track list with art thumbs); a now-playing
 // PlayerBar (image + Slider + transport IconButtons + ToggleButton). This is the acceptance test for "can host Wavee".
@@ -1147,6 +1160,29 @@ static class Slice
             gridHeight && gridWidth && noOverlap, $"gridW={gb.W:0} gridH={gb.H:0} afterY={ab.Y:0}");
     }
 
+    // Auto-fill responsive grid: 520 inner width, minCol 120, gap 10 → floor((520+10)/(120+10)) = 4 columns, each
+    // (520 − 3×10)/4 = 122.5, packed flush so the 4th column's right edge meets the inner width (no ragged gap).
+    static void AutoGridChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("autogrid", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new AutoGridProbe());
+        host.RunFrame();
+
+        var grid = host.Scene.Root;
+        var b0 = host.Scene.Bounds(Child(host.Scene, grid, 0));
+        var b3 = host.Scene.Bounds(Child(host.Scene, grid, 3));
+        var b4 = host.Scene.Bounds(Child(host.Scene, grid, 4));
+        bool count = Near(b0.W, 122.5f, 0.5f) && Near(b0.X, 0) && Near(b3.X, 397.5f, 0.5f);   // 4 columns
+        bool fillsWidth = Near(b3.X + b3.W, 520f, 0.5f);                                       // right edge flush — fills the width
+        bool wraps = Near(b4.X, 0) && Near(b4.Y, 60f, 0.5f);                                   // 5th cell wraps to row 2 (50 + 10 gap)
+        Check("51c. AutoGrid: auto-fill packs equal columns that fill the width + reflow",
+            count && fillsWidth && wraps, $"col0w={b0.W:0.0} col3right={b3.X + b3.W:0.0} row2y={b4.Y:0}");
+    }
+
     // The Wavee skeleton acceptance test: the shell composes nav + grid + images + controls; navigating to the
     // playlist renders a VIRTUALIZED 5,000-row list (first track realized, last track NOT) — all subsystems at once.
     static void WaveeSkeletonChecks(StringTable strings)
@@ -1412,6 +1448,7 @@ static class Slice
         PageHostChecks(strings);
         GridChecks(strings);
         GridStretchChecks(strings);
+        AutoGridChecks(strings);
         VirtualGridChecks(strings);
         ZStackRepeaterChecks(strings);
         NavigationViewChecks(strings);

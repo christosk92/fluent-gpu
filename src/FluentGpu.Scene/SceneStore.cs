@@ -44,6 +44,8 @@ public sealed class SceneStore : ISceneBackend
     private LayoutInput[] _layout;
     private RectF[] _bounds;          // LOCAL
     private NodePaint[] _paint;
+    private DynamicTextKind[] _dynamicText;
+    private int _dynamicTextCount;
     private InteractionInfo[] _interaction;
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
@@ -81,6 +83,7 @@ public sealed class SceneStore : ISceneBackend
         _layout = new LayoutInput[capacity];
         _bounds = new RectF[capacity];
         _paint = new NodePaint[capacity];
+        _dynamicText = new DynamicTextKind[capacity];
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
@@ -107,6 +110,7 @@ public sealed class SceneStore : ISceneBackend
         _layout[idx] = LayoutInput.Default;
         _bounds[idx] = default;
         _paint[idx] = NodePaint.Default;
+        ClearDynamicText(idx);
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
@@ -134,6 +138,7 @@ public sealed class SceneStore : ISceneBackend
         _keyHandler[idx] = null;
         _pointerDown[idx] = null;
         _drag[idx] = null;
+        ClearDynamicText(idx);
         _scroll.Remove(idx);
         _extents.Remove(idx);
         _grids.Remove(idx);
@@ -194,6 +199,36 @@ public sealed class SceneStore : ISceneBackend
     public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
     public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
     public Action<Point2>? GetDrag(NodeHandle h) => _drag[h.Raw.Index];
+
+    public bool HasDynamicText => _dynamicTextCount > 0;
+
+    public void SetDynamicText(NodeHandle h, DynamicTextKind kind)
+    {
+        int idx = (int)h.Raw.Index;
+        var old = _dynamicText[idx];
+        if (old == kind) return;
+        if (old == DynamicTextKind.None && kind != DynamicTextKind.None) _dynamicTextCount++;
+        else if (old != DynamicTextKind.None && kind == DynamicTextKind.None) _dynamicTextCount--;
+        _dynamicText[idx] = kind;
+    }
+
+    public void UpdateDynamicText(Func<DynamicTextKind, StringId> resolve)
+    {
+        if (_dynamicTextCount == 0) return;
+        for (int i = 1; i < _high; i++)
+        {
+            var kind = _dynamicText[i];
+            if (kind == DynamicTextKind.None) continue;
+            _paint[i].Text = resolve(kind);
+        }
+    }
+
+    private void ClearDynamicText(int idx)
+    {
+        if (_dynamicText[idx] == DynamicTextKind.None) return;
+        _dynamicText[idx] = DynamicTextKind.None;
+        _dynamicTextCount--;
+    }
 
     public void Mark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] |= flags;
     public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
@@ -278,7 +313,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _parent, n); Array.Resize(ref _firstChild, n); Array.Resize(ref _lastChild, n);
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
-        Array.Resize(ref _paint, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
+        Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n);
     }

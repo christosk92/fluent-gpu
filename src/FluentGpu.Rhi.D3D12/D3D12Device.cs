@@ -425,43 +425,22 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameRectCount++;
     }
 
+    // "Ready" art: until real WIC decode + GPU texture upload lands (needs-pixels), stand in with a stable per-album
+    // tint so decoded tiles read as distinct cover art. This MUST go through the rect pipeline, NOT the gradient pass:
+    // RecordAll draws ALL gradients BENEATH ALL rects within a segment (correct for backdrops/borders), so art emitted
+    // as a gradient is occluded by the card/section background rects drawn after it — the "empty tiles" regression.
     private void AddReadyImageArt(in DrawImageCmd im)
     {
-        ColorF a = AlbumColor(im.ImageId, 0);
-        ColorF b = AlbumColor(im.ImageId, 1);
-        ColorF c = AlbumColor(im.ImageId, 2);
-        ColorF d = ColorF.Lerp(AlbumColor(im.ImageId, 3), ColorF.FromRgba(8, 10, 18), 0.35f);
-
-        _gradInsts.Add(new GradientInstance
+        ColorF art = AlbumColor(im.ImageId, 0);
+        _rectInsts.Add(new RectInstance
         {
             PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
-            StartX = 0f, StartY = 0.05f, EndX = 1f, EndY = 1f,
-            C0R = a.R, C0G = a.G, C0B = a.B, C0A = a.A,
-            C1R = b.R, C1G = b.G, C1B = b.B, C1A = b.A,
-            C2R = c.R, C2G = c.G, C2B = c.B, C2A = c.A,
-            C3R = d.R, C3G = d.G, C3B = d.B, C3A = d.A,
-            O0 = 0f, O1 = 0.42f, O2 = 0.74f, O3 = 1f,
+            RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
+            R = art.R, G = art.G, B = art.B, A = art.A,
             M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
-            Dx = im.Transform.Dx, Dy = im.Transform.Dy, Radius = im.Radii.TopLeft, Opacity = im.Opacity,
-            Shape = 0f, StopCount = 4f,
+            Dx = im.Transform.Dx, Dy = im.Transform.Dy, Opacity = im.Opacity,
         });
-
-        ColorF light = ColorF.FromRgba(255, 255, 255, 72);
-        ColorF tint = ColorF.Lerp(a, ColorF.FromRgba(255, 255, 255), 0.35f) with { A = 0.28f };
-        ColorF clear = ColorF.Transparent;
-        _gradInsts.Add(new GradientInstance
-        {
-            PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
-            StartX = 0.12f, StartY = 0.10f, EndX = 1f, EndY = 1f,
-            C0R = light.R, C0G = light.G, C0B = light.B, C0A = light.A,
-            C1R = tint.R, C1G = tint.G, C1B = tint.B, C1A = tint.A,
-            C2R = clear.R, C2G = clear.G, C2B = clear.B, C2A = clear.A,
-            C3R = clear.R, C3G = clear.G, C3B = clear.B, C3A = clear.A,
-            O0 = 0f, O1 = 0.25f, O2 = 0.58f, O3 = 1f,
-            M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
-            Dx = im.Transform.Dx, Dy = im.Transform.Dy, Radius = im.Radii.TopLeft, Opacity = im.Opacity,
-            Shape = 1f, StopCount = 4f,
-        });
+        _frameRectCount++;
     }
 
     private static ColorF AlbumColor(int imageId, int stop)

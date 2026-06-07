@@ -87,6 +87,7 @@ sealed class GalleryApp : Component
         Direction = 0,
         Justify = FlexJustify.End,
         AlignItems = FlexAlign.Start,
+        HitTestVisible = false,
         Padding = new Edges4(12, 56, 152, 0),
         Children = [Embed.Comp(() => new FrameDiagnosticsHud())],
     };
@@ -115,13 +116,6 @@ sealed class FrameDiagnosticsHud : Component
 {
     public override Element Render()
     {
-        var stats = UseContext(FrameDiagnostics.Current);
-        var (tick, setTick) = UseState(0);
-        UseEffect(() => setTick((tick + 1) & 0x3FFF_FFFF), tick);
-
-        string fps = stats.Fps <= 0.0 ? "--" : stats.Fps.ToString("0");
-        string ms = stats.FrameMs <= 0.0 ? "--" : stats.FrameMs.ToString("0.0");
-
         return new BoxEl
         {
             Direction = 0,
@@ -135,16 +129,16 @@ sealed class FrameDiagnosticsHud : Component
             Corners = Radii.ControlAll,
             Children =
             [
-                Metric("fps", fps, Tok.AccentDefault),
-                Metric("cmd", stats.DrawCommandCount.ToString(), Tok.TextPrimary),
-                Metric("draw", stats.DrawNodeCount.ToString(), Tok.TextPrimary),
-                Metric("cull", stats.CulledNodeCount.ToString(), Tok.TextPrimary),
-                Metric("ms", ms, Tok.TextSecondary),
+                Metric("fps", "000", DynamicTextKind.FrameFps, Tok.AccentDefault),
+                Metric("cmd", "0000", DynamicTextKind.FrameCommandCount, Tok.TextPrimary),
+                Metric("draw", "0000", DynamicTextKind.FrameDrawCount, Tok.TextPrimary),
+                Metric("cull", "0000", DynamicTextKind.FrameCullCount, Tok.TextPrimary),
+                Metric("ms", "000.0", DynamicTextKind.FrameMs, Tok.TextSecondary),
             ],
         };
     }
 
-    static Element Metric(string label, string value, ColorF valueColor) => new BoxEl
+    static Element Metric(string label, string placeholder, DynamicTextKind dynamicText, ColorF valueColor) => new BoxEl
     {
         Direction = 0,
         Gap = 4,
@@ -152,7 +146,7 @@ sealed class FrameDiagnosticsHud : Component
         Children =
         [
             new TextEl(label) { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" },
-            new TextEl(value) { Size = 12f, Bold = true, Color = valueColor, FontFamily = "Cascadia Code" },
+            new TextEl(placeholder) { Size = 12f, Bold = true, Color = valueColor, FontFamily = "Cascadia Code", DynamicText = dynamicText },
         ],
     };
 }

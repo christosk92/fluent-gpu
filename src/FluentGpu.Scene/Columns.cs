@@ -116,6 +116,7 @@ public struct GridSpec
     public TrackSize[] Columns;   // managed ref is fine in the dict-backed side-table
     public float ColGap, RowGap;
     public float RowHeight;       // NaN ⇒ auto (max child height per row)
+    public float MinColWidth;     // > 0 ⇒ auto-fill: ignore Columns; pack as many equal 1fr tracks as fit at this min width
 }
 
 /// <summary>

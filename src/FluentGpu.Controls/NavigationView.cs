@@ -43,11 +43,11 @@ public sealed class NavigationView : Component
     const float TopPaneHeight = 48f;
     const float PaneHeaderRowHeight = 40f;
     const float PaneToggleWidth = 40f;
-    const float PaneToggleHeight = 36f;
-    const float ItemHeight = 36f;
+    const float PaneToggleHeight = 40f;
+    const float ItemHeight = 40f;
     const float ItemOuterHeight = 40f;
     const float ItemMarginX = 4f;
-    const float ItemMarginY = 2f;
+    const float ItemMarginY = 0f;
     const float HeaderHeight = 36f;
     const float IconColumnWidth = 40f;
     const float IconSize = 16f;
@@ -322,6 +322,55 @@ public sealed class NavigationView : Component
 
         bool sel = it.Key == selected;
         var foreground = sel ? Tok.TextPrimary : Tok.TextSecondary;
+        if (!expanded)
+        {
+            return new BoxEl
+            {
+                Direction = 0,
+                Role = AutomationRole.NavigationItem,
+                Width = PaneToggleWidth,
+                Height = ItemHeight,
+                Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
+                AlignItems = FlexAlign.Center,
+                Corners = Radii.OverlayAll,
+                Fill = sel ? Tok.FillSubtleSecondary : ColorF.Transparent,
+                HoverFill = sel ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+                PressedFill = sel ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+                OnClick = () => select(it.Key),
+                Children =
+                [
+                    Ui.ZStack(
+                        new BoxEl
+                        {
+                            Width = PaneToggleWidth,
+                            Height = ItemHeight,
+                            Direction = 0,
+                            AlignItems = FlexAlign.Center,
+                            Children =
+                            [
+                                new BoxEl
+                                {
+                                    Width = IndicatorW,
+                                    Height = IndicatorH,
+                                    Corners = CornerRadius4.All(2f),
+                                    Fill = ownIndicator && sel ? Tok.AccentDefault : ColorF.Transparent,
+                                },
+                            ],
+                        },
+                        new BoxEl
+                        {
+                            Width = PaneToggleWidth,
+                            Height = ItemHeight,
+                            Direction = 0,
+                            AlignItems = FlexAlign.Center,
+                            Justify = FlexJustify.Center,
+                            Children = [new TextEl(it.Glyph) { Size = IconSize, Color = foreground, FontFamily = Theme.IconFont }],
+                        }
+                    ),
+                ],
+            };
+        }
+
         var children = new List<Element>
         {
             new BoxEl
@@ -334,7 +383,7 @@ public sealed class NavigationView : Component
             },
             new BoxEl
             {
-                Width = expanded ? IconColumnWidth - IndicatorW : 37f,
+                Width = IconColumnWidth - IndicatorW,
                 Height = ItemHeight,
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
@@ -360,7 +409,7 @@ public sealed class NavigationView : Component
         {
             Direction = 0,
             Role = AutomationRole.NavigationItem,
-            Width = expanded ? float.NaN : PaneToggleWidth,
+            Width = float.NaN,
             Height = ItemHeight,
             Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
             AlignItems = FlexAlign.Center,

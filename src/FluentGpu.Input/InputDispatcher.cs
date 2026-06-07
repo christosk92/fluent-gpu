@@ -459,6 +459,10 @@ public sealed class InputDispatcher
 
     private NodeHandle HitAny(NodeHandle node, float ox, float oy, Point2 p)
     {
+        var flags = _scene.Flags(node);
+        if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
+            return NodeHandle.Null;
+
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
         float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
@@ -468,13 +472,17 @@ public sealed class InputDispatcher
             var r = HitAny(c, ax, ay, p);
             if (!r.IsNull) result = r;
         }
-        if (result.IsNull && (_scene.Flags(node) & NodeFlags.Visible) != 0 && new RectF(ax, ay, b.W, b.H).Contains(p))
+        if (result.IsNull && new RectF(ax, ay, b.W, b.H).Contains(p))
             result = node;
         return result;
     }
 
     private NodeHandle Hit(NodeHandle node, float ox, float oy, Point2 p)
     {
+        var flags = _scene.Flags(node);
+        if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
+            return NodeHandle.Null;
+
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
         float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
@@ -490,9 +498,7 @@ public sealed class InputDispatcher
         {
             var rect = new RectF(ax, ay, b.W, b.H);
             ref InteractionInfo ii = ref _scene.Interaction(node);
-            var flags = _scene.Flags(node);
-            if ((flags & NodeFlags.HitTestVisible) != 0 &&
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
+            if ((ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
                 rect.Contains(p))
             {
                 result = node;
