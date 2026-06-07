@@ -499,6 +499,19 @@ layout (layout already produced the final `Bounds` at phase 6; the tween only an
 toward identity). (Animating a genuine layout property is the rare opt-in `LayoutSelfDirty`-per-tick path
 documented in §7 cross-cutting — not used by any animation this subsystem owns.)
 
+> **SHIPPED — interaction-driven compositor effects (hover/press), record-time.** Two stateless,
+> compositor-only interaction effects ride these same channels (driven by the controls layer, controls.md §1.1):
+> (1) **Brush cross-fade** — `InteractionAnim.HoverT/PressT` (the `InteractionAnimator`, tuned to WinUI's ~83 ms
+> `ControlFasterAnimationDuration`) lerps a node's `Fill`/`Border`/hover/press brushes at record time in
+> `SceneRecorder.ResolveSurface`, using a **separate** `ColorF.LerpLinear` (sRGB→linear→lerp→sRGB) that honors the
+> linear-blend/premultiplied color contract (SPEC-INDEX §2 color row) — the shared `ColorF.Lerp` is unchanged.
+> This is a `PaintDirty`-only re-record, no component re-render. (2) **Composited SCALE** — `BoxEl.HoverScale`/
+> `PressScale` + `InteractionAnim.HoverScale`/`PressScale`: the recorder scales a node about its centre
+> (`ScaleX/ScaleY` → `LocalTransform`, **TransformDirty**) by the eased hover/press of its nearest **interactive
+> ancestor** (e.g. a slider/scrollbar thumb grows on control hover). **Composited only — never changes layout or
+> hit-test** (HitTest reads `Bounds`, not `LocalTransform`). Both honor reduced-motion (§5.8). These add no new
+> column (they ride `LocalTransform`/the existing brush columns) and no new opcode.
+
 ```csharp
 // POD seed passed to AnimEngine.Seed — picks the mode; stackalloc-friendly, [InlineArray] for multi-channel.
 public readonly struct TrackSeed

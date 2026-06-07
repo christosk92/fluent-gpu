@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
 
@@ -7,6 +8,15 @@ public sealed class Context<T>
 {
     public T Default;
     public Context(T defaultValue) => Default = defaultValue;
+}
+
+/// <summary>
+/// The ambient client size (DIP), pushed by the host each frame so components can adapt to available width
+/// (responsive layout / NavigationView display modes). Read with <c>UseContext(Viewport.Size)</c>.
+/// </summary>
+public static class Viewport
+{
+    public static readonly Context<Size2> Size = new(default);
 }
 
 /// <summary>Provides a context value to its subtree (the React <c>Context.Provider</c>). One child.</summary>

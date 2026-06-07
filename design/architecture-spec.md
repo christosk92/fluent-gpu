@@ -123,8 +123,13 @@ constant flips it on); v1 keeps the quarantine at 0.
 
 ## 3. MODULE / ASSEMBLY LAYOUT
 
-18 assemblies; strictly acyclic. **NEW** = built from scratch; **EXTRACT** = forked/vendored from a
-reference repo; **PORT** = algorithm reused, substrate rewritten.
+The design-core acyclic graph (the boxes below — now including `Animation`, `Hooks`, and the
+top-of-graph `FluentGpu.Controls`) plus the OS/test-leaf assemblies; strictly acyclic. **NEW** = built
+from scratch; **EXTRACT** = forked/vendored from a reference repo; **PORT** = algorithm reused, substrate
+rewritten. (The repo currently has **27 projects** — the design-core graph + OS leaves + the testing/headless
+leaves + the apps. The old "18 assemblies" count predated the `Animation`/`Hooks`/`Controls` splits and the
+test/leaf growth; it is restated consistently here, in `foundations.md` §CONTRACT-SUMMARY item 8, and in
+`design/README.md`.)
 
 ```
                          ┌──────────────┐
@@ -151,7 +156,13 @@ reference repo; **PORT** = algorithm reused, substrate rewritten.
         │                │                          │  Reconciler  │ PORT (control flow) + re-author
         │                │                          │ ISceneBackend│  (keyed LIS, deps, scene write)
         │                │                          └──────┬───────┘
-        │                └──────────────┬──────────────────┘
+        │                │                                 ▼
+        │                │                          ┌──────────────┐
+        │                │                          │   Controls   │ NEW (FluentGpu.Controls — top of the
+        │                │                          │ Button/Slider│  graph; refs Foundation, Dsl, Hooks,
+        │                │                          │ Nav/Repeater │  Animation, Scene, Reconciler — one-way:
+        │                │                          └──────┬───────┘  Reconciler refs only VirtualListEl,
+        │                └──────────────┬──────────────────┘          so Controls→Reconciler stays acyclic)
         │                               ▼
         │                        ┌──────────────┐
         └───────────────────────►│   Hosting    │ NEW (composition root; the ONLY assembly that

@@ -7,6 +7,7 @@
     <Project Path="FluentGpu.Dsl/FluentGpu.Dsl.csproj" />
     <Project Path="FluentGpu.Hooks/FluentGpu.Hooks.csproj" />
     <Project Path="FluentGpu.Reconciler/FluentGpu.Reconciler.csproj" />
+    <Project Path="FluentGpu.Controls/FluentGpu.Controls.csproj" />
     <Project Path="FluentGpu.Input/FluentGpu.Input.csproj" />
     <Project Path="FluentGpu.Animation/FluentGpu.Animation.csproj" />
     <Project Path="FluentGpu.Hosting/FluentGpu.Hosting.csproj" />

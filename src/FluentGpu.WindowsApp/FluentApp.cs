@@ -20,6 +20,7 @@ public static class FluentApp
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
                            bool mica = true, int frames = -1)
     {
+        Diag.Sink = Console.Error.WriteLine;   // engine diagnostics → console (Debug only; compiled out on Release)
         var strings = new StringTable();
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc(title, new Size2(width, height), 1f, mica));
@@ -32,6 +33,7 @@ public static class FluentApp
         var fonts = new GdiFontSystem(strings);
         IGpuDevice device = new D3D12Device(strings, composited: mica);
         using var host = new AppHost(app, window, device, fonts, strings, root());
+        host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
 
         window.Show();
 
@@ -41,7 +43,7 @@ public static class FluentApp
             host.RunFrame();
             n++;
             if (frames > 0 && n >= frames) break;
-            Thread.Sleep(8);
+            window.WaitForWork(host.HasActiveWork ? 8 : -1);
         }
     }
 

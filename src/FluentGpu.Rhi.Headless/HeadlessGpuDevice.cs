@@ -14,12 +14,37 @@ public sealed class HeadlessGpuDevice : IGpuDevice
 {
     private readonly List<FillRoundRectCmd> _rects = new(64);
     private readonly List<DrawGlyphRunCmd> _glyphs = new(64);
+    private readonly List<ClipCmd> _clips = new(16);
+    private readonly List<DrawImageCmd> _imageDraws = new(32);
+    private readonly List<DrawRoundRectStrokeCmd> _strokes = new(16);
+    private readonly List<DrawShadowCmd> _shadows = new(16);
+    private readonly List<DrawGradientRectCmd> _gradients = new(16);
+    private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
+    private readonly List<PushLayerCmd> _layers = new(8);
 
     public string BackendName => "Headless";
     public int FrameCount { get; private set; }
     public ColorF LastClear { get; private set; }
     public IReadOnlyList<FillRoundRectCmd> LastRects => _rects;
     public IReadOnlyList<DrawGlyphRunCmd> LastGlyphs => _glyphs;
+    /// <summary>Every PushClip pushed this frame (for clip assertions; the recorder pre-intersects each one).</summary>
+    public IReadOnlyList<ClipCmd> LastClips => _clips;
+    /// <summary>Image quads drawn this frame (Ready==0 ⇒ placeholder shown while decode is in flight).</summary>
+    public IReadOnlyList<DrawImageCmd> LastImages => _imageDraws;
+    /// <summary>SDF outlines (focus rings / stroked borders) drawn this frame.</summary>
+    public IReadOnlyList<DrawRoundRectStrokeCmd> LastStrokes => _strokes;
+    /// <summary>Soft drop shadows drawn this frame.</summary>
+    public IReadOnlyList<DrawShadowCmd> LastShadows => _shadows;
+    /// <summary>Gradient-filled rects drawn this frame.</summary>
+    public IReadOnlyList<DrawGradientRectCmd> LastGradients => _gradients;
+    /// <summary>Gradient-tinted border strokes (WinUI elevation borders) drawn this frame.</summary>
+    public IReadOnlyList<DrawGradientStrokeCmd> LastGradientStrokes => _gradientStrokes;
+    /// <summary>Backdrop-effect layers pushed this frame (acrylic).</summary>
+    public IReadOnlyList<PushLayerCmd> LastLayers => _layers;
+    /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame.</summary>
+    public int ClipBalance { get; private set; }
+    /// <summary>PushLayer/PopLayer balance check — must be 0 at end of a well-formed frame.</summary>
+    public int LayerBalance { get; private set; }
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc) => new HeadlessSwapchain(desc.SizePx);
 
@@ -27,8 +52,17 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     {
         _rects.Clear();   // retains capacity → no alloc after warmup
         _glyphs.Clear();
+        _clips.Clear();
+        _imageDraws.Clear();
+        _strokes.Clear();
+        _shadows.Clear();
+        _gradients.Clear();
+        _gradientStrokes.Clear();
+        _layers.Clear();
         LastClear = ctx.Clear;
         FrameCount++;
+        int balance = 0;
+        int layerBalance = 0;
 
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
@@ -45,10 +79,49 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     _glyphs.Add(MemoryMarshal.Read<DrawGlyphRunCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
                     break;
+                case DrawOp.PushClip:
+                    _clips.Add(MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<ClipCmd>();
+                    balance++;
+                    break;
+                case DrawOp.PopClip:
+                    balance--;
+                    break;
+                case DrawOp.DrawImage:
+                    _imageDraws.Add(MemoryMarshal.Read<DrawImageCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawImageCmd>();
+                    break;
+                case DrawOp.DrawRoundRectStroke:
+                    _strokes.Add(MemoryMarshal.Read<DrawRoundRectStrokeCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
+                    break;
+                case DrawOp.DrawShadow:
+                    _shadows.Add(MemoryMarshal.Read<DrawShadowCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    break;
+                case DrawOp.DrawGradientRect:
+                    _gradients.Add(MemoryMarshal.Read<DrawGradientRectCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawGradientRectCmd>();
+                    break;
+                case DrawOp.DrawGradientStroke:
+                    _gradientStrokes.Add(MemoryMarshal.Read<DrawGradientStrokeCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
+                    break;
+                case DrawOp.PushLayer:
+                    _layers.Add(MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<PushLayerCmd>();
+                    layerBalance++;
+                    break;
+                case DrawOp.PopLayer:
+                    pos += Unsafe.SizeOf<PopLayerCmd>();
+                    layerBalance--;
+                    break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)
             }
         }
+        ClipBalance = balance;
+        LayerBalance = layerBalance;
     }
 
     public void Dispose() { }

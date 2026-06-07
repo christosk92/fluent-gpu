@@ -250,7 +250,7 @@ blocks as cheap insurance.
 | **LayoutAux** (cold) | ~120 | separate `SlabAllocator<LayoutAux>`; ~10% of nodes; shared zero-sentinel row 0 | layout measure (border/inset/percent precision) | layout |
 | **Bounds** `{X, Y, W, H, flags}` **LOCAL** | ~32 | flat POD; pixel-snapped; **node-LOCAL space** (P8) | layout (write), record/hit/UIA (read) | this doc (placement) / layout (values) |
 | **NodePaint** `{LocalTransform:Affine2D(24), Opacity, Fill:BrushHandle, Stroke:BrushHandle, StrokeWidth, Corners:CornerRadius4(16), Clip:ClipHandle, VisualKind:byte, Layer:byte, EffectAuxRef:int}` | 64 (one cache line) | flat POD | animation (write transform/opacity), record (read all) | this doc (layout) / theming (`Fill` derivation) / backdrop (`EffectAuxRef`) |
-| **InteractionInfo** `{HitCorners, HandlerMask:ushort, CursorId, HitShape:byte, HitGeometryRef:int}` | 16 | flat POD | hit-test (hot) | `input-a11y.md` |
+| **InteractionInfo** `{HitCorners, HandlerMask:ushort, CursorId, HitShape:byte, Role:byte, HitGeometryRef:int}` | 16 | flat POD; `Role` (SHIPPED) = `AutomationRole` enum (Foundation), set by control factories so a `BoxEl` announces its control type | hit-test (hot); UIA/devtools/tests (read `Role`) | `input-a11y.md` (semantics) |
 | **A11yInfo** `{Name, AutomationId, HelpText:StringId, ControlType, Patterns:ushort, Heading, Landmark, LabeledBy, LiveSetting}` | 24 | flat POD; **cold** (scanned only when `UiaClientsAreListening`) | UIA only | `input-a11y.md` |
 | **FocusNav** `{TabIndex, IsTabStop, XY{L,R,U,D}}` | ~24 | flat POD; cold | focus engine (Tab/arrow nav) | `input-a11y.md` |
 | **NodeFlags** | 4 | single 32-bit dirty/state column | **every phase pre-filters on this** | **this doc** |
@@ -259,6 +259,7 @@ blocks as cheap insurance.
 | **BackdropRef** (side) | ~12 | tiny cold side-table `{BakeTicket, ImageHandle baked, BackdropState}` | record (backdrop node) | **`backdrop-effects-animation.md`** |
 | **VirtualState** (slab) | — | slab-backed column; per-range CTS, anchor `ItemKey`, extent table ref | layout (virtual list/grid), P2 scroll, P4 window realize | **virtualization** (`app-requirements` §3.2) |
 | **SelectionState** (sparse side-table) | 24 | tiny `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>`; **NOT a NodePaint field** (keeps NodePaint at 64B); anchor/extent text-positions + affinity + bake-ticket | record (resolve→`DrawSelectionRectCmd`), input (drag), UIA `ITextRangeProvider` | this doc (placement) / **`text.md`** (semantics, L1) |
+| **`_borderBrushes`** (sparse side-table; SHIPPED) | — | sparse map MIRRORING the gradient side-table (`Set`/`TryGet`/`Clear` + `FreeSubtree` removal); holds the per-node `GradientSpec` for the gradient elevation border; `BorderWidth` stays in the dense `NodePaint` column | record (resolve→`DrawGradientStroke`) | this doc (placement) / **`gpu-renderer.md`** (`DrawGradientStrokeCmd` shape + raster) |
 | **FlowState** | 4 | flat POD column on the spine: `{Inherited:byte, Resolved:byte, _pad:ushort}`; written at `WriteLayout` | layout (logical→physical mirror), record (RTL overlay placement) | this doc (placement) / **`layout.md`** (resolution, L5) |
 | **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
 | **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
@@ -579,6 +580,12 @@ public struct DrawCmd {
 public enum DrawOp : byte {
     // rect family (payloads: gpu-renderer.md)
     FillRoundRect, FillRoundRectStroke, DrawShadow, FillGradient,
+    DrawGradientStroke,   // = 11 (SHIPPED): a gradient-tinted SDF outline — the WinUI (Accent)ControlElevationBorder.
+                          //   The gradient PS is sampled along the local axis and drawn as a stroke band centered on
+                          //   the rounded-box edge. REUSES the GradientPipeline (a spare pad float in the 160-byte
+                          //   GradientInstance becomes `Stroke`; stride/root-sig unchanged). Shape+raster owned by
+                          //   gpu-renderer.md; carried by the sparse `_borderBrushes` side-table (mirrors `_gradients`),
+                          //   driven by the `BoxEl.BorderBrush` (`GradientSpec?`) DSL field + `.BorderBrush(spec,width)`.
     // content (payloads: text.md / media-pipeline.md)
     DrawGlyphRun, DrawImage, DrawVideo,
     // paths (payloads: gpu-renderer.md)

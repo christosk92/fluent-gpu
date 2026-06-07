@@ -2,7 +2,8 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Text;
 
-public readonly record struct TextStyle(StringId FontFamily, float SizeDip, bool Bold);
+public readonly record struct TextStyle(StringId FontFamily, float SizeDip, bool Bold,
+    TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0);
 
 /// <summary>Result of measuring a run: the box the shaped glyphs occupy + the baseline offset from the top.</summary>
 public readonly record struct TextMetrics(Size2 Size, float Baseline);
@@ -14,6 +15,7 @@ public readonly record struct TextMetrics(Size2 Size, float Baseline);
 /// </summary>
 public interface IFontSystem
 {
-    /// <summary>Measure a string under a style (intrinsic content size). Feeds the layout engine.</summary>
-    TextMetrics Measure(StringId text, in TextStyle style);
+    /// <summary>Measure a string under a style (intrinsic content size). Feeds the layout engine. When
+    /// <paramref name="maxWidth"/> is finite and the style wraps, the result is the word-wrapped multi-line box.</summary>
+    TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity);
 }

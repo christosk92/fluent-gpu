@@ -168,6 +168,7 @@ public struct DrawCmd { public DrawOp Op; public byte Flags; public ushort Paylo
 public enum DrawOp : byte {
     FillRoundRect, FillRoundRectStroke, DrawShadow,             // rect family → RenderLane.AnalyticSdf
     DrawGlyphRun, DrawImage, DrawVideo, FillPath, StrokePath, FillGradient,
+    DrawGradientStroke,                                        // = 11 (SHIPPED): gradient-tinted SDF outline (§3.1a)
     PushClipRect, PushClipRoundRect, PushStencilClip, PopStencilClip, PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,
     DrawFocusRect,                                             // superseded rectangular debug placeholder
@@ -223,7 +224,25 @@ public struct DrawVideoCmd {               // sortkey PassClass below chrome
 public struct FillPathCmd { public PathRef Path; public BrushHandle Fill; public ClipHandle Clip; public byte FillRule; }
 public struct PushLayerCmd { public RectF DeviceBounds; public float Opacity; public BlendPreset Blend;
                              public EffectHandle Effect; public ClipHandle Clip; }
+// AUTHORITY (this doc owns the SHAPE + raster). `DrawGradientStroke` = a gradient-tinted SDF OUTLINE — the WinUI
+// (Accent)ControlElevationBorder. Payload = the gradient-rect command + a stroke width; the gradient SPEC comes from
+// the sparse `_borderBrushes` side-table (scene-memory.md, mirrors `_gradients`), keyed by the `BoxEl.BorderBrush`
+// (`GradientSpec?`) DSL field. NOT a new pipeline — REUSES the GradientPipeline.
+public struct DrawGradientStrokeCmd {      // = DrawGradientRectCmd + StrokeWidth (the band width, device px)
+    public RectF Rect; public CornerRadius4 Radii; public GradientRef Brush; public ClipHandle Clip;
+    public float StrokeWidth;               // >0 ⇒ draw the gradient as a band centered on the edge (bw*0.5 inset)
+}
 ```
+
+> **`DrawGradientStroke` raster (reuses the GradientPipeline; stride/root-sig UNCHANGED).** The 160-byte
+> `GradientInstance` gains a `float Stroke` reusing a spare pad (`Pad0`) — **160-byte stride preserved**. In the
+> gradient PS, when `Stroke > 0` the fill-coverage line is swapped for the stroke-band formula already used by the
+> rounded-rect border (`cov = clamp(0.5 - (abs(d) - stroke*0.5)/fw)`); the gradient `t`/color math is untouched (the
+> gradient is sampled along the local axis exactly as the fill path does). It is `RenderLane.AnalyticSdf` (see
+> `Classify`), composes with the existing gradient-fill branch, and the recorder emits it (in the `VisualKind.Box`
+> case, at the edge-centered ring rect) only when a border brush exists. `D3D12Device` and `HeadlessGpuDevice` both
+> decode it; `HeadlessGpuDevice` exposes `LastGradientStrokes` for golden checks. Corner radius uses `radii.x`
+> (uniform) — fine for the 4 px control radius.
 
 ### 3.2 SortKey layout (64-bit) — folds the painter-order BLOCKER
 
@@ -401,6 +420,7 @@ public static RenderLane Classify(DrawOp op, in NodePaintLite p)
     => op switch {
         DrawOp.FillRoundRect or DrawOp.FillRoundRectStroke or DrawOp.DrawShadow
             or DrawOp.DrawFocusRect or DrawOp.DrawFocusRing or DrawOp.FillGradient
+            or DrawOp.DrawGradientStroke                                                 // §3.1a: gradient SDF outline
             or DrawOp.DrawSelectionRect or DrawOp.DrawScrim => RenderLane.AnalyticSdf,   // §3.6: tint quad / ring / dim
         DrawOp.DrawGlyphRun                                 => RenderLane.Glyph,
         DrawOp.DrawImage or DrawOp.DrawVideo                => RenderLane.Image,   // video = hole-punch fill, image lane

@@ -6,7 +6,14 @@ namespace FluentGpu.Animation;
 /// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity → PaintDirty. None relayout.</summary>
 public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity }
 
-public enum Easing : byte { Linear, EaseIn, EaseOut, EaseInOut, Sine, Quad, Cubic, Expo, Back, Elastic, Bounce }
+public enum Easing : byte
+{
+    Linear, EaseIn, EaseOut, EaseInOut, Sine, Quad, Cubic, Expo, Back, Elastic, Bounce,
+    // The real Fluent 2 / WinUI motion curves (cubic-bezier control points, P0=(0,0) P3=(1,1)):
+    FluentStandard,    // move / reposition — cubic-bezier(0.8, 0.0, 0.2, 1.0)
+    FluentDecelerate,  // entrance / show   — cubic-bezier(0.1, 0.9, 0.2, 1.0)
+    FluentAccelerate,  // exit / hide       — cubic-bezier(0.9, 0.1, 1.0, 0.2)
+}
 
 public enum IntegrationMode : byte { Eased, Spring }
 
@@ -107,6 +114,7 @@ public sealed class AnimEngine
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
         t.Loop = loop; t.DrivenRef = -1; t.Done = false;
+        Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
     }
 
     /// <summary>Scroll/value-driven track: progress comes from a DrivenClock source mapped through [domainMin,domainMax].</summary>
@@ -126,12 +134,30 @@ public sealed class AnimEngine
         Track? existing = Find(node, channel);
         if (existing is { Mode: IntegrationMode.Spring })
         {
+            Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
             existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite;
             return;   // keep Pos + Vel → smooth handoff
         }
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
-        t.Pos = initial ?? to; t.Vel = 0f; t.Done = false;
+        // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
+        t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false;
+        Diag.Event("anim", $"spring SEED {channel} from={t.Pos:0.###} → {to:0.###} (k={spring.Stiffness:0} c={spring.Damping:0})");
+    }
+
+    /// <summary>The node's current value on a channel (read from its composited paint) — the spring's natural start point.</summary>
+    private float CurrentValue(NodeHandle node, AnimChannel ch)
+    {
+        ref NodePaint p = ref _scene.Paint(node);
+        return ch switch
+        {
+            AnimChannel.TranslateX => p.LocalTransform.Dx,
+            AnimChannel.TranslateY => p.LocalTransform.Dy,
+            AnimChannel.ScaleX => p.LocalTransform.M11,
+            AnimChannel.ScaleY => p.LocalTransform.M22,
+            AnimChannel.Opacity => p.Opacity,
+            _ => 0f,   // Rotation: not cleanly recoverable from a scaled matrix; springs from 0
+        };
     }
 
     public void Cancel(NodeHandle node, AnimChannel channel)
@@ -165,6 +191,7 @@ public sealed class AnimEngine
     {
         if (_tracks.Count == 0) return;   // steady frame: zero work / zero alloc
         _scratch.Clear();
+        Diag.Event("anim", $"── tick dt={dtMs:0.#}ms tracks={_tracks.Count} ──");
 
         // pass 0: advance every track, compute its value (sets Done on eased completion / spring rest)
         for (int i = _tracks.Count - 1; i >= 0; i--)
@@ -208,6 +235,8 @@ public sealed class AnimEngine
                 t.Value = Sample(t.Keys, u);
             }
 
+            Diag.Event("anim", $"  {t.Channel} {t.Mode} val={t.Value:0.###}" +
+                (t.Mode == IntegrationMode.Spring ? $" vel={t.Vel:0.##} tgt={t.Target:0.###} done={t.Done}" : $" elapsed={t.ElapsedMs:0}ms done={t.Done}"));
             if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.Default;
         }
 
@@ -269,8 +298,41 @@ public sealed class AnimEngine
         Easing.Back => t * t * (2.70158f * t - 1.70158f),
         Easing.Elastic => t == 0f || t == 1f ? t : -MathF.Pow(2f, 10f * (t - 1f)) * MathF.Sin((t - 1.075f) * (2f * MathF.PI) / 0.3f),
         Easing.Bounce => Bounce(t),
+        Easing.FluentStandard => CubicBezier(t, 0.8f, 0.0f, 0.2f, 1.0f),
+        Easing.FluentDecelerate => CubicBezier(t, 0.1f, 0.9f, 0.2f, 1.0f),
+        Easing.FluentAccelerate => CubicBezier(t, 0.9f, 0.1f, 1.0f, 0.2f),
         _ => t,   // Linear
     };
+
+    /// <summary>Evaluate a CSS/WinUI cubic-bezier easing y(t): find the curve parameter s where x(s)==t (Newton +
+    /// bisection fallback), then return y(s). P0=(0,0), P3=(1,1), control points (x1,y1),(x2,y2).</summary>
+    private static float CubicBezier(float t, float x1, float y1, float x2, float y2)
+    {
+        if (t <= 0f) return 0f;
+        if (t >= 1f) return 1f;
+        static float Cx(float s, float x1, float x2) { float u = 1f - s; return 3f * u * u * s * x1 + 3f * u * s * s * x2 + s * s * s; }
+        static float Cy(float s, float y1, float y2) { float u = 1f - s; return 3f * u * u * s * y1 + 3f * u * s * s * y2 + s * s * s; }
+        static float Dx(float s, float x1, float x2) { float u = 1f - s; return 3f * u * u * x1 + 6f * u * s * (x2 - x1) + 3f * s * s * (1f - x2); }
+
+        float guess = t;
+        for (int i = 0; i < 6; i++)   // Newton-Raphson
+        {
+            float x = Cx(guess, x1, x2) - t;
+            if (MathF.Abs(x) < 1e-4f) return Cy(guess, y1, y2);
+            float d = Dx(guess, x1, x2);
+            if (MathF.Abs(d) < 1e-6f) break;
+            guess -= x / d;
+        }
+        float lo = 0f, hi = 1f; guess = t;   // bisection fallback
+        for (int i = 0; i < 20; i++)
+        {
+            float x = Cx(guess, x1, x2);
+            if (MathF.Abs(x - t) < 1e-4f) break;
+            if (x < t) lo = guess; else hi = guess;
+            guess = (lo + hi) * 0.5f;
+        }
+        return Cy(guess, y1, y2);
+    }
 
     private static float Bounce(float t)
     {

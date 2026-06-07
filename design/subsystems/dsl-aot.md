@@ -727,11 +727,15 @@ GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;   // suppress FOREGR
   *content* is owned by `devtools.md`; this doc owns only that it is a `<FeatureSwitchDefinition>`-gated assembly
   trimmed out of release, built on the retained tree + the `EnableDevtools` switch (its build placement here keeps
   the footprint ratchet honest about it being 0 bytes by default).
-- **`FluentGpu.Controls`** (the accessible-by-default control kit — Checkbox/Radio/Switch/Slider/ComboBox/
-  TextField/Tabs/Menu/Dialog/Scrollbar; content owned by `controls.md`) is a **normal portable assembly** in the
-  graph (refs `Dsl`/`Hooks`/`Foundation` only, like any app), trim-rooted only by what the app uses. It is **not**
-  feature-switched (controls are pay-for-what-you-reference via the trimmer). Its own per-control footprint rides
-  the §3.6 per-element ≤1.5 KB marginal target. Sequenced *after* the L1/L2/L4/L6 seams stabilize (gap analysis).
+- **`FluentGpu.Controls`** (the SDK controls layer; content owned by `controls.md`) is a **normal portable
+  assembly** at the top of the graph (above `Reconciler`), trim-rooted only by what the app uses. **As-shipped
+  deps:** `Foundation`, `Dsl`, `Hooks`, **`Animation`, `Scene`, `Reconciler`** — *not* the earlier
+  "`Dsl`/`Hooks`/`Foundation` only" claim. The relaxation is ratified: NavigationView/PageHost are `Component`s and
+  the Repeater/`Virtual` factory need Reconciler types; `IVirtualLayout` lives in `Scene`. It stays **acyclic** —
+  Reconciler references only `VirtualListEl` (which stays in Reconciler), so `Controls → Reconciler` is one-way.
+  It is **not** feature-switched (controls are pay-for-what-you-reference via the trimmer). Its own per-control
+  footprint rides the §3.6 per-element ≤1.5 KB marginal target. (Aspirational lookless kit sequences *after* the
+  L1/L2/L4/L6 seams stabilize; the as-shipped Phase 0 hoist ships now — see `controls.md`.)
 - **`FluentGpu.Localization`** (§3.7) ships only when `<FluentGpuLocalization>` ≠ `Invariant`; in `Invariant`
   mode the trimmer drops it entirely (no `Loc.*` references → 0 bytes). Its baked culture blobs are data-section
   (`RuntimeHelpers.CreateSpan`), not code, so they ratchet against the declared `<FluentGpuCultures>` set.
@@ -1007,7 +1011,9 @@ lists, deps, scene writes) is arena/slab/span.
                       Boundary/Derived + WGPU analyzer (pure Roslyn,     │   Windows COM structs (data only)
                       runs on any OS)                                    │
  FluentGpu.Localization  baked CLDR blobs + Loc.* (pure data, any OS)    │  IPlatformLocale impl (NSLocale vs
- FluentGpu.Controls / .Devtools  portable (refs Dsl/Hooks/Foundation)    │   WM_SETTINGCHANGE) is a Pal leaf
+ FluentGpu.Controls  portable (refs Foundation/Dsl/Hooks/Animation/      │   WM_SETTINGCHANGE) is a Pal leaf
+   Scene/Reconciler — one-way; Reconciler refs only VirtualListEl).      │
+ FluentGpu.Devtools  portable (refs Dsl/Hooks/Foundation)                │
  ───────────────────────────────────────────────────────────────────── │ ──────────────────────────────
  SceneWriter gen      portable (writes portable SoA POD)                 │
  COM lifetime         —                                                  │  ComPtr<T>, vtbl structs, IIDs,

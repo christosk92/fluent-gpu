@@ -48,7 +48,7 @@ chrome on every track change.
 
 ---
 
-## 1. Module placement & dependency seam (honors the 18-assembly DAG)
+## 1. Module placement & dependency seam (honors the acyclic assembly DAG)
 
 ```
 Foundation  ── Handle/BrushHandle, SlabAllocator, ColorF, StringId, DepKey, ChunkedArena, FrozenDictionary tables
@@ -116,6 +116,32 @@ stops resolve to a baked `RGBA16F` atlas row at intern time (`architecture-spec 
 wash is *exactly* a gradient brush; the only difference is that its stops were computed by `BrushDeriver`
 instead of authored in the DSL. The batcher and record walk are untouched. This is the load-bearing,
 verified-correct KEEP from `app-requirements §3.3`.
+
+### 2.2 T0 semantic-token catalog additions (SHIPPED — leaf values, NOT a SPEC-INDEX §2 contract)
+
+The `Tok.*` T0 token table (Light/Dark, sourced as a faithful WinUI `*_themeresources` port) gained a small set
+of **leaf token values** to back the SDK controls layer (`FluentGpu.Controls`, controls.md §1.1). These are
+**not** cross-cutting contracts — they are ordinary design-token leaf values, registered here because this
+subsystem owns the T0 token tier; the `Tok.*` table itself is built in the DSL (`exists (Dsl+SourceGen)`, §2).
+
+| Token (`Tok.*`) | WinUI key | Light | Dark | Used by |
+|---|---|---|---|---|
+| `FillControlStrong` | `ControlStrongFillColorDefault` | `#72000000` | `#8BFFFFFF` | Slider rail, ScrollBar thumb |
+| `FillControlStrongDisabled` | `ControlStrongFillColorDisabled` | `#51000000` | `#3FFFFFFF` | disabled rail/thumb |
+| `FillControlSolid` | `ControlSolidFillColorDefault` | `#FFFFFF` | `#454545` | Slider thumb ring |
+| `StrokeControlOnAccentSecondary` | `ControlStrokeColorOnAccentSecondary` | `#66000000` | `#23000000` | on-accent control stroke (lower stop) |
+
+**Corrections folded in:**
+- `StrokeControlOnAccentDefault` corrected to `#14FFFFFF` (**both themes** — was a mixed value).
+- `ScrollThumb` aligned to `#8BFFFFFF` (== `FillControlStrong` Dark); the ScrollBar control points at the
+  canonical `FillControlStrong` and `ScrollThumb` folds into it.
+
+**Two theme-aware gradient brush helpers (assembled from the `StrokeControl*` tokens):** `Tok.ControlElevationBorder`
+and `Tok.AccentControlElevationBorder` — 2-stop vertical gradients (= WinUI `ControlElevationBorderBrush` /
+`AccentControlElevationBorderBrush`: secondary stroke @0.33 → default stroke @1.0; the accent variant flips the
+stops). They produce a `GradientSpec` consumed by the `BoxEl.BorderBrush` field that the new
+`DrawGradientStroke` opcode renders (scene-memory.md §4.1 / gpu-renderer.md §3.1a) — the gradient *fill* path is
+unchanged; only the gradient-as-stroke raster is new (owned by gpu-renderer.md).
 
 ---
 

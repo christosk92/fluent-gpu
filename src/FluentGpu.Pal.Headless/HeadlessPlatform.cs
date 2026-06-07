@@ -36,6 +36,8 @@ public sealed class HeadlessWindow : IPlatformWindow
         return n;
     }
 
+    public void WaitForWork(int timeoutMs) { }
+
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
     public void Show() => Shown = true;

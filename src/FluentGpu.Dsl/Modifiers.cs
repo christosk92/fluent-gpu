@@ -17,6 +17,13 @@ public static class Modifiers
     public static BoxEl Pad(this BoxEl b, float all) => b with { Padding = Edges4.All(all) };
     public static BoxEl Pad(this BoxEl b, float left, float top, float right, float bottom) => b with { Padding = new Edges4(left, top, right, bottom) };
 
+    // Rich paint
+    public static BoxEl Shadow(this BoxEl b, ShadowSpec s) => b with { Shadow = s };
+    public static BoxEl Elevate(this BoxEl b, ShadowSpec preset) => b with { Shadow = preset };
+    public static BoxEl Gradient(this BoxEl b, GradientSpec g) => b with { Gradient = g };
+    public static BoxEl BorderBrush(this BoxEl b, GradientSpec g, float width = 1f) => b with { BorderBrush = g, BorderWidth = width };
+    public static BoxEl Acrylic(this BoxEl b, AcrylicSpec a) => b with { Acrylic = a };
+
     // Composited transform + opacity (animate without relayout)
     public static BoxEl Offset(this BoxEl b, float dx, float dy) => b with { OffsetX = dx, OffsetY = dy };
     public static BoxEl Scale(this BoxEl b, float s) => b with { ScaleX = s, ScaleY = s };
@@ -28,4 +35,10 @@ public static class Modifiers
     public static TextEl Foreground(this TextEl t, ColorF c) => t with { Color = c };
     public static TextEl FontSize(this TextEl t, float size) => t with { Size = size };
     public static TextEl Strong(this TextEl t) => t with { Bold = true };
+    public static TextEl Font(this TextEl t, string family) => t with { FontFamily = family };
+    public static TextEl Wrapped(this TextEl t, TextWrap wrap = TextWrap.Wrap) => t with { Wrap = wrap };
+    public static TextEl NoWrap(this TextEl t) => t with { Wrap = TextWrap.NoWrap };
+    public static TextEl Trim(this TextEl t, TextTrim trim = TextTrim.CharacterEllipsis) => t with { Trim = trim };
+    public static TextEl Ellipsis(this TextEl t) => t with { Trim = TextTrim.CharacterEllipsis };
+    public static TextEl MaxLines(this TextEl t, int lines) => t with { MaxLines = lines };
 }

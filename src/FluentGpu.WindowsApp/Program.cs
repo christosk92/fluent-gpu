@@ -1,5 +1,6 @@
 using FluentGpu;
 using FluentGpu.Animation;
+using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -61,11 +62,11 @@ sealed class DemoApp : Component
                     Button.Accent("-", () => setCount(count - 1)),
                     Button.Accent("+", () => setCount(count + 1)),
                     Button.Standard("Reset", () => setCount(0)),
-                    Button.Accent("Save", () => { }, new ButtonStyle
+                    Button.Accent("Save", () => { }, new Button.Style
                     {
                         Background = ColorF.FromRgba(0x10, 0x7C, 0x10),
                         Foreground = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-                        Border = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
+                        BorderBrush = GradientSpec.Solid(ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20)),
                         HoverBackground = ColorF.FromRgba(0x16, 0x95, 0x16),
                         PressedBackground = ColorF.FromRgba(0x0B, 0x5A, 0x0B),
                         CornerRadius = 6f,
@@ -85,9 +86,22 @@ static class Program
     static void Main(string[] args)
     {
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
+        string demo = "default";
         for (int i = 0; i < args.Length - 1; i++)
+        {
             if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
+            if (args[i] == "--demo") demo = args[i + 1];
+        }
 
-        FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
+        // Default = the capability gallery (everything). `--demo wavee` = the Wavee skeleton; `--demo list` = the
+        // virtualized track list; `--demo basic` = the original minimal demo.
+        if (demo == "wavee")
+            FluentApp.Run(() => new WaveeShell(), "FluentGpu — Wavee skeleton", 1180, 760, frames: frames);
+        else if (demo == "list")
+            FluentApp.Run(() => new TrackListDemo(), "FluentGpu — Virtualized List", 520, 640, frames: frames);
+        else if (demo == "basic")
+            FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
+        else
+            FluentApp.Run(() => new GalleryApp(), "FluentGpu — Capability Gallery", 1240, 820, frames: frames);
     }
 }

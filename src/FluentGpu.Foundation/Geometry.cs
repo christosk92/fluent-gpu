@@ -20,6 +20,22 @@ public readonly record struct RectF(float X, float Y, float W, float H)
     public Size2 Size => new(W, H);
     public bool Contains(Point2 p) => p.X >= X && p.X < Right && p.Y >= Y && p.Y < Bottom;
     public static RectF FromLTRB(float l, float t, float r, float b) => new(l, t, r - l, b - t);
+
+    public bool IsEmpty => W <= 0f || H <= 0f;
+
+    /// <summary>True if the two rects share any area (touching edges do not count).</summary>
+    public bool Overlaps(in RectF o) => X < o.Right && o.X < Right && Y < o.Bottom && o.Y < Bottom;
+
+    /// <summary>The overlap of two rects (an empty rect if they do not overlap). Clip-stack intersection.</summary>
+    public RectF Intersect(in RectF o)
+    {
+        float l = MathF.Max(X, o.X), t = MathF.Max(Y, o.Y);
+        float r = MathF.Min(Right, o.Right), b = MathF.Min(Bottom, o.Bottom);
+        return (r <= l || b <= t) ? default : new RectF(l, t, r - l, b - t);
+    }
+
+    /// <summary>A sentinel "unbounded" clip — larger than any real surface; intersecting with it is a no-op.</summary>
+    public static RectF Infinite => new(-1e9f, -1e9f, 2e9f, 2e9f);
 }
 
 /// <summary>Per-edge thickness (margin/padding/border). [InlineArray]-shaped logically; struct of 4 floats here.</summary>
@@ -43,9 +59,23 @@ public readonly record struct ColorF(float R, float G, float B, float A)
     public static ColorF FromRgba(byte r, byte g, byte b, byte a = 255)
         => new(r / 255f, g / 255f, b / 255f, a / 255f);
 
-    /// <summary>Linear interpolation between two colors (t in 0..1) — for animated color transitions.</summary>
+    /// <summary>Linear interpolation between two colors (t in 0..1) in straight-sRGB channels — cheap, for value fades.</summary>
     public static ColorF Lerp(ColorF a, ColorF b, float t)
         => new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t, a.A + (b.A - a.A) * t);
+
+    /// <summary>Perceptually-correct interpolation in LINEAR light (matches the engine's linear-blend/premultiplied color
+    /// contract) — used for the control hover/press surface cross-fade so mid-transition colors don't go muddy. Alpha is
+    /// already linear, so it lerps straight. Alloc-free (static local helpers, no captures).</summary>
+    public static ColorF LerpLinear(ColorF a, ColorF b, float t)
+    {
+        static float S2L(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+        static float L2S(float c) => c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(MathF.Max(c, 0f), 1f / 2.4f) - 0.055f;
+        return new(
+            L2S(S2L(a.R) + (S2L(b.R) - S2L(a.R)) * t),
+            L2S(S2L(a.G) + (S2L(b.G) - S2L(a.G)) * t),
+            L2S(S2L(a.B) + (S2L(b.B) - S2L(a.B)) * t),
+            a.A + (b.A - a.A) * t);
+    }
 }
 
 /// <summary>2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).</summary>
@@ -62,6 +92,20 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
     public bool IsIdentity => M11 == 1f && M12 == 0f && M21 == 0f && M22 == 1f && Dx == 0f && Dy == 0f;
 
     public Point2 Transform(Point2 p) => new(M11 * p.X + M21 * p.Y + Dx, M12 * p.X + M22 * p.Y + Dy);
+
+    /// <summary>The axis-aligned bounding box of <paramref name="r"/> after this transform (device-space clip/cull rect).</summary>
+    public RectF TransformBounds(in RectF r)
+    {
+        var p0 = Transform(new Point2(r.X, r.Y));
+        var p1 = Transform(new Point2(r.Right, r.Y));
+        var p2 = Transform(new Point2(r.X, r.Bottom));
+        var p3 = Transform(new Point2(r.Right, r.Bottom));
+        float minX = MathF.Min(MathF.Min(p0.X, p1.X), MathF.Min(p2.X, p3.X));
+        float minY = MathF.Min(MathF.Min(p0.Y, p1.Y), MathF.Min(p2.Y, p3.Y));
+        float maxX = MathF.Max(MathF.Max(p0.X, p1.X), MathF.Max(p2.X, p3.X));
+        float maxY = MathF.Max(MathF.Max(p0.Y, p1.Y), MathF.Max(p2.Y, p3.Y));
+        return new RectF(minX, minY, maxX - minX, maxY - minY);
+    }
 
     /// <summary>this ∘ other (apply <paramref name="other"/> first, then this).</summary>
     public Affine2D Multiply(in Affine2D o) => new(

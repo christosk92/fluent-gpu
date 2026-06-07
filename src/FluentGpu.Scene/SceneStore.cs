@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
 namespace FluentGpu.Scene;
@@ -47,6 +48,21 @@ public sealed class SceneStore : ISceneBackend
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<KeyEventArgs>?[] _keyHandler;
+    private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
+    private Action<Point2>?[] _drag;
+
+    // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
+    private readonly Dictionary<int, ScrollState> _scroll = new();
+    // Per-variable-list extent tables (Fenwick); persist across frames. Keyed by viewport node index.
+    private readonly Dictionary<int, ExtentTable> _extents = new();
+    // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
+    private readonly Dictionary<int, GridSpec> _grids = new();
+    // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
+    private readonly Dictionary<int, InteractionAnim> _interact = new();
+    private readonly Dictionary<int, ShadowSpec> _shadows = new();
+    private readonly Dictionary<int, GradientSpec> _gradients = new();
+    private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
+    private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
 
     public NodeHandle Root { get; set; }
 
@@ -69,6 +85,8 @@ public sealed class SceneStore : ISceneBackend
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
         _keyHandler = new Action<KeyEventArgs>?[capacity];
+        _pointerDown = new Action<Point2>?[capacity];
+        _drag = new Action<Point2>?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -93,6 +111,8 @@ public sealed class SceneStore : ISceneBackend
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
         _keyHandler[idx] = null;
+        _pointerDown[idx] = null;
+        _drag[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -112,6 +132,16 @@ public sealed class SceneStore : ISceneBackend
         DetachFromParent(idx);
         _click[idx] = null;
         _keyHandler[idx] = null;
+        _pointerDown[idx] = null;
+        _drag[idx] = null;
+        _scroll.Remove(idx);
+        _extents.Remove(idx);
+        _grids.Remove(idx);
+        _interact.Remove(idx);
+        _shadows.Remove(idx);
+        _gradients.Remove(idx);
+        _borderBrushes.Remove(idx);
+        _acrylics.Remove(idx);
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -160,8 +190,66 @@ public sealed class SceneStore : ISceneBackend
     public Action? GetClickHandler(NodeHandle h) => _click[h.Raw.Index];
     public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[h.Raw.Index] = handler;
     public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[h.Raw.Index];
+    public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[h.Raw.Index] = handler;
+    public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
+    public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
+    public Action<Point2>? GetDrag(NodeHandle h) => _drag[h.Raw.Index];
 
     public void Mark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] |= flags;
+    public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
+
+    // ── scroll/virtual side-table (sparse; only viewport nodes have an entry) ──
+    /// <summary>Get-or-create the scroll row for a viewport node; marks it <see cref="NodeFlags.Scrollable"/>.</summary>
+    public ref ScrollState ScrollRef(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        ref ScrollState s = ref CollectionsMarshal.GetValueRefOrAddDefault(_scroll, idx, out bool existed);
+        if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; }
+        return ref s;
+    }
+    public bool HasScroll(NodeHandle h) => _scroll.ContainsKey((int)h.Raw.Index);
+    /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
+    public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
+
+    /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
+    public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)
+    {
+        int idx = (int)h.Raw.Index;
+        if (!_extents.TryGetValue(idx, out var t)) { t = new ExtentTable(itemCount, estimate); _extents[idx] = t; }
+        else if (t.Count != itemCount) t.Reset(itemCount, estimate);
+        return t;
+    }
+    public bool TryGetExtents(NodeHandle h, out ExtentTable? t) => _extents.TryGetValue((int)h.Raw.Index, out t);
+
+    public void SetGrid(NodeHandle h, in GridSpec spec) => _grids[(int)h.Raw.Index] = spec;
+    public bool HasGrid(NodeHandle h) => _grids.ContainsKey((int)h.Raw.Index);
+    public bool TryGetGrid(NodeHandle h, out GridSpec spec) => _grids.TryGetValue((int)h.Raw.Index, out spec);
+
+    // ── rich-paint side-tables ──
+    /// <summary>Get-or-create the eased-interaction row for a node (hover/press progress).</summary>
+    public ref InteractionAnim InteractRef(NodeHandle h)
+    {
+        ref InteractionAnim s = ref CollectionsMarshal.GetValueRefOrAddDefault(_interact, (int)h.Raw.Index, out bool existed);
+        if (!existed) s = InteractionAnim.Default;
+        return ref s;
+    }
+    public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGetValue((int)h.Raw.Index, out s);
+
+    public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows[(int)h.Raw.Index] = s;
+    public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);
+    public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
+
+    public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
+    public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
+
+    public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes[(int)h.Raw.Index] = g;
+    public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
+
+    public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
+    public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
+    public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
 
     public NodeHandle FirstChild(NodeHandle h) => Wrap(_firstChild[h.Raw.Index]);
     public NodeHandle NextSibling(NodeHandle h) => Wrap(_nextSib[h.Raw.Index]);
@@ -175,8 +263,8 @@ public sealed class SceneStore : ISceneBackend
         float x = 0f, y = 0f;
         for (var n = h; !n.IsNull; n = Parent(n))
         {
-            x += _bounds[n.Raw.Index].X;
-            y += _bounds[n.Raw.Index].Y;
+            x += _bounds[n.Raw.Index].X + _paint[n.Raw.Index].LocalTransform.Dx;   // include scroll / composited translation
+            y += _bounds[n.Raw.Index].Y + _paint[n.Raw.Index].LocalTransform.Dy;
         }
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
@@ -192,6 +280,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n);
+        Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.
