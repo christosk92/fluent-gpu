@@ -14,3 +14,8 @@ packages/
 
 # Rider / VS
 .idea/
+
+# Runtime diagnostics dumps (process dumps, GC dumps, perf counters)
+*.dmp
+*.gcdump
+fluentgpu-*-counters.csv
