@@ -20,7 +20,13 @@ public static class FluentApp
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
                            bool mica = true, int frames = -1)
     {
-        Diag.Sink = Console.Error.WriteLine;   // engine diagnostics → console (Debug only; compiled out on Release)
+        bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
+        if (consoleDiagnostics)
+        {
+            Diag.Enabled = true;
+            Diag.Sink = Console.Error.WriteLine;   // engine diagnostics -> console (Debug/FLUENTGPU_DIAG only)
+        }
+
         var strings = new StringTable();
         using var app = new Win32App();
         var window = (Win32Window)app.CreateWindow(new WindowDesc(title, new Size2(width, height), 1f, mica));
