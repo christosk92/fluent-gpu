@@ -26,6 +26,10 @@ public interface IGpuDevice : IDisposable
     /// the backend copies it into its texture-staging ring; it is never retained. Rows may not be 256-aligned; the
     /// backend pads. Called once per decode completion, before <see cref="SubmitDrawList"/>.</summary>
     void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h);
+
+    /// <summary>The residency manager evicted <paramref name="imageId"/> — release its GPU texture (deferred behind the
+    /// frame fence so an in-flight frame can't read freed memory). No-op if not resident.</summary>
+    void EvictImage(int imageId) { }
 }
 
 public interface ISwapchain : IDisposable

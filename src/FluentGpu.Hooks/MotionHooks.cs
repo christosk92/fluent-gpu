@@ -1,5 +1,6 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
 

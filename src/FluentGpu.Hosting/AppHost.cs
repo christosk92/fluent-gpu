@@ -62,7 +62,7 @@ public sealed class AppHost : IDisposable
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
-    public bool HasActiveWork => _dirty || _scene.HasDynamicText || _anim.HasActive || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0;
+    public bool HasActiveWork => _dirty || _scene.HasDynamicText || _anim.HasActive || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -96,7 +96,10 @@ public sealed class AppHost : IDisposable
         _scrollAnim.RequestRerender = () => _dirty = true;   // re-realize the virtual window on a boundary crossing
         _reconciler.Anim = _anim;          // animation hooks in nested components seed tracks on their nodes
         _reconciler.Images = _images;      // image nodes request decodes + pin residency through the cache
+        _root.Context.Images = _images;    // UseImage / PrefetchImage in the root component
         _images.SetPixelSink(_device.UploadImage);   // decode completions → GPU texture upload (runs in _images.Pump, pre-submit)
+        _images.SetEvictSink(_device.EvictImage);     // residency evictions → free the GPU texture (deferred behind the fence)
+        _images.ImageStatusChanged += (_, _, _, _) => _dirty = true;   // ready/failed → re-render so UseImage components update
         _root.Context.Anim = _anim;
         // Keep the window live during the OS modal move/size loop (which otherwise blocks RunFrame until mouse-up).
         _window.PaintRequested = () => Paint(0);
@@ -173,6 +176,7 @@ public sealed class AppHost : IDisposable
             _interact.Tick(16f);                              // 7 eased hover/press brush transitions
             _scrollAnim.Tick(16f);                            // 7 smooth scroll + scrollbar fade
             _images.Pump();                                   // 7.5 apply finished decodes (+1-frame latency) + evict
+            _images.Tick(16f);                                // 7.5 advance the placeholder→image reveal clock
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             UpdateDynamicDiagnosticsText();
