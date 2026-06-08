@@ -27,10 +27,18 @@ public sealed class ToolTip : Component
             if (h.Value is { IsOpen: true } o) { o.Close(); return; }
             h.Value = svc.Open(
                 () => anchor.Value,
+                // WinUI ToolTip bubble: its own chrome — flyout/acrylic-style layer fill (AcrylicInAppFillColorDefault),
+                // 1px flyout stroke, 4px corners, a soft elevation shadow, 9,6,9,8 padding, 12px text, capped at 320px wide.
                 () => new BoxEl
                 {
-                    Padding = new Edges4(10, 6, 10, 6),
-                    Children = [new TextEl(Text) { Size = 12f, Color = Tok.TextPrimary }],
+                    Fill = Tok.FillLayerDefault,
+                    BorderColor = Tok.StrokeFlyoutDefault,
+                    BorderWidth = 1f,
+                    Corners = Radii.ControlAll,
+                    Shadow = Elevation.Flyout,
+                    MaxWidth = 320f,
+                    Padding = new Edges4(9, 6, 9, 8),
+                    Children = [new TextEl(Text) { Size = 12f, Color = Tok.TextPrimary, MaxWidth = 302f }],
                 },
                 FlyoutPlacement.BottomLeft);
         }

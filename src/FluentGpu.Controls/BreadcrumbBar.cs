@@ -23,7 +23,8 @@ public static class BreadcrumbBar
                 {
                     Direction = 0,
                     AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(4, 2, 4, 2),
+                    // WinUI BreadcrumbBar Button/LastItemContentPresenter Padding="1,3".
+                    Padding = new Edges4(1, 3, 1, 3),
                     Corners = Radii.ControlAll,
                     Role = AutomationRole.Button,
                     Children = [new TextEl(items[i]) { Size = 14f, Bold = true, Color = Tok.TextPrimary }],
@@ -36,19 +37,22 @@ public static class BreadcrumbBar
                 {
                     Direction = 0,
                     AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(4, 2, 4, 2),
+                    Padding = new Edges4(1, 3, 1, 3),
                     Corners = Radii.ControlAll,
-                    HoverFill = Tok.FillSubtleSecondary,
-                    PressedFill = Tok.FillSubtleTertiary,
+                    // WinUI breadcrumb buttons keep a transparent background in every state; the PointerOver/Pressed
+                    // change is a TEXT-color transition (BreadcrumbBarHoverForegroundBrush = TextFillColorSecondary),
+                    // not a fill. The engine has no per-state text color, so non-last items render at the rest
+                    // foreground (BreadcrumbBarNormalForegroundBrush = TextFillColorPrimary) with no fill swap.
                     Role = AutomationRole.Button,
                     OnClick = () => onSelect?.Invoke(index),
-                    Children = [new TextEl(items[index]) { Size = 14f, Color = Tok.TextSecondary }],
+                    Children = [new TextEl(items[index]) { Size = 14f, Color = Tok.TextPrimary }],
                 });
 
                 children.Add(new TextEl(Icons.ChevronRight)
                 {
                     Size = 12f,
-                    Color = Tok.TextTertiary,
+                    // PART_ChevronTextBlock = BreadcrumbBarNormalForegroundBrush = TextFillColorPrimary (was TextTertiary).
+                    Color = Tok.TextPrimary,
                     FontFamily = Theme.IconFont,
                     Margin = new Edges4(2, 0, 2, 0),
                 });

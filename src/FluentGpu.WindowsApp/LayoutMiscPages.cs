@@ -19,8 +19,20 @@ sealed class PivotPage : Component
 sealed class NumberBoxPage : Component
 {
     public override Element Render() => GalleryPage.Shell("NumberBox",
-        "A text control for numeric input, with up/down spin buttons.",
-        ControlExample.Build("A NumberBox (spinner)", NumberBox.Create(0, 1)));
+        "A text control for numeric input. Spin buttons are hidden by default (WinUI); Inline adds a stacked up/down column, Compact opens them in a popup on focus.",
+        new BoxEl
+        {
+            Direction = 1, Gap = 0,
+            Children =
+            [
+                ControlExample.Build("A NumberBox (editable, no spinners)", NumberBox.Create(0, 1)),
+                ControlExample.Build("A NumberBox with inline spin buttons", NumberBox.CreateWithSpinners(0, 1)),
+                ControlExample.Build("A NumberBox with a header, range and compact spin buttons",
+                    NumberBox.Create(initial: 0, minimum: 0, maximum: 100,
+                        spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
+                        header: "Enter an integer:")),
+            ],
+        });
 }
 
 sealed class AppBarToggleButtonPage : Component

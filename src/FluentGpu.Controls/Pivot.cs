@@ -5,9 +5,9 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI Pivot: a row of large text headers above a content region. The selected header is bold and
-/// <see cref="Tok.TextPrimary"/>; the rest are <see cref="Tok.TextSecondary"/>. Clicking a header swaps the content
-/// shown below to that pivot's content. Owns its own selection state.</summary>
+/// <summary>A WinUI Pivot: a row of large (24px) text headers above a content region. Selection is shown by a 3px accent
+/// underline pipe at the bottom (NOT bold weight): the selected header is <see cref="Tok.TextPrimary"/>, the rest are
+/// <see cref="Tok.TextSecondary"/>. Clicking a header swaps the content shown below. Owns its own selection state.</summary>
 public sealed class Pivot : Component
 {
     public IReadOnlyList<string> Headers = [];
@@ -32,20 +32,30 @@ public sealed class Pivot : Component
             bool isSelected = index == selected;
             headerItems[index] = new BoxEl
             {
-                Direction = 0,
+                Direction = 1,
+                Height = 48f,
                 AlignItems = FlexAlign.Center,
-                Padding = new Edges4(2, 4, 2, 4),
+                Justify = FlexJustify.Center,
+                Padding = new Edges4(12, 0, 12, 0),
                 Corners = Radii.ControlAll,
-                HoverFill = Tok.FillSubtleSecondary,
                 Role = AutomationRole.Tab,
                 OnClick = () => setSel(index),
                 Children =
                 [
                     new TextEl(Headers[index])
                     {
-                        Size = 18f,
-                        Bold = isSelected,
+                        Size = 24f,
                         Color = isSelected ? Tok.TextPrimary : Tok.TextSecondary,
+                    },
+                    // WinUI PivotHeaderItem SelectedPipe: Height=3, HorizontalAlignment=Stretch (full header width),
+                    // CornerRadius=PivotHeaderItemSelectedPipeCornerRadius=1.5, Margin="0,0,0,2" (no right inset).
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Stretch,   // stretch to full header width (was fixed 24f)
+                        Height = 3f,
+                        Corners = Radii.Circle(3f),      // diameter 3 → radius 1.5 (PivotHeaderItemSelectedPipeCornerRadius)
+                        Fill = isSelected ? Tok.AccentDefault : ColorF.Transparent,
+                        Margin = new Edges4(0, 0, 0, 2), // was (0,4,0,2); WinUI margin "0,0,0,2"
                     },
                 ],
             };
@@ -60,9 +70,9 @@ public sealed class Pivot : Component
                 new BoxEl
                 {
                     Direction = 0,
-                    Gap = 20f,
-                    AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(4, 4, 4, 12),
+                    Gap = 4f,
+                    AlignItems = FlexAlign.End,
+                    Padding = new Edges4(0, 0, 0, 0),
                     Children = headerItems,
                 },
                 new BoxEl

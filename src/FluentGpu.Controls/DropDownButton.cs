@@ -31,7 +31,8 @@ public sealed class DropDownButton : Component
         var children = new List<Element>();
         if (Glyph is { Length: > 0 } g) children.Add(new TextEl(g) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont });
         if (Label.Length > 0) children.Add(new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary });
-        children.Add(new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont });
+        // Chevron: WinUI AnimatedIcon is 12x12, foreground DropDownButtonForegroundSecondary = TextSecondary.
+        children.Add(new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont });
 
         return new BoxEl
         {

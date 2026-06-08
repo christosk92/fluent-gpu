@@ -67,9 +67,9 @@ public sealed class NavigationView : Component
     const float TopPaneHeight = 48f;
     const float PaneHeaderRowHeight = 40f;
     const float PaneToggleWidth = 40f;
-    const float PaneToggleHeight = 40f;
-    const float ItemHeight = 40f;
-    const float ItemOuterHeight = 40f;
+    const float PaneToggleHeight = 36f;   // WinUI PaneToggleButtonHeight = 36 (was 40)
+    const float ItemHeight = 36f;         // WinUI NavigationViewItemOnLeftMinHeight = 36 (was 40)
+    const float ItemOuterHeight = 36f;    // matches ItemHeight (was 40)
     const float ItemMarginX = 4f;
     const float ItemMarginY = 0f;
     const float HeaderHeight = 36f;

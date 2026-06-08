@@ -7,9 +7,10 @@ using System;
 namespace FluentGpu.Controls;
 
 /// <summary>
-/// A WinUI CalendarView: a month grid. A header row ("MonthName Year" + prev/next chevrons), a Mon..Sun weekday
-/// header, then a 7-column grid of the month's day numbers. The selected day is an accent-filled circle; the cells
-/// hover-highlight. Internal state is the displayed <see cref="DateOnly"/> month (first-of-month) plus the selected day.
+/// A WinUI CalendarView: a month grid. A header row ("MonthName Year" + prev/next chevrons), a 1px divider, a Mon..Sun
+/// weekday header, then a 7-column grid of the month's day numbers. Today is an accent-FILLED circle (white text);
+/// the selected day is an accent RING (border, transparent fill); cells hover-highlight. Internal state is the
+/// displayed <see cref="DateOnly"/> month (first-of-month) plus the selected day.
 /// </summary>
 public sealed class CalendarView : Component
 {
@@ -42,13 +43,17 @@ public sealed class CalendarView : Component
         for (int i = 0; i < 7; i++)
             weekdayCells[i] = new BoxEl
             {
-                Width = 36f,
+                Width = 40f,                 // CalendarViewDayItem MinWidth = 40
                 Height = 28f,
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Children = [new TextEl(Weekdays[i]) { Size = 12f, Color = Tok.TextTertiary }],
+                // Weekday header text: TextSecondary, SemiBold (CalendarViewWeekDayForeground / SemiBold weight).
+                Children = [new TextEl(Weekdays[i]) { Size = 14f, Bold = true, Color = Tok.TextSecondary }],
             };
         var weekdayHeader = new BoxEl { Direction = 0, Children = weekdayCells };
+
+        // 1px divider between the header row and the weekday/day grid.
+        var separator = new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault };
 
         // ── day grid: lead blank cells, then a cell per day; group into rows of 7 ──
         int lead = ((int)month.DayOfWeek + 6) % 7;       // Monday = 0
@@ -56,7 +61,7 @@ public sealed class CalendarView : Component
 
         var cells = new List<Element>(lead + daysInMonth);
         for (int i = 0; i < lead; i++)
-            cells.Add(new BoxEl { Width = 36f, Height = 36f });
+            cells.Add(new BoxEl { Width = 40f, Height = 40f });
 
         for (int d = 1; d <= daysInMonth; d++)
         {
@@ -64,22 +69,29 @@ public sealed class CalendarView : Component
             var thatDate = new DateOnly(month.Year, month.Month, day);
             bool isSel = thatDate == sel;
             bool isToday = thatDate == today;
+            bool ring = isSel && !isToday;
             cells.Add(new BoxEl
             {
-                Width = 36f,
-                Height = 36f,
+                Width = 40f,                              // CalendarViewDayItem MinWidth/MinHeight = 40
+                Height = 40f,
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Corners = Radii.Circle(36f),
-                Fill = isSel ? Tok.AccentDefault : ColorF.Transparent,
+                Corners = Radii.Circle(40f),
+                // Today: accent-FILLED circle (white text). Selected (and not today): accent RING (transparent fill).
+                Fill = isToday ? Tok.AccentDefault : ColorF.Transparent,
+                // Selected ring hovers/presses to a subtle fill (CalendarViewSelectedPressedBackground); plain cells
+                // use the standard hover/press tiers.
                 HoverFill = Tok.FillSubtleSecondary,
-                BorderWidth = (isToday && !isSel) ? 1.5f : 0f,
-                BorderColor = (isToday && !isSel) ? Tok.AccentDefault : ColorF.Transparent,
+                PressedFill = Tok.FillSubtleTertiary,
+                BorderWidth = ring ? 1.5f : 0f,
+                // Selected ring uses AccentDefault. (WinUI shifts the ring to AccentSecondary on hover; the engine has
+                // no per-state border-colour channel — HoverFill/PressedFill only — so the ring colour is fixed.)
+                BorderColor = ring ? Tok.AccentDefault : ColorF.Transparent,
                 Role = AutomationRole.Button,
                 OnClick = () => setSel(thatDate),
                 Children =
                 [
-                    new TextEl(day.ToString()) { Size = 13f, Color = isSel ? Tok.TextOnAccentPrimary : Tok.TextPrimary },
+                    new TextEl(day.ToString()) { Size = 14f, Color = isToday ? Tok.TextOnAccentPrimary : Tok.TextPrimary },
                 ],
             });
         }
@@ -102,7 +114,7 @@ public sealed class CalendarView : Component
             Width = 300f,
             Gap = 8f,
             Padding = Edges4.All(8f),
-            Children = [header, weekdayHeader, grid],
+            Children = [header, separator, weekdayHeader, grid],
         };
     }
 

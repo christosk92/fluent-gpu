@@ -49,8 +49,33 @@ sealed class ShotScene : Component
         // Shadow diagnostics (no acrylic): does an opaque card cast the flyout shadow? a strong one?
         "shadowonly" => new BoxEl { Width = 160, Height = 200, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0x2C, 0x2C, 0x2C), Shadow = Elevation.Flyout },
         "shadowstrong" => new BoxEl { Width = 160, Height = 200, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), Shadow = new ShadowSpec(Blur: 40f, OffsetY: 12f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0xC0)) },
+        "ring" => ProgressRing.Determinate(0.7f, 160f),
+        // Diagnostic: does composited BoxEl.Rotation work? A 30° red bar should render TILTED, not horizontal.
+        "rottest" => new BoxEl { Width = 200, Height = 24, Corners = Radii.ControlAll, Fill = ColorF.FromRgba(0xE0, 0x30, 0x30), Rotation = 30f },
         "menu" => MenuPresenter(),
+        // Control-parity shots: every interaction state on a card, diffed 1:1 against WinUI. The unchecked CheckBox /
+        // unselected RadioButton must read as an OUTLINED box/ring (hairline strong-stroke + ~10% fill), never a solid
+        // grey chip (the donut bug). The TextBox placeholder must be DIM and the caret would sit at x=0 (empty).
+        "checkbox" => CardColumn(
+            CheckBox.Create("Unchecked", CheckState.Unchecked, _ => { }),
+            CheckBox.Create("Checked", CheckState.Checked, _ => { }),
+            CheckBox.Create("Indeterminate", CheckState.Indeterminate, _ => { })),
+        "radiobutton" => CardColumn(
+            RadioButton.Create("Option A", false, () => { }),
+            RadioButton.Create("Option B (selected)", true, () => { })),
+        "textbox" => CardColumn(
+            TextBox.Create("Enter your name"),
+            TextBox.Create("you@example.com", 280f, "Email")),
         _ => new TextEl($"unknown shot '{id}'") { Size = 16f, Color = Tok.TextPrimary },
+    };
+
+    // The WinUI-Gallery "example card" surface (a slightly elevated dark panel) the controls sit on — this is the exact
+    // context where the unchecked-CheckBox grey-chip bug was visible, so shots reproduce it 1:1.
+    static Element CardColumn(params Element[] rows) => new BoxEl
+    {
+        Direction = 1, Gap = 16f, Padding = new Edges4(24, 24, 24, 24),
+        Fill = ColorF.FromRgba(0x2B, 0x2B, 0x2B), Corners = Radii.OverlayAll,
+        Children = rows,
     };
 
     // The flyout presenter card as OverlayHost builds it (transparent fill + flyout acrylic + 1px stroke + corner 8),

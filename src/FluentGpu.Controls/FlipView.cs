@@ -5,8 +5,8 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI FlipView: a clipped frame showing exactly one item at a time, with left/right circular
-/// navigation chevrons overlaid on the frame edges and a row of dot indicators beneath. The current index lives
+/// <summary>A WinUI FlipView: a clipped frame showing exactly one item at a time, with left/right rounded-rect
+/// navigation bars hugging the frame edges (no dot/pip indicator — WinUI FlipView has none). The current index lives
 /// in <see cref="UseState"/>; navigation wraps around. <see cref="Items"/> renders each entry's string centered.</summary>
 public sealed class FlipView : Component
 {
@@ -24,11 +24,11 @@ public sealed class FlipView : Component
         int count = Items.Count;
         if (count == 0)
         {
-            // Empty-state guard: an empty clipped frame, no chevrons, no dots.
+            // Empty-state guard: an empty clipped frame, no nav bars. Solid background, no resting border.
             return new BoxEl
             {
                 Width = Width, Height = Height, Corners = Radii.OverlayAll,
-                Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+                Fill = Tok.FillSolidBase,        // FlipViewBackground = SolidBackgroundFillColorBase
                 ClipToBounds = true, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             };
         }
@@ -36,27 +36,32 @@ public sealed class FlipView : Component
         int cur = idx % count;
         if (cur < 0) cur += count;
 
-        const float ChevD = 34f;
-        const float Inset = 8f;
-        float chevY = (Height - ChevD) / 2f;
+        // WinUI FlipView nav buttons: thin rounded-rect bars (16w \u00D7 38h) hugging the left/right edges.
+        const float BarW = 16f;
+        const float BarH = 38f;
+        float barY = (Height - BarH) / 2f;
 
-        // Circular chevron button. In a ZStack children stack at the origin, so we position with OffsetX/OffsetY.
-        BoxEl Chevron(string glyph, float offsetX, Action onClick) => new()
+        // In a ZStack children stack at the origin, so we position with OffsetX/OffsetY.
+        // WinUI FlipView nav button: a single AcrylicInApp fill across ALL states (no hover/pressed ramp) \u2014 mapped to
+        // FillControlDefault. The arrow recolours instead: ControlStrong at rest \u2192 TextSecondary on hover/press. Press
+        // also scales the button to 0.875 (FlipViewButtonScalePressed).
+        BoxEl NavBar(string glyph, float offsetX, Action onClick) => new()
         {
-            Width = ChevD, Height = ChevD, Corners = Radii.Circle(ChevD),
-            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
+            Width = BarW, Height = BarH, Corners = Radii.ControlAll,
+            Fill = Tok.FillControlDefault,
+            PressScale = 0.875f,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            AlignSelf = FlexAlign.Center,
-            OffsetX = offsetX, OffsetY = chevY,
+            AlignSelf = FlexAlign.Start,
+            OffsetX = offsetX, OffsetY = barY,
             Role = AutomationRole.Button, OnClick = onClick,
-            Children = [new TextEl(glyph) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextPrimary }],
+            Children = [new TextEl(glyph) { Size = 8f, FontFamily = Theme.IconFont, Color = Tok.FillControlStrong }],
         };
 
-        var frame = new BoxEl
+        return new BoxEl
         {
             ZStack = true,
             Width = Width, Height = Height, Corners = Radii.OverlayAll,
-            Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+            Fill = Tok.FillSolidBase,        // FlipViewBackground = SolidBackgroundFillColorBase
             ClipToBounds = true, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Children =
             [
@@ -67,34 +72,10 @@ public sealed class FlipView : Component
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Children = [new TextEl(Items[cur]) { Size = 20f, Color = Tok.TextPrimary }],
                 },
-                Chevron("\uE76B", Inset, () => setIdx((cur - 1 + count) % count)),
-                Chevron("\uE76C", Width - ChevD - Inset, () => setIdx((cur + 1) % count)),
+                // Previous (left) = \uEDDA, Next (right) = \uEDD9 (WinUI HorizontalPrevious/Next templates).
+                NavBar("\uEDDA", 0f, () => setIdx((cur - 1 + count) % count)),
+                NavBar("\uEDD9", Width - BarW, () => setIdx((cur + 1) % count)),
             ],
-        };
-
-        var dots = new Element[count];
-        for (int i = 0; i < count; i++)
-        {
-            bool selected = i == cur;
-            float d = selected ? 6f : 4f;
-            dots[i] = new BoxEl
-            {
-                Width = d, Height = d, Corners = Radii.Circle(d),
-                Fill = selected ? Tok.AccentDefault : Tok.FillControlStrong,
-                AlignSelf = FlexAlign.Center,
-            };
-        }
-
-        var dotRow = new BoxEl
-        {
-            Direction = 0, Gap = 4f, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center,
-            Children = dots,
-        };
-
-        return new BoxEl
-        {
-            Direction = 1, Gap = 8f, AlignItems = FlexAlign.Center,
-            Children = [frame, dotRow],
         };
     }
 }

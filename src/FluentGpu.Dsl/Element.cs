@@ -29,6 +29,7 @@ public sealed record BoxEl : Element
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
     public ShadowSpec? Shadow { get; init; }       // soft drop shadow / elevation, drawn beneath the fill
+    public ArcSpec? Arc { get; init; }             // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get; init; }   // gradient fill — supersedes Fill at record time when set
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)

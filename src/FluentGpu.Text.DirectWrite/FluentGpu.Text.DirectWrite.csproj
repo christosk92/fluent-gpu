@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />

@@ -625,6 +625,7 @@ public sealed class TreeReconciler
                 paint.Corners = b.Corners;
 
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
+                if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);

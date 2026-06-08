@@ -116,6 +116,11 @@ public static class SceneRecorder
         if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
             dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
 
+        // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
+        // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
+        if (scene.TryGetArc(node, out var arcS) && !arcS.IsNone && deviceBounds.Overlaps(clip))
+            dl.Arc(local, arcS.Color, arcS.Thickness, arcS.StartDeg, arcS.SweepDeg, arcS.RoundCaps, world, opacity, key);
+
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor.
         bool pushedClip = false;
         RectF childClip = clip;
@@ -152,30 +157,21 @@ public static class SceneRecorder
                 GradientSpec bb = default;
                 bool hasGradBorder = p.BorderWidth > 0f && scene.TryGetBorderBrush(node, out bb) && bb.Stops is { Length: > 0 };
 
-                // ── fill ──  gradient fill supersedes the solid fill; a flat solid border uses the inset "donut".
+                // ── fill ── the interior is always filled at its FULL geometry; the border is a hollow SDF ring drawn
+                // ON TOP of the fill edge (below). We must NOT fill the whole box with the border colour and overlay an
+                // inset interior (the old "donut"): with a translucent interior (e.g. the unchecked CheckBox/RadioButton
+                // fill ≈ black@10%) the opaque ring shows straight through → a solid grey chip. A hollow ring composites
+                // correctly over ANY fill opacity, exactly like the gradient-border path always has.
                 if (hasGradFill)
-                {
                     EmitGradient(dl, local, p.Corners, in g, world, opacity, key);
-                }
-                else if (p.BorderWidth > 0f && border.A > 0f && !hasGradBorder)
-                {
-                    dl.FillRoundRect(local, p.Corners, border, world, opacity, key);     // flat border ring (local space)
-                    float bw = p.BorderWidth;
-                    var inner = new RectF(bw, bw, MathF.Max(0f, pw - 2 * bw), MathF.Max(0f, ph - 2 * bw));
-                    var ic = new CornerRadius4(
-                        MathF.Max(0f, p.Corners.TopLeft - bw), MathF.Max(0f, p.Corners.TopRight - bw),
-                        MathF.Max(0f, p.Corners.BottomRight - bw), MathF.Max(0f, p.Corners.BottomLeft - bw));
-                    if (fill.A > 0f) dl.FillRoundRect(inner, ic, fill, world, opacity, key);
-                }
                 else if (fill.A > 0f)
-                {
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
-                }
 
-                // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ──
+                // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ── ONE hollow ring
+                // for every border, solid or gradient; the SDF stroke never paints the interior.
                 if (hasGradBorder)
                     EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, world, opacity, key);
-                else if (hasGradFill && p.BorderWidth > 0f && border.A > 0f)
+                else if (p.BorderWidth > 0f && border.A > 0f)
                     EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, border, world, opacity, key);
                 break;
             }

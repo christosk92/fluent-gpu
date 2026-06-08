@@ -99,6 +99,23 @@ static class Program
             if (args[i] == "--mica") micaShot = true;
         }
 
+        // DirectWrite itemizer smoke test (BiDi/script/line-break via the callee CCWs) then exit.
+        if (Array.IndexOf(args, "--itemtest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest();
+            return;
+        }
+        if (Array.IndexOf(args, "--shapetest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest();
+            return;
+        }
+        if (Array.IndexOf(args, "--layouttest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.TextLayoutEngine.SelfTest();
+            return;
+        }
+
         // Screenshot mode: render a single deterministic scene then exit. Opaque by default; --mica for the composited path.
         if (screenshot != null)
         {

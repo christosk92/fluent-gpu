@@ -12,23 +12,34 @@ public static partial class CheckBox
 {
     public sealed record Style
     {
-        public float BoxSize { get; init; } = 20f;
-        public float FontSize { get; init; } = 14f;
-        public float MinHeight { get; init; } = 32f;
-        public ColorF OffFill { get; init; }
-        public ColorF OffHover { get; init; }
-        public ColorF OffBorder { get; init; }
-        public ColorF OnFill { get; init; }
-        public ColorF OnHover { get; init; }
-        public ColorF GlyphColor { get; init; }
-        public ColorF Foreground { get; init; }
+        public float BoxSize { get; init; } = 20f;          // CheckBoxSize
+        public float GlyphSize { get; init; } = 12f;        // CheckBoxGlyphSize
+        public float FontSize { get; init; } = 14f;         // ControlContentThemeFontSize
+        public float MinHeight { get; init; } = 32f;        // CheckBoxHeight
+
+        // Unchecked box — fill is ControlAltFillColor*, stroke is ControlStrongStrokeColor* (the outer ring)
+        public ColorF OffFill { get; init; }                // CheckBoxCheckBackgroundFillUnchecked → ControlAltFillColorSecondary
+        public ColorF OffHover { get; init; }               // ...UncheckedPointerOver → ControlAltFillColorTertiary
+        public ColorF OffPressed { get; init; }             // ...UncheckedPressed → ControlAltFillColorQuaternary
+        public ColorF OffBorder { get; init; }              // CheckBoxCheckBackgroundStrokeUnchecked → ControlStrongStrokeColorDefault
+
+        // Checked/Indeterminate box — accent fill + accent stroke (the box keeps its 1px ring; stroke == fill)
+        public ColorF OnFill { get; init; }                 // CheckBoxCheckBackgroundFillChecked → AccentDefault
+        public ColorF OnHover { get; init; }                // ...CheckedPointerOver → AccentSecondary
+        public ColorF OnPressed { get; init; }              // ...CheckedPressed → AccentTertiary
+        public ColorF OnBorder { get; init; }               // CheckBoxCheckBackgroundStrokeChecked → AccentDefault
+
+        public ColorF GlyphColor { get; init; }             // CheckBoxCheckGlyphForegroundChecked → TextOnAccentPrimary
+        public ColorF Foreground { get; init; }             // CheckBoxForeground → TextPrimary
     }
 
     public static Style? StyleOverride;
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
-        OffFill = Tok.FillControlDefault, OffHover = Tok.FillControlSecondary, OffBorder = Tok.StrokeControlSecondary,
-        OnFill = Tok.AccentDefault, OnHover = Tok.AccentSecondary, GlyphColor = Tok.TextOnAccentPrimary, Foreground = Tok.TextPrimary,
+        OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
+        OffBorder = Tok.StrokeControlStrongDefault,
+        OnFill = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnBorder = Tok.AccentDefault,
+        GlyphColor = Tok.TextOnAccentPrimary, Foreground = Tok.TextPrimary,
     };
 
     public static BoxEl Create(string label, bool isChecked, Action onToggle, Style? style = null)
@@ -53,20 +64,22 @@ public static partial class CheckBox
         bool filled = on || indet;
 
         Element mark = on
-            ? new TextEl(Icons.Accept) { Size = s.BoxSize * 0.62f, Color = s.GlyphColor, FontFamily = Theme.IconFont }
+            ? new TextEl(Icons.Accept) { Size = s.GlyphSize, Color = s.GlyphColor, FontFamily = Theme.IconFont }
             : indet
                 ? new BoxEl { Width = s.BoxSize * 0.5f, Height = 2f, Corners = CornerRadius4.All(1f), Fill = s.GlyphColor }
                 : new BoxEl();
 
+        // WinUI keeps a 1px ring on the box in every state: accent stroke when filled, ControlStrongStroke when off.
         var box = new BoxEl
         {
             Width = s.BoxSize, Height = s.BoxSize,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.ControlAll,
-            BorderWidth = filled ? 0f : 1f,
-            BorderColor = filled ? ColorF.Transparent : s.OffBorder,
+            BorderWidth = 1f,
+            BorderColor = filled ? s.OnBorder : s.OffBorder,
             Fill = filled ? s.OnFill : s.OffFill,
             HoverFill = filled ? s.OnHover : s.OffHover,
+            PressedFill = filled ? s.OnPressed : s.OffPressed,
             Children = [mark],
         };
 

@@ -9,6 +9,17 @@ public readonly record struct ShadowSpec(float Blur, float OffsetY, float Offset
     public bool IsNone => Color.A <= 0f || (Blur <= 0f && Spread <= 0f && OffsetX == 0f && OffsetY == 0f);
 }
 
+/// <summary>
+/// A circular-arc stroke (WinUI ProgressRing — a trimmed, round-capped ring). The arc is centred in the node's box with
+/// radius (min(W,H)-Thickness)/2, a <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for
+/// <see cref="SweepDeg"/> degrees (0° = 12 o'clock, clockwise). The recorder emits a <c>DrawArc</c>; the GPU draws the SDF
+/// arc with round caps. A full ring is SweepDeg = 360.
+/// </summary>
+public readonly record struct ArcSpec(ColorF Color, float Thickness, float StartDeg, float SweepDeg, bool RoundCaps = true)
+{
+    public bool IsNone => Color.A <= 0f || Thickness <= 0f || SweepDeg <= 0f;
+}
+
 /// <summary>One gradient stop: a normalized position (0..1 along the gradient axis) and its color.</summary>
 public readonly record struct GradientStop(float Offset, ColorF Color);
 

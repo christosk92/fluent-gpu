@@ -24,8 +24,10 @@ public static partial class Slider
         public ColorF ThumbFill { get; init; }                         // inner accent dot
         public GradientSpec? ThumbBorder { get; init; }                // ControlElevationBorderBrush
         public float ThumbBorderWidth { get; init; } = 1f;
-        public float ThumbHoverScale { get; init; } = 1.16f;           // ~14/12 grow on hover
-        public float ThumbPressScale { get; init; } = 0.92f;           // ~ shrink on press
+        public float ThumbCornerRadius { get; init; } = 10f;           // SliderThumbCornerRadius (pill, not circle)
+        public float ThumbHoverScale { get; init; } = 1.167f;          // 14/12 inner-thumb grow on hover (Slider_themeresources.xaml:222)
+        public float ThumbPressScale { get; init; } = 0.71f;           // 8.5/12 inner-thumb shrink on press (line 234)
+        public float ThumbDisabledScale { get; init; } = 1.167f;       // disabled inner-thumb scale (line 246; same as hover)
     }
 
     public static Style? StyleOverride;
@@ -98,7 +100,7 @@ public static partial class Slider
                     new BoxEl
                     {
                         Width = thumbD, Height = thumbD, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = Radii.Circle(thumbD), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
+                        Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                         HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                         OffsetX = (thickness - thumbD) * 0.5f, OffsetY = Math.Clamp((1f - t) * length - thumbD * 0.5f, 0f, length - thumbD),
                         Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
@@ -125,7 +127,7 @@ public static partial class Slider
                         new BoxEl
                         {
                             Width = thumbD, Height = thumbD, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                             Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
                         },
@@ -171,7 +173,7 @@ public static partial class Slider
                         {
                             Width = thumbD, Height = thumbD,
                             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing,
                             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                             Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
@@ -229,7 +231,7 @@ public static partial class Slider
                         {
                             Width = thumbD, Height = thumbD,
                             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing,
                             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                             TransformBind = () => Affine2D.Translation(Math.Clamp(value.Value * width - thumbD * 0.5f, 0f, MathF.Max(0f, width - thumbD)), 0f),

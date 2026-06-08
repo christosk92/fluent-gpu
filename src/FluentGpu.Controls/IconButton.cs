@@ -17,9 +17,11 @@ public static partial class IconButton
         public float CornerRadius { get; init; } = Radii.Control;    // 4 — WinUI rounded-square (transport buttons are NOT circles)
         public string IconFont { get; init; } = Theme.IconFont;
         public ColorF Foreground { get; init; }
-        public ColorF Fill { get; init; }                           // rest (transparent in WinUI)
+        public ColorF Fill { get; init; }                           // rest (AppBarButtonBackground = SubtleFillColorTransparent)
         public ColorF HoverFill { get; init; }
         public ColorF PressedFill { get; init; }
+        public ColorF DisabledForeground { get; init; }             // AppBarButtonForegroundDisabled = TextDisabled
+        public ColorF DisabledFill { get; init; }                   // AppBarButtonBackgroundDisabled = SubtleFillColorDisabled
         public float HoverScale { get; init; } = 1f;                // icon buttons don't grow by default
         public float PressScale { get; init; } = 1f;
         public float IconHoverScale { get; init; } = 1.08f;
@@ -30,8 +32,11 @@ public static partial class IconButton
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
         Foreground = Tok.TextPrimary,
+        Fill = Tok.FillSubtleTransparent,        // EXPLICIT rest (AppBarButtonBackground)
         HoverFill = Tok.FillSubtleSecondary,     // SubtleFillColorSecondary
         PressedFill = Tok.FillSubtleTertiary,    // SubtleFillColorTertiary
+        DisabledForeground = Tok.TextDisabled,
+        DisabledFill = Tok.FillControlDisabled,  // no SubtleFillColorDisabled token → closest existing
     };
 
     public static BoxEl Create(string glyph, Action onClick, Style? style = null)

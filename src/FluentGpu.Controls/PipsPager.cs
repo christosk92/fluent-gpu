@@ -12,23 +12,25 @@ public static class PipsPager
         {
             int index = i;
             bool isSelected = index == selected;
+            // WinUI: selection is shown by a LARGER neutral dot, NOT an accent color. Both states use
+            // PipsPagerSelectionIndicatorForeground = ControlStrongFillColorDefault (rest/selected) and shift to
+            // TextFillColorSecondary on pointer-over (PipsPagerSelectionIndicatorForegroundPointerOver/Pressed).
             float dotSize = isSelected ? 6f : 4f;
             var glyph = new BoxEl
             {
                 Width = dotSize,
                 Height = dotSize,
                 Corners = Radii.Circle(dotSize),
-                Fill = isSelected ? Tok.AccentDefault : Tok.FillControlStrong,
+                Fill = Tok.FillControlStrong,
+                HoverFill = Tok.TextSecondary,
             };
             dots[index] = new BoxEl
             {
                 Direction = 0,
                 Width = 12f,
-                Height = 12f,
+                Height = 24f,
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Corners = Radii.Circle(12f),
-                HoverFill = Tok.FillSubtleSecondary,
                 Role = AutomationRole.Pager,
                 OnClick = () => onSelect(index),
                 Children = [glyph],

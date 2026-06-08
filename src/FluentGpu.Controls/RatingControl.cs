@@ -9,10 +9,15 @@ namespace FluentGpu.Controls;
 /// <see cref="FloatSignal"/> (so a page can read it); <see cref="ReadOnly"/> shows a fixed rating.</summary>
 public sealed class RatingControl : Component
 {
+    // WinUI uses two glyphs: E734 (outline) for the unselected/background layer, E735 (filled) for the selected layer.
+    const string OutlineStar = "";
+    const string FilledStar = "";
+
     public FloatSignal Value = new(0f);
     public int Max = 5;
     public float StarSize = 24f;
-    public float Gap = 4f;
+    public float Gap = 8f;                  // RatingControlItemSpacing = 8 (was 4)
+    public float MinHeight = 32f;           // WinUI MinHeight
     public bool ReadOnly;
     public Action<float>? OnChange;
 
@@ -21,7 +26,7 @@ public sealed class RatingControl : Component
 
     public override Element Render()
     {
-        float cur = Value.Value;            // subscribes → the row re-renders as the rating changes
+        float cur = Value.Value;            // subscribes -> the row re-renders as the rating changes
         float stride = StarSize + Gap;
 
         void Set(Point2 p)
@@ -35,10 +40,15 @@ public sealed class RatingControl : Component
         for (int i = 0; i < Max; i++)
         {
             bool filled = i < cur;
-            stars[i] = new TextEl(Icons.Star)
+            // RatingControlSelectedForeground -> AccentDefault; RatingControlUnselectedForeground -> TextSecondary;
+            // RatingControlDisabledSelectedForeground -> TextDisabled (ReadOnly renders a fixed, dimmed rating).
+            ColorF color = ReadOnly
+                ? (filled ? Tok.TextDisabled : Tok.TextSecondary)
+                : (filled ? Tok.AccentDefault : Tok.TextSecondary);
+            stars[i] = new TextEl(filled ? FilledStar : OutlineStar)
             {
                 Size = StarSize,
-                Color = filled ? Tok.AccentDefault : Tok.FillControlStrong,
+                Color = color,
                 FontFamily = Theme.IconFont,
             };
         }
@@ -47,6 +57,7 @@ public sealed class RatingControl : Component
         {
             Direction = 0,
             Gap = Gap,
+            MinHeight = MinHeight,
             AlignItems = FlexAlign.Center,
             Role = AutomationRole.Rating,
             OnPointerDown = ReadOnly ? null : Set,

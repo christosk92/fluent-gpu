@@ -33,21 +33,26 @@ public sealed class TeachingTip : Component
             {
                 h.Value = svc.Open(
                     () => anchor.Value,
+                    // WinUI TeachingTip body: MinWidth 320 / MaxWidth 336, content padding 12. The title and body both
+                    // use TextFillColorPrimary (TeachingTipTitleForeground / TeachingTipForeground). The footer button
+                    // panel carries a 0,12,0,0 top margin (TeachingTip button panel margin). The flyout chrome (border,
+                    // corners, shadow) is supplied by the shared FlyoutSurface, so the body adds no background/stroke.
                     () => new BoxEl
                     {
                         Direction = 1,
                         Gap = 6,
-                        MinWidth = 240,
-                        MaxWidth = 320,
-                        Padding = Edges4.All(16),
+                        MinWidth = 320,
+                        MaxWidth = 336,
+                        Padding = Edges4.All(12),
                         Children = new Element[]
                         {
                             new TextEl(Title) { Size = 16, Bold = true, Color = Tok.TextPrimary },
-                            new TextEl(Body) { Size = 14, Color = Tok.TextSecondary },
+                            new TextEl(Body) { Size = 14, Color = Tok.TextPrimary },
                             new BoxEl
                             {
                                 Direction = 0,
                                 Justify = FlexJustify.End,
+                                Margin = new Edges4(0, 12, 0, 0),
                                 Children = new Element[]
                                 {
                                     Button.Accent("Got it", () => h.Value?.Close()),

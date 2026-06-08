@@ -52,14 +52,32 @@ public sealed class ComboBox : Component
             for (int i = 0; i < Items.Count; i++)
             {
                 int idx = i;
+                bool selected = idx == sel;
+
+                // WinUI ComboBoxItemPill: 3w x 16h left accent pill (Fill=AccentFillColorDefault, corner 1.5), vertically
+                // centered, shown only on the selected row — identical construction to ListView / NavIndicator / SelectorBar.
+                var label = new TextEl(Items[idx]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f };
+                var content = new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = 9f, Grow = 1f,
+                    Children = selected
+                        ? [new BoxEl { Width = 3f, Height = 16f, Corners = Radii.Circle(3f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center, Margin = new Edges4(1, 0, 0, 0) }, label]
+                        : [label],
+                };
+
                 rows[i] = new BoxEl
                 {
-                    Height = 34f, AlignItems = FlexAlign.Center, Padding = new Edges4(11, 0, 11, 0), Corners = Radii.ControlAll,
+                    // WinUI ComboBoxItem: padding 11,5,11,7; margin 5,2,5,2; CornerRadius 3 (ComboBoxItemCornerRadius); auto height.
+                    AlignItems = FlexAlign.Center, Padding = new Edges4(11, 5, 11, 7), Margin = new Edges4(5, 2, 5, 2),
+                    Corners = CornerRadius4.All(3f),
                     Role = AutomationRole.MenuItem,
-                    Fill = i == sel ? Tok.FillSubtleSecondary : ColorF.Transparent,
-                    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                    // Selected rows invert the hover/press ramp like ListView (WinUI SelectedPointerOver=Tertiary,
+                    // SelectedPressed=Secondary); unselected use the standard Secondary→Tertiary ramp.
+                    Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
+                    HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+                    PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
                     OnClick = () => Choose(idx),
-                    Children = [new TextEl(Items[i]) { Size = 14f, Color = Tok.TextPrimary }],
+                    Children = [content],
                 };
             }
             return new BoxEl { Direction = 1, Width = Width, Padding = new Edges4(4, 4, 4, 4), Children = rows };
@@ -82,7 +100,7 @@ public sealed class ComboBox : Component
         {
             return new BoxEl
             {
-                Direction = 0, Width = Width, MinHeight = 34f, AlignItems = FlexAlign.Center,
+                Direction = 0, Width = Width, MinHeight = 32f, AlignItems = FlexAlign.Center,   // WinUI ComboBoxMinHeight = 32
                 Corners = Radii.ControlAll, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
                 Role = AutomationRole.ComboBox,
                 OnRealized = h => anchor.Value = h,
@@ -97,9 +115,11 @@ public sealed class ComboBox : Component
         string label = sel >= 0 && sel < Items.Count ? Items[sel] : Placeholder;
         return new BoxEl
         {
-            Direction = 0, Width = Width, MinHeight = 34f, AlignItems = FlexAlign.Center, Padding = new Edges4(11, 5, 0, 6),
+            // WinUI ComboBox: MinHeight=32, ComboBoxPadding=12,5,0,7, CornerRadius=ControlCornerRadius (4), BorderThickness=1.
+            Direction = 0, Width = Width, MinHeight = 32f, AlignItems = FlexAlign.Center, Padding = new Edges4(12, 5, 0, 7),
             Corners = Radii.ControlAll, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary,
+            // CommonStates: PointerOver=ControlFillColorSecondary, Pressed=ControlFillColorTertiary.
+            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.ComboBox,
             OnRealized = h => anchor.Value = h,
             OnClick = ToggleList,

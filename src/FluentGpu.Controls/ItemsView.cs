@@ -6,8 +6,9 @@ using FluentGpu.Scene;
 namespace FluentGpu.Controls;
 
 /// <summary>A WinUI <c>ItemsView</c>: a modern, single-selectable collection presented as a uniform grid of tiles.
-/// Items are chunked into rows of <see cref="Columns"/> tiles. Clicking a tile selects it; the selected tile gets an
-/// accent border and accent-subtle fill. Each tile is exposed as a button to a11y.</summary>
+/// Items are chunked into rows of <see cref="Columns"/> tiles. At rest each tile is TRANSPARENT with no border;
+/// hover paints <see cref="Tok.FillSubtleSecondary"/>. Clicking a tile selects it; the selected tile gets a 3px
+/// <see cref="Tok.AccentDefault"/> border ring (no accent fill). Each tile is exposed as a button to a11y.</summary>
 public sealed class ItemsView : Component
 {
     public IReadOnlyList<string> Items = [];
@@ -36,11 +37,11 @@ public sealed class ItemsView : Component
                 {
                     Width = 110f,
                     Height = 80f,
-                    Corners = Radii.OverlayAll,
-                    Fill = selected ? Tok.AccentSubtle : Tok.FillCardDefault,
-                    BorderColor = selected ? Tok.AccentDefault : Tok.StrokeCardDefault,
-                    BorderWidth = selected ? 2f : 1f,
-                    HoverFill = Tok.FillCardSecondary,
+                    Corners = Radii.ControlAll,
+                    Fill = ColorF.Transparent,
+                    BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent,
+                    BorderWidth = selected ? 3f : 0f,
+                    HoverFill = Tok.FillSubtleSecondary,
                     AlignItems = FlexAlign.Center,
                     Justify = FlexJustify.Center,
                     Role = AutomationRole.Button,

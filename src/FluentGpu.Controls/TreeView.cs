@@ -11,8 +11,10 @@ namespace FluentGpu.Controls;
 public sealed record TreeNode(string Label, params TreeNode[] Children);
 
 /// <summary>A WinUI TreeView: a hierarchical, expandable list. Nodes with children get an expand/collapse
-/// chevron; each level adds a fixed indent. Expansion state is keyed by the node's positional path so
-/// distinct branches toggle independently.</summary>
+/// chevron (always visible: right when collapsed, down when expanded); each level adds a fixed indent.
+/// Expansion state is keyed by the node's positional path so distinct branches toggle independently. The
+/// selected row gets a NEUTRAL <see cref="Tok.FillSubtleSecondary"/> fill plus a 3px accent left indicator
+/// bar as the only accent cue.</summary>
 public sealed class TreeView : Component
 {
     public IReadOnlyList<TreeNode> Roots = [];
@@ -23,6 +25,7 @@ public sealed class TreeView : Component
     public override Element Render()
     {
         var (expanded, setExpanded) = UseState(ImmutableHashSet<string>.Empty);
+        var (selected, setSelected) = UseState<string?>(null);
 
         var rows = new List<Element>();
 
@@ -30,8 +33,12 @@ public sealed class TreeView : Component
         {
             bool hasKids = n.Children.Length > 0;
             bool open = expanded.Contains(path);
-            rows.Add(Row(n.Label, depth, hasKids, open,
-                () => setExpanded(open ? expanded.Remove(path) : expanded.Add(path))));
+            string p = path;
+            rows.Add(Row(n.Label, depth, hasKids, open, selected == p, () =>
+            {
+                setSelected(p);
+                if (hasKids) setExpanded(open ? expanded.Remove(p) : expanded.Add(p));
+            }));
             if (hasKids && open)
                 for (int i = 0; i < n.Children.Length; i++)
                     Walk(n.Children[i], depth + 1, path + "/" + i);
@@ -43,26 +50,50 @@ public sealed class TreeView : Component
         return new BoxEl { Direction = 1, Children = rows.ToArray() };
     }
 
-    static Element Row(string label, int depth, bool hasKids, bool open, System.Action onToggle)
-        => new BoxEl
+    static Element Row(string label, int depth, bool hasKids, bool open, bool isSelected, System.Action onClick)
+    {
+        // 3x16 accent left indicator bar — only on the selected row, vertically centered. WinUI TreeViewItem
+        // SelectionIndicator is a Rectangle with RadiusX/Y = 2 (a gentle round, NOT a full pill).
+        var accentBar = new BoxEl
+        {
+            Width = 3f, Height = 16f,
+            Corners = CornerRadius4.All(2f),
+            Fill = Tok.AccentDefault,
+            AlignSelf = FlexAlign.Center,
+        };
+
+        var inner = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
             Gap = 4f,
-            MinHeight = 32f,
+            Grow = 1f,
             Padding = new Edges4(8 + depth * 16, 0, 8, 0),
-            Corners = Radii.ControlAll,
-            Margin = new Edges4(4, 1, 4, 1),
-            HoverFill = Tok.FillSubtleSecondary,
-            OnClick = onToggle,
-            Role = AutomationRole.Button,
             Children =
             [
+                // Chevron always shows for parent nodes (collapsed = right, expanded = down); leaves reserve the slot.
                 hasKids
-                    ? new TextEl(open ? Icons.ChevronDown : "")
-                        { Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary }
-                    : new BoxEl { Width = 10f },
+                    ? new TextEl(open ? Icons.ChevronDown : Icons.ChevronRight)
+                        { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextPrimary }   // TreeViewItemForeground = TextPrimary (Pressed → TextSecondary)
+                    : new BoxEl { Width = 12f },
                 new TextEl(label) { Size = 14f, Color = Tok.TextPrimary },
             ],
         };
+
+        return new BoxEl
+        {
+            ZStack = true,
+            Direction = 0,
+            AlignItems = FlexAlign.Center,
+            MinHeight = 28f,
+            Corners = Radii.ControlAll,
+            Margin = new Edges4(4, 2, 4, 2),                 // WinUI TreeViewItemPresenterMargin = 4,2
+            Fill = isSelected ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            HoverFill = Tok.FillSubtleSecondary,
+            PressedFill = Tok.FillSubtleTertiary,            // WinUI Pressed / SelectedPressed → SubtleFillColorTertiary
+            OnClick = onClick,
+            Role = AutomationRole.Button,
+            Children = isSelected ? [accentBar, inner] : [inner],
+        };
+    }
 }

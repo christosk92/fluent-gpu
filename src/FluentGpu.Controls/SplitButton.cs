@@ -48,18 +48,20 @@ public sealed class SplitButton : Component
 
         var primary = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, Padding = new Edges4(11, 5, 11, 6),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, MinWidth = 35f,   // SplitButtonPrimaryButtonSize
+            Padding = new Edges4(11, 5, 11, 6),
             Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.Button, OnClick = OnInvoke,
             Children = primaryContent,
         };
-        var divider = new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };
+        var divider = new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };  // SplitButtonBorderBrushDivider = StrokeControlDefault
         var drop = new BoxEl
         {
-            Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Width = 35f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,  // SplitButtonSecondaryButtonSize = 35
             Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.Button, OnClick = ToggleMenu,
-            Children = [new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont }],
+            // SplitButtonForegroundSecondary = TextSecondary; chevron AnimatedIcon is 12x12.
+            Children = [new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont }],
         };
 
         return new BoxEl

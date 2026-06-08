@@ -12,23 +12,35 @@ public static partial class RadioButton
 {
     public sealed record Style
     {
-        public float RingSize { get; init; } = 20f;
-        public float DotSize { get; init; } = 10f;
-        public float FontSize { get; init; } = 14f;
+        public float RingSize { get; init; } = 20f;        // OuterEllipse Width/Height
+        public float DotSize { get; init; } = 12f;         // RadioButtonCheckGlyphSize (rest)
+        public float FontSize { get; init; } = 14f;        // ControlContentThemeFontSize
         public float MinHeight { get; init; } = 32f;
-        public ColorF OffFill { get; init; }
-        public ColorF OffHover { get; init; }
-        public ColorF OffBorder { get; init; }
-        public ColorF OnRing { get; init; }
-        public ColorF Dot { get; init; }
-        public ColorF Foreground { get; init; }
+
+        // Unchecked ellipse — ControlAltFillColor* fill + ControlStrongStrokeColor* ring
+        public ColorF OffFill { get; init; }               // RadioButtonOuterEllipseFill → ControlAltFillColorSecondary
+        public ColorF OffHover { get; init; }              // ...FillPointerOver → ControlAltFillColorTertiary
+        public ColorF OffPressed { get; init; }            // ...FillPressed → ControlAltFillColorQuaternary
+        public ColorF OffBorder { get; init; }             // RadioButtonOuterEllipseStroke → ControlStrongStrokeColorDefault
+
+        // Checked ellipse — accent fill + accent ring (the 1px ring is retained, stroke == fill)
+        public ColorF OnRing { get; init; }                // RadioButtonOuterEllipseCheckedFill → AccentDefault
+        public ColorF OnHover { get; init; }               // ...CheckedFillPointerOver → AccentSecondary
+        public ColorF OnPressed { get; init; }             // ...CheckedFillPressed → AccentTertiary
+        public ColorF OnBorder { get; init; }              // RadioButtonOuterEllipseCheckedStroke → AccentDefault
+
+        public ColorF Dot { get; init; }                   // RadioButtonCheckGlyphFill → TextOnAccentPrimary
+        public GradientSpec? DotBorder { get; init; }      // RadioButtonCheckGlyphStrokeChecked → AccentControlElevationBorder
+        public ColorF Foreground { get; init; }            // RadioButtonForeground → TextPrimary
     }
 
     public static Style? StyleOverride;
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
-        OffFill = Tok.FillControlDefault, OffHover = Tok.FillControlSecondary, OffBorder = Tok.StrokeControlSecondary,
-        OnRing = Tok.AccentDefault, Dot = Tok.TextOnAccentPrimary, Foreground = Tok.TextPrimary,
+        OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
+        OffBorder = Tok.StrokeControlStrongDefault,
+        OnRing = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnBorder = Tok.AccentDefault,
+        Dot = Tok.TextOnAccentPrimary, DotBorder = Tok.AccentControlElevationBorder, Foreground = Tok.TextPrimary,
     };
 
     public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null)
@@ -39,11 +51,14 @@ public static partial class RadioButton
             Width = s.RingSize, Height = s.RingSize,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.Circle(s.RingSize),
-            BorderWidth = selected ? 0f : 1f,
-            BorderColor = selected ? ColorF.Transparent : s.OffBorder,
+            BorderWidth = 1f,
+            BorderColor = selected ? s.OnBorder : s.OffBorder,
             Fill = selected ? s.OnRing : s.OffFill,
-            HoverFill = selected ? s.OnRing : s.OffHover,
-            Children = selected ? [new BoxEl { Width = s.DotSize, Height = s.DotSize, Corners = Radii.Circle(s.DotSize), Fill = s.Dot }] : [],
+            HoverFill = selected ? s.OnHover : s.OffHover,
+            PressedFill = selected ? s.OnPressed : s.OffPressed,
+            Children = selected
+                ? [new BoxEl { Width = s.DotSize, Height = s.DotSize, Corners = Radii.Circle(s.DotSize), Fill = s.Dot, BorderBrush = s.DotBorder, BorderWidth = s.DotBorder is null ? 0f : 1f }]
+                : [],
         };
 
         return new BoxEl

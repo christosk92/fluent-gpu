@@ -60,7 +60,23 @@ sealed class ToolTipPage : Component
 
 sealed class CommandBarFlyoutPage : Component
 {
+    static readonly AppBarCommand[] Primary =
+    [
+        new(Icons.Accept, "Accept"),
+        new(Icons.Share, "Share"),
+        new(Icons.Tag, "Tag"),
+    ];
+
+    static readonly AppBarCommand[] Secondary =
+    [
+        new(Icons.Settings, "Settings"),
+        AppBarCommand.Separator,
+        new(Icons.Accept, "Show grid", Kind: AppBarCommandKind.ToggleButton, IsChecked: true),
+    ];
+
     public override Element Render() => GalleryPage.Shell("CommandBarFlyout",
-        "A contextual toolbar of commands, shown in a flyout.",
-        ControlExample.Build("A CommandBarFlyout", CommandBarFlyout.Create("Commands")));
+        "A contextual toolbar of commands, shown in a flyout — a primary icon row plus a … More button that "
+        + "expands a secondary overflow menu of labeled rows.",
+        ControlExample.Build("A CommandBarFlyout",
+            CommandBarFlyout.Create("Commands", Primary, Secondary)));
 }

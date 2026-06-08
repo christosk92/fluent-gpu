@@ -33,15 +33,17 @@ public sealed class CalendarDatePicker : Component
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
-            Gap = 8f,
             MinHeight = 32f,
-            Width = 240f,
-            Padding = new Edges4(11, 5, 11, 6),
+            MinWidth = 64f,                       // grows to content; no fixed 240 width (WinUI is flexible)
+            // WinUI CalendarDatePickerTextBlock Padding = 12,0,0,2 (left text inset). TextEl has no Padding channel,
+            // so the left inset lives on the field; a trailing inset is kept for the glyph column.
+            Padding = new Edges4(12, 5, 11, 6),
             Corners = Radii.ControlAll,
             BorderWidth = 1f,
             BorderBrush = Tok.ControlElevationBorder,
             Fill = Tok.FillControlDefault,
             HoverFill = Tok.FillControlSecondary,
+            PressedFill = Tok.FillControlTertiary,   // WinUI Pressed = ControlFillColorTertiary
             OnRealized = x => anchor.Value = x,
             OnClick = Toggle,
             Role = AutomationRole.ComboBox,
@@ -53,7 +55,7 @@ public sealed class CalendarDatePicker : Component
                     Color = date is null ? Tok.TextSecondary : Tok.TextPrimary,
                     Grow = 1f,
                 },
-                new TextEl("") { Size = 16f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                new TextEl("") { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },   // CalendarDatePickerCalendarGlyphFontSize = 12
             ],
         };
     }

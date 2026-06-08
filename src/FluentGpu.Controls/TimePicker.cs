@@ -101,7 +101,10 @@ internal sealed class TimePickerField : Component
             Justify = FlexJustify.Center,
             Grow = 1f,
             MinWidth = 54f,
-            Padding = new Edges4(11, 5, 11, 6),
+            // WinUI TimePickerHostPadding = 0,3,0,6 (the host text padding). The field is centered (Justify=Center)
+            // so horizontal slack is supplied by MinWidth=54; the vertical 3/6 split is kept on the cell. (TextEl has
+            // no Padding channel, so this stays on the cell rather than the text run.)
+            Padding = new Edges4(0, 3, 0, 6),
             HoverFill = Tok.FillControlSecondary,
             PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.Button,

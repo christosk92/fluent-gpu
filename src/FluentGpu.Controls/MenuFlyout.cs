@@ -56,7 +56,7 @@ public static class MenuFlyout
         if (hasIconColumn)
         {
             Element icon = it.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = 15f, Color = fg, FontFamily = Theme.IconFont }
+                ? new TextEl(g) { Size = 16f, Color = fg, FontFamily = Theme.IconFont }
                 : new BoxEl();
             children.Add(new BoxEl { Width = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [icon] });
         }
@@ -72,6 +72,7 @@ public static class MenuFlyout
             Gap = hasIconColumn ? 8f : 0f,
             Corners = Radii.ControlAll,
             Role = AutomationRole.MenuItem,
+            Fill = Tok.FillSubtleTransparent,   // MenuFlyoutItemBackground (explicit rest state)
             HoverFill = it.Enabled ? Tok.FillSubtleSecondary : ColorF.Transparent,
             PressedFill = it.Enabled ? Tok.FillSubtleTertiary : ColorF.Transparent,
             OnClick = it.Enabled ? () => { it.Invoke?.Invoke(); close(); } : null,

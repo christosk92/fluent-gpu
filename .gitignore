@@ -22,3 +22,4 @@ fluentgpu-*-counters.csv
 
 # --screenshot fidelity captures (generated PNGs for visual diffing)
 out/
+.shots/

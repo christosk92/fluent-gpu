@@ -70,6 +70,7 @@ sealed class GalleryApp : Component
                 new("InfoBadge", Icons.Tag, "InfoBadge"),
                 new("InfoBar", Icons.Document, "InfoBar"),
                 new("ProgressBar", Icons.Refresh, "ProgressBar"),
+                new("ProgressRing", Icons.Refresh, "ProgressRing"),
                 new("ToolTip", Icons.Document, "ToolTip"),
             ],
         },
@@ -82,6 +83,8 @@ sealed class GalleryApp : Component
                 new("Viewbox", Icons.Picture, "Viewbox"),
                 new("Border", Icons.Grid, "Border"),
                 new("Canvas", Icons.Grid, "Canvas"),
+                new("RelativePanel", Icons.Grid, "RelativePanel"),
+                new("VariableSizedWrapGrid", Icons.Grid, "VariableSizedWrapGrid"),
             ],
         },
         new("scrolling-controls", Icons.More, "Scrolling")
@@ -89,6 +92,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("PipsPager", Icons.More, "PipsPager"),
+                new("AnnotatedScrollBar", Icons.More, "AnnotatedScrollBar"),
             ],
         },
         new("navigation-cat", Icons.List, "Navigation")
@@ -128,6 +132,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
+                new("MediaPlayerElement", Icons.Movie, "MediaPlayerElement"),
             ],
         },
         new("collections", Icons.List, "Collections")
@@ -151,6 +156,7 @@ sealed class GalleryApp : Component
                 new("CommandBar", Icons.More, "CommandBar"),
                 new("AppBarSeparator", Icons.More, "AppBarSeparator"),
                 new("CommandBarFlyout", Icons.More, "CommandBarFlyout"),
+                new("SwipeControl", Icons.More, "SwipeControl"),
             ],
         },
         new("datetime", Icons.Document, "Date & time")
@@ -316,6 +322,12 @@ sealed class GalleryApp : Component
         "Canvas" => Embed.Comp(() => new CanvasPage()),
         "ToolTip" => Embed.Comp(() => new ToolTipPage()),
         "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
+        "ProgressRing" => Embed.Comp(() => new ProgressRingPage()),
+        "RelativePanel" => Embed.Comp(() => new RelativePanelPage()),
+        "VariableSizedWrapGrid" => Embed.Comp(() => new VariableSizedWrapGridPage()),
+        "AnnotatedScrollBar" => Embed.Comp(() => new AnnotatedScrollBarPage()),
+        "SwipeControl" => Embed.Comp(() => new SwipeControlPage()),
+        "MediaPlayerElement" => Embed.Comp(() => new MediaPlayerElementPage()),
         "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
         "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
         "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),

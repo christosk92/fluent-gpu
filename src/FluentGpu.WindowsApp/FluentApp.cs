@@ -10,6 +10,7 @@ using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
 using FluentGpu.Rhi.Gdi;
 using FluentGpu.Scene;
+using FluentGpu.Text.DirectWrite;
 
 namespace FluentGpu;
 
@@ -39,7 +40,9 @@ public static class FluentApp
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica);
         if (mica) Theme.WindowBackground = ColorF.Transparent;
 
-        var fonts = new GdiFontSystem(strings);
+        // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
+        // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
+        var fonts = new DirectWriteFontSystem(strings);
         IGpuDevice device = new D3D12Device(strings, composited: mica);
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.

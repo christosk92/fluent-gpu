@@ -14,13 +14,42 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class ColorPicker : Component
 {
+    /// <summary>WinUI-aligned dimensions and brushes (ColorPicker.xaml / ColorPicker_themeresources.xaml).</summary>
+    public sealed record Style
+    {
+        public float SpectrumMaxW { get; init; } = 336f;            // ColorSpectrum MaxWidth
+        public float SpectrumMaxH { get; init; } = 336f;            // ColorSpectrum MaxHeight
+        public float SpectrumThumbRadius { get; init; } = 8f;       // SelectionEllipsePanel 16x16
+        public float RailH { get; init; } = 12f;                    // ThirdDimension/AlphaSlider Height = 12 (was 18)
+        public float RailBoxH { get; init; } = 20f;                 // rail + 8px vertical padding (was 26)
+        public float SliderThumbW { get; init; } = 12f;             // SliderHorizontalThumbWidth (was 6)
+        public float SliderThumbCornerRadius { get; init; } = 6f;   // ColorPickerSliderCornerRadius (fixed, was railH/2)
+        public float SwatchW { get; init; } = 44f;                  // preview swatch (was 64)
+        public float SwatchH { get; init; } = 44f;
+        public float BorderWidth { get; init; } = 2f;               // swatch StrokeThickness (was 1)
+        public ColorF SwatchBorder { get; init; }                   // ColorPickerBorderBrush -> StrokeControlDefault
+        public ColorF AlphaRailFill { get; init; }                  // alpha gradient underlay -> FillControlDefault
+        public ColorF SliderThumbBg { get; init; }                  // ColorPickerSliderThumbBackground -> TextPrimary
+        public ColorF SpectrumThumbStroke { get; init; }            // spectrum selection ring -> TextPrimary
+    }
+
+    public static Style? StyleOverride;
+    public static Style DefaultStyle => StyleOverride ?? new Style
+    {
+        SwatchBorder = Tok.StrokeControlDefault,
+        AlphaRailFill = Tok.FillControlDefault,
+        SliderThumbBg = Tok.TextPrimary,
+        SpectrumThumbStroke = Tok.TextPrimary,
+    };
+
     public Signal<ColorF> Color = new(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
     public bool AlphaEnabled;
     public float SpectrumW = 256f;
     public float SpectrumH = 256f;
+    public Style? StyleArg;
 
-    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f)
-        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH });
+    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f, Style? style = null)
+        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH, StyleArg = style });
 
     static readonly ColorF White = ColorF.FromRgba(255, 255, 255);
     static readonly ColorF Black = ColorF.FromRgba(0, 0, 0);
@@ -28,6 +57,7 @@ public sealed class ColorPicker : Component
 
     public override Element Render()
     {
+        var st = StyleArg ?? DefaultStyle;
         var seed = Color.Peek().ToHsv();
         var h = UseSignal(seed.H);
         var sat = UseSignal(seed.S);
@@ -60,7 +90,7 @@ public sealed class ColorPicker : Component
         void SetRgb(int r, int g, int b) => SetColor(ColorF.FromRgba((byte)Math.Clamp(r, 0, 255), (byte)Math.Clamp(g, 0, 255), (byte)Math.Clamp(b, 0, 255), (byte)Cur(A)));
 
         // ── SV spectrum (white→hue ⊗ transparent→black) with a draggable 2-D thumb ──
-        float thumbR = 9f;
+        float thumbR = st.SpectrumThumbRadius;
         void SetSV(Point2 p) { sat.Value = Math.Clamp(p.X / SpectrumW, 0f, 1f); val.Value = Math.Clamp(1f - p.Y / SpectrumH, 0f, 1f); Push(); }
         var spectrum = new BoxEl
         {
@@ -85,8 +115,9 @@ public sealed class ColorPicker : Component
         };
 
         // ── Hue rail: 6 adjacent ≤4-stop gradient segments span the full 360° (MaxStops = 4) ──
-        float railH = 18f;
-        float railBoxH = 26f;
+        float railH = st.RailH;
+        float railBoxH = st.RailBoxH;
+        float railPad = (railBoxH - railH) * 0.5f;
         void SetHue(Point2 p) { h.Value = Math.Clamp(p.X / SpectrumW, 0f, 1f) * 360f; Push(); }
         var segs = new Element[6];
         for (int i = 0; i < 6; i++)
@@ -95,14 +126,14 @@ public sealed class ColorPicker : Component
                 Grow = 1f, Height = railH,
                 Gradient = Ui.LinearGradient(0f, new GradientStop(0f, ColorF.FromHsv(i * 60f, 1f, 1f)), new GradientStop(1f, ColorF.FromHsv((i + 1) * 60f, 1f, 1f))),
             };
-        var hueRail = new BoxEl
+        var hueRail = new BoxEl 
         {
             Width = SpectrumW, Height = railBoxH, ZStack = true,
             Role = AutomationRole.Slider, OnPointerDown = SetHue, OnDrag = SetHue,
             Children =
             [
-                new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Direction = 0, Corners = Radii.Circle(railH), ClipToBounds = true, Children = segs },
-                HandleAt(Math.Clamp(H / 360f * SpectrumW, 4f, SpectrumW - 4f), railBoxH),
+                new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Direction = 0, Corners = Radii.Circle(railH), ClipToBounds = true, Children = segs },
+                HandleAt(Math.Clamp(H / 360f * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st),
             ],
         };
 
@@ -119,15 +150,15 @@ public sealed class ColorPicker : Component
                 Role = AutomationRole.Slider, OnPointerDown = SetA, OnDrag = SetA,
                 Children =
                 [
-                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Corners = Radii.Circle(railH), ClipToBounds = true, Fill = Tok.FillControlDefault },
-                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Corners = Radii.Circle(railH), ClipToBounds = true, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, opaque with { A = 0f }), new GradientStop(1f, opaque)) },
-                    HandleAt(Math.Clamp(A * SpectrumW, 4f, SpectrumW - 4f), railBoxH),
+                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Corners = Radii.Circle(railH), ClipToBounds = true, Fill = st.AlphaRailFill },
+                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Corners = Radii.Circle(railH), ClipToBounds = true, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, opaque with { A = 0f }), new GradientStop(1f, opaque)) },
+                    HandleAt(Math.Clamp(A * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st),
                 ],
             });
         }
 
         // ── preview swatch + channel fields ──
-        var swatch = new BoxEl { Width = 64f, Height = 64f, Corners = Radii.ControlAll, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = color };
+        var swatch = new BoxEl { Width = st.SwatchW, Height = st.SwatchH, Corners = Radii.ControlAll, BorderWidth = st.BorderWidth, BorderColor = st.SwatchBorder, Fill = color };
         Element Field(string label, Signal<string> text, Func<string, string> sanitize, Action<string> commit, float w) => new BoxEl
         {
             Direction = 1, Gap = 3f,
@@ -172,15 +203,15 @@ public sealed class ColorPicker : Component
         return new BoxEl { Direction = 1, Gap = 12f, Children = rows.ToArray() };
     }
 
-    // A small high-contrast handle for the hue/alpha rails.
-    static Element HandleAt(float x, float railBoxH) => new BoxEl
+    // The hue/alpha rail thumb: 12px wide, 6px corner (ColorPickerSlider), TextPrimary background + 1px elevation border.
+    static Element HandleAt(float x, float railBoxH, Style st) => new BoxEl
     {
-        Width = 6f,
+        Width = st.SliderThumbW,
         Height = railBoxH,
-        OffsetX = x - 3f,
-        Corners = CornerRadius4.All(3f),
+        OffsetX = x - st.SliderThumbW * 0.5f,
+        Corners = CornerRadius4.All(st.SliderThumbCornerRadius),
         BorderWidth = 1f,
-        BorderColor = ColorF.FromRgba(0, 0, 0, 0x99),
-        Fill = ColorF.FromRgba(255, 255, 255),
+        BorderBrush = Tok.ControlElevationBorder,
+        Fill = st.SliderThumbBg,
     };
 }

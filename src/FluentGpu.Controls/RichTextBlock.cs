@@ -17,7 +17,7 @@ public static class RichTextBlock
     {
         var children = new List<Element>(paragraphs.Count);
         for (int i = 0; i < paragraphs.Count; i++)
-            children.Add(new TextEl(paragraphs[i]) { Size = 14f, Color = Tok.TextPrimary });
+            children.Add(new TextEl(paragraphs[i]) { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap });
 
         return new BoxEl
         {
@@ -36,7 +36,7 @@ public static class RichTextBlock
             new TextEl(heading) { Size = 20f, Bold = true, Color = Tok.TextPrimary },
         };
         for (int i = 0; i < paragraphs.Count; i++)
-            children.Add(new TextEl(paragraphs[i]) { Size = 14f, Color = Tok.TextPrimary });
+            children.Add(new TextEl(paragraphs[i]) { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap });
 
         return new BoxEl
         {

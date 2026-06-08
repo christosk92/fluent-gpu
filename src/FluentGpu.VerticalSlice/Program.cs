@@ -2506,7 +2506,8 @@ static class Slice
         bool joinedChrome = !outer.IsNull && host.Scene.Paint(outer).Fill.A > 0f && Near(host.Scene.Paint(outer).BorderWidth, 1f)
                             && (host.Scene.Flags(outer) & NodeFlags.ClipsToBounds) != 0;
         bool halfMetrics = !primary.IsNull && !drop.IsNull
-                           && Near(host.Scene.Bounds(primary).H, 32f) && Near(host.Scene.Bounds(drop).W, 32f) && Near(host.Scene.Bounds(drop).H, 32f);
+                           // WinUI SplitButtonSecondaryButtonSize = 35 (width); control height = 32.
+                           && Near(host.Scene.Bounds(primary).H, 32f) && Near(host.Scene.Bounds(drop).W, 35f) && Near(host.Scene.Bounds(drop).H, 32f);
         bool transparentHalves = !primary.IsNull && !drop.IsNull
                                  && host.Scene.Paint(primary).Fill.A == 0f && host.Scene.Paint(drop).Fill.A == 0f;
 

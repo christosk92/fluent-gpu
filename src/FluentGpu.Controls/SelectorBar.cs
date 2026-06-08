@@ -3,9 +3,9 @@ using FluentGpu.Dsl;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI SelectorBar: a segmented horizontal row of text items. The selected item gets an accent
-/// underline (a ~3px accent bar pinned to the bottom) and <see cref="Tok.TextPrimary"/>; the rest are
-/// <see cref="Tok.TextSecondary"/>. Stateless — the caller owns <paramref name="selected"/> and reacts to
+/// <summary>A WinUI SelectorBar: a segmented horizontal row of text items. The selected item is marked by a SHORT
+/// CENTERED accent pill at the bottom (not a full-width underline, not bold); text stays <see cref="Tok.TextPrimary"/>
+/// at rest for every item. Stateless — the caller owns <paramref name="selected"/> and reacts to
 /// <paramref name="onSelect"/>.</summary>
 public static class SelectorBar
 {
@@ -31,13 +31,17 @@ public static class SelectorBar
                     new TextEl(items![index])
                     {
                         Size = 14f,
-                        Color = isSelected ? Tok.TextPrimary : Tok.TextSecondary,
-                        Bold = isSelected,
+                        Color = Tok.TextPrimary,
                     },
+                    // WinUI SelectorBarItem pill: base Width=4, Height=3, RadiusX=0.5/RadiusY=1; when selected it
+                    // ScaleX-animates 1→4 (the ~16px shown here is that scaled result) and fades 0→1 opacity. The engine
+                    // has no per-item ScaleX state machine, so the selected pill renders at its final 16px width with a
+                    // near-flat 1px corner radius (was 1.5 / Radii.Circle(3f)).
                     new BoxEl
                     {
+                        Width = 16f,
                         Height = 3f,
-                        Corners = Radii.Circle(3f),
+                        Corners = CornerRadius4.All(1f),
                         Fill = isSelected ? Tok.AccentDefault : ColorF.Transparent,
                         Margin = new Edges4(0, 4, 0, 0),
                     },

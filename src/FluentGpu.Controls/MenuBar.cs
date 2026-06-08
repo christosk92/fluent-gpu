@@ -31,9 +31,10 @@ public sealed class MenuBar : Component
         return new BoxEl
         {
             Direction = 0,
-            Gap = 2f,
             AlignItems = FlexAlign.Center,
             Height = 40f,
+            // MenuBar.Background = MenuBarBackground = SubtleFillColorTransparent (explicit transparent surface).
+            Fill = Tok.FillSubtleTransparent,
             Children = buttons,
         };
     }
@@ -60,12 +61,18 @@ public sealed class MenuBar : Component
                     FlyoutPlacement.BottomLeft);
             }
 
+            // MenuBarItem 'Selected' state (flyout open) = SubtleFillColorTertiary, same as Pressed; at rest it is
+            // MenuBarItemBackground = SubtleFillColorTransparent (explicit, not just defaulted-transparent).
+            bool open = handle.Value is { IsOpen: true };
+
             return new BoxEl
             {
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
-                Padding = new Edges4(11, 6, 11, 6),
+                Padding = new Edges4(10, 4, 10, 4),
+                Margin = Edges4.All(4),
                 Corners = Radii.ControlAll,
+                Fill = open ? Tok.FillSubtleTertiary : Tok.FillSubtleTransparent,
                 HoverFill = Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
                 Role = AutomationRole.MenuItem,

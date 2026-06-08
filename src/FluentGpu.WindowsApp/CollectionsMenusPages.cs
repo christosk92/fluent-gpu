@@ -10,10 +10,14 @@ using static FluentGpu.Dsl.Ui;
 sealed class ListViewPage : Component
 {
     static readonly string[] Items = { "Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado" };
-    public override Element Render() => GalleryPage.Shell("ListView",
-        "A vertical, single-select list of data items.",
-        ControlExample.Build("A ListView",
-            new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [ListView.Create(Items)] }));
+    public override Element Render()
+    {
+        var selected = UseSignal(0);   // a default selection so the accent selection bar is visible (WinUI gallery parity)
+        return GalleryPage.Shell("ListView",
+            "A vertical, single-select list of data items.",
+            ControlExample.Build("A ListView",
+                new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [ListView.Create(Items, selected)] }));
+    }
 }
 
 sealed class GridViewPage : Component

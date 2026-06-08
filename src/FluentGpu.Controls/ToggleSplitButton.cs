@@ -14,6 +14,7 @@ public sealed class ToggleSplitButton : Component
     public string Label = "";
     public string? Glyph;
     public Signal<bool> IsOn = new(false);
+    public bool IsEnabled = true;
     public Action<bool>? OnToggle;
     public IReadOnlyList<MenuFlyoutItem> Items = [];
 
@@ -26,6 +27,7 @@ public sealed class ToggleSplitButton : Component
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
         bool on = IsOn.Value;
+        bool enabled = IsEnabled;
 
         void ToggleMenu()
         {
@@ -34,29 +36,35 @@ public sealed class ToggleSplitButton : Component
         }
         void Flip() { IsOn.Value = !on; OnToggle?.Invoke(!on); }
 
-        var primFill = on ? Tok.AccentDefault : Tok.FillControlDefault;
-        var primHover = on ? Tok.AccentSecondary : Tok.FillControlSecondary;
-        var primPress = on ? Tok.AccentTertiary : Tok.FillControlTertiary;
-        var fg = on ? Tok.TextOnAccentPrimary : Tok.TextPrimary;
+        // Per-state colour matrix (disabled folds the whole control to the disabled tokens).
+        var primFill  = !enabled ? Tok.FillControlDisabled : (on ? Tok.AccentDefault   : Tok.FillControlDefault);
+        var primHover = !enabled ? Tok.FillControlDisabled : (on ? Tok.AccentSecondary : Tok.FillControlSecondary);
+        var primPress = !enabled ? Tok.FillControlDisabled : (on ? Tok.AccentTertiary  : Tok.FillControlTertiary);
+        var primFg    = !enabled ? Tok.TextDisabled : (on ? Tok.TextOnAccentPrimary : Tok.TextPrimary);
+        // SplitButtonForegroundSecondary: TextSecondary unchecked; TextOnAccentSecondary in checked states.
+        var secondaryFg = !enabled ? Tok.TextDisabled : (on ? Tok.TextOnAccentSecondary : Tok.TextSecondary);
+        // DividerBackgroundGrid: StrokeControlDefault unchecked; SplitButtonBorderBrushCheckedDivider
+        // (WinUI ControlStrokeColorOnAccentTertiary — no token; closest is StrokeControlOnAccentSecondary) when checked.
+        var dividerFill = (!enabled || !on) ? Tok.StrokeControlDefault : Tok.StrokeControlOnAccentSecondary;
 
         var primaryContent = new List<Element>();
-        if (Glyph is { Length: > 0 } g) primaryContent.Add(new TextEl(g) { Size = 14f, Color = fg, FontFamily = Theme.IconFont });
-        primaryContent.Add(new TextEl(Label) { Size = 14f, Color = fg });
+        if (Glyph is { Length: > 0 } g) primaryContent.Add(new TextEl(g) { Size = 14f, Color = primFg, FontFamily = Theme.IconFont });
+        primaryContent.Add(new TextEl(Label) { Size = 14f, Color = primFg });
 
         var primary = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, Padding = new Edges4(11, 5, 11, 6),
-            Fill = ColorF.Transparent, HoverFill = primHover, PressedFill = primPress,
-            Role = AutomationRole.ToggleButton, OnClick = Flip,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, MinWidth = 35f, Padding = new Edges4(11, 5, 11, 6),
+            Fill = ColorF.Transparent, HoverFill = enabled ? primHover : primFill, PressedFill = enabled ? primPress : primFill,
+            Role = AutomationRole.ToggleButton, OnClick = enabled ? Flip : null,
             Children = primaryContent.ToArray(),
         };
-        var divider = new BoxEl { Width = 1f, Height = 16f, Fill = on ? Tok.StrokeControlOnAccentSecondary : Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };
+        var divider = new BoxEl { Width = 1f, Height = 16f, Fill = dividerFill, AlignSelf = FlexAlign.Center };
         var drop = new BoxEl
         {
-            Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Fill = ColorF.Transparent, HoverFill = primHover, PressedFill = primPress,
-            Role = AutomationRole.Button, OnClick = ToggleMenu,
-            Children = [new TextEl(Icons.ChevronDown) { Size = 10f, Color = fg, FontFamily = Theme.IconFont }],
+            Width = 35f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,  // SplitButtonSecondaryButtonSize = 35
+            Fill = ColorF.Transparent, HoverFill = enabled ? primHover : primFill, PressedFill = enabled ? primPress : primFill,
+            Role = AutomationRole.Button, OnClick = enabled ? ToggleMenu : null,
+            Children = [new TextEl(Icons.ChevronDown) { Size = 12f, Color = secondaryFg, FontFamily = Theme.IconFont }],
         };
 
         return new BoxEl
@@ -64,7 +72,7 @@ public sealed class ToggleSplitButton : Component
             Direction = 0, AlignItems = FlexAlign.Center,
             MinHeight = 32f,
             Fill = primFill,
-            BorderWidth = 1f, BorderBrush = on ? Tok.AccentControlElevationBorder : Tok.ControlElevationBorder, Corners = Radii.ControlAll,
+            BorderWidth = 1f, BorderBrush = (enabled && on) ? Tok.AccentControlElevationBorder : Tok.ControlElevationBorder, Corners = Radii.ControlAll,
             ClipToBounds = true,
             OnRealized = h => anchor.Value = h,
             Children = [primary, divider, drop],

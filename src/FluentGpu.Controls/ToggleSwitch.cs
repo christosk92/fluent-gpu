@@ -12,17 +12,22 @@ public static partial class ToggleSwitch
 {
     public sealed record Style
     {
-        public float TrackWidth { get; init; } = 40f;
-        public float TrackHeight { get; init; } = 20f;
-        public float KnobSize { get; init; } = 12f;
-        public float FontSize { get; init; } = 14f;
-        public ColorF OffFill { get; init; }
-        public ColorF OffHover { get; init; }
-        public ColorF OffBorder { get; init; }
-        public ColorF OffKnob { get; init; }
-        public ColorF OnFill { get; init; }
-        public ColorF OnHover { get; init; }
-        public ColorF OnKnob { get; init; }
+        public float TrackWidth { get; init; } = 44f;          // OuterBorder Width (generic.xaml:11484)
+        public float TrackHeight { get; init; } = 20f;         // OuterBorder Height
+        public float OffKnobSize { get; init; } = 10f;         // SwitchKnobOff Width/Height (rest, off)
+        public float NormalKnobSize { get; init; } = 12f;      // knob at rest, on
+        public float HoverKnobSize { get; init; } = 14f;       // pointer-over grow
+        public float PressedKnobSize { get; init; } = 17f;     // pressed grow
+        public float FontSize { get; init; } = 14f;            // ControlContentThemeFontSize
+        public ColorF OffFill { get; init; }                   // ToggleSwitchFillOff → ControlAltFillColorSecondary
+        public ColorF OffHover { get; init; }                  // ...OffPointerOver → ControlAltFillColorTertiary
+        public ColorF OffPressed { get; init; }                // ...OffPressed → ControlAltFillColorQuaternary
+        public ColorF OffBorder { get; init; }                 // ToggleSwitchStrokeOff → ControlStrongStrokeColorDefault
+        public ColorF OffKnob { get; init; }                   // ToggleSwitchKnobFillOff → TextSecondary
+        public ColorF OnFill { get; init; }                    // ToggleSwitchFillOn → AccentDefault
+        public ColorF OnHover { get; init; }                   // ...OnPointerOver → AccentSecondary
+        public ColorF OnPressed { get; init; }                 // ...OnPressed → AccentTertiary
+        public ColorF OnKnob { get; init; }                    // ToggleSwitchKnobFillOn → TextOnAccentPrimary
         public ColorF Foreground { get; init; }
         public ColorF HeaderColor { get; init; }
     }
@@ -30,16 +35,19 @@ public static partial class ToggleSwitch
     public static Style? StyleOverride;
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
-        OffFill = Tok.FillControlSolid, OffHover = Tok.FillControlSecondary, OffBorder = Tok.StrokeControlSecondary,
-        OffKnob = Tok.TextSecondary, OnFill = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnKnob = Tok.TextOnAccentPrimary,
+        OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
+        OffBorder = Tok.StrokeControlStrongDefault, OffKnob = Tok.TextSecondary,
+        OnFill = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnKnob = Tok.TextOnAccentPrimary,
         Foreground = Tok.TextPrimary, HeaderColor = Tok.TextSecondary,
     };
 
     public static BoxEl Create(bool isOn, Action onToggle, string? header = null, string? onContent = null, string? offContent = null, Style? style = null)
     {
         var s = style ?? DefaultStyle;
-        float pad = (s.TrackHeight - s.KnobSize) / 2f;
-        float travel = s.TrackWidth - s.KnobSize - 2f * pad;
+        // Knob: 10px off / 12px on at rest, grown to 14 (hover) / 17 (press) via composited scale (no per-frame re-render).
+        float knob = isOn ? s.NormalKnobSize : s.OffKnobSize;
+        float pad = (s.TrackHeight - knob) / 2f;
+        float travel = s.TrackWidth - knob - 2f * pad;          // 44 - 12 - 2*4 = 20 (WinUI KnobTranslateTransform X = 20)
 
         var track = new BoxEl
         {
@@ -49,16 +57,18 @@ public static partial class ToggleSwitch
             AlignItems = FlexAlign.Center,
             Padding = new Edges4(pad, 0, pad, 0),
             Corners = Radii.Circle(s.TrackHeight),
-            BorderWidth = isOn ? 0f : 1f,
+            BorderWidth = isOn ? 0f : 1f,                       // ToggleSwitchOnStrokeThickness=0 / OuterBorderStrokeThickness=1
             BorderColor = isOn ? ColorF.Transparent : s.OffBorder,
             Fill = isOn ? s.OnFill : s.OffFill,
             HoverFill = isOn ? s.OnHover : s.OffHover,
+            PressedFill = isOn ? s.OnPressed : s.OffPressed,
             Children =
             [
                 new BoxEl { Width = isOn ? travel : 0f },   // leading spacer positions the knob; its width change drives the FLIP slide
                 new BoxEl
                 {
-                    Width = s.KnobSize, Height = s.KnobSize, Corners = Radii.Circle(s.KnobSize), Fill = isOn ? s.OnKnob : s.OffKnob,
+                    Width = knob, Height = knob, Corners = Radii.Circle(knob), Fill = isOn ? s.OnKnob : s.OffKnob,
+                    HoverScale = s.HoverKnobSize / s.NormalKnobSize, PressScale = s.PressedKnobSize / s.NormalKnobSize,
                     Animate = LayoutTransition.Slide with { Dynamics = TransitionDynamics.Spring(0.20f, 0.85f) },
                 },
             ],

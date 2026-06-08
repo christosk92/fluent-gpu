@@ -70,6 +70,7 @@ public sealed class SceneStore : ISceneBackend
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly Dictionary<int, InteractionAnim> _interact = new();
     private readonly Dictionary<int, ShadowSpec> _shadows = new();
+    private readonly Dictionary<int, ArcSpec> _arcs = new();
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
@@ -347,6 +348,10 @@ public sealed class SceneStore : ISceneBackend
     public void SetShadow(NodeHandle h, in ShadowSpec s) => _shadows[(int)h.Raw.Index] = s;
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
+
+    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs[(int)h.Raw.Index] = a;
+    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGetValue((int)h.Raw.Index, out a);
+    public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
 
     public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);

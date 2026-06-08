@@ -11,7 +11,8 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class Button
 {
-    /// <summary>A button's visual style. Colours resolve from <see cref="Tok"/> in the computed default styles below.</summary>
+    /// <summary>A button's visual style. Colours resolve from <see cref="Tok"/> in the computed default styles below.
+    /// State colours follow WinUI's 4-state matrix (normal/hover/pressed/disabled) for fill, foreground and border.</summary>
     public sealed record Style
     {
         public ColorF Background { get; init; }
@@ -20,6 +21,17 @@ public static partial class Button
         public GradientSpec? BorderBrush { get; init; }
         public ColorF HoverBackground { get; init; }
         public ColorF PressedBackground { get; init; }
+        // WinUI ButtonBackgroundDisabled / ButtonForeground{PointerOver,Pressed,Disabled} / ButtonBorderBrush{Pressed,Disabled}.
+        // Hover/Pressed/Disabled foreground + Disabled fill + per-state border carry the WinUI-correct values; the engine
+        // wires box Fill/HoverFill/PressedFill and the static foreground/border directly (no text-color or disabled state
+        // machine on a leaf BoxEl/TextEl), so these document parity for theming/overrides and future disabled wiring.
+        public ColorF DisabledBackground { get; init; }
+        public ColorF HoverForeground { get; init; }
+        public ColorF PressedForeground { get; init; }
+        public ColorF DisabledForeground { get; init; }
+        public GradientSpec? HoverBorderBrush { get; init; }
+        public GradientSpec? PressedBorderBrush { get; init; }
+        public GradientSpec? DisabledBorderBrush { get; init; }
         public float BorderWidth { get; init; } = 1f;
         public float CornerRadius { get; init; } = Radii.Control;    // ControlCornerRadius = 4
         public Edges4 Padding { get; init; } = new(11, 5, 11, 6);    // ButtonPadding
@@ -42,6 +54,13 @@ public static partial class Button
         BorderBrush = Tok.AccentControlElevationBorder,
         HoverBackground = Tok.AccentSecondary,
         PressedBackground = Tok.AccentTertiary,
+        DisabledBackground = Tok.AccentDisabled,            // AccentButtonBackgroundDisabled
+        HoverForeground = Tok.TextOnAccentPrimary,
+        PressedForeground = Tok.TextOnAccentSecondary,      // AccentButtonForegroundPressed
+        DisabledForeground = Tok.TextOnAccentDisabled,      // AccentButtonForegroundDisabled
+        HoverBorderBrush = Tok.AccentControlElevationBorder,
+        PressedBorderBrush = null,                          // AccentButtonBorderBrushPressed = ControlFillColorTransparent
+        DisabledBorderBrush = null,                         // AccentButtonBorderBrushDisabled = ControlFillColorTransparent
     };
 
     public static Style StandardStyle => StandardStyleOverride ?? new Style
@@ -51,6 +70,13 @@ public static partial class Button
         BorderBrush = Tok.ControlElevationBorder,
         HoverBackground = Tok.FillControlSecondary,
         PressedBackground = Tok.FillControlTertiary,
+        DisabledBackground = Tok.FillControlDisabled,                       // ButtonBackgroundDisabled
+        HoverForeground = Tok.TextPrimary,
+        PressedForeground = Tok.TextSecondary,                              // ButtonForegroundPressed
+        DisabledForeground = Tok.TextDisabled,                             // ButtonForegroundDisabled
+        HoverBorderBrush = Tok.ControlElevationBorder,
+        PressedBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault),  // ButtonBorderBrushPressed
+        DisabledBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault), // ButtonBorderBrushDisabled
     };
 
     /// <summary>An accent (primary) button. Override the look by passing a <see cref="Style"/>.</summary>

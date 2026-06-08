@@ -1,24 +1,55 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI <c>GridView</c>: a uniform grid of card tiles laid out as a column of horizontal rows.
-/// This is a manual (non-virtualized) grid — items are chunked into rows of <paramref name="columns"/> tiles each.
-/// Each tile is a square card with a centered label, card fill/stroke, and a hover state, exposed as a button to a11y.</summary>
-public static class GridView
+/// <summary>A WinUI <c>GridView</c>: a uniform grid of selectable tiles laid out as a column of horizontal rows.
+/// This is a manual (non-virtualized) grid — items are chunked into rows of <c>columns</c> tiles each.
+/// At rest each tile is TRANSPARENT with no border (WinUI tiles have no resting card chrome); hover paints
+/// <see cref="Tok.FillSubtleSecondary"/>. The selected tile gets a neutral <see cref="Tok.FillSubtleTertiary"/>
+/// fill plus a 2px <see cref="Tok.AccentDefault"/> border ring. Single-selection, controlled by an internal index.</summary>
+public sealed class GridView : Component
 {
-    public static BoxEl Create(IReadOnlyList<string> items, int columns = 4, float tileSize = 96f)
+    public IReadOnlyList<string> Items = [];
+    public int Columns = 4;
+    public float TileSize = 96f;
+
+    public static Element Create(IReadOnlyList<string> items, int columns = 4, float tileSize = 96f)
+        => Embed.Comp(() => new GridView { Items = items, Columns = columns, TileSize = tileSize });
+
+    public override Element Render()
     {
-        if (columns < 1) columns = 1;
+        var (sel, setSel) = UseState(0);
+
+        int columns = Columns < 1 ? 1 : Columns;
 
         var rows = new List<Element>();
-        for (int start = 0; start < items.Count; start += columns)
+        for (int start = 0; start < Items.Count; start += columns)
         {
-            int end = System.Math.Min(start + columns, items.Count);
+            int end = System.Math.Min(start + columns, Items.Count);
             var tiles = new List<Element>(end - start);
-            for (int i = start; i < end; i++)
-                tiles.Add(Tile(items[i], tileSize));
+            for (int j = start; j < end; j++)
+            {
+                int i = j; // capture per-tile index across the row loop
+                bool selected = i == sel;
+                tiles.Add(new BoxEl
+                {
+                    Width = TileSize,
+                    Height = TileSize,
+                    Corners = Radii.ControlAll,
+                    Fill = selected ? Tok.FillSubtleTertiary : ColorF.Transparent,
+                    BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent,
+                    BorderWidth = selected ? 2f : 0f,
+                    HoverFill = Tok.FillSubtleSecondary,
+                    AlignItems = FlexAlign.Center,
+                    Justify = FlexJustify.Center,
+                    Role = AutomationRole.Button,
+                    OnClick = () => setSel(i),
+                    Children = [new TextEl(Items[i]) { Size = 13f, Color = Tok.TextPrimary }],
+                });
+            }
 
             rows.Add(new BoxEl
             {
@@ -35,19 +66,4 @@ public static class GridView
             Children = rows.ToArray(),
         };
     }
-
-    private static BoxEl Tile(string label, float tileSize) => new()
-    {
-        Width = tileSize,
-        Height = tileSize,
-        Corners = Radii.OverlayAll,
-        Fill = Tok.FillCardDefault,
-        BorderColor = Tok.StrokeCardDefault,
-        BorderWidth = 1f,
-        HoverFill = Tok.FillCardSecondary,
-        AlignItems = FlexAlign.Center,
-        Justify = FlexJustify.Center,
-        Role = AutomationRole.Button,
-        Children = [new TextEl(label) { Size = 13f, Color = Tok.TextPrimary }],
-    };
 }

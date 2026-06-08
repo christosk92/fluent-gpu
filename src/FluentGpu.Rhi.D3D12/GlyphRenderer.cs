@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using FluentGpu.Foundation;
+using FluentGpu.Text;
+using FluentGpu.Text.DirectWrite;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -24,8 +26,10 @@ internal struct GlyphInstance
 
 internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, BearingY, Advance; }
 internal struct FaceMetrics { public ushort Em; public short Asc, Desc; }
-/// <summary>Glyph-atlas cache key: family + size + dpi-scale + weight + codepoint (value type → no alloc).</summary>
-internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold, int Ch);
+/// <summary>Glyph-atlas cache key. <paramref name="Fam"/> is a family id (codepoint path) OR a face id (glyph-id path);
+/// <paramref name="Ch"/> is a codepoint OR a glyph id. <paramref name="ByGid"/> keeps those two key spaces disjoint so a
+/// codepoint entry and a glyph-id entry can never alias (the bug that smeared shaped + per-char glyphs together). Value type → no alloc.</summary>
+internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold, int Ch, bool ByGid);
 
 /// <summary>One baked glyph quad in LOCAL (DIP) space — color/transform/opacity are applied per-frame at replay, NOT baked
 /// here, so the same shaped run is reusable across scroll/theme/fade. The atlas UVs are stable (the shelf packer never
@@ -68,6 +72,9 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private int _shelfX = 1, _shelfY = 1, _shelfH;
 
     private readonly Dictionary<GlyphKey, GlyphEntry> _cache = new();
+    // Itemize→shape→wrap layout (shared logic with the measure path, so render and measure layout identically).
+    private TextLayoutEngine _engine = null!;
+    private readonly Dictionary<nint, int> _faceIds = new();   // IDWriteFontFace* → small int for the glyph-cache key
 
     // Shaped-run cache: unchanged text runs replay their baked local-space quads instead of re-shaping every frame
     // (kills the per-glyph GetGlyph/Dictionary.TryGetValue/DirectWrite storm). Keyed on interned StringId handles, so a
@@ -119,7 +126,7 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float a = gAtlas.Sample(gSamp, i.uv).r;
+    float a = gAtlas.Sample(gSamp, i.uv).r;   // grayscale coverage, used directly (no gamma boost — that thickened all text)
     float aOut = i.color.a * a * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
 }
@@ -140,6 +147,7 @@ float4 PSMain(VSOut i) : SV_Target
     public void Init(ID3D12Device* device)
     {
         InitDWrite();
+        _engine = new TextLayoutEngine();
         InitAtlasTexture(device);
         InitPipeline(device);
     }
@@ -235,7 +243,7 @@ float4 PSMain(VSOut i) : SV_Target
     {
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        var key = new GlyphKey(famId, sizeQ, scaleQ, bold, ch);
+        var key = new GlyphKey(famId, sizeQ, scaleQ, bold, ch, ByGid: false);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         uint cp = ch;
@@ -351,63 +359,68 @@ float4 PSMain(VSOut i) : SV_Target
         }
     }
 
-    /// <summary>The actual LTR shaping (wrap/trim/ellipsize) into LOCAL-space quads — the miss path only. Rasterizes any
-    /// missing glyphs into the atlas via <see cref="GetGlyph"/>. No color/transform: those are applied later in <see cref="Replay"/>.</summary>
+    /// <summary>Shape + lay out a run via the DirectWrite layout engine (itemize → shape → wrap/trim → position, with
+    /// kerning/ligatures/complex-script/BiDi), then rasterize each POST-shaping glyph (by glyph id) into the atlas and
+    /// bake its local-space quad. The engine drives BOTH this render path and the measure path, so they layout identically.</summary>
     private void ShapeInto(string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, float dpiScale, List<ShapedGlyph> outList)
     {
-        var face = ResolveFace(family, bold, out ushort em, out short asc, out short desc);
-        if (face == null) return;
-        int famId = FamilyId(family);
-        float scale = size / em;
-        float lineHeight = (asc + desc) * scale;
-        if (lineHeight <= 0f) lineHeight = size * 1.3f;
+        _engine.Layout(text.AsSpan(), family ?? "", bold, size, maxWidth, wrap, trim, maxLines);
         float inv = 1f / dpiScale;
-        bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
-        bool doTrim = trim != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
-        int maxL = maxLines > 0 ? maxLines : int.MaxValue;
-        float baseline = topY + asc * scale;
-        int i = 0, n = text.Length, line = 0;
-
-        if (!doWrap && !doTrim && maxLines <= 0)   // fast path: the original single-line layout
+        foreach (var lg in _engine.Glyphs)
         {
-            float p = originX;
-            for (int k = 0; k < n; k++) p = Emit(face, em, famId, text[k], size, bold, dpiScale, p, baseline, inv, outList);
-            return;
+            if (lg.Face == 0) continue;
+            var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, size, dpiScale);
+            if (ge.W > 0 && ge.H > 0)
+                outList.Add(new ShapedGlyph
+                {
+                    DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
+                    DstW = ge.W * inv, DstH = ge.H * inv,
+                    U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
+                });
         }
+    }
 
-        float ellipsisW = doTrim ? GetGlyph(face, em, famId, '…', size, bold, dpiScale).Advance : 0f;
-        while (i < n && line < maxL)
+    private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
+
+    // Rasterize one POST-shaping glyph (by glyph id, not codepoint) at the physical size into the atlas. The face comes
+    // from the layout engine; DWrite factories are process-shared, so _dw and the engine's factory are the same object.
+    private GlyphEntry GetGlyphByGid(IDWriteFontFace* face, ushort gid, float size, float dpiScale)
+    {
+        int faceId = FaceId((nint)face);
+        int sizeQ = (int)MathF.Round(size);
+        int scaleQ = (int)MathF.Round(dpiScale * 100f);
+        var key = new GlyphKey(faceId, sizeQ, scaleQ, false, gid, ByGid: true);
+        if (_cache.TryGetValue(key, out var e)) return e;
+
+        float physEm = size * dpiScale;
+        float zeroAdvance = 0f;
+        ushort gi = gid;
+        DWRITE_GLYPH_RUN run = default;
+        run.fontFace = face; run.fontEmSize = physEm; run.glyphCount = 1;
+        run.glyphIndices = &gi; run.glyphAdvances = &zeroAdvance; run.glyphOffsets = null;
+        run.isSideways = BOOL.FALSE; run.bidiLevel = 0;
+
+        IDWriteGlyphRunAnalysis* analysis;
+        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL,
+            DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
+        RECT bounds;
+        Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds), "GetAlphaTextureBounds");
+        int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
+        e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
+        if (w > 0 && h > 0)
         {
-            bool lastLine = line == maxL - 1;
-            int lineStart = i, end;
-            bool ellipsize = false;
-
-            if (!doWrap)
-            {
-                end = n; for (int k = i; k < n; k++) if (text[k] == '\n') { end = k; break; }
-                if (doTrim && MeasureRange(face, em, famId, text, lineStart, end, size, bold, dpiScale) > maxWidth)
-                { end = FitEllipsis(face, em, famId, text, lineStart, end, size, bold, dpiScale, maxWidth, ellipsisW); ellipsize = true; }
-            }
-            else
-            {
-                end = WrapEnd(face, em, famId, text, lineStart, n, size, bold, dpiScale, maxWidth, wrap);
-                if (lastLine && SkipSpaces(text, end) < n && doTrim)
-                { end = FitEllipsis(face, em, famId, text, lineStart, end, size, bold, dpiScale, maxWidth, ellipsisW); ellipsize = true; }
-            }
-
-            float pen = originX;
-            for (int k = lineStart; k < end; k++)
-                pen = Emit(face, em, famId, text[k], size, bold, dpiScale, pen, baseline, inv, outList);
-            if (ellipsize)
-                Emit(face, em, famId, '…', size, bold, dpiScale, pen, baseline, inv, outList);
-
-            i = end;
-            if (i < n && text[i] == '\n') i++;
-            else if (doWrap) i = SkipSpaces(text, i);
-            baseline += lineHeight;
-            line++;
-            if (ellipsize) break;
+            byte[] rgb = new byte[w * h * 3];
+            fixed (byte* pr = rgb)
+                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
+            byte[] gray = new byte[w * h];
+            for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
+            Pack(ref e, gray, w, h);
+            _atlasDirty = true;
         }
+        Diag.Count("text.glyph", "rasterized");
+        analysis->Release();
+        _cache[key] = e;
+        return e;
     }
 
     private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale, float pen, float baseline, float inv, List<ShapedGlyph> outList)
@@ -449,42 +462,31 @@ float4 PSMain(VSOut i) : SV_Target
     }
 #endif
 
-    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale)
+    // The wrap/fit/measure math is shared with the layout MEASURE path (FluentGpu.Text.LineBreaker) so render and measure
+    // break lines identically — the advance source is the same DirectWrite design advance via GetGlyph.
+    private readonly struct GlyphAdvanceSource : IAdvanceSource
     {
-        float p = 0f; for (int k = s; k < e; k++) p += GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; return p;
+        private readonly GlyphRenderer _r;
+        private readonly nint _face;
+        private readonly ushort _em; private readonly int _famId; private readonly float _size; private readonly bool _bold; private readonly float _dpi;
+        public GlyphAdvanceSource(GlyphRenderer r, IDWriteFontFace* face, ushort em, int famId, float size, bool bold, float dpi)
+        { _r = r; _face = (nint)face; _em = em; _famId = famId; _size = size; _bold = bold; _dpi = dpi; }
+        public float Advance(char ch) => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, ch, _size, _bold, _dpi).Advance;
+        public float EllipsisAdvance => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, '…', _size, _bold, _dpi).Advance;
     }
 
+    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale)
+        => LineBreaker.MeasureRange(text.AsSpan(), s, e, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+
     private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale, float maxWidth, float ellipsisW)
-    {
-        float p = 0f; int k = s;
-        while (k < e) { float a = GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; if (p + a + ellipsisW > maxWidth && k > s) break; p += a; k++; }
-        return k;
-    }
+        => LineBreaker.FitEllipsis(text.AsSpan(), s, e, maxWidth, ellipsisW, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
 
     private static int SkipSpaces(string text, int i) { while (i < text.Length && text[i] == ' ') i++; return i; }
 
-    /// <summary>Greedy line break: the exclusive end index of the line starting at <paramref name="start"/> that fits within
-    /// <paramref name="maxWidth"/> (breaking at word boundaries; inside an over-long word only when wrap == Wrap).</summary>
+    /// <summary>Greedy line break (shared with the measure path): the exclusive end index of the line starting at
+    /// <paramref name="start"/> that fits within <paramref name="maxWidth"/>.</summary>
     private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, bool bold, float dpiScale, float maxWidth, int wrap)
-    {
-        float pen = 0f; int i = start;
-        while (i < n)
-        {
-            if (text[i] == '\n') return i;
-            int ws = i; float wordW = 0f;
-            while (i < n && text[i] != ' ' && text[i] != '\n') { wordW += GetGlyph(face, em, famId, text[i], size, bold, dpiScale).Advance; i++; }
-            if (pen > 0f && pen + wordW > maxWidth) return ws;        // break before this word
-            if (wordW > maxWidth && pen == 0f && wrap == 1)           // a single word longer than the line → break inside (Wrap only)
-            {
-                float p2 = 0f;
-                for (int k = ws; k < i; k++) { float a = GetGlyph(face, em, famId, text[k], size, bold, dpiScale).Advance; if (p2 + a > maxWidth && k > ws) return k; p2 += a; }
-                return i;
-            }
-            pen += wordW;
-            while (i < n && text[i] == ' ') { pen += GetGlyph(face, em, famId, text[i], size, bold, dpiScale).Advance; i++; }
-        }
-        return n;
-    }
+        => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
 
     // ── GPU resources ─────────────────────────────────────────────────────────
     private void InitAtlasTexture(ID3D12Device* device)
@@ -685,6 +687,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
+        _engine?.Dispose();
         if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Glyph.InstanceUpload"); _instances->Release(); _instances = null; }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();

@@ -14,6 +14,7 @@
     <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
     <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text.DirectWrite\FluentGpu.Text.DirectWrite.csproj" />
     <ProjectReference Include="..\FluentGpu.Hosting\FluentGpu.Hosting.csproj" />
     <ProjectReference Include="..\FluentGpu.Media\FluentGpu.Media.csproj" />
     <ProjectReference Include="..\FluentGpu.Media.Codecs.Wic\FluentGpu.Media.Codecs.Wic.csproj" />

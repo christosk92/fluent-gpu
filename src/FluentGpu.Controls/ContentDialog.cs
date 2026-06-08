@@ -32,12 +32,28 @@ public sealed class ContentDialog : Component
 
         if (open)
         {
+            // Footer: equal full-width columns. Each button stretches (Grow=1) so the two share the row evenly with an
+            // 8px gap — never right-aligned auto-width. Both default to the standard style; only the designated default
+            // action (PrimaryText) is accent. A 1px separator above + a slightly distinct row bg set the footer apart.
+            var buttonRow = new BoxEl
+            {
+                Direction = 0,
+                Gap = 8f,
+                AlignItems = FlexAlign.Stretch,
+                Children =
+                [
+                    Button.Accent(PrimaryText, () => setOpen(false)) with { Grow = 1f, Justify = FlexJustify.Center },
+                    Button.Standard("Cancel", () => setOpen(false)) with { Grow = 1f, Justify = FlexJustify.Center },
+                ],
+            };
+
             var card = new BoxEl
             {
                 Direction = 1,
-                Width = 360f,
-                Padding = Edges4.All(20f),
-                Gap = 12f,
+                MinWidth = 320f,
+                MaxWidth = 548f,
+                MinHeight = 184f,   // ContentDialogMinHeight
+                MaxHeight = 756f,   // ContentDialogMaxHeight
                 Corners = Radii.OverlayAll,
                 Fill = Tok.FillSolidBase,
                 BorderColor = Tok.StrokeCardDefault,
@@ -45,18 +61,27 @@ public sealed class ContentDialog : Component
                 Shadow = Elevation.Flyout,
                 Children =
                 [
-                    new TextEl(Title) { Size = 20f, Bold = true, Color = Tok.TextPrimary },
-                    new TextEl(Message) { Size = 14f, Color = Tok.TextPrimary },
+                    // Content region (24px padding).
                     new BoxEl
                     {
-                        Direction = 0,
-                        Gap = 8f,
-                        Justify = FlexJustify.End,
+                        Direction = 1,
+                        Padding = Edges4.All(24f),
+                        Gap = 12f,
                         Children =
                         [
-                            Button.Accent(PrimaryText, () => setOpen(false)),
-                            Button.Standard("Cancel", () => setOpen(false)),
+                            new TextEl(Title) { Size = 20f, Bold = true, Color = Tok.TextPrimary },
+                            new TextEl(Message) { Size = 14f, Color = Tok.TextPrimary },
                         ],
+                    },
+                    // 1px separator line above the footer (ContentDialogSeparatorBorderBrush = CardStrokeColorDefault).
+                    new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault },
+                    // CommandSpace: WinUI's command grid inherits the dialog background (TemplateBinding Background),
+                    // so no distinct footer fill. Padding 24 all sides == ContentDialogPadding + the 24px CommandSpace top gap.
+                    new BoxEl
+                    {
+                        Direction = 1,
+                        Padding = Edges4.All(24f),
+                        Children = [buttonRow],
                     },
                 ],
             };

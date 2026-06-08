@@ -22,27 +22,50 @@ public sealed class Expander : Component
     {
         var (open, setOpen) = UseState(InitiallyExpanded);
 
+        // Trailing 32x32 rounded chevron button: only this gets the subtle hover/press, not the whole header.
+        var chevron = new BoxEl
+        {
+            Width = 32f,                                          // ExpanderChevronButtonSize = 32
+            Height = 32f,
+            Margin = new Edges4(20, 0, 8, 0),                     // ExpanderChevronMargin = 20,0,8,0
+            Corners = Radii.ControlAll,                           // ControlCornerRadius = 4
+            HoverFill = Tok.FillSubtleSecondary,                  // ExpanderChevronPointerOverBackground
+            PressedFill = Tok.FillSubtleTertiary,                 // ExpanderChevronPressedBackground (was missing)
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Children =
+            [
+                // ExpanderChevronGlyphSize = 12. ExpanderChevronForeground = TextFillColorSecondary.
+                new TextEl(open ? Icons.ChevronUp : Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+            ],
+        };
+
         var header = new BoxEl
         {
             Direction = 0,
             MinHeight = 48f,
             AlignItems = FlexAlign.Center,
-            Padding = new Edges4(16, 0, 16, 0),
+            // Chevron handles the right inset via its own margin.
+            Padding = new Edges4(16, 0, 0, 0),
+            // Header background does not change on hover — stays CardBackgroundFillColorDefault at rest and hover.
             Fill = Tok.FillCardDefault,
-            HoverFill = Tok.FillCardSecondary,
+            // WinUI Expander header (ToggleButton) carries a 1px CardStrokeColorDefault border (ExpanderHeaderBorderBrush).
+            BorderWidth = 1f,
+            BorderColor = Tok.StrokeCardDefault,
             OnClick = () => setOpen(!open),
             Role = AutomationRole.Expander,
             Children =
             [
                 new TextEl(Header) { Size = 14f, Color = Tok.TextPrimary, Grow = 1 },
-                new TextEl(open ? Icons.ChevronUp : Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                chevron,
             ],
         };
 
         var content = new BoxEl
         {
+            Direction = 1,                       // vertical content area: stretch the child to full width so wrapping text reserves its true height
             Padding = Edges4.All(16),
-            Fill = Tok.FillLayerDefault,
+            Fill = Tok.FillCardSecondary,
             Children = [Content],
         };
 

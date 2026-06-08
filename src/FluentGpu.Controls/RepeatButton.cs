@@ -16,10 +16,15 @@ public static partial class RepeatButton
         public ColorF Foreground { get; init; }
         public ColorF HoverBackground { get; init; }
         public ColorF PressedBackground { get; init; }
+        public ColorF PressedForeground { get; init; }    // RepeatButtonForegroundPressed = TextSecondary
+        public ColorF DisabledBackground { get; init; }   // RepeatButtonBackgroundDisabled = FillControlDisabled
+        public ColorF DisabledForeground { get; init; }   // RepeatButtonForegroundDisabled = TextDisabled
         public GradientSpec? BorderBrush { get; init; }
-        public float BorderWidth { get; init; } = 1f;
+        public GradientSpec? PressedBorderBrush { get; init; }   // RepeatButtonBorderBrushPressed = StrokeControlDefault
+        public GradientSpec? DisabledBorderBrush { get; init; }  // RepeatButtonBorderBrushDisabled = StrokeControlDefault
+        public float BorderWidth { get; init; } = 1f;            // RepeatButtonBorderThemeThickness = 1 (NOT 2)
         public float CornerRadius { get; init; } = Radii.Control;
-        public Edges4 Padding { get; init; } = new(11, 5, 11, 6);
+        public Edges4 Padding { get; init; } = new(8, 4, 8, 5);  // ButtonPadding (merged generic.xaml)
         public float FontSize { get; init; } = 14f;
         public float MinHeight { get; init; } = 32f;
         public float PressScale { get; init; } = 0.985f;
@@ -32,7 +37,12 @@ public static partial class RepeatButton
         Foreground = Tok.TextPrimary,
         HoverBackground = Tok.FillControlSecondary,
         PressedBackground = Tok.FillControlTertiary,
+        PressedForeground = Tok.TextSecondary,
+        DisabledBackground = Tok.FillControlDisabled,
+        DisabledForeground = Tok.TextDisabled,
         BorderBrush = Tok.ControlElevationBorder,
+        PressedBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault),
+        DisabledBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault),
     };
 
     public static BoxEl Create(string label, Action onClick, Style? style = null)
