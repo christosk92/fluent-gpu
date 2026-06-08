@@ -78,6 +78,7 @@ sealed class GalleryApp : Component
             [
                 new("Expander", Icons.ChevronDown, "Expander"),
                 new("SplitView", Icons.Grid, "SplitView"),
+                new("Viewbox", Icons.Picture, "Viewbox"),
             ],
         },
         new("scrolling-controls", Icons.More, "Scrolling")
@@ -94,6 +95,7 @@ sealed class GalleryApp : Component
                 new("BreadcrumbBar", Icons.List, "BreadcrumbBar"),
                 new("SelectorBar", Icons.List, "SelectorBar"),
                 new("TabView", Icons.Document, "TabView"),
+                new("Pivot", Icons.Document, "Pivot"),
             ],
         },
         new("dialogs", Icons.More, "Dialogs & flyouts")
@@ -101,6 +103,14 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("Flyout", Icons.More, "Flyout"),
+                new("ContentDialog", Icons.Document, "ContentDialog"),
+            ],
+        },
+        new("text-cat", Icons.Font, "Text")
+        {
+            Children =
+            [
+                new("NumberBox", Icons.Volume, "NumberBox"),
             ],
         },
         new("media", Icons.Picture, "Media")
@@ -126,6 +136,8 @@ sealed class GalleryApp : Component
             [
                 new("MenuBar", Icons.More, "MenuBar"),
                 new("AppBarButton", Icons.Accept, "AppBarButton"),
+                new("AppBarToggleButton", Icons.Accept, "AppBarToggleButton"),
+                new("CommandBar", Icons.More, "CommandBar"),
             ],
         },
         new("h-samples", "", "Samples", IsHeader: true),
@@ -261,6 +273,13 @@ sealed class GalleryApp : Component
         "menus" => Embed.Comp(() => new MenusOverviewPage()),
         "MenuBar" => Embed.Comp(() => new MenuBarPage()),
         "AppBarButton" => Embed.Comp(() => new AppBarButtonPage()),
+        "AppBarToggleButton" => Embed.Comp(() => new AppBarToggleButtonPage()),
+        "CommandBar" => Embed.Comp(() => new CommandBarPage()),
+        "Pivot" => Embed.Comp(() => new PivotPage()),
+        "ContentDialog" => Embed.Comp(() => new ContentDialogPage()),
+        "Viewbox" => Embed.Comp(() => new ViewboxPage()),
+        "text-cat" => Embed.Comp(() => new TextOverviewPage()),
+        "NumberBox" => Embed.Comp(() => new NumberBoxPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
