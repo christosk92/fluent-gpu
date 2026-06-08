@@ -110,6 +110,12 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
+        // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
+        //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
+        //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
+        if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
+            dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
+
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor.
         bool pushedClip = false;
         RectF childClip = clip;
@@ -119,10 +125,6 @@ public static class SceneRecorder
             dl.PushClip(childClip, key);
             pushedClip = true;
         }
-
-        // ── shadow: drawn beneath the fill (even for a transparent container), if a shadow row exists ──
-        if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
-            dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
 
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         bool isAcrylic = scene.TryGetAcrylic(node, out var ac) && deviceBounds.Overlaps(clip);

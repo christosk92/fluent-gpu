@@ -2429,22 +2429,16 @@ static class Slice
         NodeHandle SurfaceOf(NodeHandle n) { for (; !n.IsNull; n = host.Scene.Parent(n)) if (host.Scene.TryGetAcrylic(n, out _)) return n; return NodeHandle.Null; }
 
         svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
-        host.RunFrame();   // mount + seed the WinUI menu transition (opposing translate + border scale) + fade
+        host.RunFrame();   // mount + seed the SizeH clip-reveal + fade (seed runs in a layout effect)
+        host.RunFrame();   // tick the animation once → the first PresentedH lands
         var surface = SurfaceOf(FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
-        var clip = surface.IsNull ? NodeHandle.Null : host.Scene.FirstChild(surface);
-        var border = clip.IsNull ? NodeHandle.Null : host.Scene.NextSibling(clip);
-        var content = clip.IsNull ? NodeHandle.Null : host.Scene.FirstChild(clip);
-        float clipDy1 = clip.IsNull ? 0f : host.Scene.Paint(clip).LocalTransform.Dy;
-        float contentDy1 = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
-        float borderSy1 = border.IsNull ? 0f : host.Scene.Paint(border).LocalTransform.M22;
-        bool unfolding = !surface.IsNull && !clip.IsNull && !content.IsNull && !border.IsNull
-                         && clipDy1 > 1f && contentDy1 < -1f && borderSy1 > 0.45f && borderSy1 < 0.98f;
+        float fullH = surface.IsNull ? 0f : host.Scene.Bounds(surface).H;
+        float ph1 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;   // mid-reveal (top-anchored), < full
+        bool revealing = !surface.IsNull && !float.IsNaN(ph1) && ph1 > 1f && ph1 < fullH - 2f;
 
-        for (int i = 0; i < 20; i++) host.RunFrame();             // open settles
-        float clipDy2 = clip.IsNull ? 0f : host.Scene.Paint(clip).LocalTransform.Dy;
-        float contentDy2 = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
-        float borderSy2 = border.IsNull ? 0f : host.Scene.Paint(border).LocalTransform.M22;
-        bool unfolded = MathF.Abs(clipDy2) < 0.5f && MathF.Abs(contentDy2) < 0.5f && Near(borderSy2, 1f, 0.02f);
+        for (int i = 0; i < 24; i++) host.RunFrame();             // open settles
+        float ph2 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;
+        bool revealed = float.IsNaN(ph2) || ph2 >= fullH - 1.5f;
 
         // Close → the surface fades (opacity animates down) while staying on top (not removed instantly).
         svc.CloseTop();
@@ -2452,8 +2446,8 @@ static class Slice
         float op = host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
         bool fading = host.Scene.IsLive(surface) && op < 0.99f;
 
-        Check("64d. flyout: open uses WinUI opposing translate + border scale, then close fades", unfolding && unfolded && fading,
-            $"clipDy {clipDy1:0.0}→{clipDy2:0.0} contentDy {contentDy1:0.0}→{contentDy2:0.0} borderSy {borderSy1:0.00}→{borderSy2:0.00} closeOpacity={op:0.00}");
+        Check("64d. flyout: open clip-reveals (SizeH top-anchored) then close fades", revealing && revealed && fading,
+            $"reveal {ph1:0}/{fullH:0}→{ph2:0} closeOpacity={op:0.00}");
     }
 
     static void MenuFlyoutStyleChecks(StringTable strings)

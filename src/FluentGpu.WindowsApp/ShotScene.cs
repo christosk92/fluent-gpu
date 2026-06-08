@@ -2,6 +2,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scene;
 
 namespace FluentGpu;
 
@@ -22,6 +23,8 @@ sealed class ShotScene : Component
         // Full-bleed: the whole gallery (regression check), optionally deep-linked to a nav page via "gallery:<navkey>".
         "gallery" => Embed.Comp(() => new GalleryApp()),
         _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery:".Length) }),
+        // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
+        "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         _ => new BoxEl
         {
             Grow = 1,
@@ -67,6 +70,55 @@ sealed class ShotScene : Component
             Shadow = Elevation.Flyout,
             Padding = new Edges4(0, 2, 0, 2),
             Children = [MenuFlyout.Build(items, () => { })],
+        };
+    }
+}
+
+/// <summary>A real DropDownButton that auto-opens its MenuFlyout through OverlayHost on mount — so a screenshot captures
+/// the ACTUAL flyout path (overlay + acrylic + open animation), reproducing the live dropdown the user complained about.</summary>
+sealed class FlyoutLiveShot : Component
+{
+    public override Element Render()
+    {
+        var svc = UseContext(Overlay.Service);
+        var anchor = UseRef<NodeHandle>(default);
+        var opened = UseRef<bool>(false);
+        long tick = UseContext(FrameClock.Tick);   // re-run the open effect each frame until the anchor is realized
+
+        UseLayoutEffect(() =>
+        {
+            if (opened.Value || anchor.Value.IsNull) return;
+            opened.Value = true;
+            var items = new[]
+            {
+                new MenuFlyoutItem("Send", Icons.Document),
+                new MenuFlyoutItem("Reply", Icons.Accept),
+                new MenuFlyoutItem("Reply All", Icons.More),
+                MenuFlyoutItem.Separator,
+                new MenuFlyoutItem("Delete", Icons.Cancel, false),
+            };
+            svc.Open(() => anchor.Value, () => MenuFlyout.Build(items, () => { }), FlyoutPlacement.BottomLeft);
+        }, tick);
+
+        return new BoxEl
+        {
+            Direction = 1,
+            Padding = new Edges4(48, 48, 48, 48),
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, AlignSelf = FlexAlign.Start, AlignItems = FlexAlign.Center, Gap = 8f,
+                    MinHeight = 32f, Padding = new Edges4(11, 5, 11, 6), Corners = Radii.ControlAll,
+                    BorderWidth = 1f, BorderBrush = Tok.ControlElevationBorder, Fill = Tok.FillControlDefault,
+                    OnRealized = h => anchor.Value = h,
+                    Children =
+                    [
+                        new TextEl("Email") { Size = 14f, Color = Tok.TextPrimary },
+                        new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                    ],
+                },
+            ],
         };
     }
 }

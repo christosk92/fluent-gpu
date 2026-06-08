@@ -58,8 +58,11 @@ public static class FluentApp
             host.RunFrame();
             n++;
             if (frames > 0 && n >= frames) break;
-            // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
-            window.WaitForWork(host.HasActiveWork ? 0 : -1);
+            if (screenshot != null)
+                window.WaitForWork(8);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
+            else
+                // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
+                window.WaitForWork(host.HasActiveWork ? 0 : -1);
         }
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.

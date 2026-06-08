@@ -52,10 +52,7 @@ internal sealed class OverlayEntry
     public FlyoutPlacement Placement;
     public required OverlayHandle Handle;
     public NodeHandle WrapperNode;    // measured + translated for placement
-    public NodeHandle SurfaceNode;    // presenter surface: backdrop + close opacity
-    public NodeHandle ClipNode;       // WinUI transition clip target
-    public NodeHandle ContentNode;    // WinUI transition content translate target
-    public NodeHandle BorderNode;     // MenuFlyoutPresenterBorder, scaled independently
+    public NodeHandle SurfaceNode;    // presenter surface: the SizeH clip-reveal + opacity animate this node
     public float MeasuredH;
     public bool OpensUp;
     public bool OpenSeeded;
@@ -123,8 +120,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
 /// <summary>
 /// Wraps the app root and hosts anchored flyouts in a top-level ZStack.
 /// The base <see cref="Child"/> is always the first ZStack child (so opening/closing an overlay never remounts it).
-/// Open mirrors WinUI MenuPopupThemeTransition: opposing clip/content TranslateY, presenter-border ScaleY, and an
-/// overlay fade (250ms cubic-bezier(0,0,0,1); 83ms linear opacity). Close is an 83ms linear fade kept at top z.
+/// Open mirrors WinUI MenuPopupThemeTransition: a top-anchored SizeH clip-reveal of the presenter (content full size,
+/// revealed from the anchor edge) + a fade (250ms cubic-bezier(0,0,0,1); 83ms linear opacity). Close is an 83ms fade.
 /// </summary>
 public sealed class OverlayHost : Component
 {
@@ -172,28 +169,16 @@ public sealed class OverlayHost : Component
                 {
                     e.OpenSeeded = true;
                     float fullH = e.MeasuredH;
-                    float initialTranslateY = fullH * ClosedRatio * (e.OpensUp ? 1f : -1f);
-
+                    // WinUI MenuPopupThemeTransition: the presenter clips open from the anchor edge — content stays full size
+                    // and is revealed top-down — plus a quick fade. A single top-anchored SizeH reveal on the surface drives
+                    // the acrylic + border + clipped content + shadow together; no per-node translate/scale to desync or glitch.
+                    anim.Animate(e.SurfaceNode, AnimChannel.SizeH, fullH * ClosedRatio, fullH, OpenMs, Easing.FluentPopOpen);
                     anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OpacityMs, Easing.Linear);
-                    if (!e.ClipNode.IsNull)
-                        anim.Animate(e.ClipNode, AnimChannel.TranslateY, -initialTranslateY, 0f, OpenMs, Easing.FluentPopOpen);
-                    if (!e.ContentNode.IsNull)
-                        anim.Animate(e.ContentNode, AnimChannel.TranslateY, initialTranslateY, 0f, OpenMs, Easing.FluentPopOpen);
-                    if (!e.BorderNode.IsNull)
-                    {
-                        ref NodePaint bp = ref scene.Paint(e.BorderNode);
-                        bp.OriginY = e.OpensUp ? 0f : 1f; // WinUI: Direction_Top sets CenterY=OpenedLength.
-                        scene.Mark(e.BorderNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-                        anim.Animate(e.BorderNode, AnimChannel.ScaleY, 1f - ClosedRatio, 1f, OpenMs, Easing.FluentPopOpen);
-                    }
                 }
                 if (e.Closing && !e.CloseSeeded)
                 {
                     e.CloseSeeded = true;
-                    // If close interrupts open, WinUI keeps the interrupted clip transform fixed and only fades out.
-                    if (!e.ClipNode.IsNull) anim.Cancel(e.ClipNode, AnimChannel.TranslateY);
-                    if (!e.ContentNode.IsNull) anim.Cancel(e.ContentNode, AnimChannel.TranslateY);
-                    if (!e.BorderNode.IsNull) anim.Cancel(e.BorderNode, AnimChannel.ScaleY);
+                    anim.Cancel(e.SurfaceNode, AnimChannel.SizeH);   // freeze the reveal; close is a pure 83ms fade (WinUI)
                     anim.Animate(e.SurfaceNode, AnimChannel.Opacity, scene.Paint(e.SurfaceNode).Opacity, 0f, OpacityMs, Easing.Linear);
                 }
             }
@@ -235,9 +220,6 @@ public sealed class OverlayHost : Component
                     {
                         Body = e.Content(),
                         OnSurface = h => e.SurfaceNode = h,
-                        OnClip = h => e.ClipNode = h,
-                        OnContent = h => e.ContentNode = h,
-                        OnBorder = h => e.BorderNode = h,
                     }),
                 ],
             },
@@ -245,56 +227,28 @@ public sealed class OverlayHost : Component
     };
 }
 
-/// <summary>WinUI MenuFlyoutPresenter surface: transparent presenter over a backdrop, with a separate animated border.</summary>
+/// <summary>WinUI MenuFlyoutPresenter surface: a transparent presenter over a frosted acrylic backdrop, a 1px flyout
+/// stroke, a soft elevation shadow, and rounded corners. The OverlayHost drives the open clip-reveal (SizeH) + fade on
+/// this single node; ClipToBounds clips the content to both the rounded corners and the revealing height.</summary>
 internal sealed class FlyoutSurface : Component
 {
     public Element Body = new BoxEl();
     public Action<NodeHandle>? OnSurface;
-    public Action<NodeHandle>? OnClip;
-    public Action<NodeHandle>? OnContent;
-    public Action<NodeHandle>? OnBorder;
 
     public override Element Render() => new BoxEl
     {
         Direction = 1,
-        ZStack = true,
         AlignSelf = FlexAlign.Start,
         Fill = ColorF.Transparent,
         Acrylic = AcrylicSpec.Flyout,
+        BorderColor = Tok.StrokeFlyoutDefault,
+        BorderWidth = 1f,
         Corners = Radii.OverlayAll,
         Shadow = Elevation.Flyout,
         ClipToBounds = true,
+        Padding = new Edges4(0, 2, 0, 2),   // MenuFlyoutPresenterThemePadding
         OnRealized = h => OnSurface?.Invoke(h),
-        Children =
-        [
-            new BoxEl
-            {
-                Direction = 1,
-                Grow = 1,
-                ClipToBounds = true,
-                Padding = new Edges4(0, 2, 0, 2), // MenuFlyoutPresenterThemePadding
-                OnRealized = h => OnClip?.Invoke(h),
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Direction = 1,
-                        OnRealized = h => OnContent?.Invoke(h),
-                        Children = [Body],
-                    },
-                ],
-            },
-            new BoxEl
-            {
-                Grow = 1,
-                Fill = ColorF.Transparent,
-                BorderColor = Tok.StrokeFlyoutDefault,
-                BorderWidth = 1f,
-                Corners = Radii.OverlayAll,
-                HitTestVisible = false,
-                OnRealized = h => OnBorder?.Invoke(h),
-            },
-        ],
+        Children = [Body],
     };
 }
 
