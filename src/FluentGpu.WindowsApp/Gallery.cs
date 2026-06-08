@@ -79,6 +79,7 @@ sealed class GalleryApp : Component
                 new("Expander", Icons.ChevronDown, "Expander"),
                 new("SplitView", Icons.Grid, "SplitView"),
                 new("Viewbox", Icons.Picture, "Viewbox"),
+                new("Border", Icons.Grid, "Border"),
             ],
         },
         new("scrolling-controls", Icons.More, "Scrolling")
@@ -104,12 +105,15 @@ sealed class GalleryApp : Component
             [
                 new("Flyout", Icons.More, "Flyout"),
                 new("ContentDialog", Icons.Document, "ContentDialog"),
+                new("TeachingTip", Icons.Star, "TeachingTip"),
+                new("Popup", Icons.More, "Popup"),
             ],
         },
         new("text-cat", Icons.Font, "Text")
         {
             Children =
             [
+                new("TextBlock", Icons.Font, "TextBlock"),
                 new("NumberBox", Icons.Volume, "NumberBox"),
             ],
         },
@@ -128,6 +132,7 @@ sealed class GalleryApp : Component
                 new("GridView", Icons.Grid, "GridView"),
                 new("FlipView", Icons.Picture, "FlipView"),
                 new("TreeView", Icons.List, "TreeView"),
+                new("ItemsView", Icons.Grid, "ItemsView"),
             ],
         },
         new("menus", Icons.More, "Menus & toolbars")
@@ -138,6 +143,7 @@ sealed class GalleryApp : Component
                 new("AppBarButton", Icons.Accept, "AppBarButton"),
                 new("AppBarToggleButton", Icons.Accept, "AppBarToggleButton"),
                 new("CommandBar", Icons.More, "CommandBar"),
+                new("AppBarSeparator", Icons.More, "AppBarSeparator"),
             ],
         },
         new("h-samples", "", "Samples", IsHeader: true),
@@ -280,6 +286,12 @@ sealed class GalleryApp : Component
         "Viewbox" => Embed.Comp(() => new ViewboxPage()),
         "text-cat" => Embed.Comp(() => new TextOverviewPage()),
         "NumberBox" => Embed.Comp(() => new NumberBoxPage()),
+        "TextBlock" => Embed.Comp(() => new TextBlockPage()),
+        "TeachingTip" => Embed.Comp(() => new TeachingTipPage()),
+        "Popup" => Embed.Comp(() => new PopupPage()),
+        "ItemsView" => Embed.Comp(() => new ItemsViewPage()),
+        "Border" => Embed.Comp(() => new BorderPage()),
+        "AppBarSeparator" => Embed.Comp(() => new AppBarSeparatorPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
