@@ -77,6 +77,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("Expander", Icons.ChevronDown, "Expander"),
+                new("SplitView", Icons.Grid, "SplitView"),
             ],
         },
         new("scrolling-controls", Icons.More, "Scrolling")
@@ -84,6 +85,29 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("PipsPager", Icons.More, "PipsPager"),
+            ],
+        },
+        new("navigation-cat", Icons.List, "Navigation")
+        {
+            Children =
+            [
+                new("BreadcrumbBar", Icons.List, "BreadcrumbBar"),
+                new("SelectorBar", Icons.List, "SelectorBar"),
+                new("TabView", Icons.Document, "TabView"),
+            ],
+        },
+        new("dialogs", Icons.More, "Dialogs & flyouts")
+        {
+            Children =
+            [
+                new("Flyout", Icons.More, "Flyout"),
+            ],
+        },
+        new("media", Icons.Picture, "Media")
+        {
+            Children =
+            [
+                new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
             ],
         },
         new("h-samples", "", "Samples", IsHeader: true),
@@ -202,6 +226,15 @@ sealed class GalleryApp : Component
         "Expander" => Embed.Comp(() => new ExpanderPage()),
         "scrolling-controls" => Embed.Comp(() => new ScrollingOverviewPage()),
         "PipsPager" => Embed.Comp(() => new PipsPagerPage()),
+        "SplitView" => Embed.Comp(() => new SplitViewPage()),
+        "navigation-cat" => Embed.Comp(() => new NavigationOverviewPage()),
+        "BreadcrumbBar" => Embed.Comp(() => new BreadcrumbBarPage()),
+        "SelectorBar" => Embed.Comp(() => new SelectorBarPage()),
+        "TabView" => Embed.Comp(() => new TabViewPage()),
+        "dialogs" => Embed.Comp(() => new DialogsOverviewPage()),
+        "Flyout" => Embed.Comp(() => new FlyoutPage()),
+        "media" => Embed.Comp(() => new MediaOverviewPage()),
+        "PersonPicture" => Embed.Comp(() => new PersonPicturePage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
