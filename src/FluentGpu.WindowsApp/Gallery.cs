@@ -110,6 +110,24 @@ sealed class GalleryApp : Component
                 new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
             ],
         },
+        new("collections", Icons.List, "Collections")
+        {
+            Children =
+            [
+                new("ListView", Icons.List, "ListView"),
+                new("GridView", Icons.Grid, "GridView"),
+                new("FlipView", Icons.Picture, "FlipView"),
+                new("TreeView", Icons.List, "TreeView"),
+            ],
+        },
+        new("menus", Icons.More, "Menus & toolbars")
+        {
+            Children =
+            [
+                new("MenuBar", Icons.More, "MenuBar"),
+                new("AppBarButton", Icons.Accept, "AppBarButton"),
+            ],
+        },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
@@ -235,6 +253,14 @@ sealed class GalleryApp : Component
         "Flyout" => Embed.Comp(() => new FlyoutPage()),
         "media" => Embed.Comp(() => new MediaOverviewPage()),
         "PersonPicture" => Embed.Comp(() => new PersonPicturePage()),
+        "collections" => Embed.Comp(() => new CollectionsOverviewPage()),
+        "ListView" => Embed.Comp(() => new ListViewPage()),
+        "GridView" => Embed.Comp(() => new GridViewPage()),
+        "FlipView" => Embed.Comp(() => new FlipViewPage()),
+        "TreeView" => Embed.Comp(() => new TreeViewPage()),
+        "menus" => Embed.Comp(() => new MenusOverviewPage()),
+        "MenuBar" => Embed.Comp(() => new MenuBarPage()),
+        "AppBarButton" => Embed.Comp(() => new AppBarButtonPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
