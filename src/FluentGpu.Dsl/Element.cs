@@ -34,6 +34,12 @@ public sealed record BoxEl : Element
     public ArcSpec? Arc { get; init; }             // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get; init; }   // gradient fill — supersedes Fill at record time when set
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
+    // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
+    // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
+    public GradientSpec? HoverGradient { get; init; }
+    public GradientSpec? PressedGradient { get; init; }
+    public GradientSpec? HoverBorderBrush { get; init; }
+    public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
 
     public Action? OnClick { get; init; }
@@ -48,6 +54,10 @@ public sealed record BoxEl : Element
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
     public bool HitTestVisible { get; init; } = true;
+    /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
+    /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
+    /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
+    public bool IsEnabled { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
@@ -208,6 +218,14 @@ public sealed record TextEl(string Text) : Element
     public float Size { get; init; } = 14f;
     public bool Bold { get; init; }
     public ColorF Color { get; init; } = ColorF.FromRgba(0xE6, 0xE6, 0xE6);
+    // Stateful foreground ramps (WinUI dims/recolors label & glyph foreground on hover/press/disabled/focus). A==0 ⇒
+    // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
+    // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).
+    // Disabled/Focused are steps gated by the ancestor's NodeFlags.Disabled / this node's NodeFlags.Focused.
+    public ColorF HoverColor { get; init; }
+    public ColorF PressedColor { get; init; }
+    public ColorF DisabledColor { get; init; }
+    public ColorF FocusedColor { get; init; }
     public string? FontFamily { get; init; }
     public DynamicTextKind DynamicText { get; init; }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>

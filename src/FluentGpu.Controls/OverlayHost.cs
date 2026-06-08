@@ -21,9 +21,17 @@ public sealed class OverlayHandle
 /// positions the popup relative to the anchor's on-screen rect (flip/nudge into the viewport) and animates it open/closed
 /// with the WinUI MenuPopupThemeTransition. Resolve via <c>UseContext(Overlay.Service)</c> inside an <see cref="OverlayHost"/>.
 /// </summary>
+/// <summary>How a popup dismisses. <see cref="LightDismiss"/> = click-outside + Escape (the default); <see cref="Modal"/>
+/// = no light dismiss (ContentDialog); <see cref="None"/> = caller-controlled only.</summary>
+public enum DismissBehavior : byte { LightDismiss, Modal, None }
+
+/// <summary>Optional popup behavior. <see cref="FocusTrap"/> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).</summary>
+public readonly record struct PopupOptions(bool FocusTrap = false, DismissBehavior DismissBehavior = DismissBehavior.LightDismiss);
+
 public interface IOverlayService
 {
     OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomLeft);
+    OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options);
     void CloseTop();
     void CloseAll();
     bool AnyOpen { get; }
@@ -39,6 +47,7 @@ internal sealed class NullOverlayService : IOverlayService
 {
     public static readonly NullOverlayService Instance = new();
     public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p) => new();
+    public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p, PopupOptions o) => new();
     public void CloseTop() { }
     public void CloseAll() { }
     public bool AnyOpen => false;
@@ -55,6 +64,9 @@ internal sealed class OverlayEntry
     public NodeHandle SurfaceNode;    // presenter surface: the SizeH clip-reveal + opacity animate this node
     public float MeasuredH;
     public bool OpensUp;
+    public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
+    public NodeHandle SavedFocus;     // focus captured at open time → restored when the overlay finishes closing
+    public bool FocusTrap;
     public bool OpenSeeded;
     public bool Closing;
     public bool CloseSeeded;
@@ -66,15 +78,27 @@ internal sealed class OverlayServiceImpl : IOverlayService
     private int _nextId;
     public readonly List<OverlayEntry> Entries = new(4);
 
+    // Host-wired (via the InputHooks ambient): read/restore the focused node for WinUI flyout focus-restoration.
+    public Func<NodeHandle>? GetFocus;
+    public Action<NodeHandle>? RestoreFocus;
+
     public OverlayServiceImpl(Signal<int> version) => _version = version;
 
     public bool AnyOpen { get { foreach (var e in Entries) if (!e.Closing) return true; return false; } }
     public bool AnyClosing { get { foreach (var e in Entries) if (e.Closing) return true; return false; } }
 
     public OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomLeft)
+        => Open(anchor, content, placement, default);
+
+    public OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
     {
         var handle = new OverlayHandle { IsOpen = true };
-        var entry = new OverlayEntry { Id = _nextId++, Anchor = anchor, Content = content, Placement = placement, Handle = handle };
+        var entry = new OverlayEntry
+        {
+            Id = _nextId++, Anchor = anchor, Content = content, Placement = placement, Handle = handle,
+            FocusTrap = options.FocusTrap,
+            SavedFocus = GetFocus?.Invoke() ?? NodeHandle.Null,   // capture pre-open focus → restore on close
+        };
         handle.CloseAction = () => BeginClose(entry);
         Entries.Add(entry);
         Bump();
@@ -104,7 +128,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
     public void Finalize(OverlayEntry e)
     {
-        if (Entries.Remove(e)) Bump();
+        if (!Entries.Remove(e)) return;
+        // Restore the focus captured at open time, once nothing is left open (WinUI flyout focus-restoration).
+        if (!AnyOpen && !e.SavedFocus.IsNull) RestoreFocus?.Invoke(e.SavedFocus);
+        Bump();
     }
 
     /// <summary>Pre-focus key preview wired into the dispatcher via the InputHooks ambient: Escape closes the top overlay.</summary>
@@ -138,7 +165,10 @@ public sealed class OverlayHost : Component
         var svc = svcRef.Value;
         int ver = version.Value;   // subscribe → re-render when overlays open/close
 
-        UseContext(InputHooks.Current).KeyPreview = svc.PreviewKey;
+        var hooks = UseContext(InputHooks.Current);
+        hooks.KeyPreview = svc.PreviewKey;
+        svc.GetFocus = hooks.GetFocus;          // host-wired focus get/restore → flyout focus-restoration on close
+        svc.RestoreFocus = hooks.RestoreFocus;
         var vp = UseContext(Viewport.Size);
 
         // After layout (Bounds valid): place each popup, then seed its open (clip-unfold + fade) / close (fade) animation.
@@ -156,10 +186,11 @@ public sealed class OverlayHost : Component
                     var aRect = scene.AbsoluteRect(anchor);
                     var pRect = scene.AbsoluteRect(e.WrapperNode);
                     e.MeasuredH = pRect.H;
-                    var (x, y) = FlyoutPositioner.Place(in aRect, new Size2(pRect.W, pRect.H), in vp, e.Placement);
-                    e.OpensUp = y < aRect.Y;
+                    var place = FlyoutPositioner.Place(in aRect, new Size2(pRect.W, pRect.H), in vp, e.Placement);
+                    e.OpensUp = place.OpensUp;
+                    e.CornerJoin = place.CornerJoin;
                     ref NodePaint wp = ref scene.Paint(e.WrapperNode);
-                    wp.LocalTransform = Affine2D.Translation(x, y);
+                    wp.LocalTransform = Affine2D.Translation(place.X, place.Y);
                     scene.Mark(e.WrapperNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
                 }
 

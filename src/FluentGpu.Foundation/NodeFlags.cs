@@ -15,6 +15,7 @@ public enum NodeFlags : uint
     Visible = 1u << 8,
     HitTestVisible = 1u << 9,
     ClipsToBounds = 1u << 10,
+    Disabled = 1u << 11,          // input-disabled: the node does not hit-test/focus/key-activate/repeat/drag/click (visuals stay control-chosen)
     WantsPointer = 1u << 12,
     Focusable = 1u << 13,
     Focused = 1u << 14,

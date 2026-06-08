@@ -630,6 +630,10 @@ public sealed class TreeReconciler
                 if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
+                if (b.HoverGradient is { } hg) _scene.SetHoverGradient(node, hg); else _scene.ClearHoverGradient(node);
+                if (b.PressedGradient is { } pg) _scene.SetPressedGradient(node, pg); else _scene.ClearPressedGradient(node);
+                if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
+                if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
@@ -688,6 +692,8 @@ public sealed class TreeReconciler
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
+                // Disabled gate (set unconditionally each reconcile — toggling IsEnabled must both set AND clear the bit).
+                if (b.IsEnabled) _scene.Unmark(node, NodeFlags.Disabled); else _scene.Mark(node, NodeFlags.Disabled);
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 ii.Role = b.Role;
@@ -845,6 +851,10 @@ public sealed class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
                 paint.TextColor = t.Color;
+                paint.TextHoverColor = t.HoverColor;
+                paint.TextPressedColor = t.PressedColor;
+                paint.TextDisabledColor = t.DisabledColor;
+                paint.TextFocusedColor = t.FocusedColor;
                 _scene.SetDynamicText(node, t.DynamicText);
                 var newText = _strings.Intern(t.Text);
                 if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }

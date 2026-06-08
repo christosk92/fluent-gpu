@@ -5,7 +5,7 @@ namespace FluentGpu.Animation;
 
 /// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
 /// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. None relayout.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd }
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB }
 
 // Easing (the enum + evaluator) now lives in FluentGpu.Foundation (a foundational motion primitive shared by Dsl/Scene/
 // Render + the image cross-fade). Animation imports Foundation, so `Easing` here resolves to FluentGpu.Foundation.Easing.
@@ -87,7 +87,8 @@ public sealed class AnimEngine
     private struct Accum
     {
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
-        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN };
+        public float ClipL, ClipT, ClipR, ClipB;   // authored clip-rect edges (node-local); NaN = that edge not animated
+        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN };
         public void Fold(AnimChannel ch, float v, CompositeOp op)
         {
             bool add = op != CompositeOp.Replace;
@@ -103,6 +104,10 @@ public sealed class AnimEngine
                 case AnimChannel.SizeH: Sh = v; break;
                 case AnimChannel.StrokeTrimStart: TrimStart = v; break;
                 case AnimChannel.StrokeTrimEnd: TrimEnd = v; break;
+                case AnimChannel.ClipL: ClipL = v; break;   // clip edges replace (a clip rect, not an additive transform)
+                case AnimChannel.ClipT: ClipT = v; break;
+                case AnimChannel.ClipR: ClipR = v; break;
+                case AnimChannel.ClipB: ClipB = v; break;
             }
         }
     }
@@ -433,6 +438,17 @@ public sealed class AnimEngine
             if (!float.IsNaN(acc.Sh)) p.PresentedH = acc.Sh;
             if (!float.IsNaN(acc.TrimStart)) p.StrokeTrimStart = acc.TrimStart;
             if (!float.IsNaN(acc.TrimEnd)) p.StrokeTrimEnd = acc.TrimEnd;
+            // Authored clip-rect (node-local): an un-animated edge defaults to the node's own box edge (= no clip there),
+            // so a one-edge reveal (e.g. ClipB 0→H) clips only that side. Composed with ClipsToBounds by the recorder.
+            if (!float.IsNaN(acc.ClipL) || !float.IsNaN(acc.ClipT) || !float.IsNaN(acc.ClipR) || !float.IsNaN(acc.ClipB))
+            {
+                ref RectF cb = ref _scene.Bounds(kv.Key);
+                float cl = float.IsNaN(acc.ClipL) ? 0f : acc.ClipL;
+                float ct = float.IsNaN(acc.ClipT) ? 0f : acc.ClipT;
+                float cr = float.IsNaN(acc.ClipR) ? cb.W : acc.ClipR;
+                float cbm = float.IsNaN(acc.ClipB) ? cb.H : acc.ClipB;
+                p.ClipRect = RectF.FromLTRB(cl, ct, cr, cbm);
+            }
             _scene.Mark(kv.Key, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if ((!float.IsNaN(acc.Sw) || !float.IsNaN(acc.Sh)) && (_scene.Flags(kv.Key) & NodeFlags.Relayouting) != 0)
                 IncrementalRoots.Add(kv.Key);
@@ -445,13 +461,16 @@ public sealed class AnimEngine
         {
             Track t = _tracks[i];
             if (!t.Done) continue;
-            if ((t.Channel == AnimChannel.SizeW || t.Channel == AnimChannel.SizeH || t.Channel == AnimChannel.StrokeTrimStart || t.Channel == AnimChannel.StrokeTrimEnd) && _scene.IsLive(t.Node))
+            bool isReveal = t.Channel is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.StrokeTrimStart or AnimChannel.StrokeTrimEnd
+                or AnimChannel.ClipL or AnimChannel.ClipT or AnimChannel.ClipR or AnimChannel.ClipB;
+            if (isReveal && _scene.IsLive(t.Node))
             {
                 ref NodePaint p = ref _scene.Paint(t.Node);
                 if (t.Channel == AnimChannel.SizeW) { p.PresentedW = float.NaN; _scene.Unmark(t.Node, NodeFlags.Relayouting); }
                 else if (t.Channel == AnimChannel.SizeH) p.PresentedH = float.NaN;
                 else if (t.Channel == AnimChannel.StrokeTrimStart) p.StrokeTrimStart = float.NaN;
-                else p.StrokeTrimEnd = float.NaN;
+                else if (t.Channel == AnimChannel.StrokeTrimEnd) p.StrokeTrimEnd = float.NaN;
+                else p.ClipRect = RectF.Infinite;   // any clip edge settling clears the authored clip override
                 _scene.Mark(t.Node, NodeFlags.PaintDirty);
             }
             _tracks.RemoveAt(i);

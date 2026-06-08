@@ -428,6 +428,117 @@ sealed class RepeatProbe : Component
     public override Element Render() => RepeatButton.Create("+", () => Clicks++);
 }
 
+// Two raw clickable boxes: one always enabled, one whose IsEnabled is signal-gated (starts disabled). Exercises the
+// engine disabled gate (P1) without depending on any control's hand-rolled handler-nulling.
+sealed class DisabledProbe : Component
+{
+    public int EnabledClicks;
+    public int GatedClicks;
+    public Signal<bool>? Gate;        // false ⇒ the gated box is disabled
+    public NodeHandle EnabledBox;
+    public NodeHandle GatedBox;
+    public override Element Render()
+    {
+        var gate = UseSignal(false);
+        Gate = gate;
+        return new BoxEl
+        {
+            Direction = 1, Width = 200, Height = 120, Gap = 8,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 120, Height = 32, Role = AutomationRole.Button,
+                    Fill = new ColorF(0.2f, 0.2f, 0.2f, 1f),
+                    OnClick = () => EnabledClicks++,
+                    OnRealized = h => EnabledBox = h,
+                },
+                new BoxEl
+                {
+                    Width = 120, Height = 32, Role = AutomationRole.CheckBox,   // distinct role so the test can locate it
+                    Fill = new ColorF(0.3f, 0.3f, 0.3f, 1f),
+                    IsEnabled = gate.Value,
+                    OnClick = () => GatedClicks++,
+                    OnRealized = h => GatedBox = h,
+                },
+            ],
+        };
+    }
+}
+
+// An interactive box (with an interaction-anim row so hover/press EASE) wrapping a TextEl with primary-color state
+// ramps, so a test can read the resolved glyph color per interaction/disabled state. Exercises P2.
+sealed class TextRampProbe : Component
+{
+    public Signal<bool>? Enabled;
+    public override Element Render()
+    {
+        var enabled = UseSignal(true);
+        Enabled = enabled;
+        return new BoxEl
+        {
+            Width = 160, Height = 40, Role = AutomationRole.Button,
+            Fill = new ColorF(0.15f, 0.15f, 0.15f, 1f),
+            IsEnabled = enabled.Value,
+            OnClick = () => { },
+            HoverDurationMs = 80f, PressDurationMs = 80f,   // force an InteractionAnim row → hover/press progress eases
+            Children =
+            [
+                new TextEl("ramp")
+                {
+                    Color = ColorF.FromRgba(0xFF, 0x00, 0x00),         // resting  = red
+                    HoverColor = ColorF.FromRgba(0x00, 0xFF, 0x00),    // hover    = green
+                    PressedColor = ColorF.FromRgba(0x00, 0x00, 0xFF),  // pressed  = blue
+                    DisabledColor = ColorF.FromRgba(0xFF, 0xFF, 0xFF), // disabled = white
+                },
+            ],
+        };
+    }
+}
+
+// Hosts an overlay layer with a focusable anchor button, so a test can verify the overlay restores focus to the
+// pre-open node when it closes. Exercises P5 focus-restoration.
+sealed class FocusRestoreProbe : Component
+{
+    public IOverlayService? Service;
+    public NodeHandle AnchorNode;
+    public OverlayHandle? Handle;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new FocusRestoreInner(this)) });
+}
+
+sealed class FocusRestoreInner : Component
+{
+    readonly FocusRestoreProbe _p;
+    public FocusRestoreInner(FocusRestoreProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        return new BoxEl
+        {
+            Width = 200, Height = 120, Padding = Edges4.All(10),
+            Children =
+            [
+                new BoxEl { Width = 80, Height = 30, Role = AutomationRole.Button, OnClick = () => { }, OnRealized = h => _p.AnchorNode = h },
+            ],
+        };
+    }
+}
+
+// An interactive box whose gradient fill has hover/pressed variants, so a test can read the recorder's per-frame
+// interpolated first stop (C0) per interaction state. Exercises P4b.
+sealed class GradientRampProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 120, Height = 40, Role = AutomationRole.Button,
+        OnClick = () => { },
+        HoverDurationMs = 80f, PressDurationMs = 80f,   // force an InteractionAnim row → progress eases
+        Gradient = GradientSpec.Vertical(ColorF.FromRgba(0xFF, 0x00, 0x00), ColorF.FromRgba(0xFF, 0x00, 0x00)),         // red
+        HoverGradient = GradientSpec.Vertical(ColorF.FromRgba(0x00, 0xFF, 0x00), ColorF.FromRgba(0x00, 0xFF, 0x00)),    // green
+        PressedGradient = GradientSpec.Vertical(ColorF.FromRgba(0x00, 0x00, 0xFF), ColorF.FromRgba(0x00, 0x00, 0xFF)),  // blue
+    };
+}
+
 sealed class EditTextProbe : Component
 {
     public Signal<string>? Text;
@@ -601,6 +712,15 @@ static class Slice
         return false;
     }
 
+    static ColorF GlyphColor(HeadlessGpuDevice dev, StringTable strings, string text)
+    {
+        foreach (var g in dev.LastGlyphs)
+            if (strings.Resolve(g.Text) == text) return g.Color;
+        return default;
+    }
+
+    static ColorF FirstGradientC0(HeadlessGpuDevice dev) => dev.LastGradients.Count > 0 ? dev.LastGradients[0].C0 : default;
+
     static bool Near(float a, float b) => MathF.Abs(a - b) < 0.5f;
     static bool Near(float a, float b, float tol) => MathF.Abs(a - b) < tol;
 
@@ -621,6 +741,19 @@ static class Slice
     {
         var r = s.AbsoluteRect(n);
         return new Point2(r.X + r.W / 2f, r.Y + r.H / 2f);
+    }
+
+    // The node currently carrying the keyboard-focus flag (the dispatcher sets NodeFlags.Focused on it).
+    static NodeHandle FocusedNode(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if ((s.Flags(n) & NodeFlags.Focused) != 0) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FocusedNode(s, c);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
     }
 
     static void CollectRole(SceneStore s, NodeHandle n, AutomationRole role, List<NodeHandle> outList)
@@ -2450,6 +2583,376 @@ static class Slice
         Check("62a. RepeatButton: idle after release does no work (no busy loop)", !host.HasActiveWork);
     }
 
+    // Wave 1 / P3 — typed computed "TemplateSettings" convention: the Expander derives ExpanderTemplateSettings once from
+    // its open state and feeds them into channels — the chevron ROTATION (one glyph, down→up) and the content reveal.
+    static void ExpanderSettingsChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("expander", new Size2(360, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new Expander { Header = "Section", Content = new TextEl("expander-body") { Size = 14f }, InitiallyExpanded = false };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();   // collapsed (chevron rotation seeded to 0° → identity)
+        var chevron0 = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
+        float m11Collapsed = host.Scene.Paint(chevron0).LocalTransform.M11;
+        bool noContent = Child(host.Scene, host.Scene.Root, 1).IsNull;
+
+        // Toggle open. (a) The chevron rotation TWEENS (167ms): track peak sin θ — a tween passes through a mid-angle
+        // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel FADES in (Enter opacity 0→1):
+        // track its minimum opacity — an instant appear would read 1 from the first frame.
+        ClickNode(host, window, Child(host.Scene, host.Scene.Root, 0));
+        float peakSin = 0f, minContentOpacity = 1f;
+        for (int i = 0; i < 16; i++)
+        {
+            host.RunFrame();
+            var ch = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
+            peakSin = MathF.Max(peakSin, MathF.Abs(host.Scene.Paint(ch).LocalTransform.M12));
+            var content = Child(host.Scene, host.Scene.Root, 1);
+            if (!content.IsNull) minContentOpacity = MathF.Min(minContentOpacity, host.Scene.Paint(content).Opacity);
+        }
+        bool rotating = peakSin > 0.5f;
+        bool contentFadedIn = minContentOpacity < 0.5f;
+
+        for (int i = 0; i < 16; i++) host.RunFrame();   // settle
+        var chevronDone = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
+        float m11Done = host.Scene.Paint(chevronDone).LocalTransform.M11;   // cos 180° ≈ -1
+        bool settled = m11Done < -0.9f;
+        bool hasContent = !Child(host.Scene, host.Scene.Root, 1).IsNull && HasGlyph(device, strings, "expander-body");
+
+        Check("W1-P3.a Expander animates chevron rotation + content reveal (mid-flight)",
+            Near(m11Collapsed, 1f, 0.05f) && rotating && settled && contentFadedIn && hasContent,
+            $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minContentOpacity={minContentOpacity:0.00} content {!noContent}→{hasContent}");
+    }
+
+    // Wave 1 / P5a — popup placement result: vertical flip when a side can't fit, corner-join against the anchor, and
+    // height clamping under a full collision. Pure math — deterministic, no host.
+    static void PlacementChecks()
+    {
+        var vp = new Size2(480, 400);
+
+        // Anchor near the bottom: a 120-tall popup can't fit below → flips ABOVE; its bottom corners join the anchor.
+        var low = new RectF(20, 380, 100, 24);
+        var pa = FlyoutPositioner.Place(in low, new Size2(100, 120), in vp, FlyoutPlacement.BottomLeft);
+        bool flipped = pa.OpensUp && pa.Y < low.Y && pa.CornerJoin == CornerJoin.Bottom;
+
+        // Anchor near the top: opens BELOW (default); top corners join.
+        var high = new RectF(20, 10, 100, 24);
+        var pb = FlyoutPositioner.Place(in high, new Size2(100, 120), in vp, FlyoutPlacement.BottomLeft);
+        bool below = !pb.OpensUp && pb.Y >= high.Y + high.H - 0.5f && pb.CornerJoin == CornerJoin.Top;
+
+        // Popup taller than the viewport (collides both ways): clamp MeasuredH to the larger side (here, below).
+        var mid = new RectF(20, 180, 100, 24);
+        var pc = FlyoutPositioner.Place(in mid, new Size2(100, 600), in vp, FlyoutPlacement.BottomLeft);
+        bool clamped = pc.MeasuredH > 0f && pc.MeasuredH < 600f;
+
+        Check("W1-P5.a placement: flip-up + corner-join + collision clamp",
+            flipped && below && clamped, $"flip={flipped} below={below} clampH={pc.MeasuredH:0}");
+    }
+
+    // Wave 1 / P5b — overlay focus-restoration: an overlay captures the focused node at open time and restores it when
+    // it finishes closing (host-wired through the InputHooks focus get/restore delegates).
+    static void OverlayFocusRestoreChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("ovfocus", new Size2(480, 360), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new FocusRestoreProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        ClickNode(host, window, root.AnchorNode);   // focus the anchor (pre-open focus)
+        bool anchorFocused = (host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) != 0;
+
+        // Open an overlay (captures SavedFocus = anchor), Tab moves focus into it, then close and let it settle.
+        root.Handle = root.Service!.Open(() => root.AnchorNode,
+            () => new BoxEl { Width = 120, Height = 80, Children = [new BoxEl { Width = 100, Height = 24, OnClick = () => { } }] });
+        host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+        host.RunFrame();
+        bool movedAway = (host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) == 0;
+
+        root.Handle.Close();
+        for (int i = 0; i < 30; i++) host.RunFrame();   // close fade settles → Finalize → restore
+        bool restored = (host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) != 0;
+
+        Check("W1-P5.b overlay restores focus to the pre-open node on close",
+            anchorFocused && movedAway && restored, $"anchor0={anchorFocused} movedAway={movedAway} restored={restored}");
+    }
+
+    // Wave 1 / P6 — focus/keyboard navigation service: TabIndex-respecting tab order, XY arrow navigation, and scoped
+    // roving (within an overlay/menu subtree). Drives the InputDispatcher directly (no AppHost needed).
+    static void FocusNavChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // P6.a — TabIndex orders tab navigation: document order A,B,C but TabIndex 3,1,2 → visits B→C→A.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 10,
+                Children =
+                [
+                    new BoxEl { Key = "A", Width = 20, Height = 20, OnClick = () => { }, TabIndex = 3 },
+                    new BoxEl { Key = "B", Width = 20, Height = 20, OnClick = () => { }, TabIndex = 1 },
+                    new BoxEl { Key = "C", Width = 20, Height = 20, OnClick = () => { }, TabIndex = 2 },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var a = Child(scene, scene.Root, 0); var b = Child(scene, scene.Root, 1); var c = Child(scene, scene.Root, 2);
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) }); var f1 = disp.Focused;
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) }); var f2 = disp.Focused;
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) }); var f3 = disp.Focused;
+            Check("W1-P6.a TabIndex orders tab navigation (1→2→3, not document order)",
+                f1 == b && f2 == c && f3 == a, $"f1=B?{f1 == b} f2=C?{f2 == c} f3=A?{f3 == a}");
+        }
+
+        // P6.b — XY arrow navigation across a 2×2 grid: Right→Down→Left→Up walks TL→TR→BR→BL→TL.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1, Gap = 10,
+                Children =
+                [
+                    new BoxEl { Direction = 0, Gap = 10, Children = [
+                        new BoxEl { Key = "TL", Width = 30, Height = 20, OnClick = () => { } },
+                        new BoxEl { Key = "TR", Width = 30, Height = 20, OnClick = () => { } } ] },
+                    new BoxEl { Direction = 0, Gap = 10, Children = [
+                        new BoxEl { Key = "BL", Width = 30, Height = 20, OnClick = () => { } },
+                        new BoxEl { Key = "BR", Width = 30, Height = 20, OnClick = () => { } } ] },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var r0 = Child(scene, scene.Root, 0); var r1 = Child(scene, scene.Root, 1);
+            var tl = Child(scene, r0, 0); var tr = Child(scene, r0, 1);
+            var bl = Child(scene, r1, 0); var br = Child(scene, r1, 1);
+            disp.SetFocus(tl, visual: true);
+            disp.MoveFocusArrow(FocusDirection.Right); var aRight = disp.Focused;
+            disp.MoveFocusArrow(FocusDirection.Down); var aDown = disp.Focused;
+            disp.MoveFocusArrow(FocusDirection.Left); var aLeft = disp.Focused;
+            disp.MoveFocusArrow(FocusDirection.Up); var aUp = disp.Focused;
+            Check("W1-P6.b arrow XY nav walks the 2×2 grid (R→D→L→U)",
+                aRight == tr && aDown == br && aLeft == bl && aUp == tl,
+                $"R=TR?{aRight == tr} D=BR?{aDown == br} L=BL?{aLeft == bl} U=TL?{aUp == tl}");
+        }
+
+        // P6.c — scoped roving: NextFocusableIn cycles within a subtree and never escapes to an outside focusable.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    new BoxEl { Key = "outside", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "sub", Direction = 0, Gap = 4, Children = [
+                        new BoxEl { Key = "s1", Width = 20, Height = 20, OnClick = () => { } },
+                        new BoxEl { Key = "s2", Width = 20, Height = 20, OnClick = () => { } },
+                        new BoxEl { Key = "s3", Width = 20, Height = 20, OnClick = () => { } } ] },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var outside = Child(scene, scene.Root, 0);
+            var sub = Child(scene, scene.Root, 1);
+            var s1 = Child(scene, sub, 0); var s3 = Child(scene, sub, 2);
+            var next = disp.NextFocusableIn(sub, s1);          // s1 → s2
+            var wrap = disp.NextFocusableIn(sub, s3);          // s3 → s1 (cycles, never escapes to 'outside')
+            var first = disp.FirstFocusableIn(sub);
+            var last = disp.LastFocusableIn(sub);
+            Check("W1-P6.c scoped roving cycles within a subtree (never escapes)",
+                next == Child(scene, sub, 1) && wrap == s1 && first == s1 && last == s3 && first != outside,
+                $"next=s2?{next == Child(scene, sub, 1)} wrap=s1?{wrap == s1} first=s1?{first == s1} last=s3?{last == s3}");
+        }
+    }
+
+    // Wave 1 / P4a — authored clip-rect channel: AnimEngine ClipL/T/R/B drive NodePaint.ClipRect (node-local); the
+    // recorder intersects it into the child clip. Un-animated edges default to the node box; settling clears the override.
+    static void ClipChannelChecks()
+    {
+        var scene = new SceneStore();
+        var node = scene.CreateNode(1);
+        scene.Root = node;
+        scene.Bounds(node) = new RectF(0f, 0f, 100f, 80f);
+        var engine = new AnimEngine(scene);
+
+        bool startInfinite = scene.Paint(node).ClipRect.IsInfinite;   // no clip before any animation
+
+        // Reveal the bottom edge 0 → 80 (a one-edge clip; L/T/R default to the node box → only the bottom clips).
+        engine.Animate(node, AnimChannel.ClipB, 0f, 80f, 100f, Easing.Linear);
+        engine.Tick(0f);
+        engine.Tick(50f);
+        var mid = scene.Paint(node).ClipRect;
+        bool applied = !mid.IsInfinite && Near(mid.X, 0f) && Near(mid.Y, 0f) && Near(mid.W, 100f) && Near(mid.H, 40f, 2f);
+
+        engine.Tick(60f);   // 110ms total → animation completes and the clip override clears
+        bool reset = scene.Paint(node).ClipRect.IsInfinite;
+
+        Check("W1-P4a.a clip-rect channel applies mid-anim (bottom reveal), resets on settle",
+            startInfinite && applied && reset,
+            $"mid=({mid.X:0},{mid.Y:0},{mid.W:0},{mid.H:0}) start∞={startInfinite} reset∞={reset}");
+    }
+
+    // Wave 1 / P1 — the engine disabled gate: a single NodeFlags.Disabled bit gates hit-test, focus, and keyboard
+    // activation, replacing each control's hand-rolled handler-nulling. Visuals stay control-chosen.
+    static void DisabledChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("disabled", new Size2(320, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new DisabledProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();   // mount — the gated box starts disabled
+
+        // disabled-no-hit: clicking the disabled box invokes nothing; the always-enabled box still clicks.
+        ClickNode(host, window, root.GatedBox);
+        int gatedAfterDisabledClick = root.GatedClicks;
+        ClickNode(host, window, root.EnabledBox);
+        Check("W1-P1.a disabled node does not hit-test (click swallowed); enabled still clicks",
+            gatedAfterDisabledClick == 0 && root.EnabledClicks == 1,
+            $"gated={gatedAfterDisabledClick} enabled={root.EnabledClicks}");
+
+        // disabled-no-focus: Tab skips the disabled box → focus lands on the only enabled focusable.
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+        host.RunFrame();
+        bool focusEnabled = FocusedNode(host.Scene, host.Scene.Root) == root.EnabledBox;
+        bool gatedNotFocused = (host.Scene.Flags(root.GatedBox) & NodeFlags.Focused) == 0;
+        Check("W1-P1.b disabled node is not a tab stop (focus skips it)", focusEnabled && gatedNotFocused,
+            $"focusEnabled={focusEnabled} gatedFocused={!gatedNotFocused}");
+
+        // disabled-no-key-activate: Enter activates the focused ENABLED box; the disabled box never key-activates.
+        int beforeEnter = root.EnabledClicks;
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Enter));
+        host.RunFrame();
+        Check("W1-P1.c Enter activates the focused enabled node; disabled never key-activates",
+            root.EnabledClicks == beforeEnter + 1 && root.GatedClicks == 0,
+            $"enabled={root.EnabledClicks} gated={root.GatedClicks}");
+
+        // disabled-toggle-reenables: flip IsEnabled via the signal → the box now hit-tests and clicks.
+        root.Gate!.Value = true;
+        host.RunFrame();
+        ClickNode(host, window, root.GatedBox);
+        Check("W1-P1.d flipping IsEnabled re-enables hit-test (Mark/Unmark each reconcile)",
+            root.GatedClicks == 1, $"gated={root.GatedClicks}");
+
+        // zero-alloc: the gate is a flag bittest — steady idle frames allocate nothing on the paint half.
+        for (int i = 0; i < 6; i++) host.RunFrame();
+        var steady = host.RunFrame();
+        Check("W1-P1.e disabled gate adds no steady-state allocation", steady.HotPhaseAllocBytes == 0,
+            $"{steady.HotPhaseAllocBytes} bytes");
+    }
+
+    // Wave 1 / P2 — stateful text/glyph foreground ramps: a TextEl under an interactive box inherits the box's eased
+    // hover/press progress (no per-control animator) and steps to a disabled color via the P1 gate flag on its ancestor.
+    static void TextRampChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("textramp", new Size2(320, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new TextRampProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();   // mount
+        var box = host.Scene.Root;
+        var c = CenterOf(host.Scene, box);
+        var outside = new Point2(c.X + 300f, c.Y + 300f);
+
+        var rest = GlyphColor(device, strings, "ramp");
+        bool restOk = rest.R > 0.5f && rest.G < 0.2f && rest.B < 0.2f;   // resting = red
+
+        // hover → green (eased through the ancestor box's interaction progress)
+        window.QueueInput(new InputEvent(InputKind.PointerMove, c, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var hov = GlyphColor(device, strings, "ramp");
+        bool hovOk = hov.G > 0.5f && hov.R < 0.2f;
+
+        // press → blue (press composes over hover)
+        window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var prs = GlyphColor(device, strings, "ramp");
+        bool prsOk = prs.B > 0.5f && prs.G < 0.2f;
+
+        // release + leave → back to red
+        window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerMove, outside, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var back = GlyphColor(device, strings, "ramp");
+        bool backOk = back.R > 0.5f && back.G < 0.2f;
+
+        Check("W1-P2.a text foreground ramps: hover→green, press→blue, release→red",
+            restOk && hovOk && prsOk && backOk,
+            $"rest=({rest.R:0.0},{rest.G:0.0},{rest.B:0.0}) hov=({hov.R:0.0},{hov.G:0.0},{hov.B:0.0}) prs=({prs.R:0.0},{prs.G:0.0},{prs.B:0.0}) back=({back.R:0.0},{back.G:0.0},{back.B:0.0})");
+
+        // disabled → white (a step, regardless of pointer position; gated by the ancestor's NodeFlags.Disabled)
+        root.Enabled!.Value = false;
+        host.RunFrame();
+        var dis = GlyphColor(device, strings, "ramp");
+        Check("W1-P2.b disabled text uses the DisabledColor step", dis.R > 0.8f && dis.G > 0.8f && dis.B > 0.8f,
+            $"dis=({dis.R:0.00},{dis.G:0.00},{dis.B:0.00})");
+
+        // zero-alloc: the resolve walks ancestors with struct reads only — steady idle frames allocate nothing.
+        for (int i = 0; i < 6; i++) host.RunFrame();
+        var steady = host.RunFrame();
+        Check("W1-P2.c text ramp adds no steady-state allocation", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
+    }
+
+    // Wave 1 / P4b — stateful gradient transitions: the recorder per-frame interpolates the resting gradient's stops
+    // toward the hover/pressed gradients by the eased progress (no new GradientSpec per frame).
+    static void GradientRampChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gradramp", new Size2(320, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new GradientRampProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var c = CenterOf(host.Scene, host.Scene.Root);
+        var outside = new Point2(c.X + 300f, c.Y + 300f);
+
+        var rest = FirstGradientC0(device);
+        bool restOk = rest.R > 0.5f && rest.G < 0.2f && rest.B < 0.2f;
+
+        window.QueueInput(new InputEvent(InputKind.PointerMove, c, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var hov = FirstGradientC0(device);
+        bool hovOk = hov.G > 0.5f && hov.R < 0.2f;
+
+        window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var prs = FirstGradientC0(device);
+        bool prsOk = prs.B > 0.5f && prs.G < 0.2f;
+
+        window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerMove, outside, 0, 0));
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        var back = FirstGradientC0(device);
+        bool backOk = back.R > 0.5f && back.G < 0.2f;
+
+        Check("W1-P4b.a gradient fill ramps: hover→green, press→blue, release→red",
+            restOk && hovOk && prsOk && backOk,
+            $"rest=({rest.R:0.0},{rest.G:0.0},{rest.B:0.0}) hov=({hov.R:0.0},{hov.G:0.0},{hov.B:0.0}) prs=({prs.R:0.0},{prs.G:0.0},{prs.B:0.0}) back=({back.R:0.0},{back.G:0.0},{back.B:0.0})");
+
+        for (int i = 0; i < 6; i++) host.RunFrame();
+        var steady = host.RunFrame();
+        Check("W1-P4b.b gradient ramp adds no steady-state allocation", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
+    }
+
     static void TextInputChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -2995,6 +3498,17 @@ static class Slice
         GranularityChecks(strings);
         SliderSignalChecks(strings);
         FlowChecks(strings);
+
+        // Wave 1 engine primitives (control-parity foundation). P1 — disabled gate; P2 — stateful text ramps;
+        // P4b — stateful gradient transitions; P4a — authored clip-rect channel; P6 — focus/keyboard nav.
+        DisabledChecks(strings);
+        TextRampChecks(strings);
+        GradientRampChecks(strings);
+        ClipChannelChecks();
+        FocusNavChecks(strings);
+        PlacementChecks();
+        OverlayFocusRestoreChecks(strings);
+        ExpanderSettingsChecks(strings);
 
         // Basic-input infrastructure (Part A): repeat timing, text input, anchored overlays.
         RepeatButtonChecks(strings);

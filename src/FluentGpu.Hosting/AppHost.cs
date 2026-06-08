@@ -123,6 +123,8 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
+        _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
+        _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
 
         _reconciler.Anim = _anim;
         _reconciler.Images = _images;

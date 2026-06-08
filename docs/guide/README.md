@@ -138,6 +138,9 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    templates/storyboards/timing tokens, the logical-state x interaction-state graph, `StateBrush`/`InteractionAnimator`
    visual states, `AnimEngine` authored timelines, and the empirical verify workflow (golden checks + `--shot` +
    slow-motion proof). *Read before the control parity sweep.*
+7. **[winui-control-parity-audit.md](./winui-control-parity-audit.md)** - source-backed diff of every FluentGpu
+   control against `C:\WAVEE\microsoft-ui-xaml`, including XAML templates, C++ behavior, generated properties, and
+   engine blockers.
 
 ---
 

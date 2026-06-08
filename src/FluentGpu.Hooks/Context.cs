@@ -39,6 +39,13 @@ public sealed class InputHooks
     /// <summary>Return true to consume the key. Set by an open overlay; cleared when it closes.</summary>
     public Func<int, bool>? KeyPreview;
     public bool Preview(int key) => KeyPreview?.Invoke(key) ?? false;
+
+    /// <summary>The currently-focused node (host-wired to the dispatcher). An opening overlay captures it so the focus
+    /// can be restored when the overlay closes (WinUI flyout focus-restoration).</summary>
+    public Func<NodeHandle>? GetFocus;
+    /// <summary>Restore focus to a node (host-wired to the dispatcher). Used by an overlay on close.</summary>
+    public Action<NodeHandle>? RestoreFocus;
+
     public static readonly Context<InputHooks> Current = new(new InputHooks());
 }
 

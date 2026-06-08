@@ -117,12 +117,17 @@ public static class SceneRecorder
         if (scene.TryGetArc(node, out var arcS) && !arcS.IsNone && deviceBounds.Overlaps(clip))
             dl.Arc(local, arcS.Color, arcS.Thickness, arcS.StartDeg, arcS.SweepDeg, arcS.RoundCaps, world, opacity, key);
 
-        // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor.
+        // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor. An authored
+        // clip-rect (AnimChannel.ClipL/T/R/B, node-local) composes with ClipsToBounds into a single combined scissor.
         bool pushedClip = false;
         RectF childClip = clip;
+        bool wantClip = (flags & NodeFlags.ClipsToBounds) != 0 || !p.ClipRect.IsInfinite;
         if ((flags & NodeFlags.ClipsToBounds) != 0)
+            childClip = childClip.Intersect(deviceBounds);
+        if (!p.ClipRect.IsInfinite)
+            childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
+        if (wantClip)
         {
-            childClip = clip.Intersect(deviceBounds);
             dl.PushClip(childClip, key);
             pushedClip = true;
         }
@@ -153,20 +158,30 @@ public static class SceneRecorder
                 GradientSpec bb = default;
                 bool hasGradBorder = p.BorderWidth > 0f && scene.TryGetBorderBrush(node, out bb) && bb.Stops is { Length: > 0 };
 
+                // Stateful gradient variants (P4b): resolve once; the eased progress feeds the per-stop blend in Emit*.
+                GradientSpec hg = default, pg = default, hbb = default, pbb = default;
+                bool hasHG = hasGradFill && scene.TryGetHoverGradient(node, out hg) && hg.Stops is { Length: > 0 };
+                bool hasPG = hasGradFill && scene.TryGetPressedGradient(node, out pg) && pg.Stops is { Length: > 0 };
+                bool hasHBB = hasGradBorder && scene.TryGetHoverBorderBrush(node, out hbb) && hbb.Stops is { Length: > 0 };
+                bool hasPBB = hasGradBorder && scene.TryGetPressedBorderBrush(node, out pbb) && pbb.Stops is { Length: > 0 };
+                float gHoverT = 0f, gPressT = 0f;
+                if (hasHG || hasPG || hasHBB || hasPBB)
+                    TryResolveInteractionProgress(scene, node, out gHoverT, out gPressT);
+
                 // ── fill ── the interior is always filled at its FULL geometry; the border is a hollow SDF ring drawn
                 // ON TOP of the fill edge (below). We must NOT fill the whole box with the border colour and overlay an
                 // inset interior (the old "donut"): with a translucent interior (e.g. the unchecked CheckBox/RadioButton
                 // fill ≈ black@10%) the opaque ring shows straight through → a solid grey chip. A hollow ring composites
                 // correctly over ANY fill opacity, exactly like the gradient-border path always has.
                 if (hasGradFill)
-                    EmitGradient(dl, local, p.Corners, in g, world, opacity, key);
+                    EmitGradient(dl, local, p.Corners, in g, in hg, hasHG, in pg, hasPG, gHoverT, gPressT, world, opacity, key);
                 else if (fill.A > 0f)
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
 
                 // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ── ONE hollow ring
                 // for every border, solid or gradient; the SDF stroke never paints the interior.
                 if (hasGradBorder)
-                    EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, world, opacity, key);
+                    EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, in hbb, hasHBB, in pbb, hasPBB, gHoverT, gPressT, world, opacity, key);
                 else if (p.BorderWidth > 0f && border.A > 0f)
                     EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, border, world, opacity, key);
                 break;
@@ -174,7 +189,8 @@ public static class SceneRecorder
             case VisualKind.Text when !p.Text.IsEmpty:
             {
                 ref var li = ref scene.Layout(node);
-                dl.DrawGlyphRun(local, p.TextColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
+                ColorF textColor = ResolveTextColor(scene, node, flags, in p);
+                dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
                     (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
                 break;
             }
@@ -312,6 +328,57 @@ public static class SceneRecorder
         }
     }
 
+    /// <summary>Resolve a text/glyph node's foreground for this frame. Plain text (no state colors) returns instantly.
+    /// Otherwise: Disabled wins as a step (self-or-ancestor input-disabled), then Hover/Pressed ease with the nearest
+    /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
+    /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
+    private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    {
+        // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
+        if (p.TextHoverColor.A == 0f && p.TextPressedColor.A == 0f && p.TextDisabledColor.A == 0f && p.TextFocusedColor.A == 0f)
+            return p.TextColor;
+
+        if (p.TextDisabledColor.A > 0f && IsDisabledSelfOrAncestor(scene, node))
+            return p.TextDisabledColor;
+
+        bool hasHover = p.TextHoverColor.A > 0f;
+        bool hasPress = p.TextPressedColor.A > 0f;
+        if (hasHover || hasPress)
+        {
+            if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
+            {
+                ColorF c = p.TextColor;
+                if (hasHover) c = ColorF.LerpLinear(c, p.TextHoverColor, hoverT);   // linear-light cross-fade (color canon)
+                if (hasPress) c = ColorF.LerpLinear(c, p.TextPressedColor, pressT);
+                return c;
+            }
+            // No progress row on the interactive ancestor → instant step from its hover/press flags.
+            NodeFlags istate = NearestInteractiveStateFlags(scene, node);
+            if (hasPress && (istate & NodeFlags.Pressed) != 0) return p.TextPressedColor;
+            if (hasHover && (istate & NodeFlags.Hovered) != 0) return p.TextHoverColor;
+        }
+
+        if (p.TextFocusedColor.A > 0f && (flags & NodeFlags.Focused) != 0)
+            return p.TextFocusedColor;
+
+        return p.TextColor;
+    }
+
+    private static bool IsDisabledSelfOrAncestor(SceneStore scene, NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if ((scene.Flags(n) & NodeFlags.Disabled) != 0) return true;
+        return false;
+    }
+
+    private static NodeFlags NearestInteractiveStateFlags(SceneStore scene, NodeHandle node)
+    {
+        const int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if ((scene.Interaction(n).HandlerMask & interactive) != 0) return scene.Flags(n);
+        return NodeFlags.None;
+    }
+
     // A centerline-based SDF stroke insets the rect by bw/2; to keep the band CONCENTRIC with the box's rounded corner
     // (so the stroke's outer edge lands exactly on the bounds outline) the corner radius must shrink by the SAME bw/2 —
     // else the corner arc re-centres and the 1px ring reads as a rough/uneven corner instead of a smooth WinUI one.
@@ -321,7 +388,9 @@ public static class SceneRecorder
     private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, in Affine2D world, float opacity, ulong key)
         => dl.StrokeRoundRect(new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw)), InsetCorners(corners, bw * 0.5f), border, bw, world, opacity, key);
 
-    private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g, in Affine2D world, float opacity, ulong key)
+    private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
+        in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
+        in Affine2D world, float opacity, ulong key)
     {
         // axis endpoints in local 0..1 from the angle (0 = →, 90 = ↓); radial ignores the axis.
         float rad = g.AngleDeg * (MathF.PI / 180f);
@@ -332,13 +401,32 @@ public static class SceneRecorder
         int n = Math.Min(s.Length, GradientSpec.MaxStops);
         ColorF c0 = s[0].Color, c1 = n > 1 ? s[1].Color : c0, c2 = n > 2 ? s[2].Color : c1, c3 = n > 3 ? s[3].Color : c2;
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
+        // P4b: per-frame interpolate the resting stops toward the hover/pressed gradient by the eased progress (stack locals,
+        // never a new GradientSpec). Differing stop counts blend only the shared prefix (rest of resting stops hold).
+        if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
+        if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
         dl.GradientRect(new DrawGradientRectCmd(local, corners, start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, world, opacity), key);
+    }
+
+    // Blend the four stack-local gradient stops toward another spec's stops by t (linear-light color, linear offset).
+    // Zero-alloc: reads the (stable, mount-allocated) stop array; blends only the prefix shared with the resting count.
+    private static void LerpStops(ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
+        ref float o0, ref float o1, ref float o2, ref float o3, int n, in GradientSpec to, float t)
+    {
+        var s = to.Stops;
+        int m = Math.Min(n, Math.Min(s.Length, GradientSpec.MaxStops));
+        if (m > 0) { c0 = ColorF.LerpLinear(c0, s[0].Color, t); o0 += (s[0].Offset - o0) * t; }
+        if (m > 1) { c1 = ColorF.LerpLinear(c1, s[1].Color, t); o1 += (s[1].Offset - o1) * t; }
+        if (m > 2) { c2 = ColorF.LerpLinear(c2, s[2].Color, t); o2 += (s[2].Offset - o2) * t; }
+        if (m > 3) { c3 = ColorF.LerpLinear(c3, s[3].Color, t); o3 += (s[3].Offset - o3) * t; }
     }
 
     /// <summary>A gradient-tinted border ring: the gradient PS sampled along the local axis, drawn as an SDF band of
     /// width <paramref name="bw"/> centered on a rect inset by bw/2 (so the stroke sits inside the bounds, WinUI-style).
     /// The vertical axis spans the whole control, matching WinUI's ControlElevationBorderBrush.</summary>
-    private static void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g, in Affine2D world, float opacity, ulong key)
+    private static void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g,
+        in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
+        in Affine2D world, float opacity, ulong key)
     {
         float rad = g.AngleDeg * (MathF.PI / 180f);
         float dx = MathF.Cos(rad), dy = MathF.Sin(rad);
@@ -348,6 +436,8 @@ public static class SceneRecorder
         int n = Math.Min(s.Length, GradientSpec.MaxStops);
         ColorF c0 = s[0].Color, c1 = n > 1 ? s[1].Color : c0, c2 = n > 2 ? s[2].Color : c1, c3 = n > 3 ? s[3].Color : c2;
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
+        if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
+        if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
         var ring = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
         dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }

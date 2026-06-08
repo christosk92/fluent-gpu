@@ -74,6 +74,12 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, PolylineStrokeSpec> _polylines = new();
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
+    // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
+    // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
+    private readonly Dictionary<int, GradientSpec> _hoverGradients = new();
+    private readonly Dictionary<int, GradientSpec> _pressedGradients = new();
+    private readonly Dictionary<int, GradientSpec> _hoverBorderBrushes = new();
+    private readonly Dictionary<int, GradientSpec> _pressedBorderBrushes = new();
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
@@ -163,6 +169,10 @@ public sealed class SceneStore : ISceneBackend
         _polylines.Remove(idx);
         _gradients.Remove(idx);
         _borderBrushes.Remove(idx);
+        _hoverGradients.Remove(idx);
+        _pressedGradients.Remove(idx);
+        _hoverBorderBrushes.Remove(idx);
+        _pressedBorderBrushes.Remove(idx);
         _acrylics.Remove(idx);
         _measureCache.Remove(idx);
         _gen[idx]++;
@@ -367,6 +377,22 @@ public sealed class SceneStore : ISceneBackend
     public void SetBorderBrush(NodeHandle h, in GradientSpec g) => _borderBrushes[(int)h.Raw.Index] = g;
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGetValue((int)h.Raw.Index, out g);
     public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
+
+    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients[(int)h.Raw.Index] = g;
+    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
+
+    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients[(int)h.Raw.Index] = g;
+    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
+
+    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes[(int)h.Raw.Index] = g;
+    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
+
+    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes[(int)h.Raw.Index] = g;
+    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
 
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
