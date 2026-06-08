@@ -24,8 +24,10 @@ public static partial class Slider
         public ColorF ThumbFill { get; init; }                         // inner accent dot
         public GradientSpec? ThumbBorder { get; init; }                // ControlElevationBorderBrush
         public float ThumbBorderWidth { get; init; } = 1f;
-        public float ThumbHoverScale { get; init; } = 1.16f;           // ~14/12 grow on hover
-        public float ThumbPressScale { get; init; } = 0.92f;           // ~ shrink on press
+        public float ThumbCornerRadius { get; init; } = 10f;           // SliderThumbCornerRadius (pill, not circle)
+        public float ThumbHoverScale { get; init; } = 1.167f;          // 14/12 inner-thumb grow on hover (Slider_themeresources.xaml:222)
+        public float ThumbPressScale { get; init; } = 0.71f;           // 8.5/12 inner-thumb shrink on press (line 234)
+        public float ThumbDisabledScale { get; init; } = 1.167f;       // disabled inner-thumb scale (line 246; same as hover)
     }
 
     public static Style? StyleOverride;
@@ -37,6 +39,104 @@ public static partial class Slider
         ThumbFill = Tok.AccentDefault,
         ThumbBorder = Tok.ControlElevationBorder,
     };
+
+    /// <summary>Extended slider configuration: a value range, optional step snapping, tick marks, and orientation.</summary>
+    public sealed record Options
+    {
+        public float Min { get; init; } = 0f;
+        public float Max { get; init; } = 1f;
+        public float Step { get; init; }            // 0 = continuous
+        public float TickFrequency { get; init; }   // 0 = no ticks
+        public bool Vertical { get; init; }
+    }
+
+    /// <summary>
+    /// A slider over an arbitrary <see cref="Options.Min"/>..<see cref="Options.Max"/> range, with optional step snapping,
+    /// tick marks, and vertical orientation. <paramref name="value"/> is in range units; <paramref name="length"/> is the
+    /// track length (px) and <paramref name="thickness"/> the cross size. The 0..1 <see cref="Create(float,Action{float},float,float,Style?)"/>
+    /// and <see cref="Bind"/> overloads are unchanged.
+    /// </summary>
+    public static BoxEl Ranged(float value, Action<float> onChange, Options o, float length = 220f, float thickness = 32f, Style? style = null)
+    {
+        var s = style ?? DefaultStyle;
+        float range = MathF.Max(o.Max - o.Min, 1e-5f);
+        float t = Math.Clamp((value - o.Min) / range, 0f, 1f);
+        float thumbD = s.ThumbDiameter;
+
+        void Set(Point2 p)
+        {
+            float raw = Math.Clamp(o.Vertical ? 1f - p.Y / MathF.Max(length, 1f) : p.X / MathF.Max(length, 1f), 0f, 1f);
+            float v = o.Min + raw * range;
+            if (o.Step > 0f) v = o.Min + MathF.Round((v - o.Min) / o.Step) * o.Step;
+            onChange(Math.Clamp(v, o.Min, o.Max));
+        }
+
+        Element Ticks(bool vertical)
+        {
+            if (o.TickFrequency <= 0f) return new BoxEl { Height = 0f };
+            var marks = new List<Element>();
+            for (float tv = o.Min; tv <= o.Max + o.TickFrequency * 0.01f; tv += o.TickFrequency)
+            {
+                float tt = Math.Clamp((tv - o.Min) / range, 0f, 1f);
+                marks.Add(vertical
+                    ? new BoxEl { Width = 6f, Height = 1f, Fill = Tok.FillControlStrong, OffsetY = (1f - tt) * length }
+                    : new BoxEl { Width = 1f, Height = 6f, Fill = Tok.FillControlStrong, OffsetX = tt * length });
+            }
+            return vertical
+                ? new BoxEl { ZStack = true, Width = 6f, Height = length, Children = marks.ToArray() }
+                : new BoxEl { ZStack = true, Width = length, Height = 6f, Children = marks.ToArray() };
+        }
+
+        if (o.Vertical)
+        {
+            var track = new BoxEl
+            {
+                Width = thickness, Height = length, ZStack = true, Role = AutomationRole.Slider,
+                OnPointerDown = Set, OnDrag = Set,
+                Children =
+                [
+                    new BoxEl { Width = s.TrackHeight, Height = length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.RailFill, OffsetX = (thickness - s.TrackHeight) * 0.5f },
+                    new BoxEl { Width = s.TrackHeight, Height = t * length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.ValueFill, OffsetX = (thickness - s.TrackHeight) * 0.5f, OffsetY = (1f - t) * length },
+                    new BoxEl
+                    {
+                        Width = thumbD, Height = thumbD, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
+                        HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
+                        OffsetX = (thickness - thumbD) * 0.5f, OffsetY = Math.Clamp((1f - t) * length - thumbD * 0.5f, 0f, length - thumbD),
+                        Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
+                    },
+                ],
+            };
+            return new BoxEl { Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Children = o.TickFrequency > 0f ? [track, Ticks(true)] : [track] };
+        }
+
+        var hTrack = new BoxEl
+        {
+            Width = length, Height = thickness, ZStack = true, Role = AutomationRole.Slider,
+            OnPointerDown = Set, OnDrag = Set,
+            Children =
+            [
+                new BoxEl { Width = length, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.RailFill, OffsetY = (thickness - s.TrackHeight) * 0.5f },
+                new BoxEl { Width = t * length, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = s.ValueFill, OffsetY = (thickness - s.TrackHeight) * 0.5f },
+                new BoxEl
+                {
+                    Direction = 0, Width = length, Height = thickness, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        new BoxEl { Width = MathF.Max(0f, t * length - thumbD * 0.5f) },
+                        new BoxEl
+                        {
+                            Width = thumbD, Height = thumbD, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing, BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
+                            HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
+                            Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
+                        },
+                    ],
+                },
+            ],
+        };
+        return new BoxEl { Direction = 1, Gap = 4f, Children = o.TickFrequency > 0f ? [hTrack, Ticks(false)] : [hTrack] };
+    }
 
     public static BoxEl Create(float value, Action<float> onChange, float width = 200f, float height = 24f, Style? style = null)
     {
@@ -73,7 +173,7 @@ public static partial class Slider
                         {
                             Width = thumbD, Height = thumbD,
                             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing,
                             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                             Children = [new BoxEl { Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter, Corners = Radii.Circle(s.InnerThumbDiameter), Fill = s.ThumbFill }],
@@ -131,7 +231,7 @@ public static partial class Slider
                         {
                             Width = thumbD, Height = thumbD,
                             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Corners = Radii.Circle(thumbD), Fill = s.ThumbRing,
+                            Corners = CornerRadius4.All(s.ThumbCornerRadius), Fill = s.ThumbRing,
                             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
                             HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
                             TransformBind = () => Affine2D.Translation(Math.Clamp(value.Value * width - thumbD * 0.5f, 0f, MathF.Max(0f, width - thumbD)), 0f),

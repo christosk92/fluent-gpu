@@ -12,6 +12,7 @@ public enum Easing : byte
     FluentStandard,    // move / reposition — cubic-bezier(0.8, 0.0, 0.2, 1.0)
     FluentDecelerate,  // entrance / show   — cubic-bezier(0.1, 0.9, 0.2, 1.0)
     FluentAccelerate,  // exit / hide       — cubic-bezier(0.9, 0.1, 1.0, 0.2)
+    FluentPopOpen,     // flyout/menu open  — cubic-bezier(0, 0, 0, 1)  (the WinUI MenuPopupThemeTransition curve)
 }
 
 /// <summary>Evaluates an <see cref="Easing"/> curve at normalized time t (0..1).</summary>
@@ -32,6 +33,7 @@ public static class Easings
         Easing.FluentStandard => CubicBezier(t, 0.8f, 0.0f, 0.2f, 1.0f),
         Easing.FluentDecelerate => CubicBezier(t, 0.1f, 0.9f, 0.2f, 1.0f),
         Easing.FluentAccelerate => CubicBezier(t, 0.9f, 0.1f, 1.0f, 0.2f),
+        Easing.FluentPopOpen => CubicBezier(t, 0.0f, 0.0f, 0.0f, 1.0f),
         _ => t,   // Linear
     };
 

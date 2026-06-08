@@ -12,30 +12,188 @@ using static FluentGpu.Dsl.Ui;
 //   dotnet run --project src/FluentGpu.WindowsApp
 sealed class GalleryApp : Component
 {
+    // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Design, Controls (All + an expanded Basic input group) —
+    // with the engine's own capability demos remapped under Fundamentals/Design/Samples. (Accessibility is out of scope.)
     static readonly NavItem[] Items =
     {
         new("welcome", Icons.Home, "Home"),
-        new("h-fund", "", "Fundamentals", IsHeader: true),
-        new("state", Icons.Refresh, "State & components"),
-        new("typography", Icons.Font, "Typography"),
-        new("icons", Icons.Star, "Icons & fonts"),
-        new("h-layout", "", "Layout", IsHeader: true),
-        new("flex", Icons.Tag, "Flexbox"),
-        new("grid", Icons.Grid, "CSS Grid"),
-        new("repeater", Icons.List, "ItemsRepeater"),
-        new("virtualization", Icons.List, "List virtualization"),
+        new("fundamentals", Icons.Document, "Fundamentals")
+        {
+            Children =
+            [
+                new("state", Icons.Refresh, "State & components"),
+                new("flex", Icons.Tag, "Flexbox"),
+                new("grid", Icons.Grid, "CSS Grid"),
+                new("repeater", Icons.List, "ItemsRepeater"),
+                new("virtualization", Icons.List, "List virtualization"),
+                new("animation", Icons.Movie, "Animation"),
+                new("compositor", Icons.Brush, "Compositor"),
+                new("scrolling", Icons.Document, "Scrolling"),
+            ],
+        },
+        new("design", Icons.Brush, "Design")
+        {
+            Children =
+            [
+                new("typography", Icons.Font, "Typography"),
+                new("icons", Icons.Star, "Icons & fonts"),
+                new("images", Icons.Picture, "Images"),
+            ],
+        },
         new("h-controls", "", "Controls", IsHeader: true),
-        new("buttons", Icons.Accept, "Buttons & commands"),
-        new("inputs", Icons.Volume, "Inputs & sliders"),
-        new("h-media", "", "Media", IsHeader: true),
-        new("images", Icons.Picture, "Images"),
-        new("scrolling", Icons.Document, "Scrolling"),
-        new("h-motion", "", "Motion & GPU", IsHeader: true),
-        new("animation", Icons.Movie, "Animation"),
-        new("compositor", Icons.Brush, "Compositor"),
+        new("all", Icons.Grid, "All"),
+        new("basic-input", Icons.Accept, "Basic input")
+        {
+            InitiallyExpanded = true,
+            Children =
+            [
+                new("Button", Icons.Accept, "Button"),
+                new("DropDownButton", Icons.More, "DropDownButton"),
+                new("HyperlinkButton", Icons.Share, "HyperlinkButton"),
+                new("RepeatButton", Icons.Refresh, "RepeatButton"),
+                new("ToggleButton", Icons.Accept, "ToggleButton"),
+                new("SplitButton", Icons.More, "SplitButton"),
+                new("ToggleSplitButton", Icons.More, "ToggleSplitButton"),
+                new("CheckBox", Icons.Accept, "CheckBox"),
+                new("ColorPicker", Icons.Brush, "ColorPicker"),
+                new("ComboBox", Icons.List, "ComboBox"),
+                new("RadioButton", Icons.FavoriteStar, "RadioButton"),
+                new("RatingControl", Icons.Star, "RatingControl"),
+                new("Slider", Icons.Volume, "Slider"),
+                new("ToggleSwitch", Icons.Settings, "ToggleSwitch"),
+            ],
+        },
+        new("status-info", Icons.Document, "Status & info")
+        {
+            Children =
+            [
+                new("InfoBadge", Icons.Tag, "InfoBadge"),
+                new("InfoBar", Icons.Document, "InfoBar"),
+                new("ProgressBar", Icons.Refresh, "ProgressBar"),
+                new("ProgressRing", Icons.Refresh, "ProgressRing"),
+                new("ToolTip", Icons.Document, "ToolTip"),
+            ],
+        },
+        new("layout", Icons.Grid, "Layout")
+        {
+            Children =
+            [
+                new("Expander", Icons.ChevronDown, "Expander"),
+                new("SplitView", Icons.Grid, "SplitView"),
+                new("Viewbox", Icons.Picture, "Viewbox"),
+                new("Border", Icons.Grid, "Border"),
+                new("Canvas", Icons.Grid, "Canvas"),
+                new("RelativePanel", Icons.Grid, "RelativePanel"),
+                new("VariableSizedWrapGrid", Icons.Grid, "VariableSizedWrapGrid"),
+            ],
+        },
+        new("scrolling-controls", Icons.More, "Scrolling")
+        {
+            Children =
+            [
+                new("PipsPager", Icons.More, "PipsPager"),
+                new("AnnotatedScrollBar", Icons.More, "AnnotatedScrollBar"),
+            ],
+        },
+        new("navigation-cat", Icons.List, "Navigation")
+        {
+            Children =
+            [
+                new("BreadcrumbBar", Icons.List, "BreadcrumbBar"),
+                new("SelectorBar", Icons.List, "SelectorBar"),
+                new("TabView", Icons.Document, "TabView"),
+                new("Pivot", Icons.Document, "Pivot"),
+            ],
+        },
+        new("dialogs", Icons.More, "Dialogs & flyouts")
+        {
+            Children =
+            [
+                new("Flyout", Icons.More, "Flyout"),
+                new("ContentDialog", Icons.Document, "ContentDialog"),
+                new("TeachingTip", Icons.Star, "TeachingTip"),
+                new("Popup", Icons.More, "Popup"),
+            ],
+        },
+        new("text-cat", Icons.Font, "Text")
+        {
+            Children =
+            [
+                new("TextBox", Icons.Font, "TextBox"),
+                new("PasswordBox", Icons.Settings, "PasswordBox"),
+                new("AutoSuggestBox", Icons.List, "AutoSuggestBox"),
+                new("NumberBox", Icons.Volume, "NumberBox"),
+                new("TextBlock", Icons.Font, "TextBlock"),
+                new("RichTextBlock", Icons.Font, "RichTextBlock"),
+            ],
+        },
+        new("media", Icons.Picture, "Media")
+        {
+            Children =
+            [
+                new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
+                new("MediaPlayerElement", Icons.Movie, "MediaPlayerElement"),
+            ],
+        },
+        new("collections", Icons.List, "Collections")
+        {
+            Children =
+            [
+                new("ListView", Icons.List, "ListView"),
+                new("GridView", Icons.Grid, "GridView"),
+                new("FlipView", Icons.Picture, "FlipView"),
+                new("TreeView", Icons.List, "TreeView"),
+                new("ItemsView", Icons.Grid, "ItemsView"),
+            ],
+        },
+        new("menus", Icons.More, "Menus & toolbars")
+        {
+            Children =
+            [
+                new("MenuBar", Icons.More, "MenuBar"),
+                new("AppBarButton", Icons.Accept, "AppBarButton"),
+                new("AppBarToggleButton", Icons.Accept, "AppBarToggleButton"),
+                new("CommandBar", Icons.More, "CommandBar"),
+                new("AppBarSeparator", Icons.More, "AppBarSeparator"),
+                new("CommandBarFlyout", Icons.More, "CommandBarFlyout"),
+                new("SwipeControl", Icons.More, "SwipeControl"),
+            ],
+        },
+        new("datetime", Icons.Document, "Date & time")
+        {
+            Children =
+            [
+                new("CalendarView", Icons.Grid, "CalendarView"),
+                new("CalendarDatePicker", Icons.Document, "CalendarDatePicker"),
+                new("DatePicker", Icons.Document, "DatePicker"),
+                new("TimePicker", Icons.Document, "TimePicker"),
+            ],
+        },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
+
+    // Maps a Basic-input control key to its bundled WinUI-Gallery tile image (note the casing: "CheckBox" → "Checkbox.png").
+    public static readonly (string Key, string Title, string Image)[] BasicInputCatalog =
+    {
+        ("Button", "Button", "Button.png"),
+        ("DropDownButton", "DropDownButton", "DropDownButton.png"),
+        ("HyperlinkButton", "HyperlinkButton", "HyperlinkButton.png"),
+        ("RepeatButton", "RepeatButton", "RepeatButton.png"),
+        ("ToggleButton", "ToggleButton", "ToggleButton.png"),
+        ("SplitButton", "SplitButton", "SplitButton.png"),
+        ("ToggleSplitButton", "ToggleSplitButton", "ToggleSplitButton.png"),
+        ("CheckBox", "CheckBox", "Checkbox.png"),
+        ("ColorPicker", "ColorPicker", "ColorPicker.png"),
+        ("ComboBox", "ComboBox", "ComboBox.png"),
+        ("RadioButton", "RadioButton", "RadioButton.png"),
+        ("RatingControl", "RatingControl", "RatingControl.png"),
+        ("Slider", "Slider", "Slider.png"),
+        ("ToggleSwitch", "ToggleSwitch", "ToggleSwitch.png"),
+    };
+
+    // Initial nav page (default = Home). Overridable so the --screenshot harness can deep-link a control page.
+    public string InitialPage = "welcome";
 
     public override Element Render()
     {
@@ -44,13 +202,15 @@ sealed class GalleryApp : Component
             Embed.Comp(() => new NavigationView
             {
                 Header = "fluent-gpu",
-                Initial = "welcome",
+                Initial = InitialPage,
                 Items = Items,
                 Content = Page,   // each page is a distinct component type → the reconciler remounts it on navigation
             })
         ) with { Grow = 1 };
 
-        return ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+        var content = ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+        // Host the overlay layer at the top so anchored flyouts (ComboBox/DropDownButton/SplitButton/ColorPicker) work app-wide.
+        return Embed.Comp(() => new OverlayHost { Child = content });
     }
 
     // Integrated title bar (transparent → window Mica shows through): app identity left, a centered search pill,
@@ -94,6 +254,87 @@ sealed class GalleryApp : Component
 
     static Element Page(string key) => key switch
     {
+        // Overview / category pages (WinUI-Gallery shape).
+        "fundamentals" => Embed.Comp(() => new FundamentalsPage()),
+        "design" => Embed.Comp(() => new DesignPage()),
+        "all" => Embed.Comp(() => new AllControlsPage()),
+        "basic-input" => Embed.Comp(() => new BasicInputOverviewPage()),
+
+        // Basic input — the 14 control demo pages.
+        "Button" => Embed.Comp(() => new ButtonControlPage()),
+        "DropDownButton" => Embed.Comp(() => new DropDownButtonControlPage()),
+        "HyperlinkButton" => Embed.Comp(() => new HyperlinkButtonControlPage()),
+        "RepeatButton" => Embed.Comp(() => new RepeatButtonControlPage()),
+        "ToggleButton" => Embed.Comp(() => new ToggleButtonControlPage()),
+        "SplitButton" => Embed.Comp(() => new SplitButtonControlPage()),
+        "ToggleSplitButton" => Embed.Comp(() => new ToggleSplitButtonControlPage()),
+        "CheckBox" => Embed.Comp(() => new CheckBoxControlPage()),
+        "ColorPicker" => Embed.Comp(() => new ColorPickerControlPage()),
+        "ComboBox" => Embed.Comp(() => new ComboBoxControlPage()),
+        "RadioButton" => Embed.Comp(() => new RadioButtonControlPage()),
+        "RatingControl" => Embed.Comp(() => new RatingControlControlPage()),
+        "Slider" => Embed.Comp(() => new SliderControlPage()),
+        "ToggleSwitch" => Embed.Comp(() => new ToggleSwitchControlPage()),
+
+        // Status & info / Layout / Scrolling (WinUI Gallery parity).
+        "status-info" => Embed.Comp(() => new StatusInfoOverviewPage()),
+        "InfoBadge" => Embed.Comp(() => new InfoBadgePage()),
+        "InfoBar" => Embed.Comp(() => new InfoBarPage()),
+        "ProgressBar" => Embed.Comp(() => new ProgressBarPage()),
+        "layout" => Embed.Comp(() => new LayoutOverviewPage()),
+        "Expander" => Embed.Comp(() => new ExpanderPage()),
+        "scrolling-controls" => Embed.Comp(() => new ScrollingOverviewPage()),
+        "PipsPager" => Embed.Comp(() => new PipsPagerPage()),
+        "SplitView" => Embed.Comp(() => new SplitViewPage()),
+        "navigation-cat" => Embed.Comp(() => new NavigationOverviewPage()),
+        "BreadcrumbBar" => Embed.Comp(() => new BreadcrumbBarPage()),
+        "SelectorBar" => Embed.Comp(() => new SelectorBarPage()),
+        "TabView" => Embed.Comp(() => new TabViewPage()),
+        "dialogs" => Embed.Comp(() => new DialogsOverviewPage()),
+        "Flyout" => Embed.Comp(() => new FlyoutPage()),
+        "media" => Embed.Comp(() => new MediaOverviewPage()),
+        "PersonPicture" => Embed.Comp(() => new PersonPicturePage()),
+        "collections" => Embed.Comp(() => new CollectionsOverviewPage()),
+        "ListView" => Embed.Comp(() => new ListViewPage()),
+        "GridView" => Embed.Comp(() => new GridViewPage()),
+        "FlipView" => Embed.Comp(() => new FlipViewPage()),
+        "TreeView" => Embed.Comp(() => new TreeViewPage()),
+        "menus" => Embed.Comp(() => new MenusOverviewPage()),
+        "MenuBar" => Embed.Comp(() => new MenuBarPage()),
+        "AppBarButton" => Embed.Comp(() => new AppBarButtonPage()),
+        "AppBarToggleButton" => Embed.Comp(() => new AppBarToggleButtonPage()),
+        "CommandBar" => Embed.Comp(() => new CommandBarPage()),
+        "Pivot" => Embed.Comp(() => new PivotPage()),
+        "ContentDialog" => Embed.Comp(() => new ContentDialogPage()),
+        "Viewbox" => Embed.Comp(() => new ViewboxPage()),
+        "text-cat" => Embed.Comp(() => new TextOverviewPage()),
+        "NumberBox" => Embed.Comp(() => new NumberBoxPage()),
+        "TextBlock" => Embed.Comp(() => new TextBlockPage()),
+        "TeachingTip" => Embed.Comp(() => new TeachingTipPage()),
+        "Popup" => Embed.Comp(() => new PopupPage()),
+        "ItemsView" => Embed.Comp(() => new ItemsViewPage()),
+        "Border" => Embed.Comp(() => new BorderPage()),
+        "AppBarSeparator" => Embed.Comp(() => new AppBarSeparatorPage()),
+        "RichTextBlock" => Embed.Comp(() => new RichTextBlockPage()),
+        "TextBox" => Embed.Comp(() => new TextBoxPage()),
+        "PasswordBox" => Embed.Comp(() => new PasswordBoxPage()),
+        "AutoSuggestBox" => Embed.Comp(() => new AutoSuggestBoxPage()),
+        "Canvas" => Embed.Comp(() => new CanvasPage()),
+        "ToolTip" => Embed.Comp(() => new ToolTipPage()),
+        "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
+        "ProgressRing" => Embed.Comp(() => new ProgressRingPage()),
+        "RelativePanel" => Embed.Comp(() => new RelativePanelPage()),
+        "VariableSizedWrapGrid" => Embed.Comp(() => new VariableSizedWrapGridPage()),
+        "AnnotatedScrollBar" => Embed.Comp(() => new AnnotatedScrollBarPage()),
+        "SwipeControl" => Embed.Comp(() => new SwipeControlPage()),
+        "MediaPlayerElement" => Embed.Comp(() => new MediaPlayerElementPage()),
+        "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
+        "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
+        "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),
+        "DatePicker" => Embed.Comp(() => new DatePickerPage()),
+        "TimePicker" => Embed.Comp(() => new TimePickerPage()),
+
+        // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
         "icons" => Embed.Comp(() => new IconsPage()),
         "buttons" => Embed.Comp(() => new ButtonsPage()),

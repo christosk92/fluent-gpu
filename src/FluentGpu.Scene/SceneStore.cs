@@ -57,6 +57,7 @@ public sealed class SceneStore : ISceneBackend
     private NodeFlags[] _flags;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<KeyEventArgs>?[] _keyHandler;
+    private Action<CharEventArgs>?[] _charHandler;   // text (character) input handler
     private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
     private Action<Point2>?[] _drag;
 
@@ -69,6 +70,7 @@ public sealed class SceneStore : ISceneBackend
     // Optional rich-paint side-tables (O(decorated nodes), keyed by node index): eased interaction, shadow, gradient, acrylic.
     private readonly Dictionary<int, InteractionAnim> _interact = new();
     private readonly Dictionary<int, ShadowSpec> _shadows = new();
+    private readonly Dictionary<int, ArcSpec> _arcs = new();
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
@@ -97,6 +99,7 @@ public sealed class SceneStore : ISceneBackend
         _flags = new NodeFlags[capacity];
         _click = new Action?[capacity];
         _keyHandler = new Action<KeyEventArgs>?[capacity];
+        _charHandler = new Action<CharEventArgs>?[capacity];
         _pointerDown = new Action<Point2>?[capacity];
         _drag = new Action<Point2>?[capacity];
     }
@@ -124,6 +127,7 @@ public sealed class SceneStore : ISceneBackend
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _click[idx] = null;
         _keyHandler[idx] = null;
+        _charHandler[idx] = null;
         _pointerDown[idx] = null;
         _drag[idx] = null;
         LiveCount++;
@@ -145,6 +149,7 @@ public sealed class SceneStore : ISceneBackend
         DetachFromParent(idx);
         _click[idx] = null;
         _keyHandler[idx] = null;
+        _charHandler[idx] = null;
         _pointerDown[idx] = null;
         _drag[idx] = null;
         ClearDynamicText(idx);
@@ -244,6 +249,8 @@ public sealed class SceneStore : ISceneBackend
     public Action? GetClickHandler(NodeHandle h) => _click[h.Raw.Index];
     public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[h.Raw.Index] = handler;
     public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[h.Raw.Index];
+    public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[h.Raw.Index] = handler;
+    public Action<CharEventArgs>? GetCharHandler(NodeHandle h) => _charHandler[h.Raw.Index];
     public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[h.Raw.Index] = handler;
     public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
     public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
@@ -342,6 +349,10 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGetValue((int)h.Raw.Index, out s);
     public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
 
+    public void SetArc(NodeHandle h, in ArcSpec a) => _arcs[(int)h.Raw.Index] = a;
+    public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGetValue((int)h.Raw.Index, out a);
+    public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
+
     public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);
     public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
@@ -386,7 +397,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
-        Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n);
+        Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n);
     }
 

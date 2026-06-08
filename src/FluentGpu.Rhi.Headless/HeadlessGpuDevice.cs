@@ -18,6 +18,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawImageCmd> _imageDraws = new(32);
     private readonly List<DrawRoundRectStrokeCmd> _strokes = new(16);
     private readonly List<DrawShadowCmd> _shadows = new(16);
+    private readonly List<DrawArcCmd> _arcs = new(16);
     private readonly List<DrawGradientRectCmd> _gradients = new(16);
     private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
     private readonly List<PushLayerCmd> _layers = new(8);
@@ -38,6 +39,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawRoundRectStrokeCmd> LastStrokes => _strokes;
     /// <summary>Soft drop shadows drawn this frame.</summary>
     public IReadOnlyList<DrawShadowCmd> LastShadows => _shadows;
+    /// <summary>Circular-arc strokes (ProgressRing) drawn this frame.</summary>
+    public IReadOnlyList<DrawArcCmd> LastArcs => _arcs;
     /// <summary>Gradient-filled rects drawn this frame.</summary>
     public IReadOnlyList<DrawGradientRectCmd> LastGradients => _gradients;
     /// <summary>Gradient-tinted border strokes (WinUI elevation borders) drawn this frame.</summary>
@@ -74,6 +77,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _imageDraws.Clear();
         _strokes.Clear();
         _shadows.Clear();
+        _arcs.Clear();
         _gradients.Clear();
         _gradientStrokes.Clear();
         _layers.Clear();
@@ -116,6 +120,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawShadow:
                     _shadows.Add(MemoryMarshal.Read<DrawShadowCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    break;
+                case DrawOp.DrawArc:
+                    _arcs.Add(MemoryMarshal.Read<DrawArcCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawArcCmd>();
                     break;
                 case DrawOp.DrawGradientRect:
                     _gradients.Add(MemoryMarshal.Read<DrawGradientRectCmd>(drawList.Slice(pos)));

@@ -66,13 +66,11 @@ public static class SceneRecorder
         ref RectF b = ref scene.Bounds(node);
         ref NodePaint p = ref scene.Paint(node);
 
-        // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node centre)
+        // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node's transform-origin)
         Affine2D world = parentWorld.Multiply(Affine2D.Translation(b.X, b.Y));
+        float ox = b.W * p.OriginX, oy = b.H * p.OriginY;   // transform origin (default centre; e.g. top edge for a menu unfold)
         if (!p.LocalTransform.IsIdentity)
-        {
-            float cx = b.W * 0.5f, cy = b.H * 0.5f;
-            world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-cx, -cy));
-        }
+            world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
         // Interaction-driven composited scale (thumb hover-grow): scale about the node centre by the eased hover/press.
         // The progress comes from the node's own row if it is interactive, else from the nearest interactive ancestor
         // (a slider/scrollbar thumb is non-interactive — drag stays on the track — but grows when the control is used).
@@ -86,10 +84,7 @@ public static class SceneRecorder
             float hs = 1f + (iaScale.HoverScale - 1f) * useH;
             float isc = hs + (iaScale.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
-            {
-                float cx = b.W * 0.5f, cy = b.H * 0.5f;
-                world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-cx, -cy));
-            }
+                world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-ox, -oy));
         }
         // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
         // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).
@@ -115,6 +110,17 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
+        // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
+        //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
+        //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
+        if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
+            dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
+
+        // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
+        // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
+        if (scene.TryGetArc(node, out var arcS) && !arcS.IsNone && deviceBounds.Overlaps(clip))
+            dl.Arc(local, arcS.Color, arcS.Thickness, arcS.StartDeg, arcS.SweepDeg, arcS.RoundCaps, world, opacity, key);
+
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor.
         bool pushedClip = false;
         RectF childClip = clip;
@@ -125,14 +131,10 @@ public static class SceneRecorder
             pushedClip = true;
         }
 
-        // ── shadow: drawn beneath the fill (even for a transparent container), if a shadow row exists ──
-        if (scene.TryGetShadow(node, out var sh) && !sh.IsNone && deviceBounds.Overlaps(clip))
-            dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
-
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         bool isAcrylic = scene.TryGetAcrylic(node, out var ac) && deviceBounds.Overlaps(clip);
         if (isAcrylic)
-            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
+            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;
@@ -147,37 +149,29 @@ public static class SceneRecorder
         if (drawSelf)
         switch (p.VisualKind)
         {
-            case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f:
+            case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
+                                     || (scene.TryGetGradient(node, out var guardGradient) && guardGradient.Stops is { Length: > 0 }):
             {
                 ResolveSurface(scene, node, flags, in p, out ColorF fill, out ColorF border);
                 bool hasGradFill = scene.TryGetGradient(node, out var g) && g.Stops is { Length: > 0 };
                 GradientSpec bb = default;
                 bool hasGradBorder = p.BorderWidth > 0f && scene.TryGetBorderBrush(node, out bb) && bb.Stops is { Length: > 0 };
 
-                // ── fill ──  gradient fill supersedes the solid fill; a flat solid border uses the inset "donut".
+                // ── fill ── the interior is always filled at its FULL geometry; the border is a hollow SDF ring drawn
+                // ON TOP of the fill edge (below). We must NOT fill the whole box with the border colour and overlay an
+                // inset interior (the old "donut"): with a translucent interior (e.g. the unchecked CheckBox/RadioButton
+                // fill ≈ black@10%) the opaque ring shows straight through → a solid grey chip. A hollow ring composites
+                // correctly over ANY fill opacity, exactly like the gradient-border path always has.
                 if (hasGradFill)
-                {
                     EmitGradient(dl, local, p.Corners, in g, world, opacity, key);
-                }
-                else if (p.BorderWidth > 0f && border.A > 0f && !hasGradBorder)
-                {
-                    dl.FillRoundRect(local, p.Corners, border, world, opacity, key);     // flat border ring (local space)
-                    float bw = p.BorderWidth;
-                    var inner = new RectF(bw, bw, MathF.Max(0f, pw - 2 * bw), MathF.Max(0f, ph - 2 * bw));
-                    var ic = new CornerRadius4(
-                        MathF.Max(0f, p.Corners.TopLeft - bw), MathF.Max(0f, p.Corners.TopRight - bw),
-                        MathF.Max(0f, p.Corners.BottomRight - bw), MathF.Max(0f, p.Corners.BottomLeft - bw));
-                    if (fill.A > 0f) dl.FillRoundRect(inner, ic, fill, world, opacity, key);
-                }
                 else if (fill.A > 0f)
-                {
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
-                }
 
-                // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ──
+                // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ── ONE hollow ring
+                // for every border, solid or gradient; the SDF stroke never paints the interior.
                 if (hasGradBorder)
                     EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, world, opacity, key);
-                else if (hasGradFill && p.BorderWidth > 0f && border.A > 0f)
+                else if (p.BorderWidth > 0f && border.A > 0f)
                     EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, border, world, opacity, key);
                 break;
             }

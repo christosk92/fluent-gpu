@@ -8,6 +8,7 @@
     <ProjectReference Include="..\FluentGpu.Rhi\FluentGpu.Rhi.csproj" />
     <ProjectReference Include="..\FluentGpu.Render\FluentGpu.Render.csproj" />
     <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <ProjectReference Include="..\FluentGpu.Text.DirectWrite\FluentGpu.Text.DirectWrite.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />

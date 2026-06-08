@@ -10,6 +10,7 @@ using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
 using FluentGpu.Rhi.Gdi;
 using FluentGpu.Scene;
+using FluentGpu.Text.DirectWrite;
 
 namespace FluentGpu;
 
@@ -21,7 +22,7 @@ namespace FluentGpu;
 public static class FluentApp
 {
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-                           bool mica = true, int frames = -1)
+                           bool mica = true, int frames = -1, string? screenshot = null)
     {
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
@@ -39,7 +40,9 @@ public static class FluentApp
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica);
         if (mica) Theme.WindowBackground = ColorF.Transparent;
 
-        var fonts = new GdiFontSystem(strings);
+        // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
+        // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
+        var fonts = new DirectWriteFontSystem(strings);
         IGpuDevice device = new D3D12Device(strings, composited: mica);
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
@@ -58,8 +61,19 @@ public static class FluentApp
             host.RunFrame();
             n++;
             if (frames > 0 && n >= frames) break;
-            // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
-            window.WaitForWork(host.HasActiveWork ? 0 : -1);
+            if (screenshot != null)
+                window.WaitForWork(8);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
+            else
+                // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
+                window.WaitForWork(host.HasActiveWork ? 0 : -1);
+        }
+
+        // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
+        if (screenshot != null && device is D3D12Device d3d)
+        {
+            var px = d3d.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(screenshot, px, cw, ch);
+            Console.Error.WriteLine($"screenshot: wrote {screenshot} ({cw}x{ch})");
         }
     }
 

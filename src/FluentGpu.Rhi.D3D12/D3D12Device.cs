@@ -50,6 +50,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<RectInstance> _rectInsts = new();
     private ShadowPipeline? _shadowPipe;
     private readonly List<ShadowInstance> _shadowInsts = new();
+    private ArcPipeline? _arcPipe;
+    private readonly List<ArcInstance> _arcInsts = new();
     private GradientPipeline? _gradPipe;
     private readonly List<GradientInstance> _gradInsts = new();
     private readonly List<RectF> _clipStack = new(16);
@@ -58,6 +60,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
     private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new();
+    // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
+    // one draw), so a shadow correctly sits OVER the background drawn before it and UNDER the element it belongs to.
+    // Without this, all shadows batch before all rects and any opaque background paints over them. Glyphs always draw last.
+    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc }
+    private readonly List<(PrimKind Kind, int Count)> _runs = new();
     private int _frameImageCount;
     private int _frameImageSkipped;
     private readonly List<GlyphInstance> _glyphInsts = new();
@@ -94,6 +101,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _rectPipe.Init(_device);
         _shadowPipe = new ShadowPipeline();
         _shadowPipe.Init(_device);
+        _arcPipe = new ArcPipeline();
+        _arcPipe.Init(_device);
         _gradPipe = new GradientPipeline();
         _gradPipe.Init(_device);
         _acrylic = new AcrylicCompositor();
@@ -280,6 +289,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameImageSkipped = 0;
         _rectPipe!.BeginFrame();
         _shadowPipe!.BeginFrame();
+        _arcPipe!.BeginFrame();
         _gradPipe!.BeginFrame();
         _glyphs!.BeginFrame();
         _imagePipe!.BeginFrame((int)_frameIndex);   // pick this frame's instance buffer (avoids the CPU↔GPU race that flickers during scroll)
@@ -327,7 +337,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
+
+    // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
+    private void PushRun(PrimKind kind)
+    {
+        int n = _runs.Count;
+        if (n > 0 && _runs[n - 1].Kind == kind) _runs[n - 1] = (kind, _runs[n - 1].Count + 1);
+        else _runs.Add((kind, 1));
+    }
 
     private void Decode(ReadOnlySpan<byte> cmds)
     {
@@ -355,6 +373,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
                     });
                     _frameRectCount++;
+                    PushRun(PrimKind.Rect);
                     break;
                 }
                 case DrawOp.DrawGlyphRun:
@@ -403,6 +422,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, StrokeWidth = c.StrokeWidth,
                     });
                     _frameRectCount++;
+                    PushRun(PrimKind.Rect);
                     break;
                 }
                 case DrawOp.DrawShadow:
@@ -417,6 +437,23 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
                         Blur = c.Blur, Spread = c.Spread, OffX = c.OffsetX, OffY = c.OffsetY,
                     });
+                    PushRun(PrimKind.Shadow);
+                    break;
+                }
+                case DrawOp.DrawArc:
+                {
+                    var c = MemoryMarshal.Read<DrawArcCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawArcCmd>();
+                    const float Deg2Rad = MathF.PI / 180f;
+                    _arcInsts.Add(new ArcInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Thickness = c.Thickness, Opacity = c.Opacity,
+                        StartRad = c.StartDeg * Deg2Rad, SweepRad = c.SweepDeg * Deg2Rad, RoundCaps = c.RoundCaps != 0 ? 1f : 0f,
+                    });
+                    PushRun(PrimKind.Arc);
                     break;
                 }
                 case DrawOp.DrawGradientRect:
@@ -436,6 +473,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
                         Shape = c.Shape, StopCount = c.StopCount,
                     });
+                    PushRun(PrimKind.Gradient);
                     break;
                 }
                 case DrawOp.DrawGradientStroke:
@@ -455,6 +493,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
                         Shape = c.Shape, StopCount = c.StopCount, Stroke = c.StrokeWidth,
                     });
+                    PushRun(PrimKind.Gradient);
                     break;
                 }
                 case DrawOp.PushLayer:
@@ -481,6 +520,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             Dx = im.Transform.Dx, Dy = im.Transform.Dy, Opacity = im.Opacity,
         });
         _frameRectCount++;
+        PushRun(PrimKind.Rect);
     }
 
     // Ready image: sample the resident GPU texture through the ImagePipeline. It draws ABOVE the card/section
@@ -498,6 +538,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
         }, im.ImageId));
         _frameImageCount++;
+        PushRun(PrimKind.Image);
     }
 
     private void SetFullViewport()
@@ -555,22 +596,41 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     private void RecordAll(float lw, float lh)
     {
-        if (_shadowInsts.Count > 0) _shadowPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_shadowInsts), lw, lh);
-        if (_gradInsts.Count > 0) _gradPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_gradInsts), lw, lh);
-        if (_rectInsts.Count > 0) _rectPipe!.Record(_cmdList, CollectionsMarshal.AsSpan(_rectInsts), lw, lh);
-        // Images composite ABOVE the card/section background rects but BELOW glyph labels — one draw per image,
-        // each binding its own texture SRV (few images on screen, so per-draw is fine).
-        if (_imageDraws.Count > 0)
+        // Replay non-glyph primitives in painter (stream) order so a shadow sits OVER the background drawn before it and
+        // UNDER its own element. Consecutive same-kind ops are still one batched draw (each pipeline's Record/Begin fully
+        // (re)binds its state, so interleaving pipelines is safe). Glyphs always render last — text on top within a z-context.
+        if (_runs.Count > 0)
         {
-            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // bind heap/PSO/root-sig/VB once for the whole pass
-            foreach (var (inst, id) in _imageDraws)
-                if (_imageTextures.TryGet(id, out var srv, out var uv))
+            var rectSpan = CollectionsMarshal.AsSpan(_rectInsts);
+            var shadowSpan = CollectionsMarshal.AsSpan(_shadowInsts);
+            var arcSpan = CollectionsMarshal.AsSpan(_arcInsts);
+            var gradSpan = CollectionsMarshal.AsSpan(_gradInsts);
+            int rc = 0, sc = 0, ac = 0, gc = 0, ic = 0;
+            foreach (var (kind, count) in _runs)
+            {
+                switch (kind)
                 {
-                    var d = inst;
-                    d.UvX = uv.X; d.UvY = uv.Y; d.UvW = uv.W; d.UvH = uv.H;   // resolved sub-rect (atlas cell or whole texture)
-                    _imagePipe.Draw(_cmdList, srv, in d);
+                    case PrimKind.Shadow: _shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh); sc += count; break;
+                    case PrimKind.Arc: _arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh); ac += count; break;
+                    case PrimKind.Gradient: _gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh); gc += count; break;
+                    case PrimKind.Rect: _rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh); rc += count; break;
+                    case PrimKind.Image:
+                        _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                        for (int k = 0; k < count; k++)
+                        {
+                            var (inst, id) = _imageDraws[ic + k];
+                            if (_imageTextures.TryGet(id, out var srv, out var uv))
+                            {
+                                var d = inst;
+                                d.UvX = uv.X; d.UvY = uv.Y; d.UvW = uv.W; d.UvH = uv.H;   // resolved sub-rect (atlas cell or whole texture)
+                                _imagePipe.Draw(_cmdList, srv, in d);
+                            }
+                            else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
+                        }
+                        ic += count;
+                        break;
                 }
-                else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
+            }
         }
         if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
     }
@@ -674,6 +734,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;
                 case DrawOp.DrawRoundRectStroke: pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
                 case DrawOp.DrawShadow: pos += Unsafe.SizeOf<DrawShadowCmd>(); break;
+                case DrawOp.DrawArc: pos += Unsafe.SizeOf<DrawArcCmd>(); break;
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.PushLayer: return true;
@@ -749,6 +810,74 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
     }
 
+    /// <summary>
+    /// Debug-only: read the last-rendered back buffer back to CPU as tightly-packed, top-down BGRA8. Used by the
+    /// <c>--screenshot</c> tooling to produce a PNG for visual fidelity diffing — NOT a hot-path method (it stalls
+    /// the GPU). With FLIP_DISCARD the just-presented buffer at <c>_frameIndex</c> is still intact until reused.
+    /// </summary>
+    public byte[] CaptureBgra(out int width, out int height)
+    {
+        WaitForGpu();   // ensure the last frame finished rendering before we copy it
+        width = (int)_w; height = (int)_h;
+        ID3D12Resource* back = _backBuffers[_frameIndex];
+
+        // Footprint of subresource 0 (RowPitch is aligned to 256 → may exceed width*4; we re-pack on the CPU side).
+        D3D12_RESOURCE_DESC desc = default;
+        desc.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = _w; desc.Height = _h; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp; uint numRows; ulong rowBytes; ulong total;
+        _device->GetCopyableFootprints(&desc, 0, 1, 0, &fp, &numRows, &rowBytes, &total);
+
+        // Readback (CPU-visible) staging buffer.
+        D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC bd = default;
+        bd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
+        bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
+        bd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
+        bd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* readback;
+        Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &bd,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&readback), "Capture.Readback");
+
+        ID3D12CommandAllocator* alloc = _allocators[_frameIndex];
+        Check(alloc->Reset(), "capture.alloc.Reset");
+        Check(_cmdList->Reset(alloc, null), "capture.cmd.Reset");
+        Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        D3D12_TEXTURE_COPY_LOCATION dst = default;
+        dst.pResource = readback;
+        dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.Anonymous.PlacedFootprint = fp;
+        D3D12_TEXTURE_COPY_LOCATION src = default;
+        src.pResource = back;
+        src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.Anonymous.SubresourceIndex = 0;
+        _cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, null);
+
+        Barrier(back, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
+        Check(_cmdList->Close(), "capture.cmd.Close");
+        ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
+        _queue->ExecuteCommandLists(1, &execList);
+        WaitForGpu();
+
+        byte[] outp = new byte[(long)width * height * 4];
+        void* mapped;
+        D3D12_RANGE rr = default; rr.Begin = 0; rr.End = (nuint)total;
+        Check(readback->Map(0, &rr, &mapped), "capture.Map");
+        uint pitch = fp.Footprint.RowPitch;
+        for (int y = 0; y < height; y++)
+        {
+            byte* srcRow = (byte*)mapped + (ulong)y * pitch;
+            new ReadOnlySpan<byte>(srcRow, width * 4).CopyTo(outp.AsSpan(y * width * 4));
+        }
+        D3D12_RANGE wrote = default;   // we wrote nothing back
+        readback->Unmap(0, &wrote);
+        readback->Release();
+        return outp;
+    }
+
     internal void Resize(uint w, uint h)
     {
         if (w < 1) w = 1; if (h < 1) h = 1;
@@ -782,6 +911,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _imagePipe?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
+        _arcPipe?.Dispose();
         _gradPipe?.Dispose();
         _acrylic?.Dispose();
         _rectPipe?.Dispose();

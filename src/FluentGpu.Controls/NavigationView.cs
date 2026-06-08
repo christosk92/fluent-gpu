@@ -1,3 +1,4 @@
+using System.Linq;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -5,8 +6,17 @@ using FluentGpu.Hooks;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A NavigationView pane entry: a stable key, an icon glyph, and a label.</summary>
-public sealed record NavItem(string Key, string Glyph, string Label, bool IsHeader = false);
+/// <summary>
+/// A NavigationView pane entry: a stable key, an icon glyph, and a label. A parent group sets <see cref="Children"/>
+/// (rendered as an expand/collapse subtree with a chevron + indent); <see cref="InitiallyExpanded"/> seeds it open.
+/// The positional header is unchanged, so flat <c>new NavItem(key, glyph, label)</c> / <c>IsHeader</c> call sites keep working.
+/// </summary>
+public sealed record NavItem(string Key, string Glyph, string Label, bool IsHeader = false)
+{
+    public NavItem[]? Children { get; init; }
+    public bool InitiallyExpanded { get; init; }
+    internal bool IsExpandable => !IsHeader && Children is { Length: > 0 };
+}
 
 public enum PaneMode : byte { Expanded = 0, Compact = 1, Minimal = 2 }
 
@@ -57,9 +67,9 @@ public sealed class NavigationView : Component
     const float TopPaneHeight = 48f;
     const float PaneHeaderRowHeight = 40f;
     const float PaneToggleWidth = 40f;
-    const float PaneToggleHeight = 40f;
-    const float ItemHeight = 40f;
-    const float ItemOuterHeight = 40f;
+    const float PaneToggleHeight = 36f;   // WinUI PaneToggleButtonHeight = 36 (was 40)
+    const float ItemHeight = 36f;         // WinUI NavigationViewItemOnLeftMinHeight = 36 (was 40)
+    const float ItemOuterHeight = 36f;    // matches ItemHeight (was 40)
     const float ItemMarginX = 4f;
     const float ItemMarginY = 0f;
     const float HeaderHeight = 36f;
@@ -77,6 +87,8 @@ public sealed class NavigationView : Component
         var (selected, setSelected) = UseState(Initial.Length > 0 ? Initial : (Items.Length > 0 ? FirstSelectable() : ""));
         var (paneOpen, setPaneOpen) = UseState(false);
         var (collapsed, setCollapsed) = UseState(false);
+        var (expanded, setExpanded) = UseState(SeedExpanded(Items));     // expanded parent keys (new array per toggle — value-eq gated)
+        var (focusedKey, setFocusedKey) = UseState(selected);            // keyboard cursor (visual focus highlight)
 
         float width = UseContext(Viewport.Size).Width;
         PaneMode autoMode = width <= 0f || width >= CompactThreshold ? PaneMode.Expanded
@@ -101,8 +113,55 @@ public sealed class NavigationView : Component
         void Select(string key)
         {
             setSelected(key);
+            setFocusedKey(key);
             setPaneOpen(false);
             OnSelect?.Invoke(key);
+        }
+
+        void ToggleExpand(string key)
+            => setExpanded(expanded.Contains(key) ? expanded.Where(k => k != key).ToArray() : expanded.Append(key).ToArray());
+
+        // Click/activate a row: a group navigates to its own (overview) page AND toggles its subtree; a leaf just navigates.
+        // (WinUI: a parent with content selects + expands.)
+        void Activate(NavItem it)
+        {
+            setFocusedKey(it.Key);
+            if (it.IsExpandable) { ToggleExpand(it.Key); Select(it.Key); }
+            else Select(it.Key);
+        }
+
+        // The visible, selectable rows in display order (headers excluded) — the arrow-key cursor moves through these.
+        var flat = Flatten(Items, expanded);
+        var rows = flat.Where(r => !r.Item.IsHeader).Select(r => r.Item).ToArray();
+
+        void HandleNavKey(KeyEventArgs e)
+        {
+            int idx = Array.FindIndex(rows, r => r.Key == focusedKey);
+            switch (e.KeyCode)
+            {
+                case Keys.Down:
+                    if (rows.Length > 0) { setFocusedKey(rows[Math.Min(idx < 0 ? 0 : idx + 1, rows.Length - 1)].Key); e.Handled = true; }
+                    break;
+                case Keys.Up:
+                    if (rows.Length > 0) { setFocusedKey(rows[Math.Max(idx < 0 ? 0 : idx - 1, 0)].Key); e.Handled = true; }
+                    break;
+                case Keys.Right:
+                    if (idx >= 0 && rows[idx].IsExpandable)
+                    {
+                        if (!expanded.Contains(rows[idx].Key)) ToggleExpand(rows[idx].Key);
+                        else setFocusedKey(rows[idx].Children![0].Key);
+                        e.Handled = true;
+                    }
+                    break;
+                case Keys.Left:
+                    if (idx >= 0 && rows[idx].IsExpandable && expanded.Contains(rows[idx].Key)) { ToggleExpand(rows[idx].Key); e.Handled = true; }
+                    else { var p = ParentOf(Items, focusedKey); if (p is not null) { setFocusedKey(p.Key); e.Handled = true; } }
+                    break;
+                case Keys.Enter:
+                case Keys.Space:
+                    if (idx >= 0) { Activate(rows[idx]); e.Handled = true; }
+                    break;
+            }
         }
 
         // Hamburger action by mode: at full width it collapses to the rail; from a manually-collapsed rail it expands
@@ -116,7 +175,7 @@ public sealed class NavigationView : Component
         {
             Direction = 0,
             Grow = 1,
-            Children = [FullPane(paneWidth, selected, Select, toggle, overlay: false, labelsVisible: labelsVisible), content],
+            Children = [FullPane(paneWidth, flat, selected, focusedKey, expanded, Activate, HandleNavKey, toggle, overlay: false, labelsVisible: labelsVisible), content],
         } : mode switch
         {
             PaneMode.Compact => new BoxEl
@@ -139,8 +198,54 @@ public sealed class NavigationView : Component
         return Ui.ZStack(
             baseLayer,
             new BoxEl { Fill = LightDismissOverlay, Opacity = 1f, OnClick = () => setPaneOpen(false) },
-            FullPane(openPaneWidth, selected, Select, () => setPaneOpen(false), overlay: true, labelsVisible: true)
+            FullPane(openPaneWidth, flat, selected, focusedKey, expanded, Activate, HandleNavKey, () => setPaneOpen(false), overlay: true, labelsVisible: true)
         ) with { Grow = 1f };
+    }
+
+    // ── tree helpers ──────────────────────────────────────────────────────────────
+    static string[] SeedExpanded(NavItem[] items)
+    {
+        var seed = new List<string>();
+        void Walk(NavItem[] xs)
+        {
+            foreach (var it in xs)
+            {
+                if (it.IsExpandable && it.InitiallyExpanded) seed.Add(it.Key);
+                if (it.Children is { Length: > 0 } ch) Walk(ch);
+            }
+        }
+        Walk(items);
+        return seed.ToArray();
+    }
+
+    /// <summary>The visible rows (item + depth) in display order: a group's children follow it only while expanded.</summary>
+    static List<(NavItem Item, int Depth)> Flatten(NavItem[] items, string[] expanded)
+    {
+        var list = new List<(NavItem, int)>(items.Length + 8);
+        void Walk(NavItem[] xs, int depth)
+        {
+            foreach (var it in xs)
+            {
+                list.Add((it, depth));
+                if (it.IsExpandable && expanded.Contains(it.Key)) Walk(it.Children!, depth + 1);
+            }
+        }
+        Walk(items, 0);
+        return list;
+    }
+
+    static NavItem? ParentOf(NavItem[] items, string childKey)
+    {
+        foreach (var it in items)
+        {
+            if (it.Children is { Length: > 0 } ch)
+            {
+                foreach (var c in ch) if (c.Key == childKey) return it;
+                var deep = ParentOf(ch, childKey);
+                if (deep is not null) return deep;
+            }
+        }
+        return null;
     }
 
     string FirstSelectable()
@@ -171,10 +276,11 @@ public sealed class NavigationView : Component
         };
     }
 
-    Element FullPane(float width, string selected, Action<string> select, Action toggle, bool overlay, bool labelsVisible)
+    Element FullPane(float width, List<(NavItem Item, int Depth)> flat, string selected, string focusedKey, string[] expanded,
+                     Action<NavItem> activate, Action<KeyEventArgs> handleNavKey, Action toggle, bool overlay, bool labelsVisible)
     {
-        var mainItems = BuildItems(Items, selected, select, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible);
-        var footerItems = BuildItems(Footer, selected, select, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible);
+        var mainItems = BuildItems(flat, selected, focusedKey, expanded, activate, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible);
+        var footerItems = BuildItems(Footer.Select(f => (f, 0)).ToList(), selected, focusedKey, expanded, activate, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible);
         // Pane background, per the shipped WinUI generic.xaml: the EXPANDED (always-visible) pane =
         // NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent → FULLY TRANSPARENT, so DWM's Mica
         // window backdrop shows through. Only the transient OVERLAY (minimal/compact flyout) pane uses in-app acrylic
@@ -197,10 +303,12 @@ public sealed class NavigationView : Component
             Children =
             [
                 PaneTitleRow(toggle, labelsVisible),
-                // Menu items scroll (overflow → scrollbar on hover); the footer stays pinned at the bottom.
+                // Menu items scroll (overflow → scrollbar on hover); the footer stays pinned at the bottom. The list is the
+                // single keyboard focus owner: arrows/Enter bubble here from the focused item (it has no ClickBit, so the
+                // dispatcher's Enter/Space "activate focused clickable" never intercepts the arrow keys).
                 Ui.ScrollView(Ui.ZStack(
-                    new BoxEl { Direction = 1, Children = mainItems },
-                    Ctx.Provide(IndicatorTarget, SelectedY(Items, selected), Embed.Comp(() => new NavIndicator()))
+                    new BoxEl { Direction = 1, Focusable = true, OnKeyDown = handleNavKey, Children = mainItems },
+                    Ctx.Provide(IndicatorTarget, SelectedY(flat, selected), Embed.Comp(() => new NavIndicator()))
                 )),
                 new BoxEl { Direction = 1, Children = footerItems },
                 new BoxEl { Height = 4 },
@@ -212,6 +320,15 @@ public sealed class NavigationView : Component
 
     Element CompactPane(string selected, Action<string> select, Action toggle, bool paneOpen)
     {
+        // v1: Compact/Minimal panes show TOP-LEVEL rows only (groups don't expand inline); a group navigates to its first
+        // child so its icon still leads somewhere. Children are reachable in the Expanded pane.
+        var noneExpanded = Array.Empty<string>();
+        void CompactActivate(NavItem it)
+        {
+            if (it.IsExpandable && it.Children is { Length: > 0 } ch) select(ch[0].Key);
+            else select(it.Key);
+        }
+
         var children = new List<Element>
         {
             PaneToggleButton(toggle),
@@ -219,12 +336,12 @@ public sealed class NavigationView : Component
         };
 
         foreach (var it in Items)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expandedLayout: false, ownIndicator: true, labelsVisible: false));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         children.Add(new BoxEl { Grow = 1 });
 
         foreach (var it in Footer)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, selected, select, expandedLayout: false, ownIndicator: true, labelsVisible: false));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         return new BoxEl
         {
@@ -304,19 +421,22 @@ public sealed class NavigationView : Component
         Children = [AnimatedIcon.Glyph(glyph, IconSize, Tok.TextPrimary, Theme.IconFont)],
     };
 
-    static Element[] BuildItems(NavItem[] items, string selected, Action<string> select, bool expandedLayout, bool ownIndicator, bool labelsVisible)
+    const float IndentStep = 24f;   // per-depth left indent for nested group children (expanded layout only)
+
+    static Element[] BuildItems(List<(NavItem Item, int Depth)> flat, string selected, string focusedKey, string[] expanded,
+                                Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible)
     {
-        var result = new Element[items.Length];
-        for (int i = 0; i < items.Length; i++)
-            result[i] = Item(items[i], selected, select, expandedLayout, ownIndicator, labelsVisible);
+        var result = new Element[flat.Count];
+        for (int i = 0; i < flat.Count; i++)
+            result[i] = Item(flat[i].Item, flat[i].Depth, selected, focusedKey, expanded, activate, expandedLayout, ownIndicator, labelsVisible);
 
         return result;
     }
 
-    static float SelectedY(NavItem[] items, string selected)
+    static float SelectedY(List<(NavItem Item, int Depth)> flat, string selected)
     {
         float y = 0f;
-        foreach (var it in items)
+        foreach (var (it, _) in flat)
         {
             if (it.IsHeader)
             {
@@ -333,13 +453,17 @@ public sealed class NavigationView : Component
         return -1000f;
     }
 
-    static Element Item(NavItem it, string selected, Action<string> select, bool expandedLayout, bool ownIndicator, bool labelsVisible)
+    static Element Item(NavItem it, int depth, string selected, string focusedKey, string[] expanded,
+                        Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible)
     {
         if (it.IsHeader)
             return HeaderItem(it, expandedLayout, labelsVisible);
 
         bool sel = it.Key == selected;
+        bool focused = it.Key == focusedKey;
+        bool isExpanded = it.IsExpandable && expanded.Contains(it.Key);
         var foreground = sel ? Tok.TextPrimary : Tok.TextSecondary;
+        float indent = expandedLayout ? depth * IndentStep : 0f;
 
         // Uniform structure across expanded/compact: an indicator sliver + the icon column are ALWAYS present (so the
         // keyed item node and its icon are reused, not remounted), plus the label ONLY when expanded. Collapsing removes
@@ -365,9 +489,13 @@ public sealed class NavigationView : Component
             },
         };
         if (expandedLayout)
+        {
             children.Add(AnimatedLabel(labelsVisible, new NavLabelSpec(
                 new TextEl(it.Label) { Size = 14f, Color = foreground },
                 ItemHeight, 1f, new Edges4(4, 0, 8, 0))));
+            if (it.IsExpandable)
+                children.Add(ChevronCell(isExpanded));
+        }
 
         return new BoxEl
         {
@@ -377,16 +505,27 @@ public sealed class NavigationView : Component
             Animate = PaneTransition,           // reveal the item's background width as the pane collapses (position is a no-op)
             Width = expandedLayout ? float.NaN : PaneToggleWidth,
             Height = ItemHeight,
-            Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),
+            Margin = new Edges4(ItemMarginX + indent, ItemMarginY, ItemMarginX, ItemMarginY),
             AlignItems = FlexAlign.Center,
             Corners = Radii.OverlayAll,   // WinUI nav items round to OverlayCornerRadius (8), not ControlCornerRadius (4)
-            Fill = sel ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            Fill = sel ? Tok.FillSubtleSecondary : (focused ? Tok.FillSubtleTertiary : ColorF.Transparent),
             HoverFill = sel ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
             PressedFill = sel ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-            OnClick = () => select(it.Key),
+            OnClick = () => activate(it),
             Children = children.ToArray(),
         };
     }
+
+    // A group's expand/collapse chevron — glyph-swapped (ChevronRight ⇄ ChevronDown) on toggle. (Glyph swap rather than a
+    // rotated child component, since a reused child's props freeze at mount and wouldn't pick up the new expand state.)
+    static Element ChevronCell(bool expanded) => new BoxEl
+    {
+        Width = 28f,
+        Height = ItemHeight,
+        AlignItems = FlexAlign.Center,
+        Justify = FlexJustify.Center,
+        Children = [new TextEl(expanded ? Icons.ChevronDown : Icons.ChevronRight) { Size = 11f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont }],
+    };
 
     static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible)
     {

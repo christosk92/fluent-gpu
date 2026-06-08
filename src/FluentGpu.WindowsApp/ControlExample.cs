@@ -26,7 +26,8 @@ static class ControlExample
         var card = new BoxEl
         {
             Direction = 1, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
-            Fill = Tok.FillSolidBase, Children = cardKids.ToArray(),   // flat card (WinUI ControlExample has no drop shadow)
+            Fill = Tok.FillSolidBase, ClipToBounds = true,   // content stays within the card chrome (overlays/flyouts use the top-level layer, unaffected)
+            Children = cardKids.ToArray(),   // flat card (WinUI ControlExample has no drop shadow)
         };
 
         var outer = new List<Element> { BodyStrong(title) };

@@ -13,6 +13,7 @@ public enum DrawOp : int
     PushLayer = 9,             // begin a backdrop-effect layer (acrylic): blur the canvas behind DeviceRect
     PopLayer = 10,             // end the layer: composite tint + noise, then the subtree drew on top
     DrawGradientStroke = 11,   // gradient-tinted SDF outline (WinUI elevation border) — gradient PS + a stroke band
+    DrawArc = 12,              // SDF circular-arc stroke with round caps (ProgressRing: a trimmed ring, like WinUI's Lottie)
 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
@@ -40,8 +41,12 @@ public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Ra
     ColorF C0, ColorF C1, ColorF C2, ColorF C3, float O0, float O1, float O2, float O3, float StrokeWidth, Affine2D Transform, float Opacity);
 // Begin/end a backdrop-effect layer (acrylic): the engine snapshots the canvas under DeviceRect, gaussian-blurs it,
 // then on PopLayer tints + adds noise + a luminosity wash; the subtree between the two draws on top.
-public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity);
+public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
+// A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
+// <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
+// clockwise), with round caps when <see cref="RoundCaps"/> != 0. Matches WinUI's trimmed round-cap ring stroke.
+public readonly record struct DrawArcCmd(RectF Rect, ColorF Color, float Thickness, float StartDeg, float SweepDeg, int RoundCaps, Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -129,10 +134,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0)
+    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, tint, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity));
+        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity));
         PushSort(sortKey);
     }
 
@@ -140,6 +145,13 @@ public sealed class DrawList
     {
         WriteOp(DrawOp.PopLayer);
         WritePayload(new PopLayerCmd(deviceRect));
+        PushSort(sortKey);
+    }
+
+    public void Arc(in RectF rect, in ColorF color, float thickness, float startDeg, float sweepDeg, bool roundCaps, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.DrawArc);
+        WritePayload(new DrawArcCmd(rect, color, thickness, startDeg, sweepDeg, roundCaps ? 1 : 0, transform, opacity));
         PushSort(sortKey);
     }
 

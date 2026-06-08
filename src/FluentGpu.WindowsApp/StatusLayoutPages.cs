@@ -1,0 +1,74 @@
+using FluentGpu;
+using FluentGpu.Controls;
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using static FluentGpu.Dsl.Ui;
+
+// ── Status & info / Layout / Scrolling control demo pages (WinUI Gallery parity) ──────────────
+
+sealed class ProgressBarPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("ProgressBar",
+        "Shows the progress of an operation — determinate (a known fraction) or indeterminate (ongoing).",
+        ControlExample.Build("A determinate ProgressBar (60%)", ProgressBar.Determinate(0.6f), output: GalleryPage.LiveText(() => "60%")),
+        ControlExample.Build("An indeterminate ProgressBar", ProgressBar.Indeterminate()));
+}
+
+sealed class InfoBarPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("InfoBar",
+        "An inline notification for essential, app-wide messages — with a severity color, icon, title, and message.",
+        ControlExample.Build("Informational", InfoBar.Create(InfoBarSeverity.Informational, "Note", "This is an informational message.")),
+        ControlExample.Build("Success", InfoBar.Create(InfoBarSeverity.Success, "Success", "The operation completed successfully.")),
+        ControlExample.Build("Warning", InfoBar.Create(InfoBarSeverity.Warning, "Warning", "Something needs your attention.")),
+        ControlExample.Build("Error (closable)", InfoBar.Create(InfoBarSeverity.Error, "Error", "Something went wrong.", onClose: () => { })));
+}
+
+sealed class InfoBadgePage : Component
+{
+    public override Element Render() => GalleryPage.Shell("InfoBadge",
+        "A small piece of UI to add contextual information — a dot, a numeric count, or an icon.",
+        ControlExample.Build("Dot", InfoBadge.Dot()),
+        ControlExample.Build("Count", InfoBadge.Count(42)),
+        ControlExample.Build("Icon", InfoBadge.Icon(Icons.Accept)));
+}
+
+sealed class ExpanderPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("Expander",
+        "A header with a content area that the user can expand and collapse.",
+        ControlExample.Build("A simple Expander", Expander.Create("This text is collapsible",
+            VStack(8, Body("Hidden content, revealed when the Expander is expanded."), Button.Standard("An action", () => { })),
+            initiallyExpanded: true)));
+}
+
+sealed class PipsPagerPage : Component
+{
+    public override Element Render()
+    {
+        var (sel, setSel) = UseState(0);
+        return GalleryPage.Shell("PipsPager",
+            "A glyph-based pager for navigating a small, fixed number of pages.",
+            ControlExample.Build("A PipsPager", PipsPager.Create(5, sel, setSel), output: GalleryPage.LiveText(() => $"Page {sel + 1} / 5")));
+    }
+}
+
+// Minimal category overview pages (the expandable group keys land here when selected).
+sealed class StatusInfoOverviewPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("Status & info",
+        "Controls that surface state and notifications: InfoBadge, InfoBar, ProgressBar.");
+}
+
+sealed class LayoutOverviewPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("Layout",
+        "Controls for arranging and revealing content: Expander.");
+}
+
+sealed class ScrollingOverviewPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("Scrolling",
+        "Controls for paging and scrolling content: PipsPager.");
+}

@@ -29,28 +29,39 @@ public sealed record BoxEl : Element
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
     public ShadowSpec? Shadow { get; init; }       // soft drop shadow / elevation, drawn beneath the fill
+    public ArcSpec? Arc { get; init; }             // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get; init; }   // gradient fill — supersedes Fill at record time when set
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
 
     public Action? OnClick { get; init; }
     public Action<KeyEventArgs>? OnKeyDown { get; init; }
+    /// <summary>Text (character) input — the IME/layout-resolved codepoint, routed to the focused node and bubbled
+    /// (distinct from <see cref="OnKeyDown"/>'s raw virtual-key). Set by editable controls (EditableText/ComboBox).</summary>
+    public Action<CharEventArgs>? OnCharInput { get; init; }
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
+    /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
+    public bool Repeats { get; init; }
     public bool HitTestVisible { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 
-    // Composited (animate without relayout): transform (offset/scale/rotate about the node centre) + opacity, applied to this node + subtree.
+    // Composited (animate without relayout): transform (offset/scale/rotate about the transform origin) + opacity, applied to this node + subtree.
     public float OffsetX { get; init; }
     public float OffsetY { get; init; }
     public float ScaleX { get; init; } = 1f;
     public float ScaleY { get; init; } = 1f;
     public float Rotation { get; init; }   // degrees
     public float Opacity { get; init; } = 1f;
+    /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
+    /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
+    public float TransformOriginX { get; init; } = 0.5f;
+    public float TransformOriginY { get; init; } = 0.5f;
 
     // Interaction-driven composited scale (1 = none): grows/shrinks this node about its centre by the eased hover/press
     // progress at record time (a WinUI slider/scrollbar thumb that pops on hover). Needs a pointer handler to receive the

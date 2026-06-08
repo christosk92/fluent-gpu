@@ -439,9 +439,15 @@ public sealed class FlexLayout
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
             ref LayoutInput cli = ref _scene.Layout(c);
-            float cw = float.IsNaN(cli.Width) ? innerW : cli.Width;     // explicit child size, else fill the stack
-            float ch = float.IsNaN(cli.Height) ? innerH : cli.Height;
-            Arrange(c, padL, padT, cw, ch);   // all children at the origin → overlay (recorder paints in order)
+            float mL = cli.Margin.Left, mT = cli.Margin.Top, mR = cli.Margin.Right, mB = cli.Margin.Bottom;
+            float cw = float.IsNaN(cli.Width) ? MathF.Max(0f, innerW - mL - mR) : cli.Width;   // explicit child size, else fill the stack (minus margin)
+            float ch = float.IsNaN(cli.Height) ? MathF.Max(0f, innerH - mT - mB) : cli.Height;
+            // A ZStack has no main axis; honor AlignSelf as the child's VERTICAL placement (overlay VerticalAlignment)
+            // and its leading Margin as the offset. Start/Stretch/Auto keep the legacy top-left origin (no regression).
+            FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+            float freeV = MathF.Max(0f, innerH - ch - mT - mB);
+            float oy = align == FlexAlign.Center ? freeV * 0.5f : align == FlexAlign.End ? freeV : 0f;
+            Arrange(c, padL + mL, padT + mT + oy, cw, ch);   // overlay at the aligned origin (recorder paints in order)
         }
     }
 

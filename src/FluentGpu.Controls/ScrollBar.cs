@@ -16,7 +16,10 @@ public static partial class ScrollBar
         public float ThumbWidth { get; init; } = 8f;                 // ScrollBarVerticalThumbMinWidth (collapsed)
         public float MinThumb { get; init; } = 30f;                  // ScrollBarVerticalThumbMinHeight
         public float CornerRadius { get; init; } = 3f;               // ScrollBarCornerRadius
-        public ColorF Thumb { get; init; }                          // ControlStrongFillColorDefault
+        public ColorF Thumb { get; init; }                          // ControlStrongFillColorDefault (rest)
+        public ColorF ThumbHover { get; init; }                     // ScrollBarThumbFillPointerOver (== rest, no recolour)
+        public ColorF ThumbPressed { get; init; }                   // ScrollBarThumbFillPressed (== rest, no recolour)
+        public ColorF ThumbDisabled { get; init; }                  // ControlStrongFillColorDisabled
         public float ThumbHoverScale { get; init; } = 1.15f;
         public float ThumbPressScale { get; init; } = 1.15f;
     }
@@ -25,9 +28,12 @@ public static partial class ScrollBar
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
         Thumb = Tok.FillControlStrong,
+        ThumbHover = Tok.FillControlStrong,           // WinUI: hover/press do NOT recolour the thumb
+        ThumbPressed = Tok.FillControlStrong,
+        ThumbDisabled = Tok.FillControlStrongDisabled,
     };
 
-    public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200f, Style? style = null)
+    public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200f, Style? style = null, bool disabled = false)
     {
         var s = style ?? DefaultStyle;
         fraction = Math.Clamp(fraction, 0.05f, 1f);
@@ -35,18 +41,22 @@ public static partial class ScrollBar
         float thumbH = MathF.Max(s.MinThumb, fraction * height);
         float travel = MathF.Max(1f, height - thumbH);
         void Set(Point2 p) => onScroll(Math.Clamp((p.Y - thumbH * 0.5f) / travel, 0f, 1f));
+        var thumb = new BoxEl
+        {
+            Width = s.ThumbWidth, Height = thumbH, Corners = CornerRadius4.All(s.CornerRadius),
+            Fill = disabled ? s.ThumbDisabled : s.Thumb,
+            HoverScale = disabled ? 1f : s.ThumbHoverScale,
+            PressScale = disabled ? 1f : s.ThumbPressScale,
+        };
         return new BoxEl
         {
             Width = s.ThumbWidth, Height = height, Direction = 1, Role = AutomationRole.ScrollBar,
-            OnPointerDown = Set, OnDrag = Set,
+            // Disabled: drop the drag/press handlers so the thumb is inert (WinUI disabled scrollbar).
+            OnPointerDown = disabled ? null : Set, OnDrag = disabled ? null : Set,
             Children =
             [
                 new BoxEl { Height = position * travel },   // spacer above the thumb
-                new BoxEl
-                {
-                    Width = s.ThumbWidth, Height = thumbH, Corners = CornerRadius4.All(s.CornerRadius), Fill = s.Thumb,
-                    HoverScale = s.ThumbHoverScale, PressScale = s.ThumbPressScale,
-                },
+                thumb,
             ],
         };
     }

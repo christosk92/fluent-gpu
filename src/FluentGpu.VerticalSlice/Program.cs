@@ -421,6 +421,160 @@ sealed class FlowProbe : Component
     }
 }
 
+// ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
+sealed class RepeatProbe : Component
+{
+    public int Clicks;
+    public override Element Render() => RepeatButton.Create("+", () => Clicks++);
+}
+
+sealed class EditTextProbe : Component
+{
+    public Signal<string>? Text;
+    public override Element Render()
+    {
+        var t = UseSignal("");
+        Text = t;
+        return Embed.Comp(() => new EditableText { Text = t, Width = 160, Sanitize = s => s.Length > 8 ? s[..8] : s });
+    }
+}
+
+// Hosts an overlay layer and exposes the ambient service + an anchored button so a test can open/close flyouts.
+sealed class OverlayProbe : Component
+{
+    public IOverlayService? Service;
+    public NodeHandle Anchor;
+    public int Selected = -1;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new OverlayProbeInner(this)) });
+}
+
+sealed class OverlayProbeInner : Component
+{
+    readonly OverlayProbe _p;
+    public OverlayProbeInner(OverlayProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        return new BoxEl
+        {
+            Width = 200, Height = 120, Padding = Edges4.All(20),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+                    OnRealized = h => _p.Anchor = h,
+                    Children = [Text("anchor")],
+                },
+            ],
+        };
+    }
+}
+
+sealed class CheckBoxProbe : Component
+{
+    public CheckState State;
+    public override Element Render()
+    {
+        var (st, setSt) = UseState(CheckState.Unchecked);
+        State = st;
+        return CheckBox.Create("opt", st, next => setSt(next));
+    }
+}
+
+sealed class RadioProbe : Component
+{
+    public int Selected = -1;
+    public override Element Render()
+    {
+        var (sel, setSel) = UseState(-1);
+        Selected = sel;
+        return RadioButton.Group(new[] { "A", "B", "C" }, sel, setSel);
+    }
+}
+
+sealed class ToggleSwitchProbe : Component
+{
+    public bool On;
+    public override Element Render()
+    {
+        var (on, setOn) = UseState(false);
+        On = on;
+        return ToggleSwitch.Create(on, () => setOn(!on));
+    }
+}
+
+sealed class RatingProbe : Component
+{
+    public FloatSignal? Val;
+    public override Element Render()
+    {
+        var v = UseFloatSignal(0f);
+        Val = v;
+        return RatingControl.Create(v);
+    }
+}
+
+sealed class ComboProbe : Component
+{
+    public Signal<int>? Sel;
+    public Signal<string>? Txt;
+    readonly bool _editable;
+    public ComboProbe(bool editable) => _editable = editable;
+    public override Element Render()
+    {
+        var sel = UseSignal(-1); Sel = sel;
+        var txt = UseSignal(""); Txt = txt;
+        return Embed.Comp(() => new OverlayHost { Child = ComboBox.Create(new[] { "Red", "Green", "Blue" }, sel, _editable, txt, 200f, "pick") });
+    }
+}
+
+sealed class RangeSliderProbe : Component
+{
+    public float Val;
+    public override Element Render()
+    {
+        var (v, setV) = UseState(0f);
+        Val = v;
+        return Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
+    }
+}
+
+sealed class ColorPickerProbe : Component
+{
+    public Signal<ColorF>? Color;
+    public override Element Render()
+    {
+        var c = UseSignal(ColorF.FromRgba(255, 0, 0));
+        Color = c;
+        return ColorPicker.Create(c, alphaEnabled: true);
+    }
+}
+
+sealed class SplitButtonProbe : Component
+{
+    public int Invoked;
+    public override Element Render()
+        => SplitButton.Create("Paste", () => Invoked++, [new MenuFlyoutItem("Paste as text", Icons.Document)], Icons.Document);
+}
+
+sealed class NavHierarchyProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new NavigationView
+    {
+        Initial = "home",
+        Items =
+        [
+            new NavItem("home", "H", "Home"),
+            new NavItem("group", "G", "Group")
+            {
+                Children = [new NavItem("c1", "1", "ChildOne"), new NavItem("c2", "2", "ChildTwo")],
+            },
+        ],
+        Content = key => new BoxEl { Children = [Ui.Text("PAGE:" + key)] },
+    });
+}
+
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
 static class Slice
 {
@@ -449,6 +603,47 @@ static class Slice
 
     static bool Near(float a, float b) => MathF.Abs(a - b) < 0.5f;
     static bool Near(float a, float b, float tol) => MathF.Abs(a - b) < tol;
+
+    // Depth-first search for the first node carrying a given automation role (for locating controls in tests).
+    static NodeHandle FindRole(SceneStore s, NodeHandle n, AutomationRole role)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (s.Interaction(n).Role == role) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindRole(s, c, role);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    static Point2 CenterOf(SceneStore s, NodeHandle n)
+    {
+        var r = s.AbsoluteRect(n);
+        return new Point2(r.X + r.W / 2f, r.Y + r.H / 2f);
+    }
+
+    static void CollectRole(SceneStore s, NodeHandle n, AutomationRole role, List<NodeHandle> outList)
+    {
+        if (n.IsNull) return;
+        if (s.Interaction(n).Role == role) outList.Add(n);
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) CollectRole(s, c, role, outList);
+    }
+
+    static List<NodeHandle> Roles(SceneStore s, AutomationRole role)
+    {
+        var list = new List<NodeHandle>();
+        CollectRole(s, s.Root, role, list);
+        return list;
+    }
+
+    static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)
+    {
+        var c = CenterOf(host.Scene, n);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+        host.RunFrame();
+    }
 
     static SceneStore LayoutTree(StringTable strings, Element tree)
     {
@@ -1939,6 +2134,18 @@ static class Slice
         bool solidFill = dev.LastRects.Count == 1;                      // the fill drew once (full bounds), border is the gradient stroke
         Check("57. gradient elevation border emits a DrawGradientStroke band", oneStroke && band && solidFill,
             $"strokes={dev.LastGradientStrokes.Count} w={gs.StrokeWidth:0.0} stops={gs.StopCount} ring=({gs.Rect.X:0.0},{gs.Rect.W:0.0})");
+
+        var fillScene = LayoutTree(strings, new BoxEl
+        {
+            Width = 120, Height = 40, Corners = CornerRadius4.All(4f),
+            Gradient = Ui.LinearGradient(0f, new GradientStop(0f, ColorF.FromRgba(0, 0, 0)), new GradientStop(1f, ColorF.FromRgba(255, 255, 255))),
+        });
+        dl.Reset();
+        SceneRecorder.Record(fillScene, dl);
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        bool oneFill = dev.LastGradients.Count == 1 && dev.LastGradients[0].StopCount == 2 && dev.LastRects.Count == 0;
+        Check("57b. gradient-only BoxEl emits a DrawGradientRect", oneFill,
+            $"gradients={dev.LastGradients.Count} rects={dev.LastRects.Count}");
     }
 
     // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
@@ -2062,6 +2269,465 @@ static class Slice
             $"init={init} grew={grew} toggled={toggled} parentRenders+{FlowProbe.Renders - r0}");
     }
 
+    static void RepeatButtonChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("repeat", new Size2(320, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new RepeatProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var btn = FindRole(host.Scene, host.Scene.Root, AutomationRole.Button);
+        var center = CenterOf(host.Scene, btn);
+
+        // Press and HOLD (no up): the ticker fires once immediately, then repeats while held.
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        host.RunFrame();
+        int afterPress = root.Clicks;                     // 1 (fired on arm)
+        bool activeHeld = host.HasActiveWork;             // frames keep flowing while held
+        for (int i = 0; i < 45; i++) host.RunFrame();     // ~720ms: past the 500ms initial delay + a few intervals
+        int heldClicks = root.Clicks;
+
+        // Release: the repeat stops; clicks no longer grow (no busy loop).
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        host.RunFrame();
+        int atRelease = root.Clicks;
+        for (int i = 0; i < 10; i++) host.RunFrame();
+        int afterRelease = root.Clicks;
+
+        Check("62. RepeatButton: press fires once, holds repeat, release stops",
+            afterPress == 1 && activeHeld && heldClicks >= 2 && afterRelease == atRelease,
+            $"press={afterPress} held={heldClicks} release={atRelease}→{afterRelease}");
+        Check("62a. RepeatButton: idle after release does no work (no busy loop)", !host.HasActiveWork);
+    }
+
+    static void TextInputChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("edit", new Size2(320, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new EditTextProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+        bool found = !field.IsNull;
+        var center = CenterOf(host.Scene, field);
+
+        // Focus the field, then type "hi5" via WM_CHAR-style events.
+        window.QueueInput(new InputEvent(InputKind.PointerDown, center, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, center, 0, 0));
+        host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'h'));
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'i'));
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, '5'));
+        host.RunFrame();
+        string typed = root.Text!.Peek();
+
+        // Backspace removes the last char.
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        host.RunFrame();
+        string afterBack = root.Text!.Peek();
+
+        // Sanitize clamps to 8 chars: type a long run.
+        for (int i = 0; i < 12; i++) window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'x'));
+        host.RunFrame();
+        string clamped = root.Text!.Peek();
+
+        Check("63. text input: focused field accepts WM_CHAR, backspace, sanitize",
+            found && typed == "hi5" && afterBack == "hi" && clamped.Length == 8,
+            $"typed='{typed}' back='{afterBack}' clampedLen={clamped.Length}");
+    }
+
+    static void OverlayChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("overlay", new Size2(480, 360), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var svc = root.Service!;
+        Func<Element> menu = () => new BoxEl
+        {
+            Width = 140, Direction = 1,
+            Children =
+            [
+                new BoxEl
+                {
+                    Height = 32, Role = AutomationRole.MenuItem, OnClick = () => { root.Selected = 7; svc.CloseTop(); },
+                    Children = [Ui.Text("Item A")],
+                },
+            ],
+        };
+
+        // Let the close fade animation (83ms) settle, then the OverlayCloseDriver removes the popup.
+        void Settle() { for (int i = 0; i < 16; i++) host.RunFrame(); }
+
+        // Open → the popup (a MenuItem) appears in the scene.
+        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        host.RunFrame();
+        bool opened = !FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+
+        // Escape closes it (via the dispatcher key-preview hook).
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
+        host.RunFrame();
+        Settle();
+        bool escClosed = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+
+        // Re-open → light dismiss: a click away from the popup hits the scrim and closes it.
+        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(460, 350), 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(460, 350), 0, 0));
+        host.RunFrame();
+        Settle();
+        bool lightDismissed = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+
+        // Re-open → click the item: invokes its command and closes.
+        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        host.RunFrame();
+        var item = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+        var ic = CenterOf(host.Scene, item);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, ic, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, ic, 0, 0));
+        host.RunFrame();
+        Settle();
+        bool invoked = root.Selected == 7 && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+
+        Check("64. overlay: anchored flyout opens, Escape + light-dismiss close, item invokes",
+            opened && escClosed && lightDismissed && invoked,
+            $"open={opened} esc={escClosed} dismiss={lightDismissed} invoke={invoked}");
+    }
+
+    static void OverlayAnimationChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("ovanim", new Size2(480, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        var svc = root.Service!;
+        Func<Element> menu = () => MenuFlyout.Build(new[]
+        {
+            new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three"),
+            new MenuFlyoutItem("Four"), new MenuFlyoutItem("Five"),
+        }, () => svc.CloseTop());
+
+        NodeHandle SurfaceOf(NodeHandle n) { for (; !n.IsNull; n = host.Scene.Parent(n)) if (host.Scene.TryGetAcrylic(n, out _)) return n; return NodeHandle.Null; }
+
+        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        host.RunFrame();   // mount + seed the SizeH clip-reveal + fade (seed runs in a layout effect)
+        host.RunFrame();   // tick the animation once → the first PresentedH lands
+        var surface = SurfaceOf(FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+        float fullH = surface.IsNull ? 0f : host.Scene.Bounds(surface).H;
+        float ph1 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;   // mid-reveal (top-anchored), < full
+        bool revealing = !surface.IsNull && !float.IsNaN(ph1) && ph1 > 1f && ph1 < fullH - 2f;
+
+        for (int i = 0; i < 24; i++) host.RunFrame();             // open settles
+        float ph2 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;
+        bool revealed = float.IsNaN(ph2) || ph2 >= fullH - 1.5f;
+
+        // Close → the surface fades (opacity animates down) while staying on top (not removed instantly).
+        svc.CloseTop();
+        host.RunFrame();
+        float op = host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
+        bool fading = host.Scene.IsLive(surface) && op < 0.99f;
+
+        Check("64d. flyout: open clip-reveals (SizeH top-anchored) then close fades", revealing && revealed && fading,
+            $"reveal {ph1:0}/{fullH:0}→{ph2:0} closeOpacity={op:0.00}");
+    }
+
+    static void MenuFlyoutStyleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("menustyle", new Size2(480, 360), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var items = new[]
+        {
+            new MenuFlyoutItem("Small", Icons.Tag),
+            new MenuFlyoutItem("Medium", Icons.Tag),
+            new MenuFlyoutItem("Large", Icons.Tag),
+            MenuFlyoutItem.Separator,
+            new MenuFlyoutItem("Disabled", Icons.Cancel, false),
+        };
+        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Build(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
+        host.RunFrame();
+
+        var rows = Roles(host.Scene, AutomationRole.MenuItem);
+        bool rowMetrics = rows.Count == 4 && Near(host.Scene.Bounds(rows[0]).H, 36f);
+        // Walk up from a row to the acrylic FlyoutSurface (the presenter card; structure: surface > clip > content > rows).
+        NodeHandle surface = rows.Count > 0 ? rows[0] : NodeHandle.Null;
+        while (!surface.IsNull && !host.Scene.TryGetAcrylic(surface, out _)) surface = host.Scene.Parent(surface);
+        bool acrylic = !surface.IsNull;
+        float surfaceW = surface.IsNull ? 0f : host.Scene.AbsoluteRect(surface).W;
+        bool minWidth = surfaceW >= 96f;   // FlyoutThemeMinWidth (generic.xaml)
+        bool hasLayer = device.LastLayers.Count > 0 && device.LayerBalance == 0;
+        bool disabled = rows.Count == 4 && (host.Scene.Interaction(rows[3]).HandlerMask & InteractionInfo.ClickBit) == 0;
+
+        Check("64b. MenuFlyout: WinUI-like presenter chrome, row metrics, disabled command",
+            rowMetrics && minWidth && acrylic && hasLayer && disabled,
+            $"rows={rows.Count} h={(rows.Count > 0 ? host.Scene.Bounds(rows[0]).H : 0):0} w={surfaceW:0} acrylic={acrylic} layers={device.LastLayers.Count} disabled={disabled}");
+    }
+
+    static void SplitButtonStyleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("splitstyle", new Size2(360, 160), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new SplitButtonProbe());
+        host.RunFrame();
+
+        var buttons = Roles(host.Scene, AutomationRole.Button);
+        var primary = buttons.Count > 0 ? buttons[0] : NodeHandle.Null;
+        var drop = buttons.Count > 1 ? buttons[1] : NodeHandle.Null;
+        var outer = primary.IsNull ? NodeHandle.Null : host.Scene.Parent(primary);
+        bool twoHalves = buttons.Count == 2;
+        bool joinedChrome = !outer.IsNull && host.Scene.Paint(outer).Fill.A > 0f && Near(host.Scene.Paint(outer).BorderWidth, 1f)
+                            && (host.Scene.Flags(outer) & NodeFlags.ClipsToBounds) != 0;
+        bool halfMetrics = !primary.IsNull && !drop.IsNull
+                           // WinUI SplitButtonSecondaryButtonSize = 35 (width); control height = 32.
+                           && Near(host.Scene.Bounds(primary).H, 32f) && Near(host.Scene.Bounds(drop).W, 35f) && Near(host.Scene.Bounds(drop).H, 32f);
+        bool transparentHalves = !primary.IsNull && !drop.IsNull
+                                 && host.Scene.Paint(primary).Fill.A == 0f && host.Scene.Paint(drop).Fill.A == 0f;
+
+        Check("64c. SplitButton: joined outer chrome with independently interactive halves",
+            twoHalves && joinedChrome && halfMetrics && transparentHalves,
+            $"buttons={buttons.Count} chrome={joinedChrome} primaryH={(primary.IsNull ? 0 : host.Scene.Bounds(primary).H):0} drop={(drop.IsNull ? 0 : host.Scene.Bounds(drop).W):0}x{(drop.IsNull ? 0 : host.Scene.Bounds(drop).H):0}");
+    }
+
+    static void NavHierarchyChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("navhier", new Size2(1200, 700), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new NavHierarchyProbe());
+        host.RunFrame();
+
+        var items = new List<NodeHandle>();
+        CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+        int collapsedCount = items.Count;   // home, group (children hidden — group starts collapsed)
+
+        // Click the group → its children appear.
+        var groupCenter = CenterOf(host.Scene, items[1]);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, groupCenter, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, groupCenter, 0, 0));
+        host.RunFrame();
+        items.Clear();
+        CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+        int expandedCount = items.Count;    // home, group, c1, c2
+        bool childrenAppeared = expandedCount == collapsedCount + 2;
+
+        // Select the first child → content updates.
+        bool childSelected = false;
+        if (childrenAppeared)
+        {
+            var childCenter = CenterOf(host.Scene, items[2]);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, childCenter, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, childCenter, 0, 0));
+            host.RunFrame();
+            childSelected = HasGlyph(device, strings, "PAGE:c1");
+        }
+
+        // Click the group again → it collapses (children disappear).
+        items.Clear();
+        CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+        var g2 = CenterOf(host.Scene, items[1]);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, g2, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, g2, 0, 0));
+        host.RunFrame();
+        items.Clear();
+        CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+        bool collapsedAgain = items.Count == collapsedCount;
+
+        Check("65. NavigationView: group expands/collapses + child selection updates content",
+            collapsedCount == 2 && childrenAppeared && childSelected && collapsedAgain,
+            $"collapsed={collapsedCount} expanded={expandedCount} childPage={childSelected} recollapsed={collapsedAgain}");
+    }
+
+    static void BasicInputControlChecks(StringTable strings)
+    {
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // CheckBox — two/three-state cycle.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cb", new Size2(320, 160), 1f)); window.Show();
+            var root = new CheckBoxProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s0 = root.State;
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox)); var s1 = root.State;
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox)); var s2 = root.State;
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox)); var s3 = root.State;
+            Check("66. CheckBox cycles Unchecked→Checked→Indeterminate→Unchecked",
+                s0 == CheckState.Unchecked && s1 == CheckState.Checked && s2 == CheckState.Indeterminate && s3 == CheckState.Unchecked,
+                $"{s0}→{s1}→{s2}→{s3}");
+        }
+
+        // RadioButton — mutual exclusion via a shared index.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rb", new Size2(320, 200), 1f)); window.Show();
+            var root = new RadioProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var radios = Roles(host.Scene, AutomationRole.RadioButton);
+            ClickNode(host, window, radios[1]); int sel1 = root.Selected;
+            radios = Roles(host.Scene, AutomationRole.RadioButton);
+            ClickNode(host, window, radios[2]); int sel2 = root.Selected;
+            Check("67. RadioButton group: selecting one deselects the others",
+                radios.Count == 3 && sel1 == 1 && sel2 == 2, $"count={radios.Count} sel {sel1}→{sel2}");
+        }
+
+        // ToggleSwitch — flips on/off.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("ts", new Size2(320, 160), 1f)); window.Show();
+            var root = new ToggleSwitchProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch)); bool on1 = root.On;
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch)); bool on2 = root.On;
+            Check("68. ToggleSwitch toggles on/off", on1 && !on2, $"{on1}→{on2}");
+        }
+
+        // RatingControl — click sets, drag sweeps.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rt", new Size2(320, 120), 1f)); window.Show();
+            var root = new RatingProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
+            var rr = host.Scene.AbsoluteRect(rating);
+            var p3 = new Point2(rr.X + 70f, rr.Y + rr.H / 2f);   // 3rd star (stride 28)
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p3, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p3, 0, 0));
+            host.RunFrame();
+            float v3 = root.Val!.Peek();
+            var p5 = new Point2(rr.X + 130f, rr.Y + rr.H / 2f); // sweep to 5th
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p3, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerMove, p5, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p5, 0, 0));
+            host.RunFrame();
+            float v5 = root.Val!.Peek();
+            Check("69. RatingControl: click sets value, drag sweeps", Near(v3, 3f) && Near(v5, 5f), $"click={v3} drag={v5}");
+        }
+
+        // ComboBox — closed selection.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cmb", new Size2(420, 320), 1f)); window.Show();
+            var root = new ComboProbe(false);
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox));
+            var menuItems = Roles(host.Scene, AutomationRole.MenuItem);
+            bool opened = menuItems.Count == 3;
+            int sel = -2;
+            if (opened) { ClickNode(host, window, menuItems[1]); sel = root.Sel!.Peek(); }
+            Check("70. ComboBox: opens a list and selects an item", opened && sel == 1, $"items={menuItems.Count} sel={sel}");
+        }
+
+        // ComboBox — editable text entry.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cmbe", new Size2(420, 320), 1f)); window.Show();
+            var root = new ComboProbe(true);
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Text));
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'l'));
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'o'));
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'w'));
+            host.RunFrame();
+            string txt = root.Txt!.Peek();
+            Check("71. ComboBox: editable mode accepts typed text", txt == "low", $"text='{txt}'");
+        }
+
+        // Slider (ranged) — value range mapping + step snapping.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rsl", new Size2(320, 120), 1f)); window.Show();
+            var root = new RangeSliderProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var mid = new Point2(tr.X + 100f, tr.Y + tr.H / 2f);   // raw 0.5 of length 200 → 50, snapped to step 10
+            window.QueueInput(new InputEvent(InputKind.PointerDown, mid, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, mid, 0, 0));
+            host.RunFrame();
+            float v = root.Val;
+            Check("72a. Slider.Ranged: maps to [min,max] and snaps to step", Near(v, 50f), $"value={v}");
+        }
+
+        // ColorPicker — hue / spectrum / alpha drags + a hex channel edit.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp", new Size2(420, 420), 1f)); window.Show();
+            var root = new ColorPickerProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            bool gradientsDrawn = device.LastGradients.Count >= 9;   // spectrum(2) + hue(6) + alpha(1)
+            var sliders = Roles(host.Scene, AutomationRole.Slider);   // [spectrum, hue, alpha]
+            var sr = host.Scene.AbsoluteRect(sliders[0]);
+            bool spectrumSquare = Near(sr.W, 256f) && Near(sr.H, 256f);
+            void DragTo(NodeHandle n, float fx, float fy)
+            {
+                var r = host.Scene.AbsoluteRect(n);
+                var p = new Point2(r.X + r.W * fx, r.Y + r.H * fy);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
+                host.RunFrame();
+            }
+            DragTo(sliders[1], 0.5f, 0.5f);  var hueHsv = root.Color!.Peek().ToHsv();
+            DragTo(sliders[0], 0.5f, 0.5f);  var sv = root.Color!.Peek().ToHsv();
+            DragTo(sliders[2], 0.5f, 0.5f);  float a = root.Color!.Peek().A;
+
+            // Hex channel: clear the field and type a pure green.
+            var hex = Roles(host.Scene, AutomationRole.Text)[0];
+            ClickNode(host, window, hex);
+            for (int i = 0; i < 6; i++) window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+            foreach (char ch in "00FF00") window.QueueInput(new InputEvent(InputKind.Char, default, 0, ch));
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Enter));
+            host.RunFrame();
+            var ce = root.Color!.Peek();
+
+            bool hueOk = MathF.Abs(hueHsv.H - 180f) < 45f;
+            bool svOk = sv.S > 0.3f && sv.S < 0.7f && sv.V > 0.3f && sv.V < 0.7f;
+            bool alphaOk = a > 0.3f && a < 0.7f;
+            bool hexOk = ce.G > 0.8f && ce.R < 0.2f && ce.B < 0.2f;
+            Check("72. ColorPicker: hue/spectrum/alpha drags + hex channel update the color",
+                gradientsDrawn && spectrumSquare && hueOk && svOk && alphaOk && hexOk,
+                $"gradients={device.LastGradients.Count} spectrum={sr.W:0}x{sr.H:0} H={hueHsv.H:0} S={sv.S:0.00} V={sv.V:0.00} A={a:0.00} hex=({ce.R:0.0},{ce.G:0.0},{ce.B:0.0})");
+        }
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -2152,6 +2818,20 @@ static class Slice
         GranularityChecks(strings);
         SliderSignalChecks(strings);
         FlowChecks(strings);
+
+        // Basic-input infrastructure (Part A): repeat timing, text input, anchored overlays.
+        RepeatButtonChecks(strings);
+        TextInputChecks(strings);
+        OverlayChecks(strings);
+        OverlayAnimationChecks(strings);
+        MenuFlyoutStyleChecks(strings);
+        SplitButtonStyleChecks(strings);
+
+        // Hierarchical NavigationView (Part B).
+        NavHierarchyChecks(strings);
+
+        // Basic-input controls (Part C).
+        BasicInputControlChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

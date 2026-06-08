@@ -143,6 +143,7 @@ public sealed class TreeReconciler
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
         ctx.Images = Images;
+        ctx.Scene = _scene;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.ImageEpoch = ImageEpoch;
@@ -624,9 +625,15 @@ public sealed class TreeReconciler
                 paint.Corners = b.Corners;
 
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
+                if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
+
+                // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
+                // AnimEngine ScaleX/Y track or a TransformBind pivots about the requested origin (e.g. a menu's top edge).
+                paint.OriginX = b.TransformOriginX;
+                paint.OriginY = b.TransformOriginY;
 
                 // Static transform/opacity ONLY when the element declares one AND there's no transform binding/animation
                 // owning the channel (else a re-render would reset the bound/animated value to identity each frame).
@@ -690,6 +697,12 @@ public sealed class TreeReconciler
 
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.KeyBit); _scene.SetKeyHandler(node, null); }
+
+                if (b.OnCharInput is not null) { ii.HandlerMask |= InteractionInfo.CharBit; _scene.SetCharHandler(node, b.OnCharInput); }
+                else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.CharBit); _scene.SetCharHandler(node, null); }
+
+                if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
+                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
 
                 if (b.OnPointerDown is not null || b.OnDrag is not null)
                 {

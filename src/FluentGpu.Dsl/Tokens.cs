@@ -35,6 +35,7 @@ public sealed record TokenSet
     public required ColorF StrokeCardDefault { get; init; }
     public required ColorF StrokeDividerDefault { get; init; }
     public required ColorF StrokeSurfaceDefault { get; init; }
+    public required ColorF StrokeFlyoutDefault { get; init; }    // SurfaceStrokeColorFlyout — flyout/menu border
     public required ColorF StrokeControlOnAccentDefault { get; init; }
     public required ColorF StrokeControlOnAccentSecondary { get; init; }   // top stop of the accent elevation border gradient
 
@@ -66,6 +67,32 @@ public sealed record TokenSet
     // Hero gradient stops
     public required ColorF HeroGradientTop { get; init; }
     public required ColorF HeroGradientBottom { get; init; }
+
+    // Control-alt fill hierarchy (WinUI ControlAltFillColor* — hollow/secondary control surfaces: checkbox/radio/
+    // toggle OFF box+ellipse fill, combo placeholder, person-picture ellipse). Distinct from the FillControl* ramp.
+    public required ColorF FillControlAltSecondary { get; init; }
+    public required ColorF FillControlAltTertiary { get; init; }    // alt hover
+    public required ColorF FillControlAltQuaternary { get; init; }  // alt pressed
+    public required ColorF FillControlAltDisabled { get; init; }
+
+    // Strong STROKE (WinUI ControlStrongStrokeColor* — the control outer-ring stroke: checkbox/radio/toggle/combo
+    // border. The fill counterpart is FillControlStrong; this is the stroke variant we were missing.)
+    public required ColorF StrokeControlStrongDefault { get; init; }
+    public required ColorF StrokeControlStrongDisabled { get; init; }
+
+    // Input-active fill (WinUI ControlFillColorInputActive — focused text-control body: TextBox/AutoSuggest/NumberBox)
+    public required ColorF FillControlInputActive { get; init; }
+
+    // Severity palette (WinUI SystemFillColor* — InfoBar/InfoBadge/TeachingTip). Saturated icon color + tinted
+    // background per severity. Attention (informational) follows the system accent, exposed as Tok.SystemFillAttention.
+    public required ColorF SystemFillCritical { get; init; }
+    public required ColorF SystemFillCaution { get; init; }
+    public required ColorF SystemFillSuccess { get; init; }
+    public required ColorF SystemFillCriticalBackground { get; init; }
+    public required ColorF SystemFillCautionBackground { get; init; }
+    public required ColorF SystemFillSuccessBackground { get; init; }
+    public required ColorF SystemFillAttentionBackground { get; init; }
+    public required ColorF TextInverse { get; init; }    // WinUI TextFillColorInverse — text on a severity/inverse fill
 
     // Window
     public required ColorF WindowBackground { get; init; }
@@ -119,6 +146,7 @@ public static class Tok
     public static ColorF StrokeCardDefault => T.StrokeCardDefault;
     public static ColorF StrokeDividerDefault => T.StrokeDividerDefault;
     public static ColorF StrokeSurfaceDefault => T.StrokeSurfaceDefault;
+    public static ColorF StrokeFlyoutDefault => T.StrokeFlyoutDefault;
     public static ColorF StrokeControlOnAccentDefault => T.StrokeControlOnAccentDefault;
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
 
@@ -159,6 +187,28 @@ public static class Tok
     public static ColorF HeroGradientTop => _accent is { } a ? a with { A = 0.55f } : T.HeroGradientTop;
     public static ColorF HeroGradientBottom => T.HeroGradientBottom;
 
+    // Control-alt fill
+    public static ColorF FillControlAltSecondary => T.FillControlAltSecondary;
+    public static ColorF FillControlAltTertiary => T.FillControlAltTertiary;
+    public static ColorF FillControlAltQuaternary => T.FillControlAltQuaternary;
+    public static ColorF FillControlAltDisabled => T.FillControlAltDisabled;
+
+    // Strong stroke + input-active
+    public static ColorF StrokeControlStrongDefault => T.StrokeControlStrongDefault;
+    public static ColorF StrokeControlStrongDisabled => T.StrokeControlStrongDisabled;
+    public static ColorF FillControlInputActive => T.FillControlInputActive;
+
+    // Severity palette (Attention follows the live OS accent, like WinUI SystemFillColorAttention = SystemAccentColor*)
+    public static ColorF SystemFillCritical => T.SystemFillCritical;
+    public static ColorF SystemFillCaution => T.SystemFillCaution;
+    public static ColorF SystemFillSuccess => T.SystemFillSuccess;
+    public static ColorF SystemFillAttention => AccentDefault;
+    public static ColorF SystemFillCriticalBackground => T.SystemFillCriticalBackground;
+    public static ColorF SystemFillCautionBackground => T.SystemFillCautionBackground;
+    public static ColorF SystemFillSuccessBackground => T.SystemFillSuccessBackground;
+    public static ColorF SystemFillAttentionBackground => T.SystemFillAttentionBackground;
+    public static ColorF TextInverse => T.TextInverse;
+
     public static ColorF WindowBackground => _windowBg ?? T.WindowBackground;
 
     private static TokenSet BuildDark() => new()
@@ -185,6 +235,7 @@ public static class Tok
         StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
         StrokeDividerDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15),
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
+        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x33),   // SurfaceStrokeColorFlyout (dark): 20% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23),
         TextPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
@@ -206,6 +257,21 @@ public static class Tok
         AcrylicBase = ColorF.FromRgba(0x20, 0x20, 0x20, 0xD9),
         HeroGradientTop = ColorF.FromRgba(0x2A, 0x4A, 0x66, 0xCC),
         HeroGradientBottom = ColorF.FromRgba(0x20, 0x20, 0x20, 0x00),
+        FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
+        FillControlAltTertiary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0B),
+        FillControlAltQuaternary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12),
+        FillControlAltDisabled   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x00),
+        StrokeControlStrongDefault  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
+        StrokeControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),
+        FillControlInputActive   = ColorF.FromRgba(0x1E, 0x1E, 0x1E, 0xB3),
+        SystemFillCritical = ColorF.FromRgba(0xFF, 0x99, 0xA4),
+        SystemFillCaution  = ColorF.FromRgba(0xFC, 0xE1, 0x00),
+        SystemFillSuccess  = ColorF.FromRgba(0x6C, 0xCB, 0x5F),
+        SystemFillCriticalBackground  = ColorF.FromRgba(0x44, 0x27, 0x26),
+        SystemFillCautionBackground   = ColorF.FromRgba(0x43, 0x35, 0x19),
+        SystemFillSuccessBackground   = ColorF.FromRgba(0x39, 0x3D, 0x1B),
+        SystemFillAttentionBackground = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
+        TextInverse = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
         WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20),
     };
 
@@ -233,6 +299,7 @@ public static class Tok
         StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeDividerDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
+        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
         TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
@@ -254,6 +321,21 @@ public static class Tok
         AcrylicBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0xE6),
         HeroGradientTop = ColorF.FromRgba(0x7A, 0xB6, 0xE6, 0xB3),
         HeroGradientBottom = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0x00),
+        FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
+        FillControlAltTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
+        FillControlAltQuaternary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x18),
+        FillControlAltDisabled   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x00),
+        StrokeControlStrongDefault  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
+        StrokeControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
+        FillControlInputActive   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        SystemFillCritical = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
+        SystemFillCaution  = ColorF.FromRgba(0x9D, 0x5D, 0x00),
+        SystemFillSuccess  = ColorF.FromRgba(0x0F, 0x7B, 0x0F),
+        SystemFillCriticalBackground  = ColorF.FromRgba(0xFD, 0xE7, 0xE9),
+        SystemFillCautionBackground   = ColorF.FromRgba(0xFF, 0xF4, 0xCE),
+        SystemFillSuccessBackground   = ColorF.FromRgba(0xDF, 0xF6, 0xDD),
+        SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
+        TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         WindowBackground = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
     };
 }

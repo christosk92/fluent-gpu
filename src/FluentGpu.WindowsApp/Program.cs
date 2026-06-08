@@ -87,10 +87,41 @@ static class Program
     {
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
-        for (int i = 0; i < args.Length - 1; i++)
+        string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)
+        string shot = "menu";        // --shot <id> selects the ShotScene
+        bool micaShot = false;       // --mica reproduces the composited path the live app uses
+        for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
-            if (args[i] == "--demo") demo = args[i + 1];
+            if (i < args.Length - 1 && args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
+            if (i < args.Length - 1 && args[i] == "--demo") demo = args[i + 1];
+            if (i < args.Length - 1 && args[i] == "--screenshot") screenshot = args[i + 1];
+            if (i < args.Length - 1 && args[i] == "--shot") shot = args[i + 1];
+            if (args[i] == "--mica") micaShot = true;
+        }
+
+        // DirectWrite itemizer smoke test (BiDi/script/line-break via the callee CCWs) then exit.
+        if (Array.IndexOf(args, "--itemtest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.DWriteItemizer.SelfTest();
+            return;
+        }
+        if (Array.IndexOf(args, "--shapetest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.DWriteTextShaper.SelfTest();
+            return;
+        }
+        if (Array.IndexOf(args, "--layouttest") >= 0)
+        {
+            FluentGpu.Text.DirectWrite.TextLayoutEngine.SelfTest();
+            return;
+        }
+
+        // Screenshot mode: render a single deterministic scene then exit. Opaque by default; --mica for the composited path.
+        if (screenshot != null)
+        {
+            int sf = frames > 0 ? frames : 6;   // a few frames to settle layout + glyph upload
+            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", 900, 640, mica: micaShot, frames: sf, screenshot: screenshot);
+            return;
         }
 
         // Default = the capability gallery (everything). `--demo wavee` = the Wavee skeleton; `--demo list` = the

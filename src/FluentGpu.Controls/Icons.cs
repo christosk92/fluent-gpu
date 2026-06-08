@@ -49,4 +49,7 @@ public static class Icons
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
     public const string Movie = "\uE8B2";
+    public const string RevealPassword = "\uE7B3";   // PasswordBox "eye" reveal glyph
+    public const string CaretUpSolid = "\uE70E";     // NumberBox inline spinner up
+    public const string CaretDownSolid = "\uE70D";   // NumberBox inline spinner down
 }
