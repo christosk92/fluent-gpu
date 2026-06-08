@@ -70,6 +70,7 @@ sealed class GalleryApp : Component
                 new("InfoBadge", Icons.Tag, "InfoBadge"),
                 new("InfoBar", Icons.Document, "InfoBar"),
                 new("ProgressBar", Icons.Refresh, "ProgressBar"),
+                new("ToolTip", Icons.Document, "ToolTip"),
             ],
         },
         new("layout", Icons.Grid, "Layout")
@@ -80,6 +81,7 @@ sealed class GalleryApp : Component
                 new("SplitView", Icons.Grid, "SplitView"),
                 new("Viewbox", Icons.Picture, "Viewbox"),
                 new("Border", Icons.Grid, "Border"),
+                new("Canvas", Icons.Grid, "Canvas"),
             ],
         },
         new("scrolling-controls", Icons.More, "Scrolling")
@@ -114,6 +116,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("TextBlock", Icons.Font, "TextBlock"),
+                new("RichTextBlock", Icons.Font, "RichTextBlock"),
                 new("NumberBox", Icons.Volume, "NumberBox"),
             ],
         },
@@ -144,6 +147,7 @@ sealed class GalleryApp : Component
                 new("AppBarToggleButton", Icons.Accept, "AppBarToggleButton"),
                 new("CommandBar", Icons.More, "CommandBar"),
                 new("AppBarSeparator", Icons.More, "AppBarSeparator"),
+                new("CommandBarFlyout", Icons.More, "CommandBarFlyout"),
             ],
         },
         new("h-samples", "", "Samples", IsHeader: true),
@@ -292,6 +296,10 @@ sealed class GalleryApp : Component
         "ItemsView" => Embed.Comp(() => new ItemsViewPage()),
         "Border" => Embed.Comp(() => new BorderPage()),
         "AppBarSeparator" => Embed.Comp(() => new AppBarSeparatorPage()),
+        "RichTextBlock" => Embed.Comp(() => new RichTextBlockPage()),
+        "Canvas" => Embed.Comp(() => new CanvasPage()),
+        "ToolTip" => Embed.Comp(() => new ToolTipPage()),
+        "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
