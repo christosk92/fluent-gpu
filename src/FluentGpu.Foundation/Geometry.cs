@@ -76,6 +76,70 @@ public readonly record struct ColorF(float R, float G, float B, float A)
             L2S(S2L(a.B) + (S2L(b.B) - S2L(a.B)) * t),
             a.A + (b.A - a.A) * t);
     }
+
+    // ── HSV (for ColorPicker) ── h in [0,360), s/v/a in [0,1]. Straight-channel HSV (the conventional color-wheel space).
+    public static ColorF FromHsv(float h, float s, float v, float a = 1f)
+    {
+        h = ((h % 360f) + 360f) % 360f;
+        s = Math.Clamp(s, 0f, 1f); v = Math.Clamp(v, 0f, 1f);
+        float c = v * s;
+        float x = c * (1f - MathF.Abs((h / 60f) % 2f - 1f));
+        float m = v - c;
+        float r, g, b;
+        if (h < 60f) { r = c; g = x; b = 0f; }
+        else if (h < 120f) { r = x; g = c; b = 0f; }
+        else if (h < 180f) { r = 0f; g = c; b = x; }
+        else if (h < 240f) { r = 0f; g = x; b = c; }
+        else if (h < 300f) { r = x; g = 0f; b = c; }
+        else { r = c; g = 0f; b = x; }
+        return new(r + m, g + m, b + m, a);
+    }
+
+    public (float H, float S, float V) ToHsv()
+    {
+        float max = MathF.Max(R, MathF.Max(G, B));
+        float min = MathF.Min(R, MathF.Min(G, B));
+        float d = max - min;
+        float h = 0f;
+        if (d > 1e-6f)
+        {
+            if (max == R) h = 60f * (((G - B) / d % 6f + 6f) % 6f);
+            else if (max == G) h = 60f * ((B - R) / d + 2f);
+            else h = 60f * ((R - G) / d + 4f);
+        }
+        if (h < 0f) h += 360f;
+        float s = max <= 0f ? 0f : d / max;
+        return (h, s, max);
+    }
+
+    static int B255(float c) => Math.Clamp((int)MathF.Round(c * 255f), 0, 255);
+    public string ToHex() => $"{B255(R):X2}{B255(G):X2}{B255(B):X2}";
+
+    /// <summary>Parse a 6- or 8-hex-digit RGB/RGBA string (with or without a leading '#'). Returns false on malformed input.</summary>
+    public static bool TryParseHex(string s, out ColorF color)
+    {
+        color = default;
+        if (string.IsNullOrEmpty(s)) return false;
+        if (s[0] == '#') s = s[1..];
+        if (s.Length != 6 && s.Length != 8) return false;
+        Span<byte> bytes = stackalloc byte[4] { 0, 0, 0, 255 };
+        for (int i = 0; i < s.Length; i += 2)
+        {
+            int hi = HexVal(s[i]), lo = HexVal(s[i + 1]);
+            if (hi < 0 || lo < 0) return false;
+            bytes[i / 2] = (byte)(hi * 16 + lo);
+        }
+        color = FromRgba(bytes[0], bytes[1], bytes[2], bytes[3]);
+        return true;
+
+        static int HexVal(char c) => c switch
+        {
+            >= '0' and <= '9' => c - '0',
+            >= 'a' and <= 'f' => c - 'a' + 10,
+            >= 'A' and <= 'F' => c - 'A' + 10,
+            _ => -1,
+        };
+    }
 }
 
 /// <summary>2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).</summary>

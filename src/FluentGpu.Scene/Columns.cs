@@ -155,7 +155,7 @@ public struct InteractionAnim
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key
+    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key, bit2 = pointer, bit3 = char, bit4 = repeat
     public CursorId Cursor;
     public AutomationRole Role;   // semantic control role (set by control factories) → UIA ControlType / devtools / tests
     public bool Focusable;
@@ -163,4 +163,6 @@ public struct InteractionInfo
     public const ushort ClickBit = 1;
     public const ushort KeyBit = 2;
     public const ushort PointerBit = 4;   // position-aware press/drag (slider/scrollbar)
+    public const ushort CharBit = 8;      // text (character) input handler present
+    public const ushort RepeatBit = 16;   // clickable opts into press-and-hold auto-repeat (RepeatButton)
 }

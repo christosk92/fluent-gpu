@@ -39,18 +39,35 @@ public static partial class ToggleButton
     };
 
     public static BoxEl Create(string label, bool on, Action onToggle, Style? style = null)
+        => Build(label, on ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style);
+
+    /// <summary>Three-state toggle (adds the mixed "indeterminate" look). Click cycles Unchecked → Checked → Indeterminate.</summary>
+    public static BoxEl Create(string label, CheckState state, Action<CheckState> onCycle, Style? style = null)
+    {
+        var next = state switch
+        {
+            CheckState.Unchecked => CheckState.Checked,
+            CheckState.Checked => CheckState.Indeterminate,
+            _ => CheckState.Unchecked,
+        };
+        return Build(label, state, _ => onCycle(next), style);
+    }
+
+    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style)
     {
         var s = style ?? DefaultStyle;
+        bool on = state == CheckState.Checked;
+        bool indet = state == CheckState.Indeterminate;
         return new BoxEl
         {
             Direction = 0, Role = AutomationRole.ToggleButton, Padding = s.Padding, MinHeight = s.MinHeight, AlignItems = FlexAlign.Center,
             Corners = CornerRadius4.All(s.CornerRadius), BorderWidth = s.BorderWidth,
-            Fill = on ? s.OnBackground : s.OffBackground,
-            HoverFill = on ? s.OnHover : s.OffHover,
-            PressedFill = on ? s.OnPressed : s.OffPressed,
-            BorderBrush = on ? s.OnBorder : s.OffBorder,
-            OnClick = onToggle,
-            Children = [new TextEl(label) { Size = s.FontSize, Color = on ? s.OnForeground : s.OffForeground }],
+            Fill = on ? s.OnBackground : indet ? Tok.AccentSubtle : s.OffBackground,
+            HoverFill = on ? s.OnHover : indet ? Tok.AccentSecondary : s.OffHover,
+            PressedFill = on ? s.OnPressed : indet ? Tok.AccentTertiary : s.OffPressed,
+            BorderBrush = on || indet ? s.OnBorder : s.OffBorder,
+            OnClick = () => onClick(state),
+            Children = [new TextEl(label) { Size = s.FontSize, Color = on ? s.OnForeground : indet ? Tok.AccentDefault : s.OffForeground }],
         };
     }
 }

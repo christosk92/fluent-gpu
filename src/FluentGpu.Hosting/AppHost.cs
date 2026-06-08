@@ -51,12 +51,15 @@ public sealed class AppHost : IDisposable
     private readonly AnimEngine _anim;
     private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;
+    private readonly RepeatTicker _repeat;
     private readonly ImageCache _images;
     private readonly Dictionary<NodeHandle, RectF> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
+    private readonly InputHooks _inputHooks = new();
+    private readonly Signal<object?> _inputHooksSig;
     private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
     private Size2 _lastViewportDip;
 
@@ -78,7 +81,7 @@ public sealed class AppHost : IDisposable
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
-        || _interact.HasActive || _scrollAnim.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
+        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -101,6 +104,7 @@ public sealed class AppHost : IDisposable
         _anim = new AnimEngine(_scene);
         _interact = new InteractionAnimator(_scene);
         _scrollAnim = new ScrollAnimator(_scene);
+        _repeat = new RepeatTicker(_scene);
         _lastSize = window.ClientSizePx;
 
         // A reactive write (anywhere) requests a frame.
@@ -112,6 +116,9 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnScrollArmed = _scrollAnim.Arm;
         _dispatcher.OnScrollHover = _scrollAnim.Hover;
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
+        _dispatcher.OnRepeatArmed = _repeat.Arm;
+        _dispatcher.OnRepeatReleased = _repeat.Disarm;
+        _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
 
         _reconciler.Anim = _anim;
         _reconciler.Images = _images;
@@ -123,8 +130,10 @@ public sealed class AppHost : IDisposable
         // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.
         _lastViewportDip = ClientSizeDip();
         _viewportSig.Value = _lastViewportDip;
+        _inputHooksSig = new Signal<object?>(_inputHooks);
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
+        _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
 
         _window.PaintRequested = () => Paint(0);
 
@@ -215,6 +224,7 @@ public sealed class AppHost : IDisposable
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _interact.Tick(16f);                               // 7 eased hover/press
             _scrollAnim.Tick(16f);                             // 7 smooth scroll + scrollbar fade
+            _repeat.Tick(16f);                                 // 7 RepeatButton auto-repeat (held → re-fire click)
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(16f);
 

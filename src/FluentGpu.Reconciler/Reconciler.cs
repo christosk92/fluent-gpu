@@ -143,6 +143,7 @@ public sealed class TreeReconciler
         ctx.Runtime = Runtime;
         ctx.Anim = Anim;
         ctx.Images = Images;
+        ctx.Scene = _scene;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.ImageEpoch = ImageEpoch;
@@ -690,6 +691,12 @@ public sealed class TreeReconciler
 
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.KeyBit); _scene.SetKeyHandler(node, null); }
+
+                if (b.OnCharInput is not null) { ii.HandlerMask |= InteractionInfo.CharBit; _scene.SetCharHandler(node, b.OnCharInput); }
+                else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.CharBit); _scene.SetCharHandler(node, null); }
+
+                if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
+                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
 
                 if (b.OnPointerDown is not null || b.OnDrag is not null)
                 {

@@ -2,7 +2,7 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Pal;
 
-public enum InputKind : byte { PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5 }
+public enum InputKind : byte { PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5, Char = 6 }
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).

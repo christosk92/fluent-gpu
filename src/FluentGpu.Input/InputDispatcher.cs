@@ -49,6 +49,14 @@ public sealed class InputDispatcher
     public Action<NodeHandle, bool>? OnScrollHover;
     public Action<NodeHandle>? OnScrollLeave;
 
+    /// <summary>Set by the host: a RepeatButton was pressed (held) / released — drives the RepeatTicker auto-repeat.</summary>
+    public Action<NodeHandle>? OnRepeatArmed;
+    public Action<NodeHandle>? OnRepeatReleased;
+
+    /// <summary>Set by the host: a global key preview run before focus routing (returns true = consumed). Lets a tree-level
+    /// concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.</summary>
+    public Func<int, bool>? OnKeyPreview;
+
     public int Dispatch(ReadOnlySpan<InputEvent> events)
     {
         // Drop transient state that pointed at a freed node.
@@ -95,7 +103,9 @@ public sealed class InputDispatcher
                         var local = LocalPos(_down, e.PositionPx);
                         _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
                         if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
-                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.PointerBit) != 0) handled++;
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                            OnRepeatArmed?.Invoke(_down);   // RepeatButton: fire click now, then repeat while held
+                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.RepeatBit)) != 0) handled++;
                     }
                     break;
 
@@ -108,11 +118,13 @@ public sealed class InputDispatcher
                     }
 
                     var up = HitTest(e.PositionPx);
+                    bool wasRepeat = !_down.IsNull && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0;
+                    if (wasRepeat) OnRepeatReleased?.Invoke(_down);   // stop the auto-repeat
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     if (!up.IsNull && up == _down)
                     {
                         SetFocus(up, visual: false);        // pointer activation focuses but does NOT show the focus ring
-                        _scene.GetClickHandler(up)?.Invoke();
+                        if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
                         handled++;
                     }
                     _down = NodeHandle.Null;
@@ -121,6 +133,10 @@ public sealed class InputDispatcher
 
                 case InputKind.Key:
                     OnKey(e.KeyCode);
+                    break;
+
+                case InputKind.Char:
+                    if (OnChar(e.KeyCode)) handled++;
                     break;
 
                 case InputKind.Wheel:
@@ -392,6 +408,7 @@ public sealed class InputDispatcher
 
     private void OnKey(int key)
     {
+        if (OnKeyPreview is not null && OnKeyPreview(key)) return;   // an open overlay can swallow Escape here
         if (key == Keys.Tab) { MoveFocus(forward: true); return; }
         if (_focused.IsNull) return;
 
@@ -410,6 +427,22 @@ public sealed class InputDispatcher
             _scene.GetKeyHandler(n)?.Invoke(args);
             if (args.Handled) return;
         }
+    }
+
+    /// <summary>Route a text (character) codepoint to the focused node, bubbling up ancestors until Handled.</summary>
+    private bool OnChar(int codepoint)
+    {
+        if (_focused.IsNull) return false;
+        var args = new CharEventArgs(codepoint);   // cold path: only allocates while the user is typing
+        for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.CharBit) != 0)
+            {
+                _scene.GetCharHandler(n)?.Invoke(args);
+                if (args.Handled) return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Move focus to the next/previous focusable node in document order (cycles).</summary>

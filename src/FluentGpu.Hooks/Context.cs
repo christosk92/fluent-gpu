@@ -19,6 +19,19 @@ public static class Viewport
     public static readonly Context<Size2> Size = new(default);
 }
 
+/// <summary>
+/// A host-owned registration surface a tree-level concern can hook into without the host depending on it. The host
+/// bridges <see cref="KeyPreview"/> into the input dispatcher's pre-focus key hook, so an open overlay/flyout (which
+/// lives in the tree) can intercept Escape regardless of focus. Read the host instance via <c>UseContext(InputHooks.Current)</c>.
+/// </summary>
+public sealed class InputHooks
+{
+    /// <summary>Return true to consume the key. Set by an open overlay; cleared when it closes.</summary>
+    public Func<int, bool>? KeyPreview;
+    public bool Preview(int key) => KeyPreview?.Invoke(key) ?? false;
+    public static readonly Context<InputHooks> Current = new(new InputHooks());
+}
+
 /// <summary>Provides a context value to its subtree (the React <c>Context.Provider</c>). One child.</summary>
 public sealed record ContextProviderEl(object Channel, object? Value, Element Child) : Element
 {

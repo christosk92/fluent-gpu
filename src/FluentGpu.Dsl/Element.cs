@@ -35,9 +35,15 @@ public sealed record BoxEl : Element
 
     public Action? OnClick { get; init; }
     public Action<KeyEventArgs>? OnKeyDown { get; init; }
+    /// <summary>Text (character) input — the IME/layout-resolved codepoint, routed to the focused node and bubbled
+    /// (distinct from <see cref="OnKeyDown"/>'s raw virtual-key). Set by editable controls (EditableText/ComboBox).</summary>
+    public Action<CharEventArgs>? OnCharInput { get; init; }
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
+    /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
+    public bool Repeats { get; init; }
     public bool HitTestVisible { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }

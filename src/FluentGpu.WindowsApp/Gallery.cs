@@ -12,29 +12,78 @@ using static FluentGpu.Dsl.Ui;
 //   dotnet run --project src/FluentGpu.WindowsApp
 sealed class GalleryApp : Component
 {
+    // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Design, Controls (All + an expanded Basic input group) —
+    // with the engine's own capability demos remapped under Fundamentals/Design/Samples. (Accessibility is out of scope.)
     static readonly NavItem[] Items =
     {
         new("welcome", Icons.Home, "Home"),
-        new("h-fund", "", "Fundamentals", IsHeader: true),
-        new("state", Icons.Refresh, "State & components"),
-        new("typography", Icons.Font, "Typography"),
-        new("icons", Icons.Star, "Icons & fonts"),
-        new("h-layout", "", "Layout", IsHeader: true),
-        new("flex", Icons.Tag, "Flexbox"),
-        new("grid", Icons.Grid, "CSS Grid"),
-        new("repeater", Icons.List, "ItemsRepeater"),
-        new("virtualization", Icons.List, "List virtualization"),
+        new("fundamentals", Icons.Document, "Fundamentals")
+        {
+            Children =
+            [
+                new("state", Icons.Refresh, "State & components"),
+                new("flex", Icons.Tag, "Flexbox"),
+                new("grid", Icons.Grid, "CSS Grid"),
+                new("repeater", Icons.List, "ItemsRepeater"),
+                new("virtualization", Icons.List, "List virtualization"),
+                new("animation", Icons.Movie, "Animation"),
+                new("compositor", Icons.Brush, "Compositor"),
+                new("scrolling", Icons.Document, "Scrolling"),
+            ],
+        },
+        new("design", Icons.Brush, "Design")
+        {
+            Children =
+            [
+                new("typography", Icons.Font, "Typography"),
+                new("icons", Icons.Star, "Icons & fonts"),
+                new("images", Icons.Picture, "Images"),
+            ],
+        },
         new("h-controls", "", "Controls", IsHeader: true),
-        new("buttons", Icons.Accept, "Buttons & commands"),
-        new("inputs", Icons.Volume, "Inputs & sliders"),
-        new("h-media", "", "Media", IsHeader: true),
-        new("images", Icons.Picture, "Images"),
-        new("scrolling", Icons.Document, "Scrolling"),
-        new("h-motion", "", "Motion & GPU", IsHeader: true),
-        new("animation", Icons.Movie, "Animation"),
-        new("compositor", Icons.Brush, "Compositor"),
+        new("all", Icons.Grid, "All"),
+        new("basic-input", Icons.Accept, "Basic input")
+        {
+            InitiallyExpanded = true,
+            Children =
+            [
+                new("Button", Icons.Accept, "Button"),
+                new("DropDownButton", Icons.More, "DropDownButton"),
+                new("HyperlinkButton", Icons.Share, "HyperlinkButton"),
+                new("RepeatButton", Icons.Refresh, "RepeatButton"),
+                new("ToggleButton", Icons.Accept, "ToggleButton"),
+                new("SplitButton", Icons.More, "SplitButton"),
+                new("ToggleSplitButton", Icons.More, "ToggleSplitButton"),
+                new("CheckBox", Icons.Accept, "CheckBox"),
+                new("ColorPicker", Icons.Brush, "ColorPicker"),
+                new("ComboBox", Icons.List, "ComboBox"),
+                new("RadioButton", Icons.FavoriteStar, "RadioButton"),
+                new("RatingControl", Icons.Star, "RatingControl"),
+                new("Slider", Icons.Volume, "Slider"),
+                new("ToggleSwitch", Icons.Settings, "ToggleSwitch"),
+            ],
+        },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
+    };
+
+    // Maps a Basic-input control key to its bundled WinUI-Gallery tile image (note the casing: "CheckBox" → "Checkbox.png").
+    public static readonly (string Key, string Title, string Image)[] BasicInputCatalog =
+    {
+        ("Button", "Button", "Button.png"),
+        ("DropDownButton", "DropDownButton", "DropDownButton.png"),
+        ("HyperlinkButton", "HyperlinkButton", "HyperlinkButton.png"),
+        ("RepeatButton", "RepeatButton", "RepeatButton.png"),
+        ("ToggleButton", "ToggleButton", "ToggleButton.png"),
+        ("SplitButton", "SplitButton", "SplitButton.png"),
+        ("ToggleSplitButton", "ToggleSplitButton", "ToggleSplitButton.png"),
+        ("CheckBox", "CheckBox", "Checkbox.png"),
+        ("ColorPicker", "ColorPicker", "ColorPicker.png"),
+        ("ComboBox", "ComboBox", "ComboBox.png"),
+        ("RadioButton", "RadioButton", "RadioButton.png"),
+        ("RatingControl", "RatingControl", "RatingControl.png"),
+        ("Slider", "Slider", "Slider.png"),
+        ("ToggleSwitch", "ToggleSwitch", "ToggleSwitch.png"),
     };
 
     public override Element Render()
@@ -50,7 +99,9 @@ sealed class GalleryApp : Component
             })
         ) with { Grow = 1 };
 
-        return ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+        var content = ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+        // Host the overlay layer at the top so anchored flyouts (ComboBox/DropDownButton/SplitButton/ColorPicker) work app-wide.
+        return Embed.Comp(() => new OverlayHost { Child = content });
     }
 
     // Integrated title bar (transparent → window Mica shows through): app identity left, a centered search pill,
@@ -94,6 +145,29 @@ sealed class GalleryApp : Component
 
     static Element Page(string key) => key switch
     {
+        // Overview / category pages (WinUI-Gallery shape).
+        "fundamentals" => Embed.Comp(() => new FundamentalsPage()),
+        "design" => Embed.Comp(() => new DesignPage()),
+        "all" => Embed.Comp(() => new AllControlsPage()),
+        "basic-input" => Embed.Comp(() => new BasicInputOverviewPage()),
+
+        // Basic input — the 14 control demo pages.
+        "Button" => Embed.Comp(() => new ButtonControlPage()),
+        "DropDownButton" => Embed.Comp(() => new DropDownButtonControlPage()),
+        "HyperlinkButton" => Embed.Comp(() => new HyperlinkButtonControlPage()),
+        "RepeatButton" => Embed.Comp(() => new RepeatButtonControlPage()),
+        "ToggleButton" => Embed.Comp(() => new ToggleButtonControlPage()),
+        "SplitButton" => Embed.Comp(() => new SplitButtonControlPage()),
+        "ToggleSplitButton" => Embed.Comp(() => new ToggleSplitButtonControlPage()),
+        "CheckBox" => Embed.Comp(() => new CheckBoxControlPage()),
+        "ColorPicker" => Embed.Comp(() => new ColorPickerControlPage()),
+        "ComboBox" => Embed.Comp(() => new ComboBoxControlPage()),
+        "RadioButton" => Embed.Comp(() => new RadioButtonControlPage()),
+        "RatingControl" => Embed.Comp(() => new RatingControlControlPage()),
+        "Slider" => Embed.Comp(() => new SliderControlPage()),
+        "ToggleSwitch" => Embed.Comp(() => new ToggleSwitchControlPage()),
+
+        // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
         "icons" => Embed.Comp(() => new IconsPage()),
         "buttons" => Embed.Comp(() => new ButtonsPage()),

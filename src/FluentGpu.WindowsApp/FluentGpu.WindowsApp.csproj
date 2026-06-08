@@ -3,6 +3,10 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->
+    <Content Include="assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Foundation\FluentGpu.Foundation.csproj" />
     <ProjectReference Include="..\FluentGpu.Dsl\FluentGpu.Dsl.csproj" />
     <ProjectReference Include="..\FluentGpu.Hooks\FluentGpu.Hooks.csproj" />

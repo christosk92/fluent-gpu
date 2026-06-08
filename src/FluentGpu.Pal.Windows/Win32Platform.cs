@@ -25,7 +25,8 @@ public sealed unsafe class Win32Window : IPlatformWindow
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_SIZE = 0x0005,
                        WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202,
                        WM_MOUSEWHEEL = 0x020A, WM_MOUSEHWHEEL = 0x020E,
-                       WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104;
+                       WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
+                       WM_CHAR = 0x0102;
     // DIP scrolled per wheel notch (120 units). ~3 lines × ~16px — the conventional Windows feel.
     private const float WheelDipPerNotch = 48f;
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
@@ -205,6 +206,11 @@ public sealed unsafe class Win32Window : IPlatformWindow
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
                 _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam));
+                return true;
+            case WM_CHAR:
+                // TranslateMessage (run in the pump) synthesizes WM_CHAR from WM_KEYDOWN → the layout/IME-resolved
+                // codepoint, carried in the InputEvent.KeyCode slot. Editing/navigation keys still arrive via WM_KEYDOWN.
+                _queue.Enqueue(new InputEvent(InputKind.Char, default, 0, (int)(nuint)wParam));
                 return true;
         }
         return false;

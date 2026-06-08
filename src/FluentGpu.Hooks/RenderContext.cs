@@ -84,6 +84,7 @@ public sealed class RenderContext
     public Action RequestRerender = static () => { };
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
+    public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal

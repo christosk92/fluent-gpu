@@ -13,4 +13,13 @@ public enum AutomationRole : byte
     Slider,
     ScrollBar,
     NavigationItem,
+    // Basic-input controls (appended — existing values 0–5 are ABI-stable).
+    CheckBox,
+    RadioButton,
+    Hyperlink,
+    Rating,
+    ToggleSwitch,
+    ComboBox,
+    MenuItem,
+    Text,          // text input / Edit control type (EditableText)
 }
