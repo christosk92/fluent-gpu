@@ -551,6 +551,13 @@ sealed class ColorPickerProbe : Component
     }
 }
 
+sealed class SplitButtonProbe : Component
+{
+    public int Invoked;
+    public override Element Render()
+        => SplitButton.Create("Paste", () => Invoked++, [new MenuFlyoutItem("Paste as text", Icons.Document)], Icons.Document);
+}
+
 sealed class NavHierarchyProbe : Component
 {
     public override Element Render() => Embed.Comp(() => new NavigationView
@@ -2127,6 +2134,18 @@ static class Slice
         bool solidFill = dev.LastRects.Count == 1;                      // the fill drew once (full bounds), border is the gradient stroke
         Check("57. gradient elevation border emits a DrawGradientStroke band", oneStroke && band && solidFill,
             $"strokes={dev.LastGradientStrokes.Count} w={gs.StrokeWidth:0.0} stops={gs.StopCount} ring=({gs.Rect.X:0.0},{gs.Rect.W:0.0})");
+
+        var fillScene = LayoutTree(strings, new BoxEl
+        {
+            Width = 120, Height = 40, Corners = CornerRadius4.All(4f),
+            Gradient = Ui.LinearGradient(0f, new GradientStop(0f, ColorF.FromRgba(0, 0, 0)), new GradientStop(1f, ColorF.FromRgba(255, 255, 255))),
+        });
+        dl.Reset();
+        SceneRecorder.Record(fillScene, dl);
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        bool oneFill = dev.LastGradients.Count == 1 && dev.LastGradients[0].StopCount == 2 && dev.LastRects.Count == 0;
+        Check("57b. gradient-only BoxEl emits a DrawGradientRect", oneFill,
+            $"gradients={dev.LastGradients.Count} rects={dev.LastRects.Count}");
     }
 
     // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
@@ -2350,6 +2369,9 @@ static class Slice
             ],
         };
 
+        // Let the close fade animation (83ms) settle, then the OverlayCloseDriver removes the popup.
+        void Settle() { for (int i = 0; i < 16; i++) host.RunFrame(); }
+
         // Open → the popup (a MenuItem) appears in the scene.
         svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
         host.RunFrame();
@@ -2358,6 +2380,7 @@ static class Slice
         // Escape closes it (via the dispatcher key-preview hook).
         window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
         host.RunFrame();
+        Settle();
         bool escClosed = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
 
         // Re-open → light dismiss: a click away from the popup hits the scrim and closes it.
@@ -2366,6 +2389,7 @@ static class Slice
         window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(460, 350), 0, 0));
         window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(460, 350), 0, 0));
         host.RunFrame();
+        Settle();
         bool lightDismissed = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
 
         // Re-open → click the item: invokes its command and closes.
@@ -2376,11 +2400,125 @@ static class Slice
         window.QueueInput(new InputEvent(InputKind.PointerDown, ic, 0, 0));
         window.QueueInput(new InputEvent(InputKind.PointerUp, ic, 0, 0));
         host.RunFrame();
+        Settle();
         bool invoked = root.Selected == 7 && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
 
         Check("64. overlay: anchored flyout opens, Escape + light-dismiss close, item invokes",
             opened && escClosed && lightDismissed && invoked,
             $"open={opened} esc={escClosed} dismiss={lightDismissed} invoke={invoked}");
+    }
+
+    static void OverlayAnimationChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("ovanim", new Size2(480, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        var svc = root.Service!;
+        Func<Element> menu = () => MenuFlyout.Build(new[]
+        {
+            new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three"),
+            new MenuFlyoutItem("Four"), new MenuFlyoutItem("Five"),
+        }, () => svc.CloseTop());
+
+        NodeHandle SurfaceOf(NodeHandle n) { for (; !n.IsNull; n = host.Scene.Parent(n)) if (host.Scene.TryGetAcrylic(n, out _)) return n; return NodeHandle.Null; }
+
+        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        host.RunFrame();   // mount + seed the WinUI menu transition (opposing translate + border scale) + fade
+        var surface = SurfaceOf(FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+        var clip = surface.IsNull ? NodeHandle.Null : host.Scene.FirstChild(surface);
+        var border = clip.IsNull ? NodeHandle.Null : host.Scene.NextSibling(clip);
+        var content = clip.IsNull ? NodeHandle.Null : host.Scene.FirstChild(clip);
+        float clipDy1 = clip.IsNull ? 0f : host.Scene.Paint(clip).LocalTransform.Dy;
+        float contentDy1 = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
+        float borderSy1 = border.IsNull ? 0f : host.Scene.Paint(border).LocalTransform.M22;
+        bool unfolding = !surface.IsNull && !clip.IsNull && !content.IsNull && !border.IsNull
+                         && clipDy1 > 1f && contentDy1 < -1f && borderSy1 > 0.45f && borderSy1 < 0.98f;
+
+        for (int i = 0; i < 20; i++) host.RunFrame();             // open settles
+        float clipDy2 = clip.IsNull ? 0f : host.Scene.Paint(clip).LocalTransform.Dy;
+        float contentDy2 = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
+        float borderSy2 = border.IsNull ? 0f : host.Scene.Paint(border).LocalTransform.M22;
+        bool unfolded = MathF.Abs(clipDy2) < 0.5f && MathF.Abs(contentDy2) < 0.5f && Near(borderSy2, 1f, 0.02f);
+
+        // Close → the surface fades (opacity animates down) while staying on top (not removed instantly).
+        svc.CloseTop();
+        host.RunFrame();
+        float op = host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
+        bool fading = host.Scene.IsLive(surface) && op < 0.99f;
+
+        Check("64d. flyout: open uses WinUI opposing translate + border scale, then close fades", unfolding && unfolded && fading,
+            $"clipDy {clipDy1:0.0}→{clipDy2:0.0} contentDy {contentDy1:0.0}→{contentDy2:0.0} borderSy {borderSy1:0.00}→{borderSy2:0.00} closeOpacity={op:0.00}");
+    }
+
+    static void MenuFlyoutStyleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("menustyle", new Size2(480, 360), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var items = new[]
+        {
+            new MenuFlyoutItem("Small", Icons.Tag),
+            new MenuFlyoutItem("Medium", Icons.Tag),
+            new MenuFlyoutItem("Large", Icons.Tag),
+            MenuFlyoutItem.Separator,
+            new MenuFlyoutItem("Disabled", Icons.Cancel, false),
+        };
+        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Build(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
+        host.RunFrame();
+
+        var rows = Roles(host.Scene, AutomationRole.MenuItem);
+        bool rowMetrics = rows.Count == 4 && Near(host.Scene.Bounds(rows[0]).H, 36f);
+        // Walk up from a row to the acrylic FlyoutSurface (the presenter card; structure: surface > clip > content > rows).
+        NodeHandle surface = rows.Count > 0 ? rows[0] : NodeHandle.Null;
+        while (!surface.IsNull && !host.Scene.TryGetAcrylic(surface, out _)) surface = host.Scene.Parent(surface);
+        bool acrylic = !surface.IsNull;
+        float surfaceW = surface.IsNull ? 0f : host.Scene.AbsoluteRect(surface).W;
+        bool minWidth = surfaceW >= 96f;   // FlyoutThemeMinWidth (generic.xaml)
+        bool hasLayer = device.LastLayers.Count > 0 && device.LayerBalance == 0;
+        bool disabled = rows.Count == 4 && (host.Scene.Interaction(rows[3]).HandlerMask & InteractionInfo.ClickBit) == 0;
+
+        Check("64b. MenuFlyout: WinUI-like presenter chrome, row metrics, disabled command",
+            rowMetrics && minWidth && acrylic && hasLayer && disabled,
+            $"rows={rows.Count} h={(rows.Count > 0 ? host.Scene.Bounds(rows[0]).H : 0):0} w={surfaceW:0} acrylic={acrylic} layers={device.LastLayers.Count} disabled={disabled}");
+    }
+
+    static void SplitButtonStyleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("splitstyle", new Size2(360, 160), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new SplitButtonProbe());
+        host.RunFrame();
+
+        var buttons = Roles(host.Scene, AutomationRole.Button);
+        var primary = buttons.Count > 0 ? buttons[0] : NodeHandle.Null;
+        var drop = buttons.Count > 1 ? buttons[1] : NodeHandle.Null;
+        var outer = primary.IsNull ? NodeHandle.Null : host.Scene.Parent(primary);
+        bool twoHalves = buttons.Count == 2;
+        bool joinedChrome = !outer.IsNull && host.Scene.Paint(outer).Fill.A > 0f && Near(host.Scene.Paint(outer).BorderWidth, 1f)
+                            && (host.Scene.Flags(outer) & NodeFlags.ClipsToBounds) != 0;
+        bool halfMetrics = !primary.IsNull && !drop.IsNull
+                           && Near(host.Scene.Bounds(primary).H, 32f) && Near(host.Scene.Bounds(drop).W, 32f) && Near(host.Scene.Bounds(drop).H, 32f);
+        bool transparentHalves = !primary.IsNull && !drop.IsNull
+                                 && host.Scene.Paint(primary).Fill.A == 0f && host.Scene.Paint(drop).Fill.A == 0f;
+
+        Check("64c. SplitButton: joined outer chrome with independently interactive halves",
+            twoHalves && joinedChrome && halfMetrics && transparentHalves,
+            $"buttons={buttons.Count} chrome={joinedChrome} primaryH={(primary.IsNull ? 0 : host.Scene.Bounds(primary).H):0} drop={(drop.IsNull ? 0 : host.Scene.Bounds(drop).W):0}x{(drop.IsNull ? 0 : host.Scene.Bounds(drop).H):0}");
     }
 
     static void NavHierarchyChecks(StringTable strings)
@@ -2560,7 +2698,10 @@ static class Slice
             var root = new ColorPickerProbe();
             using var host = new AppHost(app, window, device, fonts, strings, root);
             host.RunFrame();
+            bool gradientsDrawn = device.LastGradients.Count >= 9;   // spectrum(2) + hue(6) + alpha(1)
             var sliders = Roles(host.Scene, AutomationRole.Slider);   // [spectrum, hue, alpha]
+            var sr = host.Scene.AbsoluteRect(sliders[0]);
+            bool spectrumSquare = Near(sr.W, 256f) && Near(sr.H, 256f);
             void DragTo(NodeHandle n, float fx, float fy)
             {
                 var r = host.Scene.AbsoluteRect(n);
@@ -2587,7 +2728,8 @@ static class Slice
             bool alphaOk = a > 0.3f && a < 0.7f;
             bool hexOk = ce.G > 0.8f && ce.R < 0.2f && ce.B < 0.2f;
             Check("72. ColorPicker: hue/spectrum/alpha drags + hex channel update the color",
-                hueOk && svOk && alphaOk && hexOk, $"H={hueHsv.H:0} S={sv.S:0.00} V={sv.V:0.00} A={a:0.00} hex=({ce.R:0.0},{ce.G:0.0},{ce.B:0.0})");
+                gradientsDrawn && spectrumSquare && hueOk && svOk && alphaOk && hexOk,
+                $"gradients={device.LastGradients.Count} spectrum={sr.W:0}x{sr.H:0} H={hueHsv.H:0} S={sv.S:0.00} V={sv.V:0.00} A={a:0.00} hex=({ce.R:0.0},{ce.G:0.0},{ce.B:0.0})");
         }
     }
 
@@ -2686,6 +2828,9 @@ static class Slice
         RepeatButtonChecks(strings);
         TextInputChecks(strings);
         OverlayChecks(strings);
+        OverlayAnimationChecks(strings);
+        MenuFlyoutStyleChecks(strings);
+        SplitButtonStyleChecks(strings);
 
         // Hierarchical NavigationView (Part B).
         NavHierarchyChecks(strings);

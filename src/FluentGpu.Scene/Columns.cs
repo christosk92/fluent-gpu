@@ -62,6 +62,9 @@ public struct NodePaint
 {
     public Affine2D LocalTransform;
     public float Opacity;
+    // Composited transform origin (normalized 0..1 of the node box; default centre 0.5,0.5). The recorder scales/transforms
+    // the node about (OriginX·W, OriginY·H) — so e.g. a menu can scale/unfold from its TOP edge (OriginY=0).
+    public float OriginX, OriginY;
     // Presented extent (a layout-transition "Reveal"): when not NaN, the recorder draws this node's fill + clips its
     // children to PresentedW/PresentedH instead of the laid-out Bounds — so a size change animates without relayout,
     // and the presented size may exceed the model bounds (shrink reveals). Written by AnimEngine (AnimChannel.SizeW/H).
@@ -81,6 +84,8 @@ public struct NodePaint
     {
         LocalTransform = Affine2D.Identity,
         Opacity = 1f,
+        OriginX = 0.5f,
+        OriginY = 0.5f,
         PresentedW = float.NaN,
         PresentedH = float.NaN,
         Fill = ColorF.Transparent,

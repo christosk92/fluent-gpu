@@ -86,6 +86,9 @@ sealed class GalleryApp : Component
         ("ToggleSwitch", "ToggleSwitch", "ToggleSwitch.png"),
     };
 
+    // Initial nav page (default = Home). Overridable so the --screenshot harness can deep-link a control page.
+    public string InitialPage = "welcome";
+
     public override Element Render()
     {
         var shell = VStack(0,
@@ -93,7 +96,7 @@ sealed class GalleryApp : Component
             Embed.Comp(() => new NavigationView
             {
                 Header = "fluent-gpu",
-                Initial = "welcome",
+                Initial = InitialPage,
                 Items = Items,
                 Content = Page,   // each page is a distinct component type → the reconciler remounts it on navigation
             })

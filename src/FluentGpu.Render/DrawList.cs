@@ -40,7 +40,7 @@ public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Ra
     ColorF C0, ColorF C1, ColorF C2, ColorF C3, float O0, float O1, float O2, float O3, float StrokeWidth, Affine2D Transform, float Opacity);
 // Begin/end a backdrop-effect layer (acrylic): the engine snapshots the canvas under DeviceRect, gaussian-blurs it,
 // then on PopLayer tints + adds noise + a luminosity wash; the subtree between the two draws on top.
-public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity);
+public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 
 /// <summary>
@@ -129,10 +129,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0)
+    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, tint, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity));
+        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity));
         PushSort(sortKey);
     }
 

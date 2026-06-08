@@ -20,6 +20,16 @@ public static class Viewport
 }
 
 /// <summary>
+/// A per-frame tick the host bumps (only while something subscribes, so it's free when idle). A tree-level concern that
+/// must poll each frame — e.g. an overlay driving a timed close animation to completion — reads
+/// <c>UseContext(FrameClock.Tick)</c> to re-render every frame for as long as it's mounted.
+/// </summary>
+public static class FrameClock
+{
+    public static readonly Context<long> Tick = new(0L);
+}
+
+/// <summary>
 /// A host-owned registration surface a tree-level concern can hook into without the host depending on it. The host
 /// bridges <see cref="KeyPreview"/> into the input dispatcher's pre-focus key hook, so an open overlay/flyout (which
 /// lives in the tree) can intercept Escape regardless of focus. Read the host instance via <c>UseContext(InputHooks.Current)</c>.

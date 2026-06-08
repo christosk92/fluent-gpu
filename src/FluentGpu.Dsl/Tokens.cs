@@ -35,6 +35,7 @@ public sealed record TokenSet
     public required ColorF StrokeCardDefault { get; init; }
     public required ColorF StrokeDividerDefault { get; init; }
     public required ColorF StrokeSurfaceDefault { get; init; }
+    public required ColorF StrokeFlyoutDefault { get; init; }    // SurfaceStrokeColorFlyout — flyout/menu border
     public required ColorF StrokeControlOnAccentDefault { get; init; }
     public required ColorF StrokeControlOnAccentSecondary { get; init; }   // top stop of the accent elevation border gradient
 
@@ -119,6 +120,7 @@ public static class Tok
     public static ColorF StrokeCardDefault => T.StrokeCardDefault;
     public static ColorF StrokeDividerDefault => T.StrokeDividerDefault;
     public static ColorF StrokeSurfaceDefault => T.StrokeSurfaceDefault;
+    public static ColorF StrokeFlyoutDefault => T.StrokeFlyoutDefault;
     public static ColorF StrokeControlOnAccentDefault => T.StrokeControlOnAccentDefault;
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
 
@@ -185,6 +187,7 @@ public static class Tok
         StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
         StrokeDividerDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15),
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
+        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x33),   // SurfaceStrokeColorFlyout (dark): 20% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23),
         TextPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
@@ -233,6 +236,7 @@ public static class Tok
         StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeDividerDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
+        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
         TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),

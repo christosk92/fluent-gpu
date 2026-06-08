@@ -50,13 +50,17 @@ public sealed record BoxEl : Element
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 
-    // Composited (animate without relayout): transform (offset/scale/rotate about the node centre) + opacity, applied to this node + subtree.
+    // Composited (animate without relayout): transform (offset/scale/rotate about the transform origin) + opacity, applied to this node + subtree.
     public float OffsetX { get; init; }
     public float OffsetY { get; init; }
     public float ScaleX { get; init; } = 1f;
     public float ScaleY { get; init; } = 1f;
     public float Rotation { get; init; }   // degrees
     public float Opacity { get; init; } = 1f;
+    /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
+    /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
+    public float TransformOriginX { get; init; } = 0.5f;
+    public float TransformOriginY { get; init; } = 0.5f;
 
     // Interaction-driven composited scale (1 = none): grows/shrinks this node about its centre by the eased hover/press
     // progress at record time (a WinUI slider/scrollbar thumb that pops on hover). Needs a pointer handler to receive the

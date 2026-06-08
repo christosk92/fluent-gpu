@@ -11,11 +11,15 @@ public sealed class SplitButton : Component
 {
     public string Label = "";
     public string? Glyph;
+    public Element? PrimaryContent;
     public Action? OnInvoke;
     public IReadOnlyList<MenuFlyoutItem> Items = [];
 
     public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null)
         => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph });
+
+    public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items)
+        => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items });
 
     public override Element Render()
     {
@@ -29,24 +33,31 @@ public sealed class SplitButton : Component
             handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items, () => handle.Value?.Close()), FlyoutPlacement.BottomLeft);
         }
 
-        var primaryContent = new List<Element>();
-        if (Glyph is { Length: > 0 } g) primaryContent.Add(new TextEl(g) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont });
-        primaryContent.Add(new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary });
+        Element[] primaryContent;
+        if (PrimaryContent is { } custom)
+        {
+            primaryContent = [custom];
+        }
+        else
+        {
+            var list = new List<Element>();
+            if (Glyph is { Length: > 0 } g) list.Add(new TextEl(g) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont });
+            list.Add(new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary });
+            primaryContent = list.ToArray();
+        }
 
         var primary = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 32f, Padding = new Edges4(11, 5, 11, 6),
-            Corners = new CornerRadius4(Radii.Control, 0f, 0f, Radii.Control),
-            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, Padding = new Edges4(11, 5, 11, 6),
+            Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.Button, OnClick = OnInvoke,
-            Children = primaryContent.ToArray(),
+            Children = primaryContent,
         };
         var divider = new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };
         var drop = new BoxEl
         {
-            Width = 32f, MinHeight = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = new CornerRadius4(0f, Radii.Control, Radii.Control, 0f),
-            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
+            Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             Role = AutomationRole.Button, OnClick = ToggleMenu,
             Children = [new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont }],
         };
@@ -54,7 +65,10 @@ public sealed class SplitButton : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
+            MinHeight = 32f,
+            Fill = Tok.FillControlDefault,
             BorderWidth = 1f, BorderBrush = Tok.ControlElevationBorder, Corners = Radii.ControlAll,
+            ClipToBounds = true,
             OnRealized = h => anchor.Value = h,
             Children = [primary, divider, drop],
         };

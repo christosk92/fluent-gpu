@@ -21,7 +21,7 @@ namespace FluentGpu;
 public static class FluentApp
 {
     public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-                           bool mica = true, int frames = -1)
+                           bool mica = true, int frames = -1, string? screenshot = null)
     {
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
@@ -60,6 +60,14 @@ public static class FluentApp
             if (frames > 0 && n >= frames) break;
             // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
             window.WaitForWork(host.HasActiveWork ? 0 : -1);
+        }
+
+        // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
+        if (screenshot != null && device is D3D12Device d3d)
+        {
+            var px = d3d.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(screenshot, px, cw, ch);
+            Console.Error.WriteLine($"screenshot: wrote {screenshot} ({cw}x{ch})");
         }
     }
 

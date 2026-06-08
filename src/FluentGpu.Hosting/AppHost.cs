@@ -60,6 +60,8 @@ public sealed class AppHost : IDisposable
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
     private readonly InputHooks _inputHooks = new();
     private readonly Signal<object?> _inputHooksSig;
+    private readonly Signal<object?> _frameClockSig = new(0L);
+    private long _frameClock;
     private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
     private Size2 _lastViewportDip;
 
@@ -134,6 +136,7 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
+        _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
 
         _window.PaintRequested = () => Paint(0);
 
@@ -249,6 +252,7 @@ public sealed class AppHost : IDisposable
                 ComponentsRendered = _reconciler.ConsumeRenderCount(),
             };
             PublishFrameStats(LastStats);
+            if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
             return LastStats;
         }
         finally

@@ -87,10 +87,22 @@ static class Program
     {
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
+        string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)
+        string shot = "menu";        // --shot <id> selects the ShotScene
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) frames = f;
             if (args[i] == "--demo") demo = args[i + 1];
+            if (args[i] == "--screenshot") screenshot = args[i + 1];
+            if (args[i] == "--shot") shot = args[i + 1];
+        }
+
+        // Screenshot mode: opaque (non-Mica) capture of a single deterministic scene, then exit.
+        if (screenshot != null)
+        {
+            int sf = frames > 0 ? frames : 6;   // a few frames to settle layout + glyph upload
+            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", 900, 640, mica: false, frames: sf, screenshot: screenshot);
+            return;
         }
 
         // Default = the capability gallery (everything). `--demo wavee` = the Wavee skeleton; `--demo list` = the

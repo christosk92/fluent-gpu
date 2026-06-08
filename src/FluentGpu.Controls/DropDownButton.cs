@@ -46,6 +46,7 @@ public sealed class DropDownButton : Component
             Fill = Tok.FillControlDefault,
             HoverFill = Tok.FillControlSecondary,
             PressedFill = Tok.FillControlTertiary,
+            ClipToBounds = true,
             Role = AutomationRole.Button,
             OnRealized = h => anchor.Value = h,
             OnClick = Toggle,

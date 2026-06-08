@@ -66,13 +66,11 @@ public static class SceneRecorder
         ref RectF b = ref scene.Bounds(node);
         ref NodePaint p = ref scene.Paint(node);
 
-        // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node centre)
+        // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node's transform-origin)
         Affine2D world = parentWorld.Multiply(Affine2D.Translation(b.X, b.Y));
+        float ox = b.W * p.OriginX, oy = b.H * p.OriginY;   // transform origin (default centre; e.g. top edge for a menu unfold)
         if (!p.LocalTransform.IsIdentity)
-        {
-            float cx = b.W * 0.5f, cy = b.H * 0.5f;
-            world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-cx, -cy));
-        }
+            world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
         // Interaction-driven composited scale (thumb hover-grow): scale about the node centre by the eased hover/press.
         // The progress comes from the node's own row if it is interactive, else from the nearest interactive ancestor
         // (a slider/scrollbar thumb is non-interactive — drag stays on the track — but grows when the control is used).
@@ -86,10 +84,7 @@ public static class SceneRecorder
             float hs = 1f + (iaScale.HoverScale - 1f) * useH;
             float isc = hs + (iaScale.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
-            {
-                float cx = b.W * 0.5f, cy = b.H * 0.5f;
-                world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-cx, -cy));
-            }
+                world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-ox, -oy));
         }
         // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
         // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).
@@ -132,7 +127,7 @@ public static class SceneRecorder
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         bool isAcrylic = scene.TryGetAcrylic(node, out var ac) && deviceBounds.Overlaps(clip);
         if (isAcrylic)
-            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
+            dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key);
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;
@@ -147,7 +142,8 @@ public static class SceneRecorder
         if (drawSelf)
         switch (p.VisualKind)
         {
-            case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f:
+            case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
+                                     || (scene.TryGetGradient(node, out var guardGradient) && guardGradient.Stops is { Length: > 0 }):
             {
                 ResolveSurface(scene, node, flags, in p, out ColorF fill, out ColorF border);
                 bool hasGradFill = scene.TryGetGradient(node, out var g) && g.Stops is { Length: > 0 };

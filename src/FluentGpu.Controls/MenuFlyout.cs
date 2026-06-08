@@ -18,34 +18,58 @@ public readonly record struct MenuFlyoutItem(string Label, string? Glyph = null,
 /// Selecting a row runs its command and closes the overlay. Used by DropDownButton / SplitButton / ToggleSplitButton.</summary>
 public static class MenuFlyout
 {
-    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = 160f)
+    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = 96f)
     {
+        bool hasIconColumn = false;
+        for (int i = 0; i < items.Count; i++)
+            if (!items[i].IsSeparator && items[i].Glyph is { Length: > 0 }) { hasIconColumn = true; break; }
+
         var rows = new Element[items.Count];
         for (int i = 0; i < items.Count; i++)
         {
             var it = items[i];
             rows[i] = it.IsSeparator
-                ? new BoxEl { Height = 1f, Margin = new Edges4(8, 4, 8, 4), Fill = Tok.StrokeDividerDefault }
-                : Row(it, close);
+                ? Separator()
+                : Row(it, close, hasIconColumn);
         }
-        return new BoxEl { Direction = 1, MinWidth = minWidth, Padding = new Edges4(4, 4, 4, 4), Children = rows };
+        return new BoxEl
+        {
+            Direction = 1,
+            MinWidth = minWidth, // FlyoutThemeMinWidth; final width is content-driven.
+            Children = rows,
+        };
     }
 
-    static Element Row(MenuFlyoutItem it, Action close)
+    static Element Separator() => new BoxEl
+    {
+        Direction = 1,
+        Height = 9f,
+        Justify = FlexJustify.Center,
+        Padding = new Edges4(12, 0, 12, 0),
+        Children = [new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
+    };
+
+    static Element Row(MenuFlyoutItem it, Action close, bool hasIconColumn)
     {
         var fg = it.Enabled ? Tok.TextPrimary : Tok.TextDisabled;
         var children = new List<Element>();
-        if (it.Glyph is { Length: > 0 } g)
-            children.Add(new BoxEl { Width = 24f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [new TextEl(g) { Size = 14f, Color = fg, FontFamily = Theme.IconFont }] });
-        children.Add(new TextEl(it.Label) { Size = 14f, Color = fg });
+        if (hasIconColumn)
+        {
+            Element icon = it.Glyph is { Length: > 0 } g
+                ? new TextEl(g) { Size = 15f, Color = fg, FontFamily = Theme.IconFont }
+                : new BoxEl();
+            children.Add(new BoxEl { Width = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [icon] });
+        }
+        children.Add(new TextEl(it.Label) { Size = 14f, Color = fg, Grow = 1f });
 
         return new BoxEl
         {
             Direction = 0,
-            Height = 32f,
+            Height = 36f,   // MenuFlyoutItem rendered height (text line + 11,8,11,9 padding)
             AlignItems = FlexAlign.Center,
-            Padding = new Edges4(10, 0, 12, 0),
-            Gap = 4f,
+            Margin = new Edges4(4, 2, 4, 2),
+            Padding = new Edges4(11, 8, 11, 9),
+            Gap = hasIconColumn ? 8f : 0f,
             Corners = Radii.ControlAll,
             Role = AutomationRole.MenuItem,
             HoverFill = it.Enabled ? Tok.FillSubtleSecondary : ColorF.Transparent,

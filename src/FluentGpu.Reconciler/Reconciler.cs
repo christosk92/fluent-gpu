@@ -629,6 +629,11 @@ public sealed class TreeReconciler
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
 
+                // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
+                // AnimEngine ScaleX/Y track or a TransformBind pivots about the requested origin (e.g. a menu's top edge).
+                paint.OriginX = b.TransformOriginX;
+                paint.OriginY = b.TransformOriginY;
+
                 // Static transform/opacity ONLY when the element declares one AND there's no transform binding/animation
                 // owning the channel (else a re-render would reset the bound/animated value to identity each frame).
                 if (b.TransformBind is null && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f))

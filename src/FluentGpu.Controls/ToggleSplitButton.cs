@@ -45,18 +45,16 @@ public sealed class ToggleSplitButton : Component
 
         var primary = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 32f, Padding = new Edges4(11, 5, 11, 6),
-            Corners = new CornerRadius4(Radii.Control, 0f, 0f, Radii.Control),
-            Fill = primFill, HoverFill = primHover, PressedFill = primPress,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, Padding = new Edges4(11, 5, 11, 6),
+            Fill = ColorF.Transparent, HoverFill = primHover, PressedFill = primPress,
             Role = AutomationRole.ToggleButton, OnClick = Flip,
             Children = primaryContent.ToArray(),
         };
         var divider = new BoxEl { Width = 1f, Height = 16f, Fill = on ? Tok.StrokeControlOnAccentSecondary : Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };
         var drop = new BoxEl
         {
-            Width = 32f, MinHeight = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = new CornerRadius4(0f, Radii.Control, Radii.Control, 0f),
-            Fill = primFill, HoverFill = primHover, PressedFill = primPress,
+            Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Fill = ColorF.Transparent, HoverFill = primHover, PressedFill = primPress,
             Role = AutomationRole.Button, OnClick = ToggleMenu,
             Children = [new TextEl(Icons.ChevronDown) { Size = 10f, Color = fg, FontFamily = Theme.IconFont }],
         };
@@ -64,7 +62,10 @@ public sealed class ToggleSplitButton : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
+            MinHeight = 32f,
+            Fill = primFill,
             BorderWidth = 1f, BorderBrush = on ? Tok.AccentControlElevationBorder : Tok.ControlElevationBorder, Corners = Radii.ControlAll,
+            ClipToBounds = true,
             OnRealized = h => anchor.Value = h,
             Children = [primary, divider, drop],
         };

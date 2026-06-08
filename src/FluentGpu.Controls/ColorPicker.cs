@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Linq;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -17,10 +16,10 @@ public sealed class ColorPicker : Component
 {
     public Signal<ColorF> Color = new(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
     public bool AlphaEnabled;
-    public float SpectrumW = 260f;
-    public float SpectrumH = 168f;
+    public float SpectrumW = 256f;
+    public float SpectrumH = 256f;
 
-    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 260f, float spectrumH = 168f)
+    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f)
         => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH });
 
     static readonly ColorF White = ColorF.FromRgba(255, 255, 255);
@@ -73,16 +72,21 @@ public sealed class ColorPicker : Component
                 new BoxEl { Width = SpectrumW, Height = SpectrumH, Gradient = Ui.LinearGradient(90f, new GradientStop(0f, ClearBlack), new GradientStop(1f, Black)) },
                 new BoxEl
                 {
-                    Width = thumbR * 2f, Height = thumbR * 2f, Corners = Radii.Circle(thumbR * 2f),
-                    BorderWidth = 2f, BorderColor = White, Fill = ColorF.Transparent,
+                    Width = thumbR * 2f, Height = thumbR * 2f, ZStack = true,
                     OffsetX = Math.Clamp(S * SpectrumW, thumbR, SpectrumW - thumbR) - thumbR,
                     OffsetY = Math.Clamp((1f - V) * SpectrumH, thumbR, SpectrumH - thumbR) - thumbR,
+                    Children =
+                    [
+                        new BoxEl { Width = thumbR * 2f, Height = thumbR * 2f, Corners = Radii.Circle(thumbR * 2f), BorderWidth = 2f, BorderColor = White, Fill = ColorF.Transparent },
+                        new BoxEl { Width = 10f, Height = 10f, OffsetX = 4f, OffsetY = 4f, Corners = Radii.Circle(10f), BorderWidth = 1f, BorderColor = ColorF.FromRgba(0, 0, 0, 0x99), Fill = ColorF.Transparent },
+                    ],
                 },
             ],
         };
 
         // ── Hue rail: 6 adjacent ≤4-stop gradient segments span the full 360° (MaxStops = 4) ──
-        float railH = 16f;
+        float railH = 18f;
+        float railBoxH = 26f;
         void SetHue(Point2 p) { h.Value = Math.Clamp(p.X / SpectrumW, 0f, 1f) * 360f; Push(); }
         var segs = new Element[6];
         for (int i = 0; i < 6; i++)
@@ -93,12 +97,12 @@ public sealed class ColorPicker : Component
             };
         var hueRail = new BoxEl
         {
-            Width = SpectrumW, Height = railH, ZStack = true, Corners = Radii.Circle(railH), ClipToBounds = true,
+            Width = SpectrumW, Height = railBoxH, ZStack = true,
             Role = AutomationRole.Slider, OnPointerDown = SetHue, OnDrag = SetHue,
             Children =
             [
-                new BoxEl { Width = SpectrumW, Height = railH, Direction = 0, Children = segs },
-                HandleAt(Math.Clamp(H / 360f * SpectrumW, 4f, SpectrumW - 4f), railH),
+                new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Direction = 0, Corners = Radii.Circle(railH), ClipToBounds = true, Children = segs },
+                HandleAt(Math.Clamp(H / 360f * SpectrumW, 4f, SpectrumW - 4f), railBoxH),
             ],
         };
 
@@ -111,41 +115,56 @@ public sealed class ColorPicker : Component
             var opaque = ColorF.FromHsv(H, S, V, 1f);
             rows.Add(new BoxEl
             {
-                Width = SpectrumW, Height = railH, ZStack = true, Corners = Radii.Circle(railH), ClipToBounds = true,
+                Width = SpectrumW, Height = railBoxH, ZStack = true,
                 Role = AutomationRole.Slider, OnPointerDown = SetA, OnDrag = SetA,
                 Children =
                 [
-                    new BoxEl { Width = SpectrumW, Height = railH, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, opaque with { A = 0f }), new GradientStop(1f, opaque)) },
-                    HandleAt(Math.Clamp(A * SpectrumW, 4f, SpectrumW - 4f), railH),
+                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Corners = Radii.Circle(railH), ClipToBounds = true, Fill = Tok.FillControlDefault },
+                    new BoxEl { Width = SpectrumW, Height = railH, OffsetY = 4f, Corners = Radii.Circle(railH), ClipToBounds = true, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, opaque with { A = 0f }), new GradientStop(1f, opaque)) },
+                    HandleAt(Math.Clamp(A * SpectrumW, 4f, SpectrumW - 4f), railBoxH),
                 ],
             });
         }
 
         // ── preview swatch + channel fields ──
-        var swatch = new BoxEl { Width = 48f, Height = 48f, Corners = Radii.ControlAll, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = color };
+        var swatch = new BoxEl { Width = 64f, Height = 64f, Corners = Radii.ControlAll, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = color };
         Element Field(string label, Signal<string> text, Func<string, string> sanitize, Action<string> commit, float w) => new BoxEl
         {
-            Direction = 1, Gap = 2f,
+            Direction = 1, Gap = 3f,
             Children =
             [
-                new TextEl(label) { Size = 11f, Color = Tok.TextSecondary },
-                Embed.Comp(() => new EditableText { Text = text, Width = w, Height = 28f, FontSize = 13f, Sanitize = sanitize, OnCommit = commit }),
+                new TextEl(label) { Size = 12f, Color = Tok.TextSecondary },
+                Embed.Comp(() => new EditableText { Text = text, Width = w, Height = 32f, FontSize = 14f, Sanitize = sanitize, OnCommit = commit }),
             ],
         };
-        static string DigitsMax3(string s) => new string(s.Where(char.IsDigit).Take(3).ToArray());
-        static string HexMax6(string s) => new string(s.Where(Uri.IsHexDigit).Take(6).ToArray());
+        static string DigitsMax3(string s)
+        {
+            Span<char> buf = stackalloc char[3];
+            int n = 0;
+            for (int i = 0; i < s.Length && n < buf.Length; i++)
+                if (char.IsDigit(s[i])) buf[n++] = s[i];
+            return new string(buf[..n]);
+        }
+        static string HexMax6(string s)
+        {
+            Span<char> buf = stackalloc char[6];
+            int n = 0;
+            for (int i = 0; i < s.Length && n < buf.Length; i++)
+                if (Uri.IsHexDigit(s[i])) buf[n++] = s[i];
+            return new string(buf[..n]);
+        }
         int ParseInt(string s) => int.TryParse(s, out int n) ? n : 0;
 
         var channels = new BoxEl
         {
-            Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.End,
             Children =
             [
                 swatch,
-                Field("Hex", hexText, HexMax6, s => { if (ColorF.TryParseHex(s, out var c)) SetColor(c); }, 84f),
-                Field("R", rText, DigitsMax3, s => SetRgb(ParseInt(s), Cur(color.G), Cur(color.B)), 48f),
-                Field("G", gText, DigitsMax3, s => SetRgb(Cur(color.R), ParseInt(s), Cur(color.B)), 48f),
-                Field("B", bText, DigitsMax3, s => SetRgb(Cur(color.R), Cur(color.G), ParseInt(s)), 48f),
+                Field("Hex", hexText, HexMax6, s => { if (ColorF.TryParseHex(s, out var c)) SetColor(c); }, 88f),
+                Field("R", rText, DigitsMax3, s => SetRgb(ParseInt(s), Cur(color.G), Cur(color.B)), 64f),
+                Field("G", gText, DigitsMax3, s => SetRgb(Cur(color.R), ParseInt(s), Cur(color.B)), 64f),
+                Field("B", bText, DigitsMax3, s => SetRgb(Cur(color.R), Cur(color.G), ParseInt(s)), 64f),
             ],
         };
         rows.Add(channels);
@@ -153,14 +172,15 @@ public sealed class ColorPicker : Component
         return new BoxEl { Direction = 1, Gap = 12f, Children = rows.ToArray() };
     }
 
-    // A small handle for the hue/alpha rails: a thin vertical bar at the given x.
-    static Element HandleAt(float x, float railH) => new BoxEl
+    // A small high-contrast handle for the hue/alpha rails.
+    static Element HandleAt(float x, float railBoxH) => new BoxEl
     {
-        Direction = 0,
-        Children =
-        [
-            new BoxEl { Width = MathF.Max(0f, x - 1.5f) },
-            new BoxEl { Width = 3f, Height = railH, Corners = CornerRadius4.All(1.5f), BorderWidth = 1f, BorderColor = ColorF.FromRgba(0, 0, 0, 0x66), Fill = ColorF.FromRgba(255, 255, 255) },
-        ],
+        Width = 6f,
+        Height = railBoxH,
+        OffsetX = x - 3f,
+        Corners = CornerRadius4.All(3f),
+        BorderWidth = 1f,
+        BorderColor = ColorF.FromRgba(0, 0, 0, 0x99),
+        Fill = ColorF.FromRgba(255, 255, 255),
     };
 }

@@ -44,17 +44,17 @@ float4 CopyPS(V i) : SV_Target { return gSrc.Sample(gSamp, i.uv); }   // preserv
 float4 BlurPS(V i) : SV_Target
 {
     float2 d = texelDir.zw * texelDir.xy;
-    float3 c = gSrc.Sample(gSamp, i.uv).rgb * 0.227027;
-    c += gSrc.Sample(gSamp, i.uv + d * 1.3846153846).rgb * 0.3162162;
-    c += gSrc.Sample(gSamp, i.uv - d * 1.3846153846).rgb * 0.3162162;
-    c += gSrc.Sample(gSamp, i.uv + d * 3.2307692308).rgb * 0.0702703;
-    c += gSrc.Sample(gSamp, i.uv - d * 3.2307692308).rgb * 0.0702703;
-    return float4(c, 1);
+    float4 c = gSrc.Sample(gSamp, i.uv) * 0.227027;
+    c += gSrc.Sample(gSamp, i.uv + d * 1.3846153846) * 0.3162162;
+    c += gSrc.Sample(gSamp, i.uv - d * 1.3846153846) * 0.3162162;
+    c += gSrc.Sample(gSamp, i.uv + d * 3.2307692308) * 0.0702703;
+    c += gSrc.Sample(gSamp, i.uv - d * 3.2307692308) * 0.0702703;
+    return c;                                                         // preserve premultiplied alpha; transparent Mica must not blur to black
 }
 """;
 
     private const string CompHlsl = """
-cbuffer C : register(b0) { float4 rect; float4 vps; float4 tint; float4 prm; };   // vps = logicalW,logicalH,physW,physH ; prm = radius,tintOp,lumOp,noiseOp
+cbuffer C : register(b0) { float4 rect; float4 vps; float4 tint; float4 fallback; float4 prm; };   // vps = logicalW,logicalH,physW,physH ; prm = radius,tintOp,lumOp,noiseOp
 Texture2D gBlur : register(t0);
 SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 half : TEXCOORD1; };
@@ -68,6 +68,17 @@ V VSMain(uint id : SV_VertexID)
     o.half = rect.zw * 0.5;
     return o;
 }
+float Lum(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+float3 ClipColor(float3 c)
+{
+    float l = Lum(c);
+    float n = min(c.r, min(c.g, c.b));
+    float x = max(c.r, max(c.g, c.b));
+    if (n < 0.0) c = l + (c - l) * l / max(l - n, 1e-5);
+    if (x > 1.0) c = l + (c - l) * (1.0 - l) / max(x - l, 1e-5);
+    return saturate(c);
+}
+float3 SetLum(float3 c, float l) { return ClipColor(c + (l - Lum(c))); }
 float4 PSMain(V i) : SV_Target
 {
     float r = min(prm.x, min(i.half.x, i.half.y));
@@ -76,10 +87,19 @@ float4 PSMain(V i) : SV_Target
     float fw = max(fwidth(d), 1e-4);
     float cov = saturate(0.5 - d / fw);
     float2 uv = i.pos.xy / vps.zw;                                // SV_Position is physical px → uv into the physical-size blurred texture
-    float3 B = gBlur.Sample(gSamp, uv).rgb;                       // blurred backdrop
-    float lum = dot(B, float3(0.2126, 0.7152, 0.0722));
-    float3 withLum = lerp(B, tint.rgb * lum, prm.z);             // luminosity-tinted layer
-    float3 res = lerp(withLum, tint.rgb, prm.y);                 // tint color layer
+    float4 src = gBlur.Sample(gSamp, uv);                         // premultiplied blurred backdrop
+
+    // WinUI resolves transparent backdrop over opaque FallbackColor before blur. We preserve alpha through the blur
+    // passes and complete that SourceOver resolve here; transparent/Mica regions therefore acrylic against fallback,
+    // not transparent black.
+    float3 B = src.rgb + fallback.rgb * saturate(1.0 - src.a);
+
+    // WinUI 3 AcrylicBrush.cpp: luminosity blend first, then tint/color blend. The luminosity pass keeps backdrop
+    // hue/saturation but takes lightness from the luminosity/tint color; the color pass applies tint hue/saturation
+    // while preserving that luminosity result.
+    float3 lumBlend = lerp(B, SetLum(B, Lum(tint.rgb)), prm.z);
+    float3 colorBlend = SetLum(tint.rgb, Lum(lumBlend));
+    float3 res = lerp(lumBlend, colorBlend, prm.y);
     float n = frac(sin(dot(i.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
     res += (n - 0.5) * prm.w;                                    // noise
     return float4(res * cov, cov);                              // premultiplied
@@ -214,7 +234,7 @@ float4 PSMain(V i) : SV_Target
 
     private void BuildCompositePipeline()
     {
-        _compRoot = SampleRootSig(16);
+        _compRoot = SampleRootSig(20);
         ID3DBlob* vs = Compile(CompHlsl, "VSMain", "vs_5_1");
         ID3DBlob* ps = Compile(CompHlsl, "PSMain", "ps_5_1");
         _compPso = MakePso(_compRoot, vs, ps, blend: true);
@@ -354,14 +374,15 @@ float4 PSMain(V i) : SV_Target
         var crt = Rtv(0); cmd->OMSetRenderTargets(1, &crt, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
         cmd->SetGraphicsRootSignature(_compRoot);
         cmd->SetPipelineState(_compPso);
-        Span<float> cc = stackalloc float[16]
+        Span<float> cc = stackalloc float[20]
         {
             L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H,
             lw, lh, _w, _h,             // logical viewport (VS NDC) + physical size (PS uv)
             L.Tint.R, L.Tint.G, L.Tint.B, L.Tint.A,
+            L.Fallback.R, L.Fallback.G, L.Fallback.B, L.Fallback.A,
             L.Radii.TopLeft, L.TintOpacity, L.LuminosityOpacity, L.NoiseOpacity,
         };
-        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 16, c, 0);
+        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 20, c, 0);
         cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(1));   // q0 holds the final blurred image
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         cmd->DrawInstanced(4, 1, 0, 0);

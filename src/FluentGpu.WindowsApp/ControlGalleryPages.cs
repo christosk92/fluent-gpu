@@ -180,8 +180,16 @@ sealed class SplitButtonControlPage : Component
             new("Paste as text", Icons.Document, true, () => setMsg("Paste as text")),
             new("Paste special", Icons.Document, true, () => setMsg("Paste special")),
         };
+        var colors = new List<MenuFlyoutItem>
+        {
+            new("Red", null, true, () => setMsg("Red")),
+            new("Green", null, true, () => setMsg("Green")),
+            new("Blue", null, true, () => setMsg("Blue")),
+        };
         return GalleryPage.Shell("SplitButton", "A two-part button: a primary action plus a dropdown of related choices.",
             ControlExample.Build("A SplitButton", SplitButton.Create("Paste", () => setMsg("Paste (primary)"), items, Icons.Document),
+                output: BodyStrong(msg)),
+            ControlExample.Build("A SplitButton with text", SplitButton.Create("Choose color", () => setMsg("Choose color"), colors),
                 output: BodyStrong(msg)));
     }
 }

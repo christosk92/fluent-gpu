@@ -15,28 +15,37 @@ public readonly record struct GradientStop(float Offset, ColorF Color);
 public enum GradientShape : byte { Linear = 0, Radial = 1 }
 
 /// <summary>
-/// A gradient fill. <see cref="AngleDeg"/> is the linear axis (0 = left→right, 90 = top→bottom). Up to 4 stops are
+/// A gradient fill. <see cref="AngleDeg"/> is the linear axis (0 = left-to-right, 90 = top-to-bottom). Up to 4 stops are
 /// carried into the POD draw command; extras are ignored. When set on a node it supersedes the solid fill at record time.
 /// </summary>
 public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, GradientStop[] Stops)
 {
     public const int MaxStops = 4;
 
-    /// <summary>A solid "gradient" (one stop) — so a flat border and a gradient border are the SAME knob (BorderBrush).</summary>
+    /// <summary>A solid "gradient" (one stop) - so a flat border and a gradient border are the SAME knob (BorderBrush).</summary>
     public static GradientSpec Solid(ColorF color) => new(GradientShape.Linear, 0f, [new GradientStop(0f, color)]);
 
-    /// <summary>A vertical 2-stop linear gradient (top → bottom).</summary>
+    /// <summary>A vertical 2-stop linear gradient (top to bottom).</summary>
     public static GradientSpec Vertical(ColorF top, ColorF bottom) => new(GradientShape.Linear, 90f, [new GradientStop(0f, top), new GradientStop(1f, bottom)]);
 }
 
 /// <summary>
-/// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, blurs it (<see cref="BlurSigma"/>),
-/// then tints + adds noise + a luminosity wash. Realized by the <c>PushLayer</c>/<c>PopLayer</c> backdrop subsystem.
+/// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
+/// through <see cref="Fallback"/>, blurs it (<see cref="BlurSigma"/>), then applies WinUI's luminosity/tint recipe.
+/// Realized by the <c>PushLayer</c>/<c>PopLayer</c> backdrop subsystem.
 /// </summary>
-public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity)
+public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity, ColorF Fallback)
 {
-    // The real WinUI AcrylicBrush "Default" recipe parameters (dark): backdrop gaussian blur (radius ≈ 30 →
-    // sigma below), TintColor, TintOpacity, TintLuminosityOpacity (the luminosity-blend layer), and the noise overlay.
-    public static AcrylicSpec InAppDefault => new(ColorF.FromRgba(0x2C, 0x2C, 0x2C), 0.8f, 30f, 0.02f, 0.10f);
-    public static AcrylicSpec InAppBase => new(ColorF.FromRgba(0x20, 0x20, 0x20), 0.85f, 30f, 0.02f, 0.10f);
+    public AcrylicSpec(ColorF tint, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity)
+        : this(tint, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity, tint) { }
+
+    // WinUI 3 AcrylicBrush_themeresources.xaml source values. The renderer follows AcrylicBrush.cpp:
+    // backdrop SourceOver opaque FallbackColor -> GaussianBlur(30) -> luminosity blend -> tint/color blend -> noise.
+    public static AcrylicSpec InAppDefault => new(ColorF.FromRgba(0x2C, 0x2C, 0x2C), 0.15f, 30f, 0.02f, 0.96f, ColorF.FromRgba(0x2C, 0x2C, 0x2C));
+    public static AcrylicSpec InAppBase => new(ColorF.FromRgba(0x20, 0x20, 0x20), 0.50f, 30f, 0.02f, 0.96f, ColorF.FromRgba(0x1C, 0x1C, 0x1C));
+
+    // MenuFlyoutPresenter and CommandBarFlyoutPresenter use DesktopAcrylicTransparentBrush plus
+    // AcrylicBackgroundFillColorDefaultBackdrop. In-canvas reproduction uses that same acrylic recipe.
+    public static AcrylicSpec Flyout => InAppDefault;
+    public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }
