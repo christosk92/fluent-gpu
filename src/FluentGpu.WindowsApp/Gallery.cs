@@ -153,6 +153,16 @@ sealed class GalleryApp : Component
                 new("CommandBarFlyout", Icons.More, "CommandBarFlyout"),
             ],
         },
+        new("datetime", Icons.Document, "Date & time")
+        {
+            Children =
+            [
+                new("CalendarView", Icons.Grid, "CalendarView"),
+                new("CalendarDatePicker", Icons.Document, "CalendarDatePicker"),
+                new("DatePicker", Icons.Document, "DatePicker"),
+                new("TimePicker", Icons.Document, "TimePicker"),
+            ],
+        },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
@@ -306,6 +316,11 @@ sealed class GalleryApp : Component
         "Canvas" => Embed.Comp(() => new CanvasPage()),
         "ToolTip" => Embed.Comp(() => new ToolTipPage()),
         "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
+        "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
+        "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
+        "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),
+        "DatePicker" => Embed.Comp(() => new DatePickerPage()),
+        "TimePicker" => Embed.Comp(() => new TimePickerPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
