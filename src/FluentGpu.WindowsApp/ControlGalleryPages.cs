@@ -174,23 +174,24 @@ sealed class SplitButtonControlPage : Component
 {
     public override Element Render()
     {
-        var (msg, setMsg) = UseState("—");
+        var (msg1, setMsg1) = UseState("—");   // each example owns its own output state (was one shared signal → both updated)
+        var (msg2, setMsg2) = UseState("—");
         var items = new List<MenuFlyoutItem>
         {
-            new("Paste as text", Icons.Document, true, () => setMsg("Paste as text")),
-            new("Paste special", Icons.Document, true, () => setMsg("Paste special")),
+            new("Paste as text", Icons.Document, true, () => setMsg1("Paste as text")),
+            new("Paste special", Icons.Document, true, () => setMsg1("Paste special")),
         };
         var colors = new List<MenuFlyoutItem>
         {
-            new("Red", null, true, () => setMsg("Red")),
-            new("Green", null, true, () => setMsg("Green")),
-            new("Blue", null, true, () => setMsg("Blue")),
+            new("Red", null, true, () => setMsg2("Red")),
+            new("Green", null, true, () => setMsg2("Green")),
+            new("Blue", null, true, () => setMsg2("Blue")),
         };
         return GalleryPage.Shell("SplitButton", "A two-part button: a primary action plus a dropdown of related choices.",
-            ControlExample.Build("A SplitButton", SplitButton.Create("Paste", () => setMsg("Paste (primary)"), items, Icons.Document),
-                output: BodyStrong(msg)),
-            ControlExample.Build("A SplitButton with text", SplitButton.Create("Choose color", () => setMsg("Choose color"), colors),
-                output: BodyStrong(msg)));
+            ControlExample.Build("A SplitButton", SplitButton.Create("Paste", () => setMsg1("Paste (primary)"), items, Icons.Document),
+                output: BodyStrong(msg1)),
+            ControlExample.Build("A SplitButton with text", SplitButton.Create("Choose color", () => setMsg2("Choose color"), colors),
+                output: BodyStrong(msg2)));
     }
 }
 

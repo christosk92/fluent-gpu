@@ -197,7 +197,11 @@ public sealed class OverlayHost : Component
                 layers.Add(Embed.Comp(() => new OverlayCloseDriver { Svc = svc }));
         }
 
-        return Ctx.Provide(Overlay.Service, (IOverlayService)svc, Ui.ZStack(layers.ToArray()) with { Grow = 1 });
+        // Pin the overlay stack to the viewport so a tall popup (a flyout/menu is a POPOUT by design) can't grow the stack
+        // and re-flow the page underneath — MeasureZStack otherwise sizes to the tallest child, which would resize the app
+        // shell and reset the nav scroll. The popup still floats/overflows freely; it just no longer affects the layout.
+        return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
+            Ui.ZStack(layers.ToArray()) with { Grow = 1, Width = vp.Width, Height = vp.Height });
     }
 
     // A full-bleed positioning host so the popup lays out at its own (0,0); the layout effect translates the wrapper.
