@@ -26,6 +26,7 @@ public sealed class EditableText : Component
     public ColorF Foreground = Tok.TextPrimary;
     public ColorF CaretColor = Tok.TextPrimary;
     public string Placeholder = "";
+    public bool Mask = false;                // PasswordBox: render the value as dots (the model text is unchanged)
 
     public override Element Render()
     {
@@ -66,7 +67,8 @@ public sealed class EditableText : Component
 
         var row = new List<Element>
         {
-            new TextEl(Placeholder) { Size = FontSize, Color = Foreground, TextBind = () => text.Value.Length == 0 ? Placeholder : text.Value },
+            new TextEl(Placeholder) { Size = FontSize, Color = Foreground, TextBind = () =>
+                text.Value.Length == 0 ? Placeholder : (Mask ? new string('•', text.Value.Length) : text.Value) },
         };
         if (focused)
             row.Add(Embed.Comp(() => new EditableCaret { Color = CaretColor, Height = FontSize + 2f }));

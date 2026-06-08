@@ -115,9 +115,12 @@ sealed class GalleryApp : Component
         {
             Children =
             [
+                new("TextBox", Icons.Font, "TextBox"),
+                new("PasswordBox", Icons.Settings, "PasswordBox"),
+                new("AutoSuggestBox", Icons.List, "AutoSuggestBox"),
+                new("NumberBox", Icons.Volume, "NumberBox"),
                 new("TextBlock", Icons.Font, "TextBlock"),
                 new("RichTextBlock", Icons.Font, "RichTextBlock"),
-                new("NumberBox", Icons.Volume, "NumberBox"),
             ],
         },
         new("media", Icons.Picture, "Media")
@@ -297,6 +300,9 @@ sealed class GalleryApp : Component
         "Border" => Embed.Comp(() => new BorderPage()),
         "AppBarSeparator" => Embed.Comp(() => new AppBarSeparatorPage()),
         "RichTextBlock" => Embed.Comp(() => new RichTextBlockPage()),
+        "TextBox" => Embed.Comp(() => new TextBoxPage()),
+        "PasswordBox" => Embed.Comp(() => new PasswordBoxPage()),
+        "AutoSuggestBox" => Embed.Comp(() => new AutoSuggestBoxPage()),
         "Canvas" => Embed.Comp(() => new CanvasPage()),
         "ToolTip" => Embed.Comp(() => new ToolTipPage()),
         "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
