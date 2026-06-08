@@ -9,7 +9,10 @@
 > via `FluentApp.Run`; on-screen pixel polish is the ongoing edge. Full design corpus in [`design/`](./design/README.md);
 > developer & agent guide in [`docs/guide/`](./docs/guide/README.md).
 
-<img width="1064" height="687" alt="image" src="https://github.com/user-attachments/assets/097d8df5-56db-4b2e-80c4-0dbb9e1b919c" />
+
+
+https://github.com/user-attachments/assets/8e82a2cc-b908-40df-88f9-30438b44c02c
+
 
 ---
 
