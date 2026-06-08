@@ -71,6 +71,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, InteractionAnim> _interact = new();
     private readonly Dictionary<int, ShadowSpec> _shadows = new();
     private readonly Dictionary<int, ArcSpec> _arcs = new();
+    private readonly Dictionary<int, PolylineStrokeSpec> _polylines = new();
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
@@ -158,6 +159,8 @@ public sealed class SceneStore : ISceneBackend
         _grids.Remove(idx);
         _interact.Remove(idx);
         _shadows.Remove(idx);
+        _arcs.Remove(idx);
+        _polylines.Remove(idx);
         _gradients.Remove(idx);
         _borderBrushes.Remove(idx);
         _acrylics.Remove(idx);
@@ -352,6 +355,10 @@ public sealed class SceneStore : ISceneBackend
     public void SetArc(NodeHandle h, in ArcSpec a) => _arcs[(int)h.Raw.Index] = a;
     public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGetValue((int)h.Raw.Index, out a);
     public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
+
+    public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p) => _polylines[(int)h.Raw.Index] = p;
+    public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGetValue((int)h.Raw.Index, out p);
+    public void ClearPolylineStroke(NodeHandle h) => _polylines.Remove((int)h.Raw.Index);
 
     public void SetGradient(NodeHandle h, in GradientSpec g) => _gradients[(int)h.Raw.Index] = g;
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGetValue((int)h.Raw.Index, out g);

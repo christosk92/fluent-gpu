@@ -194,6 +194,10 @@ public sealed class GdiSwapchain : ISwapchain
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;   // experimental GDI path: no focus ring yet
                 case DrawOp.DrawShadow:
                     pos += Unsafe.SizeOf<DrawShadowCmd>(); break;           // experimental GDI path: no shadows
+                case DrawOp.DrawArc:
+                    pos += Unsafe.SizeOf<DrawArcCmd>(); break;              // experimental GDI path: no arcs
+                case DrawOp.DrawPolylineStroke:
+                    pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;   // experimental GDI path: no path strokes
                 case DrawOp.DrawGradientRect:
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;     // experimental GDI path: no gradients
                 case DrawOp.PushLayer:

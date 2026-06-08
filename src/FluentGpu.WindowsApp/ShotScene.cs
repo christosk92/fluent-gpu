@@ -53,6 +53,20 @@ sealed class ShotScene : Component
         // Diagnostic: does composited BoxEl.Rotation work? A 30° red bar should render TILTED, not horizontal.
         "rottest" => new BoxEl { Width = 200, Height = 24, Corners = Radii.ControlAll, Fill = ColorF.FromRgba(0xE0, 0x30, 0x30), Rotation = 30f },
         "menu" => MenuPresenter(),
+        // Corner-AA diagnostic: a translucent-fill + 1px solid-border rounded box (the unchecked-CheckBox case) blown up so
+        // the corner smoothness is unmistakable. The 1px ring must follow a single smooth concentric arc, not a rough notch.
+        "borderzoom" => new BoxEl
+        {
+            Direction = 0, Gap = 40f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                // Faithful 8× magnification of the unchecked CheckBox box (20→160, radius 4→32, border 1→8).
+                new BoxEl { Width = 160, Height = 160, Corners = CornerRadius4.All(32f), BorderWidth = 8f,
+                    BorderColor = Tok.StrokeControlStrongDefault, Fill = Tok.FillControlAltSecondary },
+                new BoxEl { Width = 160, Height = 160, Corners = CornerRadius4.All(32f), BorderWidth = 2f,
+                    BorderColor = Tok.StrokeControlStrongDefault, Fill = Tok.FillControlAltSecondary },
+            ],
+        },
         // Control-parity shots: every interaction state on a card, diffed 1:1 against WinUI. The unchecked CheckBox /
         // unselected RadioButton must read as an OUTLINED box/ring (hairline strong-stroke + ~10% fill), never a solid
         // grey chip (the donut bug). The TextBox placeholder must be DIM and the caret would sit at x=0 (empty).
@@ -63,6 +77,9 @@ sealed class ShotScene : Component
         "radiobutton" => CardColumn(
             RadioButton.Create("Option A", false, () => { }),
             RadioButton.Create("Option B (selected)", true, () => { })),
+        "toggle" => CardColumn(
+            ToggleSwitch.Create(false, () => { }, "Off"),
+            ToggleSwitch.Create(true, () => { }, "On")),
         "textbox" => CardColumn(
             TextBox.Create("Enter your name"),
             TextBox.Create("you@example.com", 280f, "Email")),

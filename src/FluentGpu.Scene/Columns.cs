@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4 }
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
@@ -62,6 +62,7 @@ public struct NodePaint
 {
     public Affine2D LocalTransform;
     public float Opacity;
+    public float HoverOpacity, PressedOpacity;
     // Composited transform origin (normalized 0..1 of the node box; default centre 0.5,0.5). The recorder scales/transforms
     // the node about (OriginX·W, OriginY·H) — so e.g. a menu can scale/unfold from its TOP edge (OriginY=0).
     public float OriginX, OriginY;
@@ -69,10 +70,13 @@ public struct NodePaint
     // children to PresentedW/PresentedH instead of the laid-out Bounds — so a size change animates without relayout,
     // and the presented size may exceed the model bounds (shrink reveals). Written by AnimEngine (AnimChannel.SizeW/H).
     public float PresentedW, PresentedH;
+    public float StrokeTrimStart, StrokeTrimEnd;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
     public ColorF PressedFill;    // A==0 ⇒ recorder auto-darkens Fill on press
     public ColorF BorderColor;
+    public ColorF HoverBorderColor;    // A==0 ⇒ recorder auto-lightens BorderColor on hover (else eases to this exact token)
+    public ColorF PressedBorderColor;  // A==0 ⇒ recorder auto-darkens BorderColor on press (else eases to this exact token)
     public float BorderWidth;
     public CornerRadius4 Corners;
     public ColorF TextColor;
@@ -84,10 +88,14 @@ public struct NodePaint
     {
         LocalTransform = Affine2D.Identity,
         Opacity = 1f,
+        HoverOpacity = float.NaN,
+        PressedOpacity = float.NaN,
         OriginX = 0.5f,
         OriginY = 0.5f,
         PresentedW = float.NaN,
         PresentedH = float.NaN,
+        StrokeTrimStart = float.NaN,
+        StrokeTrimEnd = float.NaN,
         Fill = ColorF.Transparent,
         VisualKind = VisualKind.None,
     };
@@ -150,11 +158,25 @@ public struct GridSpec
 public struct InteractionAnim
 {
     public float HoverT, HoverTarget, PressT, PressTarget;
+    public float HoverStart, PressStart, HoverElapsedMs, PressElapsedMs;
+    public float HoverDurationMs, PressDurationMs;
+    public EasingSpec HoverEasing, PressEasing;
     // Record-time composited scale targets (1 = none). The recorder scales the node about its centre by
     // lerp(lerp(1,HoverScale,HoverT),PressScale,PressT) — e.g. a slider/scrollbar thumb that grows on hover, shrinks on
     // press. Composited only: it never changes layout or hit-testing (HitTest reads Bounds, not the world transform).
     public float HoverScale, PressScale;
-    public static InteractionAnim Default => new() { HoverScale = 1f, PressScale = 1f };
+    public const float ControlFasterMs = 83f;
+    public const float ControlFastMs = 167f;
+    public const float ControlNormalMs = 250f;
+    public static InteractionAnim Default => new()
+    {
+        HoverScale = 1f,
+        PressScale = 1f,
+        HoverDurationMs = ControlFasterMs,
+        PressDurationMs = ControlFasterMs,
+        HoverEasing = Easing.FluentPopOpen,
+        PressEasing = Easing.FluentPopOpen,
+    };
 }
 
 /// <summary>Hit-test / input column.</summary>

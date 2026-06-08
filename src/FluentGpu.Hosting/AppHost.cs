@@ -48,6 +48,7 @@ public sealed class AppHost : IDisposable
     private readonly DrawList _drawList = new();
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
+    private readonly IFrameTimeSource _frameTime;
     private readonly AnimEngine _anim;
     private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;
@@ -91,13 +92,14 @@ public sealed class AppHost : IDisposable
     public ImageCache Images => _images;
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
-                   StringTable strings, Component root, ImageCache? images = null)
+                   StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null)
     {
         _window = window;
         _device = device;
         _root = root;
         _strings = strings;
         _images = images ?? new ImageCache(new FakeImageDecoder());
+        _frameTime = frameTime ?? (window.Handle.Kind == NativeHandleKind.Headless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _layout = new FlexLayout(_scene, fonts);
@@ -222,14 +224,15 @@ public sealed class AppHost : IDisposable
             if (reconciled) DumpSceneOnce(layoutSize);
 
             if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
-            _anim.Tick(16f);                                   // 7 animation (transform/opacity/presented-size — never relayout)
+            float dtMs = _frameTime.NextDeltaMs();
+            _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
-            _interact.Tick(16f);                               // 7 eased hover/press
-            _scrollAnim.Tick(16f);                             // 7 smooth scroll + scrollbar fade
-            _repeat.Tick(16f);                                 // 7 RepeatButton auto-repeat (held → re-fire click)
+            _interact.Tick(dtMs);                              // 7 eased hover/press
+            _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
+            _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _images.Pump();                                    // 7.5 apply finished decodes + evict
-            _images.Tick(16f);
+            _images.Tick(dtMs);
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             UpdateDynamicDiagnosticsText();

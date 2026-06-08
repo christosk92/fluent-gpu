@@ -14,6 +14,7 @@ public enum DrawOp : int
     PopLayer = 10,             // end the layer: composite tint + noise, then the subtree drew on top
     DrawGradientStroke = 11,   // gradient-tinted SDF outline (WinUI elevation border) — gradient PS + a stroke band
     DrawArc = 12,              // SDF circular-arc stroke with round caps (ProgressRing: a trimmed ring, like WinUI's Lottie)
+    DrawPolylineStroke = 13,   // SDF stroked polyline with trim start/end (AnimatedIcon path-trim)
 }
 
 // POD payloads (unmanaged). Encoded as [int op][payload] in the byte stream.
@@ -47,6 +48,9 @@ public readonly record struct PopLayerCmd(RectF DeviceRect);
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
 // clockwise), with round caps when <see cref="RoundCaps"/> != 0. Matches WinUI's trimmed round-cap ring stroke.
 public readonly record struct DrawArcCmd(RectF Rect, ColorF Color, float Thickness, float StartDeg, float SweepDeg, int RoundCaps, Affine2D Transform, float Opacity);
+public readonly record struct DrawPolylineStrokeCmd(RectF Rect, ColorF Color, float Thickness,
+    Point2 P0, Point2 P1, Point2 P2, Point2 P3, int PointCount, float TrimStart, float TrimEnd, int RoundCaps,
+    Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -152,6 +156,16 @@ public sealed class DrawList
     {
         WriteOp(DrawOp.DrawArc);
         WritePayload(new DrawArcCmd(rect, color, thickness, startDeg, sweepDeg, roundCaps ? 1 : 0, transform, opacity));
+        PushSort(sortKey);
+    }
+
+    public void PolylineStroke(in RectF rect, in ColorF color, float thickness,
+                               in Point2 p0, in Point2 p1, in Point2 p2, in Point2 p3, int pointCount,
+                               float trimStart, float trimEnd, bool roundCaps, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.DrawPolylineStroke);
+        WritePayload(new DrawPolylineStrokeCmd(rect, color, thickness, p0, p1, p2, p3, pointCount,
+            trimStart, trimEnd, roundCaps ? 1 : 0, transform, opacity));
         PushSort(sortKey);
     }
 

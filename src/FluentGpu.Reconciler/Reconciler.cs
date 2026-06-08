@@ -621,6 +621,8 @@ public sealed class TreeReconciler
                 paint.HoverFill = b.HoverFill;
                 paint.PressedFill = b.PressedFill;
                 paint.BorderColor = b.BorderColor;
+                paint.HoverBorderColor = b.HoverBorderColor;
+                paint.PressedBorderColor = b.PressedBorderColor;
                 paint.BorderWidth = b.BorderWidth;
                 paint.Corners = b.Corners;
 
@@ -645,12 +647,19 @@ public sealed class TreeReconciler
                     paint.LocalTransform = tf;
                 }
                 if (b.OpacityBind is null && b.Opacity != 1f) paint.Opacity = b.Opacity;
+                paint.HoverOpacity = b.HoverOpacity;
+                paint.PressedOpacity = b.PressedOpacity;
 
-                if (b.HoverScale != 1f || b.PressScale != 1f)
+                if (b.HoverScale != 1f || b.PressScale != 1f || !float.IsNaN(b.HoverOpacity) || !float.IsNaN(b.PressedOpacity)
+                    || !float.IsNaN(b.HoverDurationMs) || !float.IsNaN(b.PressDurationMs))
                 {
                     ref InteractionAnim ia = ref _scene.InteractRef(node);
                     ia.HoverScale = b.HoverScale;
                     ia.PressScale = b.PressScale;
+                    ia.HoverDurationMs = float.IsNaN(b.HoverDurationMs) ? InteractionAnim.ControlFasterMs : b.HoverDurationMs;
+                    ia.PressDurationMs = float.IsNaN(b.PressDurationMs) ? InteractionAnim.ControlFasterMs : b.PressDurationMs;
+                    ia.HoverEasing = b.HoverEasing;
+                    ia.PressEasing = b.PressEasing;
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -772,6 +781,38 @@ public sealed class TreeReconciler
                 li.FlexGrow = g.Grow; li.FlexShrink = g.Shrink; li.FlexBasis = g.Basis;
                 li.AlignSelf = g.AlignSelf; li.Margin = g.Margin; li.Padding = g.Padding;
                 _scene.SetGrid(node, new GridSpec { Columns = g.Columns, ColGap = g.ColGap, RowGap = g.RowGap, RowHeight = g.RowHeight, MinColWidth = g.MinColWidth });
+                break;
+            }
+            case PolylineStrokeEl pl:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.PolylineStroke;
+                paint.OriginX = pl.TransformOriginX;
+                paint.OriginY = pl.TransformOriginY;
+                paint.Opacity = pl.Opacity;
+
+                var tf = Affine2D.Translation(pl.OffsetX, pl.OffsetY);
+                if (pl.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(pl.Rotation * (MathF.PI / 180f)));
+                if (pl.ScaleX != 1f || pl.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pl.ScaleX, pl.ScaleY));
+                paint.LocalTransform = tf;
+
+                if (pl.HoverScale != 1f || pl.PressScale != 1f)
+                {
+                    ref InteractionAnim ia = ref _scene.InteractRef(node);
+                    ia.HoverScale = pl.HoverScale;
+                    ia.PressScale = pl.PressScale;
+                }
+
+                _scene.SetPolylineStroke(node, new PolylineStrokeSpec(
+                    pl.P0, pl.P1, pl.P2, pl.P3, pl.PointCount,
+                    pl.Color, pl.Thickness, pl.TrimStart, pl.TrimEnd, pl.RoundCaps));
+
+                ref LayoutInput li = ref _scene.Layout(node);
+                li.Margin = pl.Margin;
+                li.Width = pl.Width; li.Height = pl.Height;
+                li.MinW = pl.MinWidth; li.MinH = pl.MinHeight; li.MaxW = pl.MaxWidth; li.MaxH = pl.MaxHeight;
+                li.FlexGrow = pl.Grow; li.FlexShrink = pl.Shrink; li.FlexBasis = pl.Basis;
+                li.AlignSelf = pl.AlignSelf;
                 break;
             }
             case ImageEl im:

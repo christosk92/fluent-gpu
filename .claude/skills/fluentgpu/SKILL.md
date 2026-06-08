@@ -84,13 +84,46 @@ Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only
 | Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Reconciler/Reconciler.cs` |
 | Element shapes / props / binds | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` |
 | DSL helpers / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` |
-| Controls | `src/FluentGpu.Controls/*.cs` (composition only) |
+| Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
+| Control visual state / motion | `StateBrush` ramps + `InteractionAnimator` progress; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing`. Declare targets/specs, NOT a state matrix or per-control runtime |
+| Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal); use for draw-on paths and authored timelines, not hover/press visual states |
+| Rounded-rect / border rendering | `SceneRecorder.cs` + `Rhi.D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
 | Frame loop / scheduling | `src/FluentGpu.Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
 | Layout / scoped relayout | `src/FluentGpu.Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
 | Retained scene (SoA, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
 | Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` |
 | Theming tokens | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
+
+## WinUI controls, animations, and states
+
+Before changing a control, read the whole WinUI template in `C:\WAVEE\microsoft-ui-xaml`. Framework controls usually
+live in `controls\dev\CommonStyles\<Control>_themeresources.xaml`; also check `<Control>_themeresources_perf2026.xaml`
+when present. Muxcontrols usually live under `controls\dev\<Control>\`. Shared timing tokens are in
+`controls\dev\CommonStyles\Common_themeresources_any.xaml`: `ControlNormalAnimationDuration=250ms`,
+`ControlFastAnimationDuration=167ms`, `ControlFasterAnimationDuration=83ms`, and
+`ControlFastOutSlowInKeySpline=0,0,0,1`.
+
+Search for `VisualState`, `Storyboard`, `DoubleAnimation`, `KeyFrame`, `Setter`, `AnimatedIcon.State`, `PointerOver`,
+`Pressed`, `Selected`, and `Checked`. Pitfalls: `_perf2026` files can differ; `Pressed` may be hidden inside names like
+`CheckedPressed` or nested styles; invisible parts with `Opacity=0` can be the actual animation (RadioButton's
+`PressedCheckGlyph`); duration/easing/color values are often indirect resources; zero-duration animations and setters
+still matter.
+
+State model:
+
+```text
+logical axis:     Unselected/Unchecked --click--> Selected/Checked --optional--> Indeterminate
+interaction axis: Normal --pointer enter--> PointerOver --pointer down--> Pressed
+                  Pressed --pointer up inside--> PointerOver
+                  PointerOver --pointer leave--> Normal
+                  any enabled state --disabled--> Disabled
+```
+
+Map WinUI cross-product names to axes: `SelectedPressed` = selected logical ramp + pressed interaction target.
+Hover/press visual states belong in `InteractionAnimator` data (`HoverFill`, `PressedOpacity`, `PressScale`,
+durations/easings). Explicit timelines belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon
+segments). Do not add a per-control VisualStateManager or duplicate animation runtime.
 
 Design corpus (architecture authority, canon-gated) is `design/`; as-built reactive model is
 `design/subsystems/reconciler-hooks.md §0bis`. After editing `design/*`: `powershell -File design/check-canon.ps1`
@@ -101,3 +134,7 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.
 - `docs/guide/rendering-and-performance.md` — frame pipeline, scoped relayout + boundary firewall, optimization guide.
 - `docs/guide/pitfalls.md` — symptom → cause → fix.
+- `docs/guide/control-fidelity.md` — **building WinUI-faithful controls**: exact WinUI template/storyboard/timing-token
+  lookup, state-search pitfalls, the logical-state x interaction-state graph, rounded-rect rendering rules,
+  `StateBrush`/`InteractionAnimator` visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
+  empirical verify workflow (golden checks + `--shot` + slow-motion proof). Read before any control parity work.

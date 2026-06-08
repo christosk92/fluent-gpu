@@ -24,6 +24,8 @@ public sealed record BoxEl : Element
     public ColorF HoverFill { get; init; }
     public ColorF PressedFill { get; init; }
     public ColorF BorderColor { get; init; }
+    public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
+    public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
     public CornerRadius4 Corners { get; init; }
 
@@ -58,6 +60,8 @@ public sealed record BoxEl : Element
     public float ScaleY { get; init; } = 1f;
     public float Rotation { get; init; }   // degrees
     public float Opacity { get; init; } = 1f;
+    public float HoverOpacity { get; init; } = float.NaN;
+    public float PressedOpacity { get; init; } = float.NaN;
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;
@@ -68,6 +72,10 @@ public sealed record BoxEl : Element
     // hover/press flags. Composited only — never changes layout or hit-testing.
     public float HoverScale { get; init; } = 1f;
     public float PressScale { get; init; } = 1f;
+    public float HoverDurationMs { get; init; } = float.NaN;
+    public float PressDurationMs { get; init; } = float.NaN;
+    public EasingSpec HoverEasing { get; init; } = Easing.FluentPopOpen;
+    public EasingSpec PressEasing { get; init; } = Easing.FluentPopOpen;
 
     // ── Fine-grained reactive bindings (signals-first). A bind is a thunk that READS signals; the reconciler turns it
     // into an effect at mount that writes only this node's channel + marks the matching dirty axis, so a signal change
@@ -149,6 +157,46 @@ public sealed record GridEl : Element
 /// <summary>A text run. <see cref="FontFamily"/> selects the face — a system family name ("Segoe UI",
 /// "Segoe Fluent Icons") or a custom file as <c>"path/to.ttf#Family Name"</c> (the WinUI syntax). Null = the theme
 /// body font. Combine with an icon-font family + a private-use glyph to render icons (see <c>Ui.Icon</c>).</summary>
+/// <summary>A leaf stroked polyline, drawn analytically by the renderer and revealable through stroke trim.</summary>
+public sealed record PolylineStrokeEl : Element
+{
+    public override ushort ElementTypeId => 11;
+
+    public Point2 P0 { get; init; }
+    public Point2 P1 { get; init; }
+    public Point2 P2 { get; init; }
+    public Point2 P3 { get; init; }
+    public int PointCount { get; init; } = 2;
+    public ColorF Color { get; init; }
+    public float Thickness { get; init; } = 1f;
+    public float TrimStart { get; init; }
+    public float TrimEnd { get; init; } = 1f;
+    public bool RoundCaps { get; init; } = true;
+
+    public float OffsetX { get; init; }
+    public float OffsetY { get; init; }
+    public float ScaleX { get; init; } = 1f;
+    public float ScaleY { get; init; } = 1f;
+    public float Rotation { get; init; }
+    public float Opacity { get; init; } = 1f;
+    public float TransformOriginX { get; init; } = 0.5f;
+    public float TransformOriginY { get; init; } = 0.5f;
+    public float HoverScale { get; init; } = 1f;
+    public float PressScale { get; init; } = 1f;
+
+    public float Width { get; init; } = float.NaN;
+    public float Height { get; init; } = float.NaN;
+    public float MinWidth { get; init; } = float.NaN;
+    public float MinHeight { get; init; } = float.NaN;
+    public float MaxWidth { get; init; } = float.NaN;
+    public float MaxHeight { get; init; } = float.NaN;
+    public float Grow { get; init; }
+    public float Shrink { get; init; }
+    public float Basis { get; init; } = float.NaN;
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    public Edges4 Margin { get; init; }
+}
+
 public sealed record TextEl(string Text) : Element
 {
     public override ushort ElementTypeId => 2;

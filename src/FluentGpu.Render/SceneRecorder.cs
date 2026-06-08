@@ -76,11 +76,7 @@ public static class SceneRecorder
         // (a slider/scrollbar thumb is non-interactive — drag stays on the track — but grows when the control is used).
         if (scene.TryGetInteract(node, out var iaScale) && (iaScale.HoverScale != 1f || iaScale.PressScale != 1f))
         {
-            int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
-            float useH = iaScale.HoverT, useP = iaScale.PressT;
-            if ((scene.Interaction(node).HandlerMask & interactive) == 0)
-                for (var anc = scene.Parent(node); !anc.IsNull; anc = scene.Parent(anc))
-                    if ((scene.Interaction(anc).HandlerMask & interactive) != 0 && scene.TryGetInteract(anc, out var pr)) { useH = pr.HoverT; useP = pr.PressT; break; }
+            TryResolveInteractionProgress(scene, node, out float useH, out float useP);
             float hs = 1f + (iaScale.HoverScale - 1f) * useH;
             float isc = hs + (iaScale.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
@@ -98,7 +94,7 @@ public static class SceneRecorder
         float childScaleX = netScaleX * p.LocalTransform.M11;   // the scale this node imposes on its children
         float childScaleY = netScaleY * p.LocalTransform.M22;
 
-        float opacity = parentOpacity * p.Opacity;
+        float opacity = parentOpacity * ResolveOpacity(scene, node, in p);
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
@@ -189,6 +185,20 @@ public static class SceneRecorder
                 dl.DrawImage(local, p.Corners, p.ImageId, ready, p.Fill, world, opacity, crossFade, key);
                 break;
             }
+            case VisualKind.PolylineStroke:
+            {
+                if (scene.TryGetPolylineStroke(node, out var pl))
+                {
+                    float trimStart = float.IsNaN(p.StrokeTrimStart) ? pl.TrimStart : p.StrokeTrimStart;
+                    float trimEnd = float.IsNaN(p.StrokeTrimEnd) ? pl.TrimEnd : p.StrokeTrimEnd;
+                    trimStart = Math.Clamp(trimStart, 0f, 1f);
+                    trimEnd = Math.Clamp(trimEnd, 0f, 1f);
+                    if (pl.Color.A > 0f && pl.Thickness > 0f && pl.PointCount >= 2 && trimEnd > trimStart)
+                        dl.PolylineStroke(local, pl.Color, pl.Thickness, pl.P0, pl.P1, pl.P2, pl.P3,
+                            pl.PointCount, trimStart, trimEnd, pl.RoundCaps, world, opacity, key);
+                }
+                break;
+            }
         }
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
@@ -221,32 +231,95 @@ public static class SceneRecorder
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
     /// else the instantaneous flag behaviour (first frame / no animator).</summary>
+    private static bool TryResolveInteractionProgress(SceneStore scene, NodeHandle node, out float hoverT, out float pressT)
+    {
+        hoverT = 0f;
+        pressT = 0f;
+
+        int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
+        bool nodeInteractive = (scene.Interaction(node).HandlerMask & interactive) != 0;
+        bool hasOwn = scene.TryGetInteract(node, out var own);
+        if (hasOwn)
+        {
+            hoverT = own.HoverT;
+            pressT = own.PressT;
+            return true;
+        }
+
+        if (!nodeInteractive)
+        {
+            for (var anc = scene.Parent(node); !anc.IsNull; anc = scene.Parent(anc))
+            {
+                if ((scene.Interaction(anc).HandlerMask & interactive) == 0) continue;
+                if (!scene.TryGetInteract(anc, out var parent)) continue;
+                hoverT = parent.HoverT;
+                pressT = parent.PressT;
+                return true;
+            }
+        }
+
+        return hasOwn;
+    }
+
+    private static float ResolveOpacity(SceneStore scene, NodeHandle node, in NodePaint p)
+    {
+        bool hasHover = !float.IsNaN(p.HoverOpacity);
+        bool hasPress = !float.IsNaN(p.PressedOpacity);
+        if (!hasHover && !hasPress) return p.Opacity;
+
+        float opacity = p.Opacity;
+        if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT))
+        {
+            if (hasHover)
+                opacity += (p.HoverOpacity - opacity) * hoverT;
+            if (hasPress)
+                opacity += (p.PressedOpacity - opacity) * pressT;
+            return opacity;
+        }
+
+        NodeFlags flags = scene.Flags(node);
+        if (hasPress && (flags & NodeFlags.Pressed) != 0) return p.PressedOpacity;
+        if (hasHover && (flags & NodeFlags.Hovered) != 0) return p.HoverOpacity;
+        return opacity;
+    }
+
     private static void ResolveSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF fill, out ColorF border)
     {
         fill = p.Fill; border = p.BorderColor;
-        if (scene.TryGetInteract(node, out var ia) && (ia.HoverT > 0.001f || ia.PressT > 0.001f))
+        if (TryResolveInteractionProgress(scene, node, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
         {
             ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
             ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
             // Cross-fade in LINEAR light (color canon: linear-blend / premultiplied) — not straight sRGB.
-            fill = ColorF.LerpLinear(p.Fill, hov, ia.HoverT);
-            fill = ColorF.LerpLinear(fill, prs, ia.PressT);
-            ColorF hb = Lighten(p.BorderColor, 0.08f), pb = Darken(p.BorderColor, 0.12f);
-            border = ColorF.LerpLinear(p.BorderColor, hb, ia.HoverT);
-            border = ColorF.LerpLinear(border, pb, ia.PressT);
+            fill = ColorF.LerpLinear(p.Fill, hov, hoverT);
+            fill = ColorF.LerpLinear(fill, prs, pressT);
+            // Border eases to its explicit per-state token when set (e.g. CheckBox unchecked-pressed stroke →
+            // ControlStrongStrokeColorDisabled), else falls back to a lighten/darken of the resting border.
+            ColorF hb = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(p.BorderColor, 0.08f);
+            ColorF pb = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(p.BorderColor, 0.12f);
+            border = ColorF.LerpLinear(p.BorderColor, hb, hoverT);
+            border = ColorF.LerpLinear(border, pb, pressT);
         }
         else if ((flags & NodeFlags.Pressed) != 0)
         {
-            fill = p.PressedFill.A > 0f ? p.PressedFill : Darken(fill, 0.12f); border = Darken(border, 0.12f);
+            fill = p.PressedFill.A > 0f ? p.PressedFill : Darken(fill, 0.12f);
+            border = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(border, 0.12f);
         }
         else if ((flags & NodeFlags.Hovered) != 0)
         {
-            fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f); border = Lighten(border, 0.08f);
+            fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f);
+            border = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(border, 0.08f);
         }
     }
 
+    // A centerline-based SDF stroke insets the rect by bw/2; to keep the band CONCENTRIC with the box's rounded corner
+    // (so the stroke's outer edge lands exactly on the bounds outline) the corner radius must shrink by the SAME bw/2 —
+    // else the corner arc re-centres and the 1px ring reads as a rough/uneven corner instead of a smooth WinUI one.
+    private static CornerRadius4 InsetCorners(in CornerRadius4 c, float d)
+        => new(MathF.Max(0f, c.TopLeft - d), MathF.Max(0f, c.TopRight - d), MathF.Max(0f, c.BottomRight - d), MathF.Max(0f, c.BottomLeft - d));
+
     private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, in Affine2D world, float opacity, ulong key)
-        => dl.StrokeRoundRect(new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw)), corners, border, bw, world, opacity, key);
+        => dl.StrokeRoundRect(new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw)), InsetCorners(corners, bw * 0.5f), border, bw, world, opacity, key);
 
     private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g, in Affine2D world, float opacity, ulong key)
     {
@@ -276,7 +349,7 @@ public static class SceneRecorder
         ColorF c0 = s[0].Color, c1 = n > 1 ? s[1].Color : c0, c2 = n > 2 ? s[2].Color : c1, c3 = n > 3 ? s[3].Color : c2;
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
         var ring = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
-        dl.GradientStroke(new DrawGradientStrokeCmd(ring, corners, start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
+        dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }
 
     /// <summary>WinUI dual focus visual: a 1px inner secondary stroke at the control edge + a 2px outer primary stroke

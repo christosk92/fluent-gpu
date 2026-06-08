@@ -15,9 +15,48 @@ public enum Easing : byte
     FluentPopOpen,     // flyout/menu open  — cubic-bezier(0, 0, 0, 1)  (the WinUI MenuPopupThemeTransition curve)
 }
 
+public readonly record struct EasingSpec
+{
+    private readonly byte _hasValue;
+    private readonly byte _kind;
+    private readonly Easing _named;
+    private readonly float _x1, _y1, _x2, _y2;
+
+    private EasingSpec(Easing named)
+    {
+        _hasValue = 1;
+        _kind = 0;
+        _named = named;
+        _x1 = _y1 = _x2 = _y2 = 0f;
+    }
+
+    private EasingSpec(float x1, float y1, float x2, float y2)
+    {
+        _hasValue = 1;
+        _kind = 1;
+        _named = Easing.Linear;
+        _x1 = x1;
+        _y1 = y1;
+        _x2 = x2;
+        _y2 = y2;
+    }
+
+    public static EasingSpec Default => default;
+    public static EasingSpec Named(Easing easing) => new(easing);
+    public static EasingSpec CubicBezier(float x1, float y1, float x2, float y2) => new(x1, y1, x2, y2);
+    public static implicit operator EasingSpec(Easing easing) => new(easing);
+
+    internal float Evaluate(float t)
+        => _hasValue == 0 ? Easings.Ease(Easing.EaseInOut, t)
+         : _kind == 1 ? Easings.CubicBezier(t, _x1, _y1, _x2, _y2)
+         : Easings.Ease(_named, t);
+}
+
 /// <summary>Evaluates an <see cref="Easing"/> curve at normalized time t (0..1).</summary>
 public static class Easings
 {
+    public static float Ease(EasingSpec e, float t) => e.Evaluate(t);
+
     public static float Ease(Easing e, float t) => e switch
     {
         Easing.EaseIn => t * t,
@@ -39,7 +78,7 @@ public static class Easings
 
     /// <summary>Evaluate a CSS/WinUI cubic-bezier easing y(t): find the curve parameter s where x(s)==t (Newton +
     /// bisection fallback), then return y(s). P0=(0,0), P3=(1,1), control points (x1,y1),(x2,y2).</summary>
-    private static float CubicBezier(float t, float x1, float y1, float x2, float y2)
+    internal static float CubicBezier(float t, float x1, float y1, float x2, float y2)
     {
         if (t <= 0f) return 0f;
         if (t >= 1f) return 1f;

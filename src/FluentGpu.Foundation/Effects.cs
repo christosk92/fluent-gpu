@@ -20,6 +20,17 @@ public readonly record struct ArcSpec(ColorF Color, float Thickness, float Start
     public bool IsNone => Color.A <= 0f || Thickness <= 0f || SweepDeg <= 0f;
 }
 
+/// <summary>
+/// A retained stroked polyline with normalized trim controls. Points are local DIP coordinates inside the node's box;
+/// trim values are path-distance fractions (0..1), so animation can reveal the stroke in draw order.
+/// </summary>
+public readonly record struct PolylineStrokeSpec(
+    Point2 P0, Point2 P1, Point2 P2, Point2 P3, int PointCount,
+    ColorF Color, float Thickness, float TrimStart = 0f, float TrimEnd = 1f, bool RoundCaps = true)
+{
+    public bool IsNone => Color.A <= 0f || Thickness <= 0f || PointCount < 2 || TrimEnd <= TrimStart;
+}
+
 /// <summary>One gradient stop: a normalized position (0..1 along the gradient axis) and its color.</summary>
 public readonly record struct GradientStop(float Offset, ColorF Color);
 

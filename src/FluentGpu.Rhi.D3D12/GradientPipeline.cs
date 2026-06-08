@@ -48,12 +48,16 @@ struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSi
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
     Inst it = gInst[iid];
-    float2 lp = it.pos + corner * it.size;
+    // Inflate the quad so the full coverage footprint (fill edge AA, or an outline band's outer half + AA) is rasterized
+    // rather than clipped by the rect quad — otherwise rounded corners / pill ends read rough. See RoundRectPipeline.
+    float margin = (it.stroke > 0.0 ? it.stroke * 0.5 : 0.0) + 2.0;
+    float2 dir = corner * 2.0 - 1.0;
+    float2 lp = it.pos + corner * it.size + dir * margin;
     float2 world = float2(it.m.x * lp.x + it.m.z * lp.y + it.t.x, it.m.y * lp.x + it.m.w * lp.y + it.t.y);
     float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
     o.pos = float4(ndc, 0.0, 1.0);
-    o.local = corner * it.size - it.size * 0.5;
+    o.local = corner * it.size - it.size * 0.5 + dir * margin;
     o.halfSize = it.size * 0.5;
     o.radius = it.radius;
     o.opacity = it.opacity;

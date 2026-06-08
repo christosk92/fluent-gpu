@@ -107,7 +107,10 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Reconciler/Reconciler.cs` | the heart; render-effects + keyed `ReconcileChildren` |
 | Element shapes / props / bindings | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` | add a free `ElementTypeId`; wire in reconciler `Mount`/`Update` |
 | DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` | pure element builders |
-| Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` | composition only — no new opcodes/columns |
+| Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` | composition only — no new opcodes/columns. WinUI fidelity: **[control-fidelity.md](./control-fidelity.md)** |
+| Control visual state / interaction motion | `StateBrush` ramps + `InteractionAnimator`; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing` | model logical state x interaction state, NOT a 12-state matrix; child parts can inherit the clickable ancestor's progress |
+| Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal) + enter/exit presets in `ControlMotion` | use for authored WinUI timelines, draw-on paths, and true insert/remove parts; not for ordinary hover/press |
+| Rounded-rect / border rendering | `src/FluentGpu.Render/SceneRecorder.cs` + `src/FluentGpu.Rhi.D3D12/{RoundRect,Gradient}Pipeline.cs` | hollow SDF ring (no donut); `InsetCorners`; quad inflation for stroke band + AA |
 | Frame loop, scheduling, compositor frame | `src/FluentGpu.Hosting/AppHost.cs` | `RunFrame`/`Paint`; `_runtime.Flush()` is phase 3 |
 | Layout (flex/grid/measure) | `src/FluentGpu.Layout/FlexLayout.cs` | `Run` (full) vs `RunSubtree` (scoped) |
 | Scoped relayout / boundary firewall | `src/FluentGpu.Layout/LayoutInvalidator.cs` + `SceneStore` LayoutDirty worklist | up-rule walk to boundary |
@@ -131,6 +134,10 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 4. **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline, the SoA scene, reconcile,
    scoped relayout + the boundary firewall, the compositor bypass, zero-alloc, an optimization decision guide.
 5. **[pitfalls.md](./pitfalls.md)** — common mistakes as **symptom → cause → fix** (read before debugging).
+6. **[control-fidelity.md](./control-fidelity.md)** — building WinUI-faithful controls: where to find the exact WinUI
+   templates/storyboards/timing tokens, the logical-state x interaction-state graph, `StateBrush`/`InteractionAnimator`
+   visual states, `AnimEngine` authored timelines, and the empirical verify workflow (golden checks + `--shot` +
+   slow-motion proof). *Read before the control parity sweep.*
 
 ---
 

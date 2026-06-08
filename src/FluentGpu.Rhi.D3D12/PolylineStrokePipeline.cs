@@ -7,78 +7,111 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL <c>Inst</c> struct. One instanced quad per rounded rect, with a world transform + opacity.</summary>
 [StructLayout(LayoutKind.Sequential)]
-internal struct RectInstance
+internal struct PolylineStrokeInstance
 {
     public float PosX, PosY, W, H;
-    public float RTL, RTR, RBR, RBL;
     public float R, G, B, A;
-    public float M11, M12, M21, M22, Dx, Dy;   // 2x3 world transform (local→device)
-    public float Opacity;
-    public float StrokeWidth;   // 0 = filled; >0 = an SDF outline (focus ring / border) of this width. Keeps the 80-byte stride.
+    public float M11, M12, M21, M22;
+    public float Dx, Dy, Thickness, Opacity;
+    public float P0X, P0Y, P1X, P1Y;
+    public float P2X, P2Y, P3X, P3Y;
+    public float PointCount, TrimStart, TrimEnd, RoundCaps;
 }
 
-/// <summary>
-/// The SDF rounded-rect pipeline (design/subsystems/gpu-renderer.md): a unit quad drawn instanced; instance data
-/// (rect/radii/color) is read in the VS from a root StructuredBuffer; the PS evaluates the analytic rounded-box SDF
-/// with single-pass AA. Shaders are compiled at runtime (D3DCompile → DXBC sm5.1; DXC→DXIL offline is the spec's eventual path).
-/// </summary>
-internal sealed unsafe class RoundRectPipeline : IDisposable
+internal sealed unsafe class PolylineStrokePipeline : IDisposable
 {
-    private const int MaxInstances = 4096;
+    private const int MaxInstances = 1024;
 
     private ID3D12RootSignature* _rootSig;
     private ID3D12PipelineState* _pso;
-    private ID3D12Resource* _quad;          // 4-vertex unit quad (upload heap)
-    private ID3D12Resource* _instances;     // structured buffer of RectInstance (upload heap, persistently mapped)
-    private RectInstance* _mapped;
+    private ID3D12Resource* _quad;
+    private ID3D12Resource* _instances;
+    private PolylineStrokeInstance* _mapped;
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
     private int _cursor;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 color; float4 m; float2 t; float opacity; float stroke; };
+struct Inst {
+    float2 pos; float2 size;
+    float4 color;
+    float4 m;
+    float2 t; float thickness; float opacity;
+    float4 p01;
+    float4 p23;
+    float pointCount; float trimStart; float trimEnd; float roundCaps;
+};
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; float opacity : TEXCOORD4; float stroke : TEXCOORD5; };
+struct VSOut {
+    float4 pos : SV_Position;
+    float2 local : TEXCOORD0;
+    float4 color : TEXCOORD1;
+    float4 p01 : TEXCOORD2;
+    float4 p23 : TEXCOORD3;
+    float4 trim : TEXCOORD4;
+};
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
     Inst it = gInst[iid];
-    // INFLATE the quad outward by a margin so the FULL coverage footprint is rasterized. The PS evaluates an SDF whose
-    // edge sits at the rect boundary (fill) or straddles the centreline ±stroke/2 (outline); the antialiasing feather
-    // adds ~1px more on each side. The bare rect quad clips that outer half — harmless on straight edges (a hair thin)
-    // but it slices the rectangular quad corner through a rounded band, so corners/pill-ends read ROUGH. The margin is in
-    // local units; ~2px covers the AA feather at sane DPI, plus stroke/2 to contain the outline's outer half.
-    float margin = (it.stroke > 0.0 ? it.stroke * 0.5 : 0.0) + 2.0;
-    float2 dir = corner * 2.0 - 1.0;                            // -1 at corner 0, +1 at corner 1 (outward)
-    float2 lp = it.pos + corner * it.size + dir * margin;       // inflated local-space point
-    float2 world = float2(it.m.x * lp.x + it.m.z * lp.y + it.t.x,  // 2x3 affine: local → device
+    float pad = it.thickness * 0.5 + 2.0;
+    float2 lp = it.pos + float2(lerp(-pad, it.size.x + pad, corner.x), lerp(-pad, it.size.y + pad, corner.y));
+    float2 world = float2(it.m.x * lp.x + it.m.z * lp.y + it.t.x,
                           it.m.y * lp.x + it.m.w * lp.y + it.t.y);
     float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
     o.pos = float4(ndc, 0.0, 1.0);
-    o.local = corner * it.size - it.size * 0.5 + dir * margin;   // SDF coverage stays in local space (crisp under transform via fwidth)
-    o.halfSize = it.size * 0.5;
-    o.radius = it.radii.x;
+    o.local = lp - it.pos;
     o.color = it.color;
-    o.opacity = it.opacity;
-    o.stroke = it.stroke;
+    o.p01 = it.p01;
+    o.p23 = it.p23;
+    o.trim = float4(it.thickness, it.pointCount, it.trimStart, it.trimEnd);
+    o.color.a *= it.opacity;
     return o;
+}
+
+float sdCapsule(float2 p, float2 a, float2 b, float r)
+{
+    float2 pa = p - a;
+    float2 ba = b - a;
+    float h = saturate(dot(pa, ba) / max(dot(ba, ba), 1e-5));
+    return length(pa - ba * h) - r;
+}
+
+void addTrimmedSegment(float2 p, float2 a, float2 b, float segStart, float segLen, float trimA, float trimB, float r, inout float d)
+{
+    if (segLen <= 1e-4) return;
+    float localA = saturate((trimA - segStart) / segLen);
+    float localB = saturate((trimB - segStart) / segLen);
+    if (localB <= localA) return;
+    float2 ta = lerp(a, b, localA);
+    float2 tb = lerp(a, b, localB);
+    d = min(d, sdCapsule(p, ta, tb, r));
 }
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float2 q = abs(i.local) - (i.halfSize - i.radius);
-    float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;   // signed distance to the rounded-box edge
-    float fw = max(fwidth(d), 1e-4);
-    float cov;
-    if (i.stroke > 0.0)
-        cov = clamp(0.5 - (abs(d) - i.stroke * 0.5) / fw, 0.0, 1.0);   // outline: a band of width 'stroke' centred on the edge
-    else
-        cov = clamp(0.5 - d / fw, 0.0, 1.0);                            // fill: crisp ~1px linear AA
-    float aOut = i.color.a * cov * i.opacity;
-    return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
+    float2 p0 = i.p01.xy, p1 = i.p01.zw, p2 = i.p23.xy, p3 = i.p23.zw;
+    float pointCount = i.trim.y;
+    float l0 = length(p1 - p0);
+    float l1 = pointCount > 2.5 ? length(p2 - p1) : 0.0;
+    float l2 = pointCount > 3.5 ? length(p3 - p2) : 0.0;
+    float total = max(l0 + l1 + l2, 1e-4);
+    float trimA = saturate(i.trim.z) * total;
+    float trimB = saturate(i.trim.w) * total;
+    if (trimB <= trimA) discard;
+
+    float r = i.trim.x * 0.5;
+    float d = 1e9;
+    addTrimmedSegment(i.local, p0, p1, 0.0, l0, trimA, trimB, r, d);
+    addTrimmedSegment(i.local, p1, p2, l0, l1, trimA, trimB, r, d);
+    addTrimmedSegment(i.local, p2, p3, l0 + l1, l2, trimA, trimB, r, d);
+
+    float aa = max(fwidth(d), 1e-5);
+    float cov = 1.0 - smoothstep(-aa, aa, d);
+    float aOut = i.color.a * cov;
+    return float4(i.color.rgb * aOut, aOut);
 }
 """;
 
@@ -106,7 +139,7 @@ float4 PSMain(VSOut i) : SV_Target
             if ((int)hr < 0)
             {
                 string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"shader {entry} ({target}) failed: {msg}");
+                throw new InvalidOperationException($"polyline shader {entry} ({target}) failed: {msg}");
             }
         }
         return code;
@@ -118,10 +151,10 @@ float4 PSMain(VSOut i) : SV_Target
         p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         p[0].Anonymous.Constants.ShaderRegister = 0;
         p[0].Anonymous.Constants.RegisterSpace = 0;
-        p[0].Anonymous.Constants.Num32BitValues = 2;   // viewport (w,h)
+        p[0].Anonymous.Constants.Num32BitValues = 2;
         p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_VERTEX;
         p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_SRV;
-        p[1].Anonymous.Descriptor.ShaderRegister = 0;   // t0
+        p[1].Anonymous.Descriptor.ShaderRegister = 0;
         p[1].Anonymous.Descriptor.RegisterSpace = 0;
         p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_VERTEX;
 
@@ -131,9 +164,9 @@ float4 PSMain(VSOut i) : SV_Target
         desc.Flags = D3D12_ROOT_SIGNATURE_FLAGS.D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ID3DBlob* sig = null; ID3DBlob* err = null;
-        Check(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION.D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err), "SerializeRootSignature");
+        Check(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION.D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err), "Polyline.SerializeRootSignature");
         ID3D12RootSignature* rs;
-        Check(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), __uuidof<ID3D12RootSignature>(), (void**)&rs), "CreateRootSignature");
+        Check(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), __uuidof<ID3D12RootSignature>(), (void**)&rs), "Polyline.CreateRootSignature");
         _rootSig = rs;
         sig->Release();
         if (err != null) err->Release();
@@ -143,18 +176,13 @@ float4 PSMain(VSOut i) : SV_Target
     {
         ID3DBlob* vs = Compile("VSMain", "vs_5_1");
         ID3DBlob* ps = Compile("PSMain", "ps_5_1");
-
         byte[] semantic = Encoding.ASCII.GetBytes("POSITION\0");
         fixed (byte* sem = semantic)
         {
             D3D12_INPUT_ELEMENT_DESC elem = default;
             elem.SemanticName = (sbyte*)sem;
-            elem.SemanticIndex = 0;
             elem.Format = DXGI_FORMAT.DXGI_FORMAT_R32G32_FLOAT;
-            elem.InputSlot = 0;
-            elem.AlignedByteOffset = 0;
             elem.InputSlotClass = D3D12_INPUT_CLASSIFICATION.D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-            elem.InstanceDataStepRate = 0;
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = default;
             pd.pRootSignature = _rootSig;
@@ -166,28 +194,22 @@ float4 PSMain(VSOut i) : SV_Target
             pd.RTVFormats[0] = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
             pd.SampleDesc.Count = 1;
             pd.SampleMask = uint.MaxValue;
-
-            // rasterizer: solid, no cull
             pd.RasterizerState.FillMode = D3D12_FILL_MODE.D3D12_FILL_MODE_SOLID;
             pd.RasterizerState.CullMode = D3D12_CULL_MODE.D3D12_CULL_MODE_NONE;
             pd.RasterizerState.DepthClipEnable = BOOL.TRUE;
-
-            // alpha blend on RT0
             pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
-            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;   // premultiplied
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
             pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
             pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
             pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
             pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
             pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
             pd.BlendState.RenderTarget[0].RenderTargetWriteMask = (byte)D3D12_COLOR_WRITE_ENABLE.D3D12_COLOR_WRITE_ENABLE_ALL;
-
-            // depth/stencil off
             pd.DepthStencilState.DepthEnable = BOOL.FALSE;
             pd.DepthStencilState.StencilEnable = BOOL.FALSE;
 
             ID3D12PipelineState* pso;
-            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "CreateGraphicsPipelineState");
+            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "Polyline.CreateGraphicsPipelineState");
             _pso = pso;
         }
         vs->Release();
@@ -196,17 +218,16 @@ float4 PSMain(VSOut i) : SV_Target
 
     private void BuildBuffers(ID3D12Device* device)
     {
-        // unit quad (triangle strip): (0,0)(1,0)(0,1)(1,1)
         float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8, "RoundRect.QuadUpload");
+        _quad = CreateUpload(device, sizeof(float) * 8, "Polyline.QuadUpload");
         void* qp; _quad->Map(0, null, &qp);
         Buffer.MemoryCopy(quad, qp, sizeof(float) * 8, sizeof(float) * 8);
         _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = sizeof(float) * 8, StrideInBytes = sizeof(float) * 2 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances), "RoundRect.InstanceUpload");
+        _instances = CreateUpload(device, (uint)(sizeof(PolylineStrokeInstance) * MaxInstances), "Polyline.InstanceUpload");
         void* ip; _instances->Map(0, null, &ip);
-        _mapped = (RectInstance*)ip;   // persistently mapped
+        _mapped = (PolylineStrokeInstance*)ip;
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
@@ -222,17 +243,16 @@ float4 PSMain(VSOut i) : SV_Target
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        rd.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_NONE;
         ID3D12Resource* res;
         Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "CreateCommittedResource");
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Polyline.CreateCommittedResource");
         D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }
 
     public void BeginFrame() => _cursor = 0;
 
-    public void Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH)
+    public void Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<PolylineStrokeInstance> instances, float vpW, float vpH)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
@@ -244,7 +264,7 @@ float4 PSMain(VSOut i) : SV_Target
         cmd->SetGraphicsRootSignature(_rootSig);
         cmd->SetPipelineState(_pso);
         cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootShaderResourceView(1, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
+        cmd->SetGraphicsRootShaderResourceView(1, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(PolylineStrokeInstance)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
             cmd->IASetVertexBuffers(0, 1, qv);
@@ -253,8 +273,8 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "RoundRect.InstanceUpload"); _instances->Release(); _instances = null; }
-        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "RoundRect.QuadUpload"); _quad->Release(); _quad = null; }
+        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Polyline.InstanceUpload"); _instances->Release(); _instances = null; }
+        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Polyline.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
     }

@@ -52,6 +52,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<ShadowInstance> _shadowInsts = new();
     private ArcPipeline? _arcPipe;
     private readonly List<ArcInstance> _arcInsts = new();
+    private PolylineStrokePipeline? _polylinePipe;
+    private readonly List<PolylineStrokeInstance> _polylineInsts = new();
     private GradientPipeline? _gradPipe;
     private readonly List<GradientInstance> _gradInsts = new();
     private readonly List<RectF> _clipStack = new(16);
@@ -63,7 +65,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
     // one draw), so a shadow correctly sits OVER the background drawn before it and UNDER the element it belongs to.
     // Without this, all shadows batch before all rects and any opaque background paints over them. Glyphs always draw last.
-    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc }
+    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline }
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
     private int _frameImageCount;
     private int _frameImageSkipped;
@@ -103,6 +105,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _shadowPipe.Init(_device);
         _arcPipe = new ArcPipeline();
         _arcPipe.Init(_device);
+        _polylinePipe = new PolylineStrokePipeline();
+        _polylinePipe.Init(_device);
         _gradPipe = new GradientPipeline();
         _gradPipe.Init(_device);
         _acrylic = new AcrylicCompositor();
@@ -290,6 +294,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _rectPipe!.BeginFrame();
         _shadowPipe!.BeginFrame();
         _arcPipe!.BeginFrame();
+        _polylinePipe!.BeginFrame();
         _gradPipe!.BeginFrame();
         _glyphs!.BeginFrame();
         _imagePipe!.BeginFrame((int)_frameIndex);   // pick this frame's instance buffer (avoids the CPU↔GPU race that flickers during scroll)
@@ -337,7 +342,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
 
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
@@ -454,6 +459,23 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         StartRad = c.StartDeg * Deg2Rad, SweepRad = c.SweepDeg * Deg2Rad, RoundCaps = c.RoundCaps != 0 ? 1f : 0f,
                     });
                     PushRun(PrimKind.Arc);
+                    break;
+                }
+                case DrawOp.DrawPolylineStroke:
+                {
+                    var c = MemoryMarshal.Read<DrawPolylineStrokeCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>();
+                    _polylineInsts.Add(new PolylineStrokeInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Thickness = c.Thickness, Opacity = c.Opacity,
+                        P0X = c.P0.X, P0Y = c.P0.Y, P1X = c.P1.X, P1Y = c.P1.Y,
+                        P2X = c.P2.X, P2Y = c.P2.Y, P3X = c.P3.X, P3Y = c.P3.Y,
+                        PointCount = c.PointCount, TrimStart = c.TrimStart, TrimEnd = c.TrimEnd, RoundCaps = c.RoundCaps != 0 ? 1f : 0f,
+                    });
+                    PushRun(PrimKind.Polyline);
                     break;
                 }
                 case DrawOp.DrawGradientRect:
@@ -604,14 +626,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
             var rectSpan = CollectionsMarshal.AsSpan(_rectInsts);
             var shadowSpan = CollectionsMarshal.AsSpan(_shadowInsts);
             var arcSpan = CollectionsMarshal.AsSpan(_arcInsts);
+            var polylineSpan = CollectionsMarshal.AsSpan(_polylineInsts);
             var gradSpan = CollectionsMarshal.AsSpan(_gradInsts);
-            int rc = 0, sc = 0, ac = 0, gc = 0, ic = 0;
+            int rc = 0, sc = 0, ac = 0, pc = 0, gc = 0, ic = 0;
             foreach (var (kind, count) in _runs)
             {
                 switch (kind)
                 {
                     case PrimKind.Shadow: _shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh); sc += count; break;
                     case PrimKind.Arc: _arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh); ac += count; break;
+                    case PrimKind.Polyline: _polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh); pc += count; break;
                     case PrimKind.Gradient: _gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh); gc += count; break;
                     case PrimKind.Rect: _rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh); rc += count; break;
                     case PrimKind.Image:
@@ -735,6 +759,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 case DrawOp.DrawRoundRectStroke: pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
                 case DrawOp.DrawShadow: pos += Unsafe.SizeOf<DrawShadowCmd>(); break;
                 case DrawOp.DrawArc: pos += Unsafe.SizeOf<DrawArcCmd>(); break;
+                case DrawOp.DrawPolylineStroke: pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.PushLayer: return true;
@@ -912,6 +937,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
         _arcPipe?.Dispose();
+        _polylinePipe?.Dispose();
         _gradPipe?.Dispose();
         _acrylic?.Dispose();
         _rectPipe?.Dispose();

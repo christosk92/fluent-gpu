@@ -19,6 +19,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawRoundRectStrokeCmd> _strokes = new(16);
     private readonly List<DrawShadowCmd> _shadows = new(16);
     private readonly List<DrawArcCmd> _arcs = new(16);
+    private readonly List<DrawPolylineStrokeCmd> _polylines = new(16);
     private readonly List<DrawGradientRectCmd> _gradients = new(16);
     private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
     private readonly List<PushLayerCmd> _layers = new(8);
@@ -41,6 +42,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawShadowCmd> LastShadows => _shadows;
     /// <summary>Circular-arc strokes (ProgressRing) drawn this frame.</summary>
     public IReadOnlyList<DrawArcCmd> LastArcs => _arcs;
+    /// <summary>Stroked polylines drawn this frame.</summary>
+    public IReadOnlyList<DrawPolylineStrokeCmd> LastPolylines => _polylines;
     /// <summary>Gradient-filled rects drawn this frame.</summary>
     public IReadOnlyList<DrawGradientRectCmd> LastGradients => _gradients;
     /// <summary>Gradient-tinted border strokes (WinUI elevation borders) drawn this frame.</summary>
@@ -78,6 +81,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _strokes.Clear();
         _shadows.Clear();
         _arcs.Clear();
+        _polylines.Clear();
         _gradients.Clear();
         _gradientStrokes.Clear();
         _layers.Clear();
@@ -124,6 +128,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawArc:
                     _arcs.Add(MemoryMarshal.Read<DrawArcCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawArcCmd>();
+                    break;
+                case DrawOp.DrawPolylineStroke:
+                    _polylines.Add(MemoryMarshal.Read<DrawPolylineStrokeCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>();
                     break;
                 case DrawOp.DrawGradientRect:
                     _gradients.Add(MemoryMarshal.Read<DrawGradientRectCmd>(drawList.Slice(pos)));

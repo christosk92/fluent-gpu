@@ -10,10 +10,20 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class RadioButton
 {
+    internal static class RadioButtonMotion
+    {
+        public const float ControlFastMs = 167f;     // Common_themeresources_any.xaml ControlFastAnimationDuration
+        public const float ControlNormalMs = 250f;   // Common_themeresources_any.xaml ControlNormalAnimationDuration
+        public static readonly EasingSpec FastOutSlowIn = Easing.FluentPopOpen; // ControlFastOutSlowInKeySpline = 0,0,0,1
+    }
+
     public sealed record Style
     {
         public float RingSize { get; init; } = 20f;        // OuterEllipse Width/Height
         public float DotSize { get; init; } = 12f;         // RadioButtonCheckGlyphSize (rest)
+        public float DotHoverSize { get; init; } = 14f;    // RadioButtonCheckGlyphPointerOverSize
+        public float DotPressedSize { get; init; } = 10f;  // RadioButtonCheckGlyphPressedOverSize
+        public float PressedDotSize { get; init; } = 4f;   // PressedCheckGlyph Width/Height (rest)
         public float FontSize { get; init; } = 14f;        // ControlContentThemeFontSize
         public float MinHeight { get; init; } = 32f;
 
@@ -46,6 +56,9 @@ public static partial class RadioButton
     public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null)
     {
         var s = style ?? DefaultStyle;
+        float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
+        float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
+        float pressedDotScale = s.PressedDotSize > 0f ? s.DotPressedSize / s.PressedDotSize : 1f;
         var ring = new BoxEl
         {
             Width = s.RingSize, Height = s.RingSize,
@@ -57,8 +70,35 @@ public static partial class RadioButton
             HoverFill = selected ? s.OnHover : s.OffHover,
             PressedFill = selected ? s.OnPressed : s.OffPressed,
             Children = selected
-                ? [new BoxEl { Width = s.DotSize, Height = s.DotSize, Corners = Radii.Circle(s.DotSize), Fill = s.Dot, BorderBrush = s.DotBorder, BorderWidth = s.DotBorder is null ? 0f : 1f }]
-                : [],
+                ? [new BoxEl
+                {
+                    Key = "CheckGlyph",
+                    Width = s.DotSize, Height = s.DotSize,
+                    Corners = Radii.Circle(s.DotSize),
+                    Fill = s.Dot,
+                    BorderBrush = s.DotBorder,
+                    BorderWidth = s.DotBorder is null ? 0f : 1f,
+                    HoverScale = hoverScale,
+                    PressScale = pressScale,
+                    HoverDurationMs = RadioButtonMotion.ControlNormalMs,
+                    PressDurationMs = RadioButtonMotion.ControlNormalMs,
+                    HoverEasing = RadioButtonMotion.FastOutSlowIn,
+                    PressEasing = RadioButtonMotion.FastOutSlowIn,
+                }]
+                : [new BoxEl
+                {
+                    Key = "PressedCheckGlyph",
+                    Width = s.PressedDotSize, Height = s.PressedDotSize,
+                    Corners = Radii.Circle(s.PressedDotSize),
+                    Fill = s.Dot,
+                    BorderBrush = s.DotBorder,
+                    BorderWidth = s.DotBorder is null ? 0f : 1f,
+                    Opacity = 0f,
+                    PressedOpacity = 1f,
+                    PressScale = pressedDotScale,
+                    PressDurationMs = RadioButtonMotion.ControlFastMs,
+                    PressEasing = RadioButtonMotion.FastOutSlowIn,
+                }],
         };
 
         return new BoxEl

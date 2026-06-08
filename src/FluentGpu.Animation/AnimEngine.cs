@@ -5,7 +5,7 @@ namespace FluentGpu.Animation;
 
 /// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
 /// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. None relayout.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH }
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd }
 
 // Easing (the enum + evaluator) now lives in FluentGpu.Foundation (a foundational motion primitive shared by Dsl/Scene/
 // Render + the image cross-fade). Animation imports Foundation, so `Easing` here resolves to FluentGpu.Foundation.Easing.
@@ -32,7 +32,21 @@ public readonly struct SpringParams
 }
 
 /// <summary>One keyframe: a normalized offset (0..1), its value, and the easing of the segment leading INTO it.</summary>
-public readonly record struct Keyframe(float Offset, float Value, Easing Easing = Easing.EaseInOut);
+public readonly record struct Keyframe
+{
+    public float Offset { get; init; }
+    public float Value { get; init; }
+    public EasingSpec Easing { get; init; }
+
+    public Keyframe(float offset, float value) : this(offset, value, EasingSpec.Default) { }
+    public Keyframe(float offset, float value, Easing easing) : this(offset, value, (EasingSpec)easing) { }
+    public Keyframe(float offset, float value, EasingSpec easing)
+    {
+        Offset = offset;
+        Value = value;
+        Easing = easing;
+    }
+}
 
 /// <summary>A value source (scroll offset, playback ms, a custom MotionValue) that can drive a timeline instead of wall-time.</summary>
 public sealed class DrivenClockTable
@@ -61,6 +75,7 @@ public sealed class AnimEngine
         public float DurationMs, ElapsedMs;
         public bool Loop;
         public int DrivenRef = -1;            // -1 = wall-clock; else index into the DrivenClockTable
+        public bool JustSeeded;
         public float DomainMin, DomainMax;    // driven: maps source value → progress
         // spring
         public float Pos, Vel, Target;
@@ -71,8 +86,8 @@ public sealed class AnimEngine
 
     private struct Accum
     {
-        public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh;
-        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN };
+        public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
+        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN };
         public void Fold(AnimChannel ch, float v, CompositeOp op)
         {
             bool add = op != CompositeOp.Replace;
@@ -86,6 +101,8 @@ public sealed class AnimEngine
                 case AnimChannel.Opacity: Op = add ? Op * v : v; break;
                 case AnimChannel.SizeW: Sw = v; break;   // presented width (Reveal) — replace, never relayout
                 case AnimChannel.SizeH: Sh = v; break;
+                case AnimChannel.StrokeTrimStart: TrimStart = v; break;
+                case AnimChannel.StrokeTrimEnd: TrimEnd = v; break;
             }
         }
     }
@@ -107,13 +124,17 @@ public sealed class AnimEngine
                         Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace)
         => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite);
 
+    public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs,
+                        EasingSpec easing, CompositeOp composite = CompositeOp.Replace)
+        => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite);
+
     /// <summary>Multi-keyframe eased track (@keyframes). Offsets must be ascending in 0..1.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace)
     {
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
-        t.Loop = loop; t.DrivenRef = -1; t.Done = false;
+        t.Loop = loop; t.DrivenRef = -1; t.Done = false; t.JustSeeded = true;
         if (Diag.Enabled) Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
     }
 
@@ -123,7 +144,7 @@ public sealed class AnimEngine
     {
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DrivenRef = drivenRef;
-        t.DomainMin = domainMin; t.DomainMax = domainMax; t.Done = false;
+        t.DomainMin = domainMin; t.DomainMax = domainMax; t.Done = false; t.JustSeeded = true;
     }
 
     /// <summary>Spring toward <paramref name="to"/>. If a spring already runs on this node+channel, it RETARGETS — keeping
@@ -135,13 +156,13 @@ public sealed class AnimEngine
         if (existing is { Mode: IntegrationMode.Spring })
         {
             if (Diag.Enabled) Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
-            existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite;
+            existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite; existing.JustSeeded = false;
             return;   // keep Pos + Vel → smooth handoff
         }
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
         // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
-        t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false;
+        t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false; t.JustSeeded = true;
         if (Diag.Enabled) Diag.Event("anim", $"spring SEED {channel} from={t.Pos:0.###} → {to:0.###} (k={spring.Stiffness:0} c={spring.Damping:0})");
     }
 
@@ -158,6 +179,8 @@ public sealed class AnimEngine
             AnimChannel.Opacity => p.Opacity,
             AnimChannel.SizeW => !float.IsNaN(p.PresentedW) ? p.PresentedW : _scene.Bounds(node).W,
             AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
+            AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : (_scene.TryGetPolylineStroke(node, out var ps) ? ps.TrimStart : 0f),
+            AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : (_scene.TryGetPolylineStroke(node, out var pe) ? pe.TrimEnd : 1f),
             _ => 0f,   // Rotation: not cleanly recoverable from a scaled matrix; springs from 0
         };
     }
@@ -339,15 +362,22 @@ public sealed class AnimEngine
             {
                 if (!t.Done)
                 {
-                    // semi-implicit (symplectic) Euler, sub-stepped for stability at frame spikes
-                    float dt = dtMs * 0.001f;
-                    int n = Math.Clamp((int)MathF.Ceiling(dt / 0.004f), 1, 8);
-                    float h = dt / n;
-                    for (int s = 0; s < n; s++)
+                    if (t.JustSeeded || dtMs <= 0f)
                     {
-                        float a = (t.Spring.Stiffness * (t.Target - t.Pos) - t.Spring.Damping * t.Vel) / t.Spring.Mass;
-                        t.Vel += a * h;
-                        t.Pos += t.Vel * h;
+                        t.JustSeeded = false;
+                    }
+                    else
+                    {
+                        // semi-implicit (symplectic) Euler, sub-stepped for stability at frame spikes
+                        float dt = dtMs * 0.001f;
+                        int n = Math.Clamp((int)MathF.Ceiling(dt / 0.004f), 1, 8);
+                        float h = dt / n;
+                        for (int s = 0; s < n; s++)
+                        {
+                            float a = (t.Spring.Stiffness * (t.Target - t.Pos) - t.Spring.Damping * t.Vel) / t.Spring.Mass;
+                            t.Vel += a * h;
+                            t.Pos += t.Vel * h;
+                        }
                     }
                     if (MathF.Abs(t.Target - t.Pos) < t.Spring.RestEps && MathF.Abs(t.Vel) < t.Spring.RestEps * 50f)
                     { t.Pos = t.Target; t.Vel = 0f; t.Done = true; }
@@ -359,12 +389,14 @@ public sealed class AnimEngine
                 float u;
                 if (t.DrivenRef >= 0)
                 {
+                    t.JustSeeded = false;
                     float src = Clocks.Sample(t.DrivenRef);
                     u = t.DomainMax == t.DomainMin ? 0f : Math.Clamp((src - t.DomainMin) / (t.DomainMax - t.DomainMin), 0f, 1f);
                 }
                 else
                 {
-                    t.ElapsedMs += dtMs;
+                    if (t.JustSeeded) t.JustSeeded = false;
+                    else t.ElapsedMs += dtMs;
                     u = t.DurationMs <= 0f ? 1f : t.ElapsedMs / t.DurationMs;
                     if (t.Loop) u -= MathF.Floor(u); else if (u >= 1f) { u = 1f; t.Done = true; }
                 }
@@ -399,6 +431,8 @@ public sealed class AnimEngine
             // the host, which writes it to LayoutInput and re-solves the subtree (live reflow).
             if (!float.IsNaN(acc.Sw)) p.PresentedW = acc.Sw;
             if (!float.IsNaN(acc.Sh)) p.PresentedH = acc.Sh;
+            if (!float.IsNaN(acc.TrimStart)) p.StrokeTrimStart = acc.TrimStart;
+            if (!float.IsNaN(acc.TrimEnd)) p.StrokeTrimEnd = acc.TrimEnd;
             _scene.Mark(kv.Key, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if ((!float.IsNaN(acc.Sw) || !float.IsNaN(acc.Sh)) && (_scene.Flags(kv.Key) & NodeFlags.Relayouting) != 0)
                 IncrementalRoots.Add(kv.Key);
@@ -411,11 +445,13 @@ public sealed class AnimEngine
         {
             Track t = _tracks[i];
             if (!t.Done) continue;
-            if ((t.Channel == AnimChannel.SizeW || t.Channel == AnimChannel.SizeH) && _scene.IsLive(t.Node))
+            if ((t.Channel == AnimChannel.SizeW || t.Channel == AnimChannel.SizeH || t.Channel == AnimChannel.StrokeTrimStart || t.Channel == AnimChannel.StrokeTrimEnd) && _scene.IsLive(t.Node))
             {
                 ref NodePaint p = ref _scene.Paint(t.Node);
                 if (t.Channel == AnimChannel.SizeW) { p.PresentedW = float.NaN; _scene.Unmark(t.Node, NodeFlags.Relayouting); }
-                else p.PresentedH = float.NaN;
+                else if (t.Channel == AnimChannel.SizeH) p.PresentedH = float.NaN;
+                else if (t.Channel == AnimChannel.StrokeTrimStart) p.StrokeTrimStart = float.NaN;
+                else p.StrokeTrimEnd = float.NaN;
                 _scene.Mark(t.Node, NodeFlags.PaintDirty);
             }
             _tracks.RemoveAt(i);

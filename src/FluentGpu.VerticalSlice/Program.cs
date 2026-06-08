@@ -807,16 +807,19 @@ static class Slice
         scene.Paint(node).Opacity = 0f;
         scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
         engine.Animate(node, AnimChannel.Opacity, 0f, 1f, 100f, Easing.Linear);
+        engine.Tick(0f);
+        bool startOk = MathF.Abs(scene.Paint(node).Opacity) < 0.001f;
         engine.Tick(50f);
         float op = scene.Paint(node).Opacity;
         var fl = scene.Flags(node);
         bool midOk = MathF.Abs(op - 0.5f) < 0.02f && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
         engine.Tick(60f);   // 110ms > 100ms → complete
         bool doneOk = MathF.Abs(scene.Paint(node).Opacity - 1f) < 0.001f && !engine.HasActive;
-        Check("22. opacity timeline eases & completes (no relayout)", midOk && doneOk, $"@50ms={op:0.00}");
+        Check("22. opacity timeline samples t0, eases & completes (no relayout)", startOk && midOk && doneOk, $"@50ms={op:0.00}");
 
         scene.Flags(node) &= ~(NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
         engine.Animate(node, AnimChannel.TranslateX, 0f, 100f, 100f, Easing.Linear);
+        engine.Tick(0f);
         engine.Tick(25f);
         float dx = scene.Paint(node).LocalTransform.Dx;
         var fl2 = scene.Flags(node);
@@ -971,10 +974,112 @@ static class Slice
             Check("23f. enter animates a mounted node from the enter terminal (opacity 0 → 1)",
                 a1 < 0.5f && Near(a2, 1f), $"opacity {a1:0.00}→{a2:0.00}");
         }
+
+        // (The CheckBox checkmark draw-on is a component reveal hook → it needs the host's layout-effect drain, so it is
+        //  exercised through the real AppHost in check 66b, not the bare reconciler here.)
+
+        // 23h — WinUI RadioButton motion: CheckGlyph is 12px at rest, 14px on PointerOver, 10px on Pressed; unchecked
+        // Pressed uses a separate PressedCheckGlyph that appears while held and grows from 4px toward 10px.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            recon.ReconcileRoot(RadioButton.Create("x", true, () => { }), null);   // root = row; ring = child0; dot = ring.child0
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var ring = Child(scene, scene.Root, 0);
+            var dot = Child(scene, ring, 0);
+            bool sized = Near(scene.Bounds(dot).W, 12f, 0.01f) && Near(scene.Bounds(dot).H, 12f, 0.01f);
+            bool interactive = scene.TryGetInteract(dot, out var ia)
+                && Near(ia.HoverScale, 14f / 12f, 0.001f)
+                && Near(ia.PressScale, 10f / 12f, 0.001f)
+                && Near(ia.HoverDurationMs, 250f, 0.01f)
+                && Near(ia.PressDurationMs, 250f, 0.01f);
+            bool instantChecked = scene.Paint(dot).LocalTransform.IsIdentity;
+            Check("23h. RadioButton wires WinUI CheckGlyph size states (12 rest, 14 hover, 10 pressed)",
+                sized && interactive && instantChecked,
+                $"size={scene.Bounds(dot).W:0.#} hoverScale={ia.HoverScale:0.###} pressScale={ia.PressScale:0.###}");
+
+            var unselected = new SceneStore();
+            var unselectedRecon = new TreeReconciler(unselected, strings);
+            unselectedRecon.ReconcileRoot(RadioButton.Create("x", false, () => { }), null);
+            new FlexLayout(unselected, new HeadlessFontSystem(strings)).Run(unselected.Root);
+            var unselectedRing = Child(unselected, unselected.Root, 0);
+            var pressedGlyph = Child(unselected, unselectedRing, 0);
+            bool hiddenAtRest = Near(unselected.Bounds(pressedGlyph).W, 4f, 0.01f)
+                && Near(unselected.Paint(pressedGlyph).Opacity, 0f, 0.001f)
+                && Near(unselected.Paint(pressedGlyph).PressedOpacity, 1f, 0.001f);
+            bool growsToPressedSize = unselected.TryGetInteract(pressedGlyph, out var pia)
+                && Near(pia.PressScale, 10f / 4f, 0.001f)
+                && Near(pia.PressDurationMs, 167f, 0.01f);
+
+            var iax = new InteractionAnimator(unselected);
+            iax.SetPress(unselected.Root, true);
+            iax.Tick(16f);
+            var dl = new DrawList();
+            SceneRecorder.Record(unselected, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool drewPressedGlyph = false;
+            foreach (var rect in dev.LastRects)
+                if (Near(rect.Rect.W, 4f, 0.01f) && rect.Opacity > 0.08f && rect.Transform.M11 > 1.08f)
+                    drewPressedGlyph = true;
+            Check("23h2. RadioButton unchecked press draws PressedCheckGlyph (4px hidden → visible/growing toward 10px)",
+                hiddenAtRest && growsToPressedSize && drewPressedGlyph,
+                $"rest={hiddenAtRest} scale={pia.PressScale:0.###} drew={drewPressedGlyph}");
+        }
+
+        // 23i — visual-state RAMP wiring (the StateBrush model, not a 12-state matrix): an unchecked CheckBox wires the
+        // full interaction ladder into the box's scene columns. Crucially the PRESSED stroke DIMS to
+        // ControlStrongStrokeColorDisabled (the exact WinUI press feedback) — provable here without pixels, the empirical
+        // counterpart to a screenshot. The recorder eases BorderColor→PressedBorderColor on PressT (covered by check 58).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            recon.ReconcileRoot(CheckBox.Create("x", CheckState.Unchecked, _ => { }), null);
+            ref var p = ref scene.Paint(Child(scene, scene.Root, 0));   // the 20px box
+            bool restRing = MathF.Abs(p.BorderColor.A - Tok.StrokeControlStrongDefault.A) < 0.02f;
+            bool pressDims = MathF.Abs(p.PressedBorderColor.A - Tok.StrokeControlStrongDisabled.A) < 0.02f && p.PressedBorderColor.A < p.BorderColor.A;
+            bool hoverFill = MathF.Abs(p.HoverFill.A - Tok.FillControlAltTertiary.A) < 0.02f;
+            bool pressFill = MathF.Abs(p.PressedFill.A - Tok.FillControlAltQuaternary.A) < 0.02f;
+            Check("23i. CheckBox wires the interaction ramp (pressed stroke dims to StrongDisabled, no 12-state matrix)",
+                restRing && pressDims && hoverFill && pressFill,
+                $"ring.A={p.BorderColor.A:0.00}→press {p.PressedBorderColor.A:0.00}; fill hover.A={p.HoverFill.A:0.00} press.A={p.PressedFill.A:0.00}");
+        }
+
+    }
+
+    // Smallest in-flight presented width anywhere in a subtree (a DrawnCheckmark/DrawnDash reveal), else NaN. The
+    // checkmark "draws itself" by sweeping its clip box's presented width 0→full — this lets a check assert the draw-on
+    // empirically (mid-reveal: 0 &lt; w &lt; full; settled: NaN, since AnimEngine resets a finished reveal to NaN).
+    static float RevealingW(SceneStore s, NodeHandle n)
+    {
+        float best = float.NaN;
+        float w = s.Paint(n).PresentedW;
+        if (!float.IsNaN(w)) best = w;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            float cw = RevealingW(s, c);
+            if (!float.IsNaN(cw) && (float.IsNaN(best) || cw < best)) best = cw;
+        }
+        return best;
     }
 
     // The opt-in size modes: ScaleCorrect (GPU scale → 1, compositor-only) and Relayout (re-solve the subtree at the
     // interpolated size each tick → live text reflow), both via the same general AnimateBounds entry point.
+    // Smallest active stroke-trim end in a subtree (DrawnCheckmark/DrawnDash), else NaN. A freshly seeded draw-on starts
+    // at 0, advances between 0 and 1 while active, then AnimEngine resets the override to NaN when the track settles.
+    static float ActiveStrokeTrimEnd(SceneStore s, NodeHandle n)
+    {
+        float best = float.NaN;
+        float t = s.Paint(n).StrokeTrimEnd;
+        if (!float.IsNaN(t)) best = t;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            float ct = ActiveStrokeTrimEnd(s, c);
+            if (!float.IsNaN(ct) && (float.IsNaN(best) || ct < best)) best = ct;
+        }
+        return best;
+    }
+
     static void SizeModeChecks(StringTable strings)
     {
         // 23g — ScaleCorrect: a grown node starts scaled-down and springs its scale to 1, never relaying out.
@@ -1268,6 +1373,7 @@ static class Slice
         var s1 = Single(strings);
         var a1 = new AnimEngine(s1);
         a1.Animate(s1.Root, AnimChannel.TranslateX, 0f, 100f, 100f, Easing.Linear);
+        a1.Tick(0f);
         a1.Tick(50f);
         float mid = s1.Paint(s1.Root).LocalTransform.Dx;
         a1.Tick(100f);
@@ -1279,6 +1385,7 @@ static class Slice
         var a2 = new AnimEngine(s2);
         a2.Animate(s2.Root, AnimChannel.TranslateX, 0f, 30f, 100f, Easing.Linear, CompositeOp.Replace);
         a2.Animate(s2.Root, AnimChannel.TranslateX, 0f, 20f, 100f, Easing.Linear, CompositeOp.Add);
+        a2.Tick(0f);
         a2.Tick(100f);
         float add = s2.Paint(s2.Root).LocalTransform.Dx;
         Check("32. composite add combines tracks", Near(add, 50f, 0.5f), $"dx={add:0.#}");
@@ -2150,6 +2257,45 @@ static class Slice
 
     // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
     // (the WinUI ~83ms BackgroundTransition) — it must ease through an intermediate value, not snap, then settle.
+    static void PolylineStrokeChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, new PolylineStrokeEl
+        {
+            Width = 24,
+            Height = 24,
+            P0 = new Point2(2, 12),
+            P1 = new Point2(10, 20),
+            P2 = new Point2(22, 4),
+            PointCount = 3,
+            Color = ColorF.FromRgba(255, 255, 255),
+            Thickness = 2f,
+            TrimEnd = 0.5f,
+        });
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(100, 100), 1f, ColorF.Transparent));
+
+        bool staticStroke = dev.LastPolylines.Count == 1 && Near(dev.LastPolylines[0].TrimEnd, 0.5f, 0.001f)
+            && dev.LastPolylines[0].PointCount == 3;
+
+        var anim = new AnimEngine(scene);
+        anim.Keyframes(scene.Root, AnimChannel.StrokeTrimEnd,
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, EasingSpec.CubicBezier(0.55f, 0f, 0f, 1f))], 100f);
+        anim.Tick(0f);
+        float t0 = scene.Paint(scene.Root).StrokeTrimEnd;
+        anim.Tick(16f);
+        float t16 = scene.Paint(scene.Root).StrokeTrimEnd;
+        dl.Reset();
+        SceneRecorder.Record(scene, dl);
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(100, 100), 1f, ColorF.Transparent));
+
+        bool animatedStroke = Near(t0, 0f, 0.001f) && t16 > 0f && t16 < 0.35f
+            && dev.LastPolylines.Count == 1 && Near(dev.LastPolylines[0].TrimEnd, t16, 0.001f);
+        Check("57c. PolylineStroke emits DrawPolylineStroke and supports animated trim-end",
+            staticStroke && animatedStroke, $"static={staticStroke} t0={t0:0.00} t16={t16:0.00} cmds={dev.LastPolylines.Count}");
+    }
+
     static void CrossfadeChecks(StringTable strings)
     {
         var scene = LayoutTree(strings, new BoxEl
@@ -2416,7 +2562,8 @@ static class Slice
         var device = new HeadlessGpuDevice();
         var fonts = new HeadlessFontSystem(strings);
         var root = new OverlayProbe();
-        using var host = new AppHost(app, window, device, fonts, strings, root);
+        var clock = new ManualFrameTimeSource();
+        using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
         host.RunFrame();
 
         var svc = root.Service!;
@@ -2430,18 +2577,21 @@ static class Slice
 
         svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
         host.RunFrame();   // mount + seed the SizeH clip-reveal + fade (seed runs in a layout effect)
+        clock.Advance(16f);
         host.RunFrame();   // tick the animation once → the first PresentedH lands
         var surface = SurfaceOf(FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
         float fullH = surface.IsNull ? 0f : host.Scene.Bounds(surface).H;
         float ph1 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;   // mid-reveal (top-anchored), < full
         bool revealing = !surface.IsNull && !float.IsNaN(ph1) && ph1 > 1f && ph1 < fullH - 2f;
 
-        for (int i = 0; i < 24; i++) host.RunFrame();             // open settles
+        for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }             // open settles
         float ph2 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;
         bool revealed = float.IsNaN(ph2) || ph2 >= fullH - 1.5f;
 
         // Close → the surface fades (opacity animates down) while staying on top (not removed instantly).
         svc.CloseTop();
+        host.RunFrame();
+        clock.Advance(16f);
         host.RunFrame();
         float op = host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
         bool fading = host.Scene.IsLive(surface) && op < 0.99f;
@@ -2586,6 +2736,32 @@ static class Slice
             Check("66. CheckBox cycles Unchecked→Checked→Indeterminate→Unchecked",
                 s0 == CheckState.Unchecked && s1 == CheckState.Checked && s2 == CheckState.Indeterminate && s3 == CheckState.Unchecked,
                 $"{s0}→{s1}→{s2}→{s3}");
+        }
+
+        // 66b — the LIVE checkmark DRAW-ON through AppHost (the EXACT click path the gallery uses). Toggling
+        // unchecked→checked must leave the checkmark mid-DRAW on the click frame: its clip box's presented width is
+        // sweeping 0→full (the stroke drawing itself, WinUI-style), then settles (reveal resets to NaN). If nothing is
+        // revealing on that frame, the draw-on isn't running — the "animation not showing" report.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cbanim", new Size2(320, 160), 1f)); window.Show();
+            var root = new CheckBoxProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();   // mount unchecked
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox));   // toggle → checked + 1 frame
+            var box = Child(host.Scene, FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox), 0);
+            float t0 = ActiveStrokeTrimEnd(host.Scene, box);
+            clock.Advance(80f);
+            host.RunFrame();
+            float t1 = ActiveStrokeTrimEnd(host.Scene, box);
+            bool drewPolyline = device.LastPolylines.Count > 0 && device.LastPolylines[0].TrimEnd > 0f && device.LastPolylines[0].TrimEnd < 1f;
+            bool drawing = Near(t0, 0f, 0.001f) && t1 > 0.01f && t1 < 1f && host.Animation.HasActive && drewPolyline;
+            clock.Advance(400f);
+            host.RunFrame();
+            bool settled = float.IsNaN(ActiveStrokeTrimEnd(host.Scene, box)) && !host.Animation.HasActive;
+            Check("66b. LIVE: toggling a CheckBox DRAWS the checkmark in (stroke-trim polyline, AppHost click path)",
+                drawing && settled, $"trim {t0:0.00}->{t1:0.00} poly={device.LastPolylines.Count} settled={settled}");
         }
 
         // RadioButton — mutual exclusion via a shared index.
@@ -2811,6 +2987,7 @@ static class Slice
         NavigationViewAnimationChecks(strings);
         FontFamilyChecks(strings);
         GradientBorderChecks(strings);
+        PolylineStrokeChecks(strings);
         CrossfadeChecks(strings);
         WaveeSkeletonChecks(strings);
 
