@@ -22,4 +22,10 @@ public enum AutomationRole : byte
     ComboBox,
     MenuItem,
     Text,          // text input / Edit control type (EditableText)
+    // Status & info / layout / navigation controls (appended — existing values are ABI-stable).
+    ProgressBar,
+    InfoBar,
+    Expander,
+    Pager,
+    Tab,
 }

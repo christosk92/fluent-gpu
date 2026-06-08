@@ -63,6 +63,29 @@ sealed class GalleryApp : Component
                 new("ToggleSwitch", Icons.Settings, "ToggleSwitch"),
             ],
         },
+        new("status-info", Icons.Document, "Status & info")
+        {
+            Children =
+            [
+                new("InfoBadge", Icons.Tag, "InfoBadge"),
+                new("InfoBar", Icons.Document, "InfoBar"),
+                new("ProgressBar", Icons.Refresh, "ProgressBar"),
+            ],
+        },
+        new("layout", Icons.Grid, "Layout")
+        {
+            Children =
+            [
+                new("Expander", Icons.ChevronDown, "Expander"),
+            ],
+        },
+        new("scrolling-controls", Icons.More, "Scrolling")
+        {
+            Children =
+            [
+                new("PipsPager", Icons.More, "PipsPager"),
+            ],
+        },
         new("h-samples", "", "Samples", IsHeader: true),
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
@@ -169,6 +192,16 @@ sealed class GalleryApp : Component
         "RatingControl" => Embed.Comp(() => new RatingControlControlPage()),
         "Slider" => Embed.Comp(() => new SliderControlPage()),
         "ToggleSwitch" => Embed.Comp(() => new ToggleSwitchControlPage()),
+
+        // Status & info / Layout / Scrolling (WinUI Gallery parity).
+        "status-info" => Embed.Comp(() => new StatusInfoOverviewPage()),
+        "InfoBadge" => Embed.Comp(() => new InfoBadgePage()),
+        "InfoBar" => Embed.Comp(() => new InfoBarPage()),
+        "ProgressBar" => Embed.Comp(() => new ProgressBarPage()),
+        "layout" => Embed.Comp(() => new LayoutOverviewPage()),
+        "Expander" => Embed.Comp(() => new ExpanderPage()),
+        "scrolling-controls" => Embed.Comp(() => new ScrollingOverviewPage()),
+        "PipsPager" => Embed.Comp(() => new PipsPagerPage()),
 
         // Engine capability demos (remapped under Fundamentals / Design).
         "typography" => Embed.Comp(() => new TypographyPage()),
