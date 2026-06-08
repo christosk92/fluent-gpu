@@ -84,7 +84,10 @@ public sealed class EditableText : Component
             Corners = Radii.ControlAll,
             Fill = Tok.FillControlDefault,
             HoverFill = Tok.FillControlSecondary,
-            BorderColor = focused ? Tok.AccentDefault : Tok.StrokeControlDefault,
+            // A gradient-solid border renders as a hollow SDF ring (vs a flat border, which fills the whole rect with the
+            // border colour and relies on an opaque fill to cover it — our ~6%-alpha control fill can't, so the accent
+            // focus border would bleed through the entire field). Solid-as-gradient keeps the accent on the edge only.
+            BorderBrush = GradientSpec.Solid(focused ? Tok.AccentDefault : Tok.StrokeControlDefault),
             BorderWidth = focused ? 2f : 1f,
             Focusable = true,
             Role = AutomationRole.Text,

@@ -39,6 +39,13 @@ sealed class ShotScene : Component
     {
         // Sanity scene: a flat known-color rounded rect (proves the readback→PNG pipeline before trusting acrylic shots).
         "swatch" => new BoxEl { Width = 200, Height = 120, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0x10, 0x7C, 0x10) },
+        // Mimics a FOCUSED EditableText (accent 2px border + ~6% control fill) — must read as a hollow accent ring, NOT a filled blue box.
+        "textfocus" => new BoxEl
+        {
+            Direction = 0, Width = 280, Height = 36, AlignItems = FlexAlign.Center, Padding = new Edges4(10, 0, 10, 0),
+            Corners = Radii.ControlAll, Fill = Tok.FillControlDefault, BorderBrush = GradientSpec.Solid(Tok.AccentDefault), BorderWidth = 2f,
+            Children = [new TextEl("saas") { Size = 14f, Color = Tok.TextPrimary }],
+        },
         // Shadow diagnostics (no acrylic): does an opaque card cast the flyout shadow? a strong one?
         "shadowonly" => new BoxEl { Width = 160, Height = 200, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0x2C, 0x2C, 0x2C), Shadow = Elevation.Flyout },
         "shadowstrong" => new BoxEl { Width = 160, Height = 200, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), Shadow = new ShadowSpec(Blur: 40f, OffsetY: 12f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0xC0)) },
