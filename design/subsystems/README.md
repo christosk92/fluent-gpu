@@ -106,7 +106,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | Seam | Authority |
 |------|-----------|
 | IPlatformApp, IPlatformWindow, IPlatformAppLoop, NativeHandle(Kind), InputEventRing/WindowEvent shape | pal-rhi.md |
-| IClipboard, IImeSession | pal-rhi.md (seam definition) / input-a11y.md (consumer + IME caret/clipboard/dragdrop use) |
+| IClipboard, IImeSession | pal-rhi.md (seam definition) / input-a11y.md (consumer + IME caret/clipboard/dragdrop use) — *AS-BUILT: `IClipboard` (SetText/TryGetText/SequenceNumber) on `IPlatformApp`; the IME session ships as `IPlatformTextInput` + `ITextInputSink`/`ImeClause` on `IPlatformWindow` (Imm32 impl, event-shaped so TSF/ITextStoreACP can replace it; full in-place TSF remains the hardening item). Selection/caret/IME-underline rendering rides the as-built `TextEditState` scene side-table + pooled rect slabs emitted as plain fills/clipped glyph re-emits (the spec'd dedicated opcodes remain the production target).* |
 | **IPlatformWindow.SetCursor(CursorId) + RegisterCustomCursor** | pal-rhi.md (seam) / input-a11y.md (CursorResolver arbitration along the hit route) |
 | **IPlatformLocale** (Epoch/snapshot, modeled on ISystemColors) | pal-rhi.md (seam) / text.md + dsl-aot.md (edge-localization consumer) |
 | ISystemColors (accent + HC + Epoch) | pal-rhi.md (seam) / theming.md (consumer + EpochContext) |
