@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -667,6 +669,25 @@ sealed class ComboProbe : Component
     }
 }
 
+sealed class AutoSuggestProbe : Component
+{
+    public Signal<string>? Query;
+    public override Element Render()
+    {
+        var query = UseSignal("ca");
+        Query = query;
+        return Embed.Comp(() => new OverlayHost
+        {
+            Child = AutoSuggestBox.Create(
+                new[] { "Cascadia Code", "Calendar", "Calculator", "Camera", "Canvas" },
+                "Search",
+                260f,
+                query,
+                debounceMs: 0f),
+        });
+    }
+}
+
 sealed class RangeSliderProbe : Component
 {
     public float Val;
@@ -696,6 +717,65 @@ sealed class SplitButtonProbe : Component
         => SplitButton.Create("Paste", () => Invoked++, [new MenuFlyoutItem("Paste as text", Icons.Document)], Icons.Document);
 }
 
+sealed class SplitButtonLongMenuProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = Embed.Comp(() => new SplitButton
+        {
+            Label = "Paste",
+            Glyph = Icons.Document,
+            OnInvoke = () => { },
+            Items =
+            [
+                new MenuFlyoutItem("Paste as text", Icons.Document),
+                new MenuFlyoutItem("Paste special", Icons.Document),
+            ],
+        }),
+    });
+}
+
+sealed class ContentDialogProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = Embed.Comp(() => new ContentDialog
+        {
+            TriggerLabel = "Show dialog",
+            Title = "Save your work?",
+            Message = "Lorem ipsum dolor sit amet, adipisicing elit.",
+            PrimaryText = "Save",
+            SecondaryText = "Don't Save",
+            CloseText = "Cancel",
+            DefaultButton = ContentDialog.DefaultBtn.Primary,
+            OpenOnMount = true,
+        }),
+    });
+}
+
+sealed class TeachingTipProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = new BoxEl
+        {
+            Direction = 1,
+            Width = 520,
+            Padding = new Edges4(120, 48, 0, 0),
+            Children =
+            [
+                Embed.Comp(() => new TeachingTip
+                {
+                    TriggerLabel = "Show teaching tip",
+                    Title = "Save your work",
+                    Body = "Click the disk icon, or press Ctrl+S, to save your changes.",
+                    OpenOnMount = true,
+                }),
+            ],
+        },
+    });
+}
+
 sealed class NavHierarchyProbe : Component
 {
     public override Element Render() => Embed.Comp(() => new NavigationView
@@ -714,6 +794,23 @@ sealed class NavHierarchyProbe : Component
 }
 
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
+sealed class PipsPagerOutputProbe : Component
+{
+    public override Element Render()
+    {
+        var selected = UseSignal(0);
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                PipsPager.Create(5, selected.Value, i => selected.Value = i),
+                new TextEl("") { Size = 14f, Color = Tok.TextPrimary, TextBind = () => $"Page {selected.Value + 1} / 5" },
+            ],
+        };
+    }
+}
+
 static class Slice
 {
     static int s_failures;
@@ -808,6 +905,49 @@ static class Slice
         CollectRole(s, s.Root, role, list);
         return list;
     }
+
+    static NodeHandle FindTextNode(SceneStore s, StringTable strings, NodeHandle n, string text)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        ref var p = ref s.Paint(n);
+        if (p.VisualKind == VisualKind.Text && strings.Resolve(p.Text) == text) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindTextNode(s, strings, c, text);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    static NodeHandle FindPolylineStrokeNode(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (s.Paint(n).VisualKind == VisualKind.PolylineStroke) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindPolylineStrokeNode(s, c);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    static int DrawPayloadSize(DrawOp op) => op switch
+    {
+        DrawOp.FillRoundRect => Unsafe.SizeOf<FillRoundRectCmd>(),
+        DrawOp.DrawGlyphRun => Unsafe.SizeOf<DrawGlyphRunCmd>(),
+        DrawOp.PushClip => Unsafe.SizeOf<ClipCmd>(),
+        DrawOp.PopClip => 0,
+        DrawOp.DrawImage => Unsafe.SizeOf<DrawImageCmd>(),
+        DrawOp.DrawRoundRectStroke => Unsafe.SizeOf<DrawRoundRectStrokeCmd>(),
+        DrawOp.DrawShadow => Unsafe.SizeOf<DrawShadowCmd>(),
+        DrawOp.DrawGradientRect => Unsafe.SizeOf<DrawGradientRectCmd>(),
+        DrawOp.PushLayer => Unsafe.SizeOf<PushLayerCmd>(),
+        DrawOp.PopLayer => Unsafe.SizeOf<PopLayerCmd>(),
+        DrawOp.DrawGradientStroke => Unsafe.SizeOf<DrawGradientStrokeCmd>(),
+        DrawOp.DrawArc => Unsafe.SizeOf<DrawArcCmd>(),
+        DrawOp.DrawPolylineStroke => Unsafe.SizeOf<DrawPolylineStrokeCmd>(),
+        _ => 0,
+    };
 
     static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)
     {
@@ -997,6 +1137,23 @@ static class Slice
         var fl2 = scene.Flags(node);
         bool transOk = MathF.Abs(dx - 25f) < 0.5f && (fl2 & NodeFlags.TransformDirty) != 0 && (fl2 & NodeFlags.LayoutDirty) == 0;
         Check("23. translate timeline marks TransformDirty only", transOk, $"@25ms dx={dx:0.0}");
+
+        var modal = scene.CreateNode(1);
+        ref NodePaint mp = ref scene.Paint(modal);
+        mp.Opacity = 1f;
+        mp.LocalTransform = Affine2D.Identity;
+        engine.Animate(modal, AnimChannel.ScaleX, 1f, 1.05f, 167f, Easing.FluentPopOpen);
+        engine.Animate(modal, AnimChannel.ScaleY, 1f, 1.05f, 167f, Easing.FluentPopOpen);
+        engine.Animate(modal, AnimChannel.Opacity, 1f, 0f, 83f, Easing.Linear);
+        engine.Tick(0f);
+        for (int i = 0; i < 6; i++) engine.Tick(16f);  // 96ms: opacity settled/removed, scale still active
+        float faded = scene.Paint(modal).Opacity;
+        bool scaleStillActive = engine.HasTracks(modal);
+        engine.Tick(16f);                              // previous bug: remaining scale tracks reset Opacity to 1 here
+        float held = scene.Paint(modal).Opacity;
+        Check("23z. multi-channel animation preserves completed channels while longer tracks continue",
+            faded < 0.01f && held < 0.01f && scaleStillActive,
+            $"opacity {faded:0.00}->{held:0.00}, active={scaleStillActive}");
     }
 
     // General layout-transition projection (continuous FLIP): the side-table plumbing, the spring that drives a moved
@@ -2425,6 +2582,48 @@ static class Slice
         bool oneFill = dev.LastGradients.Count == 1 && dev.LastGradients[0].StopCount == 2 && dev.LastRects.Count == 0;
         Check("57b. gradient-only BoxEl emits a DrawGradientRect", oneFill,
             $"gradients={dev.LastGradients.Count} rects={dev.LastRects.Count}");
+
+        var chromeScene = LayoutTree(strings, new BoxEl
+        {
+            Width = 120,
+            Height = 72,
+            Corners = Radii.OverlayAll,
+            Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+            BorderColor = ColorF.FromRgba(0x80, 0x80, 0x80),
+            BorderWidth = 1f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 120,
+                    Height = 36,
+                    Fill = ColorF.FromRgba(0x40, 0x40, 0x40),
+                },
+            ],
+        });
+        dl.Reset();
+        SceneRecorder.Record(chromeScene, dl);
+        int firstFill = -1, secondFill = -1, stroke = -1, opIndex = 0, pos = 0;
+        var bytes = dl.Bytes;
+        while (pos + sizeof(int) <= bytes.Length)
+        {
+            var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos));
+            pos += sizeof(int);
+            if (op == DrawOp.FillRoundRect)
+            {
+                if (firstFill < 0) firstFill = opIndex;
+                else if (secondFill < 0) secondFill = opIndex;
+            }
+            else if (op == DrawOp.DrawRoundRectStroke && stroke < 0)
+            {
+                stroke = opIndex;
+            }
+            pos += DrawPayloadSize(op);
+            opIndex++;
+        }
+        bool chromeOrder = firstFill >= 0 && secondFill > firstFill && stroke > secondFill;
+        Check("57c. BoxEl chrome order: parent border records after descendant fills",
+            chromeOrder, $"parentFill={firstFill} childFill={secondFill} stroke={stroke}");
     }
 
     // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
@@ -2464,7 +2663,7 @@ static class Slice
 
         bool animatedStroke = Near(t0, 0f, 0.001f) && t16 > 0f && t16 < 0.35f
             && dev.LastPolylines.Count == 1 && Near(dev.LastPolylines[0].TrimEnd, t16, 0.001f);
-        Check("57c. PolylineStroke emits DrawPolylineStroke and supports animated trim-end",
+        Check("57d. PolylineStroke emits DrawPolylineStroke and supports animated trim-end",
             staticStroke && animatedStroke, $"static={staticStroke} t0={t0:0.00} t16={t16:0.00} cmds={dev.LastPolylines.Count}");
     }
 
@@ -2747,23 +2946,28 @@ static class Slice
     {
         var vp = new Size2(480, 400);
 
-        // Anchor near the bottom: a 120-tall popup can't fit below → flips ABOVE; its bottom corners join the anchor.
+        // Anchor near the bottom: a 120-tall free flyout can't fit below → flips ABOVE; free flyouts keep all corners.
         var low = new RectF(20, 380, 100, 24);
         var pa = FlyoutPositioner.Place(in low, new Size2(100, 120), in vp, FlyoutPlacement.BottomLeft);
-        bool flipped = pa.OpensUp && pa.Y < low.Y && pa.CornerJoin == CornerJoin.Bottom;
+        bool flipped = pa.OpensUp && pa.Y < low.Y && pa.CornerJoin == CornerJoin.None;
 
-        // Anchor near the top: opens BELOW (default); top corners join.
+        // Anchor near the top: a free flyout opens BELOW (default) and still keeps all corners rounded.
         var high = new RectF(20, 10, 100, 24);
         var pb = FlyoutPositioner.Place(in high, new Size2(100, 120), in vp, FlyoutPlacement.BottomLeft);
-        bool below = !pb.OpensUp && pb.Y >= high.Y + high.H - 0.5f && pb.CornerJoin == CornerJoin.Top;
+        bool below = !pb.OpensUp && pb.Y >= high.Y + high.H + 7.5f && pb.CornerJoin == CornerJoin.None;
+
+        // Attached stretch dropdowns (ComboBox/AutoSuggest style) stay flush and join the field edge.
+        var attach = FlyoutPositioner.Place(in high, new Size2(100, 120), in vp, FlyoutPlacement.BottomStretch);
+        bool attachedJoin = !attach.OpensUp && Near(attach.Y, high.Y + high.H, 0.01f) && attach.CornerJoin == CornerJoin.Top;
 
         // Popup taller than the viewport (collides both ways): clamp MeasuredH to the larger side (here, below).
         var mid = new RectF(20, 180, 100, 24);
         var pc = FlyoutPositioner.Place(in mid, new Size2(100, 600), in vp, FlyoutPlacement.BottomLeft);
         bool clamped = pc.MeasuredH > 0f && pc.MeasuredH < 600f;
 
-        Check("W1-P5.a placement: flip-up + corner-join + collision clamp",
-            flipped && below && clamped, $"flip={flipped} below={below} clampH={pc.MeasuredH:0}");
+        Check("W1-P5.a placement: flip-up + free/attached corner-join + collision clamp",
+            flipped && below && attachedJoin && clamped,
+            $"flip={flipped} below={below} attach={attachedJoin} clampH={pc.MeasuredH:0}");
     }
 
     // Wave 1 / P5b — overlay focus-restoration: an overlay captures the focused node at open time and restores it when
@@ -3191,19 +3395,112 @@ static class Slice
         }, () => svc.CloseTop());
 
         NodeHandle SurfaceOf(NodeHandle n) { for (; !n.IsNull; n = host.Scene.Parent(n)) if (host.Scene.TryGetAcrylic(n, out _)) return n; return NodeHandle.Null; }
+        NodeHandle SmokeScrim()
+        {
+            NodeHandle best = NodeHandle.Null;
+            float bestArea = 0f;
+            void Walk(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                ref var p = ref host.Scene.Paint(n);
+                var r = host.Scene.AbsoluteRect(n);
+                float area = r.W * r.H;
+                if (p.Fill.A > 0.1f && r.W >= 400f && r.H >= 320f && area > bestArea)
+                {
+                    best = n;
+                    bestArea = area;
+                }
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Walk(c);
+            }
+            Walk(host.Scene.Root);
+            return best;
+        }
+
+        (bool Fading, bool Settled, bool NoPopBack, float MaxSurface, float MaxScrim) CloseChrome(PopupChrome chrome)
+        {
+            NodeHandle body = NodeHandle.Null;
+            Func<Element> content = () => new BoxEl
+            {
+                Width = chrome == PopupChrome.TeachingTip ? 320f : 260f,
+                Height = chrome == PopupChrome.TeachingTip ? 96f : 88f,
+                Fill = Tok.FillCardDefault,
+                OnRealized = h => body = h,
+                Children = [new TextEl("overlay body") { Color = Tok.TextPrimary }],
+            };
+            var options = new PopupOptions(
+                FocusTrap: chrome == PopupChrome.Modal,
+                DismissBehavior: chrome == PopupChrome.Modal ? DismissBehavior.Modal : DismissBehavior.LightDismiss,
+                Chrome: chrome);
+            svc.Open(() => root.Anchor, content, FlyoutPlacement.BottomLeft, options);
+            host.RunFrame();
+            for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }
+
+            NodeHandle surface = NodeHandle.Null;
+            if (!body.IsNull)
+            {
+                if (chrome == PopupChrome.Flyout)
+                {
+                    surface = SurfaceOf(body);
+                }
+                else
+                {
+                    for (var n = host.Scene.Parent(body); !n.IsNull; n = host.Scene.Parent(n))
+                    {
+                        if ((host.Scene.Flags(n) & NodeFlags.ClipsToBounds) != 0) { surface = n; break; }
+                    }
+                }
+            }
+            NodeHandle scrim = chrome == PopupChrome.Modal ? SmokeScrim() : NodeHandle.Null;
+
+            svc.CloseTop();
+            host.RunFrame();
+            clock.Advance(16f);
+            host.RunFrame();
+            float closeOp = !surface.IsNull && host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
+            float closeScrim = !scrim.IsNull && host.Scene.IsLive(scrim) ? host.Scene.Paint(scrim).Opacity : 0f;
+            bool fading = !surface.IsNull && host.Scene.IsLive(surface) && closeOp < 0.99f
+                && (chrome != PopupChrome.Modal || (!scrim.IsNull && host.Scene.IsLive(scrim) && closeScrim < 0.99f));
+
+            for (int i = 0; i < 16; i++) { clock.Advance(16f); host.RunFrame(); }
+            bool settled = surface.IsNull || !host.Scene.IsLive(surface) || !host.Animation.HasTracks(surface);
+            if (chrome == PopupChrome.Modal && !scrim.IsNull && host.Scene.IsLive(scrim))
+                settled &= !host.Animation.HasTracks(scrim);
+
+            bool noPopBack = true;
+            float maxSurface = 0f;
+            float maxScrim = 0f;
+            for (int i = 0; i < 6; i++)
+            {
+                clock.Advance(16f);
+                host.RunFrame();
+                if (!surface.IsNull && host.Scene.IsLive(surface))
+                {
+                    float liveOp = host.Scene.Paint(surface).Opacity;
+                    maxSurface = MathF.Max(maxSurface, liveOp);
+                    if (liveOp > 0.01f) noPopBack = false;
+                }
+                if (!scrim.IsNull && host.Scene.IsLive(scrim))
+                {
+                    float liveScrim = host.Scene.Paint(scrim).Opacity;
+                    maxScrim = MathF.Max(maxScrim, liveScrim);
+                    if (liveScrim > 0.01f) noPopBack = false;
+                }
+            }
+            return (fading, settled, noPopBack, maxSurface, maxScrim);
+        }
 
         svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
-        host.RunFrame();   // mount + seed the SizeH clip-reveal + fade (seed runs in a layout effect)
+        host.RunFrame();   // mount + seed the authored clip-rect reveal + fade (seed runs in a layout effect)
         clock.Advance(16f);
-        host.RunFrame();   // tick the animation once → the first PresentedH lands
+        host.RunFrame();   // tick the animation once → the first ClipRect lands
         var surface = SurfaceOf(FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
         float fullH = surface.IsNull ? 0f : host.Scene.Bounds(surface).H;
-        float ph1 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;   // mid-reveal (top-anchored), < full
-        bool revealing = !surface.IsNull && !float.IsNaN(ph1) && ph1 > 1f && ph1 < fullH - 2f;
+        RectF cr1 = surface.IsNull ? RectF.Infinite : host.Scene.Paint(surface).ClipRect;   // mid-reveal: finite, < full height
+        bool revealing = !surface.IsNull && !cr1.IsInfinite && cr1.H > 1f && cr1.H < fullH - 2f;
 
         for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }             // open settles
-        float ph2 = surface.IsNull ? float.NaN : host.Scene.Paint(surface).PresentedH;
-        bool revealed = float.IsNaN(ph2) || ph2 >= fullH - 1.5f;
+        RectF cr2 = surface.IsNull ? RectF.Infinite : host.Scene.Paint(surface).ClipRect;
+        bool revealed = cr2.IsInfinite;
 
         // Close → the surface fades (opacity animates down) while staying on top (not removed instantly).
         svc.CloseTop();
@@ -3213,8 +3510,113 @@ static class Slice
         float op = host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
         bool fading = host.Scene.IsLive(surface) && op < 0.99f;
 
-        Check("64d. flyout: open clip-reveals (SizeH top-anchored) then close fades", revealing && revealed && fading,
-            $"reveal {ph1:0}/{fullH:0}→{ph2:0} closeOpacity={op:0.00}");
+        Check("64d. flyout: open clip-reveals (authored ClipRect) then close fades", revealing && revealed && fading,
+            $"clipH {cr1.H:0}/{fullH:0}→{(cr2.IsInfinite ? "∞" : cr2.H.ToString("0"))} closeOpacity={op:0.00}");
+        // Regression for overlay close "pop back": after the close track settles, later frames must not record the
+        // surface visible while structural overlay removal catches up.
+        for (int i = 0; i < 10; i++) { clock.Advance(16f); host.RunFrame(); }
+        bool settled = surface.IsNull || !host.Scene.IsLive(surface) || !host.Animation.HasTracks(surface);
+        bool noPopBack = true;
+        float maxAfterSettle = 0f;
+        for (int i = 0; i < 4; i++)
+        {
+            clock.Advance(16f);
+            host.RunFrame();
+            if (!surface.IsNull && host.Scene.IsLive(surface))
+            {
+                float liveOp = host.Scene.Paint(surface).Opacity;
+                maxAfterSettle = MathF.Max(maxAfterSettle, liveOp);
+                if (liveOp > 0.01f) noPopBack = false;
+            }
+        }
+        Check("64e. overlay close settles without a one-frame pop-back", settled && noPopBack,
+            $"settled={settled} maxOpacityAfterSettle={maxAfterSettle:0.00} live={(!surface.IsNull && host.Scene.IsLive(surface))}");
+
+        var flyoutClose = CloseChrome(PopupChrome.Flyout);
+        var modalClose = CloseChrome(PopupChrome.Modal);
+        var teachingClose = CloseChrome(PopupChrome.TeachingTip);
+        bool allChrome = flyoutClose.Fading && flyoutClose.Settled && flyoutClose.NoPopBack
+            && modalClose.Fading && modalClose.Settled && modalClose.NoPopBack
+            && teachingClose.Fading && teachingClose.Settled && teachingClose.NoPopBack;
+        Check("64f. overlay close lifecycle is host-owned for flyout, modal scrim+card, and TeachingTip",
+            allChrome,
+            $"flyout=({flyoutClose.Fading},{flyoutClose.Settled},max={flyoutClose.MaxSurface:0.00}) " +
+            $"modal=({modalClose.Fading},{modalClose.Settled},card={modalClose.MaxSurface:0.00},scrim={modalClose.MaxScrim:0.00}) " +
+            $"tip=({teachingClose.Fading},{teachingClose.Settled},max={teachingClose.MaxSurface:0.00})");
+    }
+
+    static void ContentDialogChromeChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("dialogchrome", new Size2(760, 520), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ContentDialogProbe());
+
+        for (int i = 0; i < 24; i++) host.RunFrame();   // open + settle the modal scale/fade
+
+        var title = FindTextNode(host.Scene, strings, host.Scene.Root, "Save your work?");
+        NodeHandle outer = title;
+        while (!outer.IsNull)
+        {
+            ref var p = ref host.Scene.Paint(outer);
+            if (Near(p.BorderWidth, 1f, 0.01f) && ColorClose(p.BorderColor, Tok.StrokeSurfaceDefault, 0.02f))
+                break;
+            outer = host.Scene.Parent(outer);
+        }
+
+        var top = outer.IsNull ? NodeHandle.Null : Child(host.Scene, outer, 0);
+        var sep = outer.IsNull ? NodeHandle.Null : Child(host.Scene, outer, 1);
+        var command = outer.IsNull ? NodeHandle.Null : Child(host.Scene, outer, 2);
+
+        bool realOuterBorder = !outer.IsNull
+            && ColorClose(host.Scene.Paint(outer).Fill, Tok.FillSolidBase, 0.02f)
+            && ColorClose(host.Scene.Paint(outer).BorderColor, Tok.StrokeSurfaceDefault, 0.02f)
+            && Near(host.Scene.Paint(outer).BorderWidth, 1f, 0.01f)
+            && Near(host.Scene.Paint(outer).Corners.TopLeft, Radii.Overlay, 0.01f)
+            && (host.Scene.Flags(outer) & NodeFlags.ClipsToBounds) != 0;
+        bool topOverlay = !top.IsNull && ColorClose(host.Scene.Paint(top).Fill, Tok.FillLayerAlt, 0.02f)
+            && Near(host.Scene.Layout(top).Padding.Left, 24f, 0.01f)
+            && Near(host.Scene.Paint(top).Corners.TopLeft, 0f, 0.01f)
+            && Near(host.Scene.Paint(top).Corners.BottomLeft, 0f, 0.01f);
+        bool separator = !sep.IsNull && Near(host.Scene.Bounds(sep).H, 1f, 0.01f)
+            && ColorClose(host.Scene.Paint(sep).Fill, Tok.StrokeCardDefault, 0.02f);
+        bool commandRow = !command.IsNull && ColorClose(host.Scene.Paint(command).Fill, Tok.FillSolidBase, 0.02f)
+            && Near(host.Scene.Layout(command).Padding.Left, 24f, 0.01f)
+            && Near(host.Scene.Layout(command).Gap, 8f, 0.01f)
+            && Near(host.Scene.Paint(command).Corners.TopLeft, 0f, 0.01f)
+            && Near(host.Scene.Paint(command).Corners.BottomLeft, 0f, 0.01f);
+
+        Check("64g. ContentDialog chrome: real outer border; square internal content/command layers",
+            realOuterBorder && topOverlay && separator && commandRow,
+            $"outer={realOuterBorder} top={topOverlay} sep={separator} cmd={commandRow}");
+    }
+
+    static void TeachingTipPlacementChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("tipplace", new Size2(760, 520), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new TeachingTipProbe());
+
+        for (int i = 0; i < 16; i++) host.RunFrame();   // mount, place, publish placement signal, settle the beak component
+
+        var triggerText = FindTextNode(host.Scene, strings, host.Scene.Root, "Show teaching tip");
+        NodeHandle trigger = triggerText;
+        while (!trigger.IsNull && host.Scene.Interaction(trigger).Role != AutomationRole.Button)
+            trigger = host.Scene.Parent(trigger);
+        var beakStroke = FindPolylineStrokeNode(host.Scene, host.Scene.Root);
+        var ar = trigger.IsNull ? default : host.Scene.AbsoluteRect(trigger);
+        var br = beakStroke.IsNull ? default : host.Scene.AbsoluteRect(beakStroke);
+        float anchorCx = ar.X + ar.W * 0.5f;
+        float beakCx = br.X + br.W * 0.5f;
+        bool aligned = !trigger.IsNull && !beakStroke.IsNull && Near(beakCx, anchorCx, 1.5f);
+
+        Check("64h. TeachingTip tail aligns to resolved target center after popup placement",
+            aligned, $"anchorCx={anchorCx:0.0} beakCx={beakCx:0.0} dx={beakCx - anchorCx:0.0}");
     }
 
     static void MenuFlyoutStyleChecks(StringTable strings)
@@ -3281,6 +3683,26 @@ static class Slice
         Check("64c. SplitButton: joined outer chrome with independently interactive halves",
             twoHalves && joinedChrome && halfMetrics && transparentHalves,
             $"buttons={buttons.Count} chrome={joinedChrome} primaryH={(primary.IsNull ? 0 : host.Scene.Bounds(primary).H):0} drop={(drop.IsNull ? 0 : host.Scene.Bounds(drop).W):0}x{(drop.IsNull ? 0 : host.Scene.Bounds(drop).H):0}");
+
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("splitlong", new Size2(360, 220), 1f));
+        window2.Show();
+        var device2 = new HeadlessGpuDevice();
+        var fonts2 = new HeadlessFontSystem(strings);
+        using var host2 = new AppHost(app2, window2, device2, fonts2, strings, new SplitButtonLongMenuProbe());
+        host2.RunFrame();
+        var splitButtons = Roles(host2.Scene, AutomationRole.Button);
+        var secondary = splitButtons.Count > 1 ? splitButtons[1] : NodeHandle.Null;
+        if (!secondary.IsNull) ClickNode(host2, window2, secondary);
+        host2.RunFrame();
+        var specialText = FindTextNode(host2.Scene, strings, host2.Scene.Root, "Paste special");
+        NodeHandle surface = specialText;
+        while (!surface.IsNull && !host2.Scene.TryGetAcrylic(surface, out _)) surface = host2.Scene.Parent(surface);
+        var sr = surface.IsNull ? default : host2.Scene.AbsoluteRect(surface);
+        var tr = specialText.IsNull ? default : host2.Scene.AbsoluteRect(specialText);
+        bool longLabelFits = !surface.IsNull && !specialText.IsNull && tr.Right <= sr.Right - 10f && sr.W > 150f;
+        Check("64c2. SplitButton menu: long item text fits inside the flyout surface",
+            longLabelFits, $"surfaceW={sr.W:0} textRight={tr.Right:0} surfaceRight={sr.Right:0}");
     }
 
     static void NavHierarchyChecks(StringTable strings)
@@ -3332,6 +3754,29 @@ static class Slice
         Check("65. NavigationView: group expands/collapses + child selection updates content",
             collapsedCount == 2 && childrenAppeared && childSelected && collapsedAgain,
             $"collapsed={collapsedCount} expanded={expandedCount} childPage={childSelected} recollapsed={collapsedAgain}");
+    }
+
+    static void PipsPagerOutputChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("pipsout", new Size2(320, 160), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new PipsPagerOutputProbe());
+        host.RunFrame();
+
+        var pips = Roles(host.Scene, AutomationRole.Pager);
+        bool initial = HasGlyph(device, strings, "Page 1 / 5");
+        if (pips.Count > 2) ClickNode(host, window, pips[2]);   // index 1
+        bool odd = HasGlyph(device, strings, "Page 2 / 5");
+        pips = Roles(host.Scene, AutomationRole.Pager);
+        if (pips.Count > 3) ClickNode(host, window, pips[3]);   // index 2, the reported blank-output path
+        bool even = HasGlyph(device, strings, "Page 3 / 5");
+
+        Check("65b. PipsPager output TextBind survives owner re-render for even selected indices",
+            pips.Count >= 6 && initial && odd && even,
+            $"pips={pips.Count} initial={initial} odd={odd} even={even}");
     }
 
     static void BasicInputControlChecks(StringTable strings)
@@ -3507,6 +3952,22 @@ static class Slice
             int sel = -2;
             if (opened) { ClickNode(host, window, menuItems[1]); sel = root.Sel!.Peek(); }
             Check("70. ComboBox: opens a list and selects an item", opened && sel == 1, $"items={menuItems.Count} sel={sel}");
+        }
+
+        // AutoSuggestBox -- open popup width matches the owning field (WinUI popup/list is field-width, not content-width).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("asb", new Size2(420, 320), 1f)); window.Show();
+            var root = new AutoSuggestProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();   // mount + post-commit open effect
+            host.RunFrame();   // overlay content
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+            var rows = Roles(host.Scene, AutomationRole.MenuItem);
+            float fieldW = host.Scene.AbsoluteRect(field).W;
+            float rowW = rows.Count > 0 ? host.Scene.AbsoluteRect(rows[0]).W : 0f;
+            Check("70a. AutoSuggestBox: suggestions popup width matches the field", rows.Count == 5 && rowW >= fieldW - 16f,
+                $"rows={rows.Count} fieldW={fieldW:0.#} rowW={rowW:0.#}");
         }
 
         // ComboBox — editable text entry.
@@ -3695,11 +4156,14 @@ static class Slice
         TextInputChecks(strings);
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
+        ContentDialogChromeChecks(strings);
+        TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
         SplitButtonStyleChecks(strings);
 
         // Hierarchical NavigationView (Part B).
         NavHierarchyChecks(strings);
+        PipsPagerOutputChecks(strings);
 
         // Basic-input controls (Part C).
         BasicInputControlChecks(strings);

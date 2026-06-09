@@ -5,6 +5,8 @@ namespace FluentGpu.Controls;
 
 public static class PipsPager
 {
+    const string PipGlyph = "\uEA3B";   // PipsPagerNormalGlyph / PipsPagerSelectedGlyph
+
     public static BoxEl Create(int count, int selected, Action<int> onSelect)
     {
         var dots = new Element[count < 0 ? 0 : count];
@@ -12,18 +14,9 @@ public static class PipsPager
         {
             int index = i;
             bool isSelected = index == selected;
-            // WinUI: selection is shown by a LARGER neutral dot, NOT an accent color. Both states use
-            // PipsPagerSelectionIndicatorForeground = ControlStrongFillColorDefault (rest/selected) and shift to
-            // TextFillColorSecondary on pointer-over (PipsPagerSelectionIndicatorForegroundPointerOver/Pressed).
-            float dotSize = isSelected ? 6f : 4f;
-            var glyph = new BoxEl
-            {
-                Width = dotSize,
-                Height = dotSize,
-                Corners = Radii.Circle(dotSize),
-                Fill = Tok.FillControlStrong,
-                HoverFill = Tok.TextSecondary,
-            };
+            // WinUI PipsPager_themeresources: both states use glyph EA3B in the icon font; selected is font-size 6,
+            // normal is font-size 4, inside a 12x24 selection-indicator button. The foreground is neutral, not accent.
+            float glyphSize = isSelected ? 6f : 4f;
             dots[index] = new BoxEl
             {
                 Direction = 0,
@@ -33,7 +26,17 @@ public static class PipsPager
                 Justify = FlexJustify.Center,
                 Role = AutomationRole.Pager,
                 OnClick = () => onSelect(index),
-                Children = [glyph],
+                Children =
+                [
+                    new TextEl(PipGlyph)
+                    {
+                        Size = glyphSize,
+                        Color = Tok.FillControlStrong,
+                        HoverColor = Tok.TextSecondary,
+                        PressedColor = Tok.TextSecondary,
+                        FontFamily = Theme.IconFont,
+                    },
+                ],
             };
         }
 

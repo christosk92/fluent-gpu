@@ -89,6 +89,31 @@ public sealed class AnimEngine
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
         public float ClipL, ClipT, ClipR, ClipB;   // authored clip-rect edges (node-local); NaN = that edge not animated
         public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN };
+        public static Accum FromPaint(in NodePaint p)
+        {
+            // Preserve channels that do NOT have an active track this tick. Without this, a longer scale/size track can
+            // reset opacity to 1 after a shorter opacity close track has already settled at 0 (dialog/flyout pop-back).
+            var tf = p.LocalTransform;
+            float sx = MathF.Sqrt(tf.M11 * tf.M11 + tf.M12 * tf.M12);
+            float sy = MathF.Sqrt(tf.M21 * tf.M21 + tf.M22 * tf.M22);
+            float rot = (tf.M11 != 0f || tf.M12 != 0f) ? MathF.Atan2(tf.M12, tf.M11) * (180f / MathF.PI) : 0f;
+            var a = new Accum
+            {
+                Tx = tf.Dx, Ty = tf.Dy, Sx = sx == 0f ? 1f : sx, Sy = sy == 0f ? 1f : sy, Rot = rot,
+                Op = p.Opacity,
+                Sw = p.PresentedW, Sh = p.PresentedH,
+                TrimStart = p.StrokeTrimStart, TrimEnd = p.StrokeTrimEnd,
+                ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN,
+            };
+            if (!p.ClipRect.IsInfinite)
+            {
+                a.ClipL = p.ClipRect.X;
+                a.ClipT = p.ClipRect.Y;
+                a.ClipR = p.ClipRect.Right;
+                a.ClipB = p.ClipRect.Bottom;
+            }
+            return a;
+        }
         public void Fold(AnimChannel ch, float v, CompositeOp op)
         {
             bool add = op != CompositeOp.Replace;
@@ -413,7 +438,7 @@ public sealed class AnimEngine
                 Diag.Event("anim", $"  {t.Channel} {t.Mode} val={t.Value:0.###}" +
                     (t.Mode == IntegrationMode.Spring ? $" vel={t.Vel:0.##} tgt={t.Target:0.###} done={t.Done}" : $" elapsed={t.ElapsedMs:0}ms done={t.Done}"));
             }
-            if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.Default;
+            if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.FromPaint(in _scene.Paint(t.Node));
         }
 
         // fold Replace tracks first (the base), then additive layers — so order can't clobber the base

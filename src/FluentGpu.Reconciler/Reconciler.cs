@@ -427,7 +427,15 @@ public sealed class TreeReconciler
         else if (el is TextEl t)
         {
             if (t.TextBind is { } txb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Text = _strings.Intern(txb()); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    var next = _strings.Intern(txb());
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.Text == next) return;
+                    paint.Text = next;
+                    _scene.Mark(node, NodeFlags.LayoutDirty);
+                }, owner: null, runNow: true));
             if (t.ColorBind is { } cb)
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
         }
@@ -759,7 +767,9 @@ public sealed class TreeReconciler
                 li.AlignSelf = s.AlignSelf;
 
                 _scene.Mark(node, NodeFlags.ClipsToBounds);
-                _scene.ScrollRef(node).Orientation = s.Horizontal ? (byte)1 : (byte)0;
+                ref ScrollState ss = ref _scene.ScrollRef(node);
+                ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
+                ss.ContentSized = s.ContentSized;
                 break;
             }
             case VirtualListEl v:
@@ -860,8 +870,11 @@ public sealed class TreeReconciler
                 paint.TextDisabledColor = t.DisabledColor;
                 paint.TextFocusedColor = t.FocusedColor;
                 _scene.SetDynamicText(node, t.DynamicText);
-                var newText = _strings.Intern(t.Text);
-                if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
+                if (t.TextBind is null)
+                {
+                    var newText = _strings.Intern(t.Text);
+                    if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
+                }
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.TextStyle = new TextStyle(_strings.Intern(t.FontFamily), t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);

@@ -80,7 +80,8 @@ sealed class ContentDialogPage : Component
     public override Element Render() => GalleryPage.Shell("ContentDialog",
         "A modal dialog that shows contextual information and requires a response.",
         ControlExample.Build("A ContentDialog",
-            ContentDialog.Create("Delete file", "Delete this file?", "This action can't be undone.", "Delete")));
+            ContentDialog.Create("Show dialog", "Save your work?", "Lorem ipsum dolor sit amet, adipisicing elit.",
+                "Save", "Don't Save", "Cancel")));
 }
 
 sealed class TextOverviewPage : Component

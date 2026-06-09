@@ -129,6 +129,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     {
         uint flags = 0;
 #if DEBUG
+        if (Diag.EnvFlag("FG_D3D12_DEBUG"))
         {
             ID3D12Debug* dbg = null;
             if ((int)D3D12GetDebugInterface(__uuidof<ID3D12Debug>(), (void**)&dbg) >= 0 && dbg != null)

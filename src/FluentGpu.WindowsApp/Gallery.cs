@@ -12,6 +12,8 @@ using static FluentGpu.Dsl.Ui;
 //   dotnet run --project src/FluentGpu.WindowsApp
 sealed class GalleryApp : Component
 {
+    static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD") || Diag.EnvFlag("FG_DIAG");
+
     // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Design, Controls (All + an expanded Basic input group) —
     // with the engine's own capability demos remapped under Fundamentals/Design/Samples. (Accessibility is out of scope.)
     static readonly NavItem[] Items =
@@ -208,7 +210,7 @@ sealed class GalleryApp : Component
             })
         ) with { Grow = 1 };
 
-        var content = ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 };
+        var content = ShowDiagnosticsHud ? ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 } : shell;
         // Host the overlay layer at the top so anchored flyouts (ComboBox/DropDownButton/SplitButton/ColorPicker) work app-wide.
         return Embed.Comp(() => new OverlayHost { Child = content });
     }

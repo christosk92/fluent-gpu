@@ -126,6 +126,7 @@ public struct ScrollState
     public float ContentW, ContentH;      // Layout-published full content extent (DIP)
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
+    public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)

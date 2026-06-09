@@ -7,7 +7,9 @@ public enum FlyoutPlacement : byte
 {
     BottomLeft,      // below the anchor, left edges aligned (menus / DropDownButton)
     BottomStretch,   // below the anchor, left aligned and width-matched (ComboBox)
+    BottomCenter,    // below the anchor, centered on the anchor (targeted TeachingTip; beak owns separation)
     TopLeft,         // above the anchor, left edges aligned
+    TopCenter,       // above the anchor, centered on the anchor (targeted TeachingTip; beak owns separation)
 }
 
 /// <summary>Which popup corners abut (and so should square against) the anchor edge — WinUI <c>UpdateCornerRadius</c>
@@ -27,19 +29,24 @@ public readonly record struct PopupPlacementResult(float X, float Y, bool OpensU
 /// </summary>
 public static class FlyoutPositioner
 {
+    const float FreeTargetGap = 8f;   // WinUI flyout/popup target separation; attached/stretch popups stay flush.
+
     public static PopupPlacementResult Place(in RectF anchor, in Size2 popup, in Size2 viewport, FlyoutPlacement placement)
     {
         float vw = viewport.Width, vh = viewport.Height;
-        float x = anchor.X;
-        float belowY = anchor.Y + anchor.H;
-        float aboveTop = anchor.Y;
+        bool centered = placement is FlyoutPlacement.BottomCenter or FlyoutPlacement.TopCenter;
+        bool attached = placement is FlyoutPlacement.BottomStretch;
+        float x = centered ? anchor.X + (anchor.W - popup.Width) * 0.5f : anchor.X;
+        float gap = attached ? 0f : FreeTargetGap;
+        float belowY = anchor.Y + anchor.H + gap;
+        float aboveTop = anchor.Y - gap;
         float popH = popup.Height;
         float roomBelow = MathF.Max(0f, vh - belowY);
         float roomAbove = MathF.Max(0f, aboveTop);
 
         bool fitsBelow = belowY + popH <= vh;
         bool fitsAbove = aboveTop - popH >= 0f;
-        bool preferAbove = placement == FlyoutPlacement.TopLeft;
+        bool preferAbove = placement is FlyoutPlacement.TopLeft or FlyoutPlacement.TopCenter;
 
         bool opensUp;
         float y;
@@ -64,8 +71,9 @@ public static class FlyoutPositioner
         if (x < 0f) x = 0f;
         if (y < 0f) y = 0f;
 
-        // The popup edge that abuts the anchor squares its corners (the dropdown joins the field).
-        CornerJoin join = opensUp ? CornerJoin.Bottom : CornerJoin.Top;
+        // Only attached dropdowns (ComboBox/AutoSuggest-style BottomStretch) join the field. Free flyouts, menus, and
+        // TeachingTips keep all overlay corners rounded; TeachingTip uses its own beak.
+        CornerJoin join = attached ? (opensUp ? CornerJoin.Bottom : CornerJoin.Top) : CornerJoin.None;
         return new PopupPlacementResult(x, y, opensUp, measuredH, placement, join);
     }
 }

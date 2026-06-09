@@ -231,6 +231,7 @@ public sealed class AppHost : IDisposable
             if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
             float dtMs = _frameTime.NextDeltaMs();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
+            _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _interact.Tick(dtMs);                              // 7 eased hover/press

@@ -155,6 +155,16 @@ public static class SceneRecorder
             else stats.CulledNodeCount++;
         }
 
+        bool pendingSolidBorder = false;
+        bool pendingGradientBorder = false;
+        ColorF pendingBorder = default;
+        GradientSpec pendingBorderBrush = default;
+        GradientSpec pendingHoverBorderBrush = default;
+        GradientSpec pendingPressedBorderBrush = default;
+        bool pendingHasHoverBorderBrush = false;
+        bool pendingHasPressedBorderBrush = false;
+        float pendingBorderHoverT = 0f, pendingBorderPressT = 0f;
+
         bool drawSelf = hasOwnVisual && ownVisible;
         if (drawSelf)
         switch (p.VisualKind)
@@ -190,9 +200,21 @@ public static class SceneRecorder
                 // ── border ring (SDF band, drawn over the fill edge — inside the bounds, WinUI-style) ── ONE hollow ring
                 // for every border, solid or gradient; the SDF stroke never paints the interior.
                 if (hasGradBorder)
-                    EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in bb, in hbb, hasHBB, in pbb, hasPBB, gHoverT, gPressT, world, opacity, key);
+                {
+                    pendingGradientBorder = true;
+                    pendingBorderBrush = bb;
+                    pendingHoverBorderBrush = hbb;
+                    pendingPressedBorderBrush = pbb;
+                    pendingHasHoverBorderBrush = hasHBB;
+                    pendingHasPressedBorderBrush = hasPBB;
+                    pendingBorderHoverT = gHoverT;
+                    pendingBorderPressT = gPressT;
+                }
                 else if (p.BorderWidth > 0f && border.A > 0f)
-                    EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, border, world, opacity, key);
+                {
+                    pendingSolidBorder = true;
+                    pendingBorder = border;
+                }
                 break;
             }
             case VisualKind.Text when !p.Text.IsEmpty:
@@ -228,6 +250,16 @@ public static class SceneRecorder
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
+
+        // Box border chrome paints after descendants. A control border must remain visible over filled child regions
+        // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a
+        // border with nested fill plates.
+        if (pendingGradientBorder)
+            EmitGradientBorderRing(dl, pb, p.Corners, p.BorderWidth, in pendingBorderBrush, in pendingHoverBorderBrush,
+                pendingHasHoverBorderBrush, in pendingPressedBorderBrush, pendingHasPressedBorderBrush,
+                pendingBorderHoverT, pendingBorderPressT, world, opacity, key);
+        else if (pendingSolidBorder)
+            EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, world, opacity, key);
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 

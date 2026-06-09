@@ -31,8 +31,9 @@ public static class FrameClock
 
 /// <summary>
 /// A host-owned registration surface a tree-level concern can hook into without the host depending on it. The host
-/// bridges <see cref="KeyPreview"/> into the input dispatcher's pre-focus key hook, so an open overlay/flyout (which
-/// lives in the tree) can intercept Escape regardless of focus. Read the host instance via <c>UseContext(InputHooks.Current)</c>.
+/// bridges <see cref="KeyPreview"/> into the input dispatcher's pre-focus key hook, and runs
+/// <see cref="AfterAnimations"/> after the animation engine ticks but before recording. Read the host instance via
+/// <c>UseContext(InputHooks.Current)</c>.
 /// </summary>
 public sealed class InputHooks
 {
@@ -45,6 +46,31 @@ public sealed class InputHooks
     public Func<NodeHandle>? GetFocus;
     /// <summary>Restore focus to a node (host-wired to the dispatcher). Used by an overlay on close.</summary>
     public Action<NodeHandle>? RestoreFocus;
+
+    private readonly List<(object Owner, Action Action)> _afterAnimations = new();
+
+    /// <summary>
+    /// Host phase 7 hook: after <c>AnimEngine.Tick</c>, before record/present. Tree-level systems with retained
+    /// animation lifecycles (overlays) use this to finalize settled visuals without a one-frame post-present delay.
+    /// Registered by owner so multiple tree systems can coexist without clobbering each other.
+    /// </summary>
+    public void SetAfterAnimations(object owner, Action? action)
+    {
+        for (int i = 0; i < _afterAnimations.Count; i++)
+        {
+            if (!ReferenceEquals(_afterAnimations[i].Owner, owner)) continue;
+            if (action is null) _afterAnimations.RemoveAt(i);
+            else _afterAnimations[i] = (owner, action);
+            return;
+        }
+        if (action is not null) _afterAnimations.Add((owner, action));
+    }
+
+    public void RunAfterAnimations()
+    {
+        for (int i = 0; i < _afterAnimations.Count; i++)
+            _afterAnimations[i].Action();
+    }
 
     public static readonly Context<InputHooks> Current = new(new InputHooks());
 }

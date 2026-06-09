@@ -290,6 +290,12 @@ public sealed record ScrollEl : Element
 
     public Element Content { get; init; } = new BoxEl();
     public bool Horizontal { get; init; }     // false = vertical scroll (the common case)
+    /// <summary>
+    /// Measure to content when auto-sized, then clamp by Min/Max. Default false keeps ScrollView a hard viewport
+    /// boundary for app/page/navigation scrolling; popup lists (ComboBox/MenuFlyout/AutoSuggest) opt in so short lists
+    /// size to their rows and tall lists scroll after MaxHeight.
+    /// </summary>
+    public bool ContentSized { get; init; }
 
     // The viewport participates in its parent's layout like a box (size + flex + margin + a backing fill).
     public float Width { get; init; } = float.NaN;

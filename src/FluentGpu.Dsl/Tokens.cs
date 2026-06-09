@@ -24,9 +24,11 @@ public sealed record TokenSet
     public required ColorF FillCardDefault { get; init; }
     public required ColorF FillCardSecondary { get; init; }
     public required ColorF FillLayerDefault { get; init; }       // flyout / expander body
+    public required ColorF FillLayerAlt { get; init; }           // WinUI LayerFillColorAltBrush (ContentDialog top overlay)
     public required ColorF FillSolidBase { get; init; }          // page background
     public required ColorF FillSolidBaseAlt { get; init; }       // pane / lower surface
     public required ColorF FillSolidSecondary { get; init; }
+    public required ColorF FillSolidTertiary { get; init; }
     public required ColorF FillSmoke { get; init; }              // dialog / overlay scrim
 
     // Stroke hierarchy
@@ -38,6 +40,7 @@ public sealed record TokenSet
     public required ColorF StrokeFlyoutDefault { get; init; }    // SurfaceStrokeColorFlyout — flyout/menu border
     public required ColorF StrokeControlOnAccentDefault { get; init; }
     public required ColorF StrokeControlOnAccentSecondary { get; init; }   // top stop of the accent elevation border gradient
+    public required ColorF StrokeControlOnAccentTertiary { get; init; }    // checked SplitButton divider (#37000000)
 
     // Text hierarchy
     public required ColorF TextPrimary { get; init; }
@@ -143,9 +146,11 @@ public static class Tok
     public static ColorF FillCardDefault => T.FillCardDefault;
     public static ColorF FillCardSecondary => T.FillCardSecondary;
     public static ColorF FillLayerDefault => T.FillLayerDefault;
+    public static ColorF FillLayerAlt => T.FillLayerAlt;
     public static ColorF FillSolidBase => T.FillSolidBase;
     public static ColorF FillSolidBaseAlt => T.FillSolidBaseAlt;
     public static ColorF FillSolidSecondary => T.FillSolidSecondary;
+    public static ColorF FillSolidTertiary => T.FillSolidTertiary;
     public static ColorF FillSmoke => T.FillSmoke;
 
     // Stroke
@@ -157,6 +162,7 @@ public static class Tok
     public static ColorF StrokeFlyoutDefault => T.StrokeFlyoutDefault;
     public static ColorF StrokeControlOnAccentDefault => T.StrokeControlOnAccentDefault;
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
+    public static ColorF StrokeControlOnAccentTertiary => T.StrokeControlOnAccentTertiary;
 
     /// <summary>WinUI ControlElevationBorderBrush: a 2-stop vertical gradient (secondary edge → default edge) — the
     /// signature Fluent control border. Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
@@ -252,9 +258,11 @@ public static class Tok
         FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
         FillCardSecondary    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
         FillLayerDefault     = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C),
+        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
         FillSolidBase        = ColorF.FromRgba(0x20, 0x20, 0x20),
         FillSolidBaseAlt     = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
-        FillSolidSecondary   = ColorF.FromRgba(0x28, 0x28, 0x28),
+        FillSolidSecondary   = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
+        FillSolidTertiary    = ColorF.FromRgba(0x28, 0x28, 0x28),
         FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
         StrokeControlDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12),
         StrokeControlSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18),
@@ -264,6 +272,7 @@ public static class Tok
         StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x33),   // SurfaceStrokeColorFlyout (dark): 20% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23),
+        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         TextPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         TextSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC5),
         TextTertiary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
@@ -321,9 +330,11 @@ public static class Tok
         FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
         FillCardSecondary    = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
         FillLayerDefault     = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80),
+        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         FillSolidBase        = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
         FillSolidBaseAlt     = ColorF.FromRgba(0xEB, 0xEB, 0xEB),
         FillSolidSecondary   = ColorF.FromRgba(0xEE, 0xEE, 0xEE),
+        FillSolidTertiary    = ColorF.FromRgba(0xF9, 0xF9, 0xF9),
         FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
         StrokeControlDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeControlSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x29),
@@ -333,6 +344,7 @@ public static class Tok
         StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
         TextSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x9E),
         TextTertiary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),

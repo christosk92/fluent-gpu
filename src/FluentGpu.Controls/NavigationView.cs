@@ -502,7 +502,9 @@ public sealed class NavigationView : Component
             Key = it.Key,                       // keyed → reused across expanded/compact (icon glides, only the label exits)
             Direction = 0,
             Role = AutomationRole.NavigationItem,
-            Animate = PaneTransition,           // reveal the item's background width as the pane collapses (position is a no-op)
+            // Do not attach the pane-width FLIP transition to every row: expanding one group inserts child rows and would
+            // project unrelated item/icon rows as if the whole pane were collapsing. The pane node owns width reveal; labels
+            // own their enter/exit fade/slide.
             Width = expandedLayout ? float.NaN : PaneToggleWidth,
             Height = ItemHeight,
             Margin = new Edges4(ItemMarginX + indent, ItemMarginY, ItemMarginX, ItemMarginY),

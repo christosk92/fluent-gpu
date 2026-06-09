@@ -10,6 +10,7 @@ public static class Icons
     public const string Back = "\uE72B";
     public const string Forward = "\uE72A";
     public const string ChevronDown = "\uE70D";
+    public const string ChevronDownSmall = "\uE96E";  // AnimatedChevronDownSmall fallback (DropDownButton/SplitButton)
     public const string ChevronUp = "\uE70E";
     public const string ChevronRight = "\uE76C";
     public const string Clock = "\uE823";
