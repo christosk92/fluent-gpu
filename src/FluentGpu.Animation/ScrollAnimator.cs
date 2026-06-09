@@ -95,16 +95,21 @@ public sealed class ScrollAnimator
             sc.IdleMs = (movingNow || sc.PointerOver) ? 0f : sc.IdleMs + dtMs;
             float fadeTarget = (movingNow || sc.PointerOver || sc.IdleMs < 700f) ? 1f : 0f;
             float expandTarget = sc.PointerOverScrollbar && fadeTarget > 0f ? 1f : 0f;
+            float oldFade = sc.FadeT;
+            float oldExpand = sc.ExpandT;
             sc.FadeT += (fadeTarget - sc.FadeT) * kFade;
             sc.ExpandT += (expandTarget - sc.ExpandT) * kFade;
-            _scene.Mark(n, NodeFlags.PaintDirty);
 
-            if (!movingNow && !sc.PointerOver && sc.FadeT < 0.01f && sc.ExpandT < 0.01f)
+            bool fadeSettled = MathF.Abs(fadeTarget - sc.FadeT) < 0.01f;
+            bool expandSettled = MathF.Abs(expandTarget - sc.ExpandT) < 0.01f;
+            if (fadeSettled) sc.FadeT = fadeTarget;
+            if (expandSettled) sc.ExpandT = expandTarget;
+            if (sc.FadeT != oldFade || sc.ExpandT != oldExpand) _scene.Mark(n, NodeFlags.PaintDirty);
+
+            if (!movingNow && fadeSettled && expandSettled && (sc.PointerOver || sc.IdleMs >= 700f))
             {
-                sc.FadeT = 0f;
-                sc.ExpandT = 0f;
                 Drop(i, n);
-            }   // fully settled + hidden
+            }   // fully settled: either statically visible under hover, or hidden after the idle delay
         }
     }
 

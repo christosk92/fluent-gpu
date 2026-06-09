@@ -139,6 +139,16 @@ sealed class VirtualProbe : Component
 }
 
 // A NavigationView with 3 items + a footer → proves adaptive Expanded/Compact/Minimal display modes.
+sealed class CountingVirtualProbe : Component
+{
+    public int RenderItemCalls;
+    public override Element Render()
+        => Virtual.List(1000, 40f,
+               renderItem: i => { RenderItemCalls++; return new BoxEl { Height = 40f }; },
+               keyOf: i => "r" + i)
+           with { Width = 300, Height = 200 };
+}
+
 sealed class NavProbe : Component
 {
     public override Element Render() => Embed.Comp(() => new NavigationView
@@ -788,6 +798,7 @@ sealed class NavHierarchyProbe : Component
             {
                 Children = [new NavItem("c1", "1", "ChildOne"), new NavItem("c2", "2", "ChildTwo")],
             },
+            new NavItem("after", "A", "After"),
         ],
         Content = key => new BoxEl { Children = [Ui.Text("PAGE:" + key)] },
     });
@@ -1799,6 +1810,59 @@ static class Slice
         Check("37. wheel scrolls via transform (layout-free) + clamps", scrolled && clamped, $"off→{sc1.OffsetY:0}, clamp={sc2.OffsetY:0}");
     }
 
+    static void ScrollCrossAxisChecks(StringTable strings)
+    {
+        const string longLine =
+            "This intentionally unwrapped caption is long enough to exceed the viewport width and must not widen the vertical scroll content or nested virtual grids.";
+
+        var tree = Ui.ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Gap = 12f,
+            Padding = Edges4.All(24f),
+            Children =
+            [
+                new TextEl(longLine) { Size = 14f },
+                new BoxEl
+                {
+                    Height = 260f,
+                    Children =
+                    [
+                        Virtual.Grid(1000, columns: 4, itemHeight: 110f, gap: 12f,
+                            renderItem: i => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) },
+                            keyOf: i => "g" + i),
+                    ],
+                },
+            ],
+        });
+
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(tree, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root, new Size2(480f, 320f));
+
+        scene.TryGetScroll(scene.Root, out var outer);
+        NodeHandle gridViewport = NodeHandle.Null;
+        void Visit(NodeHandle n)
+        {
+            if (n.IsNull) return;
+            if (scene.TryGetScroll(n, out var sc) && sc.ItemCount == 1000) gridViewport = n;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) Visit(c);
+        }
+        Visit(scene.Root);
+
+        scene.TryGetScroll(gridViewport, out var gridScroll);
+        var firstCard = scene.FirstChild(gridScroll.ContentNode);
+        var grid = scene.AbsoluteRect(gridViewport);
+        var card = scene.AbsoluteRect(firstCard);
+
+        bool contentClamped = Near(outer.ContentW, outer.ViewportW) && Near(scene.Bounds(outer.ContentNode).W, outer.ViewportW);
+        bool gridConstrained = !gridViewport.IsNull && Near(grid.W, 432f) && card.W <= 101f;
+
+        Check("37a. vertical ScrollView clamps cross-axis content before nested virtual layout",
+            contentClamped && gridConstrained,
+            $"contentW={outer.ContentW:0} viewportW={outer.ViewportW:0} gridW={grid.W:0} cardW={card.W:0}");
+    }
+
     // Virtualization: a 10k-row list realizes only the viewport window; scrolling recycles via the slab free-list
     // (bounded live nodes, no leak); a sub-extent scroll is a transform-only frame (no realize / no relayout).
     // Overlay scrollbar visual states: hover over the lane shows the full WinUI gutter; leaving collapses to a thin
@@ -1822,7 +1886,7 @@ static class Slice
         host.RunFrame();
 
         window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
-        for (int i = 0; i < 18; i++) host.RunFrame();
+        for (int i = 0; i < 40; i++) host.RunFrame();
 
         bool expandedGutter = false, expandedThumb = false;
         foreach (var rect in device.LastRects)
@@ -1831,6 +1895,7 @@ static class Slice
             expandedGutter |= r.W >= 10f && r.H >= 190f;
             expandedThumb |= r.W >= 10f && r.H >= 30f && r.H < 190f;
         }
+        bool hoverSettledIdle = !host.HasActiveWork;
 
         window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(260f, 260f), 0, 0));
         for (int i = 0; i < 30; i++) host.RunFrame();
@@ -1854,6 +1919,8 @@ static class Slice
         Check("38a. overlay scrollbar expands, collapses to a visible thumb, then auto-hides",
             expandedGutter && expandedThumb && !collapsedGutter && collapsedThumb && !anyScrollbar,
             $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
+        Check("38b. hover-visible scrollbar settles without keeping frames active",
+            hoverSettledIdle, $"active={host.HasActiveWork}");
     }
 
     static void VirtualChecks(StringTable strings)
@@ -1892,6 +1959,21 @@ static class Slice
         bool reachedEnd = sc2.FirstRealized > 9000;
         bool bounded = liveEnd < 90 && Math.Abs(liveEnd - live0) < 40;
         Check("40. fling recycles via free-list (bounded live nodes, no leak)", reachedEnd && bounded, $"first={sc2.FirstRealized} live {live0}→{liveEnd}");
+
+        var counted = new CountingVirtualProbe();
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("virt-overlap", new Size2(640, 480), 1f));
+        window2.Show();
+        using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, counted);
+        host2.RunFrame();
+        int calls0 = counted.RenderItemCalls;
+        window2.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 100), 0, 0, 200f));
+        host2.RunFrame();
+        int calls1 = counted.RenderItemCalls - calls0;
+        host2.Scene.TryGetScroll(host2.Scene.Root, out var countedScroll);
+        bool reusedOverlap = countedScroll.FirstRealized > 0 && calls1 <= 5;
+        Check("40a. virtual scroll reuses overlapping realized item elements",
+            reusedOverlap, $"first={countedScroll.FirstRealized} newTemplateCalls={calls1}");
     }
 
     // The Fenwick extent table: O(log n) prefix-sum (OffsetOf) + binary-lift (IndexAt) + O(log n) correction.
@@ -3733,10 +3815,8 @@ static class Slice
         bool childSelected = false;
         if (childrenAppeared)
         {
-            var childCenter = CenterOf(host.Scene, items[2]);
-            window.QueueInput(new InputEvent(InputKind.PointerDown, childCenter, 0, 0));
-            window.QueueInput(new InputEvent(InputKind.PointerUp, childCenter, 0, 0));
-            host.RunFrame();
+            for (int i = 0; i < 4; i++) host.RunFrame();   // let the child rows clear their staggered enter delay
+            ClickNode(host, window, items[2]);
             childSelected = HasGlyph(device, strings, "PAGE:c1");
         }
 
@@ -3750,10 +3830,19 @@ static class Slice
         items.Clear();
         CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
         bool collapsedAgain = items.Count == collapsedCount;
+        var afterText = FindTextNode(host.Scene, strings, host.Scene.Root, "After");
+        var afterLabel = afterText.IsNull ? NodeHandle.Null : host.Scene.Parent(afterText);
+        var afterRow = afterLabel.IsNull ? NodeHandle.Null : host.Scene.Parent(afterLabel);
+        float afterLabelDy = afterLabel.IsNull ? 0f : host.Scene.Paint(afterLabel).LocalTransform.Dy;
+        bool labelNotProjected = !afterLabel.IsNull && MathF.Abs(afterLabelDy) < 0.01f;
+        bool rowOwnsMotion = !afterRow.IsNull && host.Animation.HasTracks(afterRow);
 
         Check("65. NavigationView: group expands/collapses + child selection updates content",
-            collapsedCount == 2 && childrenAppeared && childSelected && collapsedAgain,
+            collapsedCount == 3 && childrenAppeared && childSelected && collapsedAgain,
             $"collapsed={collapsedCount} expanded={expandedCount} childPage={childSelected} recollapsed={collapsedAgain}");
+        Check("65a. NavigationView: hierarchy reflow motion is owned by the whole row, not the label",
+            collapsedAgain && rowOwnsMotion && labelNotProjected,
+            $"rowTracks={rowOwnsMotion} labelDy={afterLabelDy:0.###}");
     }
 
     static void PipsPagerOutputChecks(StringTable strings)
@@ -4104,6 +4193,7 @@ static class Slice
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         ScrollChecks(strings);
+        ScrollCrossAxisChecks(strings);
         ScrollOverlayChecks(strings);
         VirtualChecks(strings);
         ExtentTableChecks();

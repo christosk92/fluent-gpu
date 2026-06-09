@@ -28,7 +28,7 @@ public sealed class TreeReconciler
     private readonly List<Component> _live = new();
 
     // The previously-realized window per virtual-list viewport (the keyed-diff's oldKids). Rented from ArrayPool.
-    private sealed class VirtualEntry { public Element[]? Prev; public int PrevLen; public VirtualListEl? El; }
+    private sealed class VirtualEntry { public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El; }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
     // Context provider value signals, keyed by provider node index (a consumer resolves by walking ancestors).
@@ -133,7 +133,7 @@ public sealed class TreeReconciler
         for (int i = 0; i < _dirtyVirtualScratch.Count; i++)
         {
             var node = _dirtyVirtualScratch[i];
-            if (_virtuals.TryGetValue(node, out var e) && e.El is { } el) RealizeWindow(node, el);
+            if (_virtuals.TryGetValue(node, out var e) && e.El is { } el) RealizeWindow(node, el, reuseOverlap: true);
         }
         return _dirtyVirtualScratch.Count > 0;
     }
@@ -191,6 +191,8 @@ public sealed class TreeReconciler
 
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
+        if (ReferenceEquals(newEl, oldEl)) return;
+
         if (newEl is ComponentEl nce)
         {
             // Reuse → the component is AUTONOMOUS: it re-renders via its own effect on its own state/context. A parent
@@ -462,7 +464,7 @@ public sealed class TreeReconciler
         RealizeWindow(node, ve);
     }
 
-    private void RealizeWindow(NodeHandle node, VirtualListEl ve)
+    private void RealizeWindow(NodeHandle node, VirtualListEl ve, bool reuseOverlap = false)
     {
         if (!_virtuals.TryGetValue(node, out var entry)) { entry = new VirtualEntry(); _virtuals[node] = entry; }
         entry.El = ve;
@@ -492,19 +494,27 @@ public sealed class TreeReconciler
         if (last < first) last = first;
         int w = last - first;
 
+        var prev = reuseOverlap ? entry.Prev : null;
+        int prevFirst = entry.PrevFirst;
         var cur = ArrayPool<Element>.Shared.Rent(Math.Max(1, w));
         for (int i = 0; i < w; i++)
         {
             int idx = first + i;
-            var el = ve.RenderItem(idx);
-            string key = ve.KeyOf?.Invoke(idx) ?? ("#" + idx);
-            cur[i] = el with { Key = key };
+            int oldSlot = idx - prevFirst;
+            Element? el = prev is not null && (uint)oldSlot < (uint)entry.PrevLen ? prev[oldSlot] : null;
+            if (el is null)
+            {
+                el = ve.RenderItem(idx);
+                string key = ve.KeyOf?.Invoke(idx) ?? ("#" + idx);
+                el = el with { Key = key };
+            }
+            cur[i] = el;
         }
 
         ReconcileChildren(content, cur.AsSpan(0, w), entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen));
 
         if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
-        entry.Prev = cur; entry.PrevLen = w;
+        entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
         scw.FirstRealized = first; scw.LastRealized = last;
@@ -520,7 +530,7 @@ public sealed class TreeReconciler
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
-        var oldNodes = oldN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[oldN];
+        Span<NodeHandle> oldNodes = oldN <= 128 ? stackalloc NodeHandle[oldN] : new NodeHandle[oldN];
         if (oldN > 0)
         {
             int i = 0;
@@ -528,20 +538,33 @@ public sealed class TreeReconciler
         }
 
         Dictionary<string, int>? keyMap = null;
-        for (int j = 0; j < oldN; j++)
-            if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
+        if (oldN > 32)
+            for (int j = 0; j < oldN; j++)
+                if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
 
-        var used = oldN == 0 ? Array.Empty<bool>() : new bool[oldN];
-        var newNodes = newN == 0 ? Array.Empty<NodeHandle>() : new NodeHandle[newN];
+        Span<bool> used = oldN <= 128 ? stackalloc bool[oldN] : new bool[oldN];
+        Span<NodeHandle> newNodes = newN <= 128 ? stackalloc NodeHandle[newN] : new NodeHandle[newN];
         bool structural = false;
 
         for (int i = 0; i < newN; i++)
         {
             Element nk = newKids[i];
             int match = -1;
-            if (nk.Key is string key && keyMap is not null && keyMap.TryGetValue(key, out int j)
-                && !used[j] && oldKids[j].ElementTypeId == nk.ElementTypeId)
-                match = j;
+            if (nk.Key is string key)
+            {
+                if (keyMap is not null && keyMap.TryGetValue(key, out int mapped)
+                    && !used[mapped] && oldKids[mapped].ElementTypeId == nk.ElementTypeId)
+                    match = mapped;
+                else if (keyMap is null)
+                {
+                    for (int oldIndex = 0; oldIndex < oldN; oldIndex++)
+                    {
+                        if (used[oldIndex] || oldKids[oldIndex].ElementTypeId != nk.ElementTypeId || oldKids[oldIndex].Key != key) continue;
+                        match = oldIndex;
+                        break;
+                    }
+                }
+            }
             else if (nk.Key is null && i < oldN && !used[i] && oldKids[i].Key is null
                 && oldKids[i].ElementTypeId == nk.ElementTypeId)
                 match = i;

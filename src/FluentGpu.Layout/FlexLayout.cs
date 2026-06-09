@@ -376,8 +376,8 @@ public sealed class FlexLayout
         // the reconciled model, not mutable layout scratch. Mutating it poisoned content-sized popup lists: the first
         // arrange wrote the 96px menu minimum into the column, so the next measure clipped long menu labels to 96px.
         var cs = Measure(content, horizontal ? float.PositiveInfinity : innerW);   // vertical scroll: wrap text to the viewport width
-        float contentW = horizontal ? cs.Width : MathF.Max(cs.Width, innerW);
-        float contentH = horizontal ? MathF.Max(cs.Height, innerH) : cs.Height;
+        float contentW = horizontal ? cs.Width : innerW;
+        float contentH = horizontal ? innerH : cs.Height;
         Arrange(content, padL, padT, contentW, contentH);   // content-box origin; Input adds -ScrollOffset
         return (contentW, contentH);
     }
