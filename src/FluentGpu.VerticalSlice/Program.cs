@@ -73,6 +73,32 @@ sealed class HoverProbe : Component
     public override Element Render() => Button.Accent("hi", () => { });
 }
 
+// E3 — implicit BrushTransition: a logical state flip (signal → re-render with a different Fill / text Color) must
+// CROSS-FADE the displayed color over BrushTransitionMs instead of snapping (WinUI BrushTransition, 83ms).
+sealed class BrushTransitionProbe : Component
+{
+    public Signal<bool>? On;
+    public static readonly ColorF FillA = ColorF.FromRgba(0xFF, 0x00, 0x00);
+    public static readonly ColorF FillB = ColorF.FromRgba(0x00, 0x00, 0xFF);
+    public static readonly ColorF TextA = ColorF.FromRgba(0x00, 0xFF, 0x00);
+    public static readonly ColorF TextB = ColorF.FromRgba(0xFF, 0x00, 0xFF);
+    public override Element Render()
+    {
+        var on = UseSignal(false);
+        On = on;
+        return new BoxEl
+        {
+            Width = 77, Height = 33,
+            Fill = on.Value ? FillB : FillA,
+            BrushTransitionMs = 83f,
+            Children =
+            [
+                new TextEl("bt") { Size = 12f, Color = on.Value ? TextB : TextA, BrushTransitionMs = 83f },
+            ],
+        };
+    }
+}
+
 // Two bare clickable boxes for the E1 focus-ring geometry checks: default FocusVisualMargin (−3) and the Slider
 // asymmetric −7,0,−7,0. Bare BoxEls (no border/gradient) so LastStrokes carries ONLY the focus rings.
 sealed class FocusRingProbe : Component
@@ -3377,6 +3403,45 @@ static class Slice
             $"A={light.A:0.###} R={light.R:0.###}");
     }
 
+    // E3 — implicit BrushTransition: a logical flip cross-fades fill + foreground over 83ms (no snap), then settles
+    // exactly at the target and the frame loop idles again (the row self-removes).
+    static void BrushTransitionChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("brush", new Size2(300, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new BrushTransitionProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        static FillRoundRectCmd ProbeRect(HeadlessGpuDevice dev)
+        {
+            foreach (var r in dev.LastRects) if (Near(r.Rect.W, 77f) && Near(r.Rect.H, 33f)) return r;
+            return default;
+        }
+
+        bool restingA = ColorClose(ProbeRect(device).Fill, BrushTransitionProbe.FillA, 0.004f);
+
+        root.On!.Value = true;   // logical flip → re-render with FillB/TextB
+        host.RunFrame();         // first frame: T has advanced one fixed dt (~16.7/83) — mid-fade
+        var mid = ProbeRect(device).Fill;
+        var midText = GlyphColor(device, strings, "bt");
+        bool fillMid = mid.B > 0.05f && mid.B < 0.95f && mid.R > 0.05f && mid.R < 0.95f;
+        bool textMid = midText.G > 0.05f && midText.G < 0.95f && midText.B > 0.05f && midText.B < 0.95f;
+
+        for (int i = 0; i < 10; i++) host.RunFrame();   // ≥83ms of fixed frames → settled
+        bool fillSettled = ColorClose(ProbeRect(device).Fill, BrushTransitionProbe.FillB, 0.004f);
+        bool textSettled = ColorClose(GlyphColor(device, strings, "bt"), BrushTransitionProbe.TextB, 0.004f);
+        bool idle = !host.HasActiveWork;
+
+        Check("E3.a BrushTransition cross-fades the fill on a logical flip (mid ≠ snap, settles exact)",
+            restingA && fillMid && fillSettled, $"rest={restingA} mid=({mid.R:0.##},{mid.G:0.##},{mid.B:0.##}) settled={fillSettled}");
+        Check("E3.b BrushTransition cross-fades the text foreground too, then the loop idles",
+            textMid && textSettled && idle, $"mid=({midText.R:0.##},{midText.G:0.##},{midText.B:0.##}) settled={textSettled} idle={idle}");
+    }
+
     static void FocusNavChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -4527,6 +4592,7 @@ static class Slice
         FocusNavChecks(strings);
         InputVocabularyChecks(strings);
         FocusRingChecks(strings);
+        BrushTransitionChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

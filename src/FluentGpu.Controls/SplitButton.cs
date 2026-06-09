@@ -132,7 +132,7 @@ public sealed class SplitButton : Component
             Fill = menuOpen ? Tok.FillControlTertiary : ColorF.Transparent,
             HoverFill = Tok.FillControlSecondary,    // SplitButtonBackgroundPointerOver
             PressedFill = Tok.FillControlTertiary,   // SplitButtonBackgroundPressed
-            HoverDurationMs = Motion.ControlFast, PressDurationMs = Motion.ControlFast,
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,   // ControlFastOutSlowInKeySpline = 0,0,0,1
             Role = AutomationRole.Button, IsEnabled = enabled, OnClick = OnInvoke,
             Children = primaryChildren,
@@ -155,7 +155,7 @@ public sealed class SplitButton : Component
             Fill = menuOpen ? Tok.FillControlTertiary : ColorF.Transparent,
             HoverFill = Tok.FillControlSecondary,    // SplitButtonBackgroundPointerOver
             PressedFill = Tok.FillControlTertiary,   // SplitButtonBackgroundPressed
-            HoverDurationMs = Motion.ControlFast, PressDurationMs = Motion.ControlFast,
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
             Role = AutomationRole.Button, IsEnabled = enabled, OnClick = ToggleMenu,
             Children =

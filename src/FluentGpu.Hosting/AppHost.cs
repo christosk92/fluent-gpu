@@ -144,7 +144,8 @@ public sealed class AppHost : IDisposable
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
-        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
+        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _scene.HasBrushAnims
+        || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -316,6 +317,7 @@ public sealed class AppHost : IDisposable
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _interact.Tick(dtMs);                              // 7 eased hover/press
+            _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }

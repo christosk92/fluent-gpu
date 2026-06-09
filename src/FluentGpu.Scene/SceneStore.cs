@@ -87,6 +87,9 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
+    // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
+    private readonly Dictionary<int, BrushAnim> _brushAnims = new();
+    private readonly List<int> _brushScratch = new();
 
     public NodeHandle Root { get; set; }
 
@@ -191,6 +194,7 @@ public sealed class SceneStore : ISceneBackend
         _pressedBorderBrushes.Remove(idx);
         _acrylics.Remove(idx);
         _measureCache.Remove(idx);
+        _brushAnims.Remove(idx);
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -292,6 +296,30 @@ public sealed class SceneStore : ISceneBackend
     public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[h.Raw.Index];
     public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[h.Raw.Index] = handler;
     public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[h.Raw.Index];
+
+    // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
+    public bool HasBrushAnims => _brushAnims.Count > 0;
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims[(int)h.Raw.Index] = ba;
+    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGetValue((int)h.Raw.Index, out ba);
+
+    /// <summary>Advance every active brush transition by <paramref name="dtMs"/>, mark the nodes PaintDirty, and drop
+    /// settled rows. Called by the host at phase 7 (next to the interaction animator). 0-alloc (reused scratch).</summary>
+    public void AdvanceBrushAnims(float dtMs)
+    {
+        if (_brushAnims.Count == 0) return;
+        _brushScratch.Clear();
+        foreach (var kv in _brushAnims) _brushScratch.Add(kv.Key);
+        for (int i = 0; i < _brushScratch.Count; i++)
+        {
+            int idx = _brushScratch[i];
+            if (_gen[idx] == 0) { _brushAnims.Remove(idx); continue; }
+            var ba = _brushAnims[idx];
+            ba.T = ba.DurationMs <= 0f ? 1f : MathF.Min(1f, ba.T + dtMs / ba.DurationMs);
+            _flags[idx] |= NodeFlags.PaintDirty;
+            if (ba.T >= 1f) _brushAnims.Remove(idx);
+            else _brushAnims[idx] = ba;
+        }
+    }
 
     /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).</summary>
     public NodeHandle FindAccelerator(int key, KeyModifiers mods)

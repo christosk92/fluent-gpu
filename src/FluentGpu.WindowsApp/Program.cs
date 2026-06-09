@@ -89,6 +89,7 @@ static class Program
         string demo = "default";
         string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)
         string shot = "menu";        // --shot <id> selects the ShotScene
+        string page = "welcome";     // --page <id> deep-links a gallery page (perf/diagnosis automation)
         bool micaShot = false;       // --mica reproduces the composited path the live app uses
         for (int i = 0; i < args.Length; i++)
         {
@@ -96,6 +97,7 @@ static class Program
             if (i < args.Length - 1 && args[i] == "--demo") demo = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--screenshot") screenshot = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--shot") shot = args[i + 1];
+            if (i < args.Length - 1 && args[i] == "--page") page = args[i + 1];
             if (args[i] == "--mica") micaShot = true;
         }
 
@@ -133,6 +135,6 @@ static class Program
         else if (demo == "basic")
             FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
         else
-            FluentApp.Run(() => new GalleryApp(), "FluentGpu — Capability Gallery", 1240, 820, frames: frames);
+            FluentApp.Run(() => new GalleryApp { InitialPage = page }, "FluentGpu — Capability Gallery", 1240, 820, frames: frames);
     }
 }

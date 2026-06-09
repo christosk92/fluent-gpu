@@ -367,6 +367,14 @@ public static class SceneRecorder
             fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f);
             border = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(border, 0.08f);
         }
+
+        // Implicit BrushTransition (logical state flip): cross-fade from the previously-displayed color toward the
+        // state-resolved color above. Linear-light, like every other brush cross-fade (color canon).
+        if (scene.TryGetBrushAnim(node, out var ba))
+        {
+            if ((ba.Channels & BrushAnim.FillBit) != 0) fill = ColorF.LerpLinear(ba.FillFrom, fill, ba.T);
+            if ((ba.Channels & BrushAnim.BorderBit) != 0) border = ColorF.LerpLinear(ba.BorderFrom, border, ba.T);
+        }
     }
 
     /// <summary>Resolve a text/glyph node's foreground for this frame. Plain text (no state colors) returns instantly.
@@ -374,6 +382,15 @@ public static class SceneRecorder
     /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
     /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
     private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    {
+        ColorF resolved = ResolveTextColorCore(scene, node, flags, in p);
+        // Implicit BrushTransition on the foreground (logical state flip): cross-fade from the previously-displayed color.
+        if (scene.TryGetBrushAnim(node, out var ba) && (ba.Channels & BrushAnim.TextBit) != 0)
+            resolved = ColorF.LerpLinear(ba.TextFrom, resolved, ba.T);
+        return resolved;
+    }
+
+    private static ColorF ResolveTextColorCore(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
     {
         // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
         if (p.TextHoverColor.A == 0f && p.TextPressedColor.A == 0f && p.TextDisabledColor.A == 0f && p.TextFocusedColor.A == 0f)

@@ -648,6 +648,32 @@ public sealed class TreeReconciler
                                   || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null
                                   || b.FillBind is not null;
                 paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
+
+                // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
+                // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.
+                if (!isMount && !float.IsNaN(b.BrushTransitionMs) && b.BrushTransitionMs > 0f
+                    && (paint.Fill != b.Fill || paint.BorderColor != b.BorderColor))
+                {
+                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
+                    var ba = new BrushAnim { DurationMs = b.BrushTransitionMs };
+                    if (paint.Fill != b.Fill)
+                    {
+                        ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
+                            ? ColorF.LerpLinear(prev.FillFrom, paint.Fill, prev.T)   // continue from the displayed color
+                            : paint.Fill;
+                        ba.Channels |= BrushAnim.FillBit;
+                    }
+                    if (paint.BorderColor != b.BorderColor)
+                    {
+                        ba.BorderFrom = midFlight && (prev.Channels & BrushAnim.BorderBit) != 0
+                            ? ColorF.LerpLinear(prev.BorderFrom, paint.BorderColor, prev.T)
+                            : paint.BorderColor;
+                        ba.Channels |= BrushAnim.BorderBit;
+                    }
+                    _scene.SetBrushAnim(node, ba);
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }
+
                 paint.Fill = b.Fill;
                 paint.HoverFill = b.HoverFill;
                 paint.PressedFill = b.PressedFill;
@@ -916,6 +942,23 @@ public sealed class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
+
+                // Implicit BrushTransition on the resting foreground (WinUI BrushTransition on a logical state flip).
+                if (!isMount && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color)
+                {
+                    bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
+                    var ba = new BrushAnim
+                    {
+                        DurationMs = t.BrushTransitionMs,
+                        Channels = BrushAnim.TextBit,
+                        TextFrom = midFlight && (prev.Channels & BrushAnim.TextBit) != 0
+                            ? ColorF.LerpLinear(prev.TextFrom, paint.TextColor, prev.T)
+                            : paint.TextColor,
+                    };
+                    _scene.SetBrushAnim(node, ba);
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }
+
                 paint.TextColor = t.Color;
                 paint.TextHoverColor = t.HoverColor;
                 paint.TextPressedColor = t.PressedColor;

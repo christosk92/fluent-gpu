@@ -109,6 +109,11 @@ public sealed record BoxEl : Element
     public EasingSpec HoverEasing { get; init; } = Easing.FluentPopOpen;
     public EasingSpec PressEasing { get; init; } = Easing.FluentPopOpen;
 
+    /// <summary>Implicit brush transition (WinUI <c>BrushTransition</c>): when a re-render changes Fill/BorderColor on
+    /// this LIVE node (a logical state flip — checked, selected…), the displayed color cross-fades over this duration
+    /// instead of snapping. NaN = snap (the default); WinUI control templates use 83ms.</summary>
+    public float BrushTransitionMs { get; init; } = float.NaN;
+
     // ── Fine-grained reactive bindings (signals-first). A bind is a thunk that READS signals; the reconciler turns it
     // into an effect at mount that writes only this node's channel + marks the matching dirty axis, so a signal change
     // updates exactly this node with no component re-render / no reconcile. Transform/Opacity/Fill are compositor-only
@@ -248,6 +253,9 @@ public sealed record TextEl(string Text) : Element
     public ColorF PressedColor { get; init; }
     public ColorF DisabledColor { get; init; }
     public ColorF FocusedColor { get; init; }
+    /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
+    /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
+    public float BrushTransitionMs { get; init; } = float.NaN;
     public string? FontFamily { get; init; }
     public DynamicTextKind DynamicText { get; init; }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>

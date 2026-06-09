@@ -190,6 +190,21 @@ public struct InteractionAnim
     };
 }
 
+/// <summary>
+/// An implicit brush transition (WinUI <c>BrushTransition</c>, 83ms): when a LOGICAL state flip re-renders a node with a
+/// different Fill/BorderColor/TextColor and the element opted in (<c>BrushTransitionMs</c>), the reconciler captures the
+/// previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <c>T</c> advances
+/// (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+/// </summary>
+public struct BrushAnim
+{
+    public ColorF FillFrom, BorderFrom, TextFrom;
+    public float T;            // 0 → 1 progress (advanced by SceneStore.AdvanceBrushAnims at phase 7)
+    public float DurationMs;
+    public byte Channels;
+    public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
+}
+
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
