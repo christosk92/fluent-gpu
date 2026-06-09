@@ -77,9 +77,13 @@ public delegate void ImageCompleteHandler(int id, bool ok, int w, int h, ImageFa
 /// </summary>
 public sealed class ImageCache
 {
+    /// <summary>Dedup key: (source, target size) as a value type — a cache HIT allocates nothing (no `$"{src}@{w}x{h}"`
+    /// string per request, which mattered: every realized image row calls <see cref="Request"/>).</summary>
+    private readonly record struct SourceKey(string Source, int W, int H);
+
     private sealed class Entry
     {
-        public string Key = "";
+        public SourceKey Key;
         public ImageState State;
         public int W, H;
         public int Refs;        // liveness: >0 ⇒ on screen ⇒ never evicted
@@ -91,7 +95,7 @@ public sealed class ImageCache
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
     }
 
-    private readonly Dictionary<string, int> _byKey = new();
+    private readonly Dictionary<SourceKey, int> _byKey = new();
     private readonly Dictionary<int, Entry> _byId = new();
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
@@ -141,7 +145,7 @@ public sealed class ImageCache
     public ImageHandle Request(string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible,
                                string? blurHash = null, ImageTransition? transition = null)
     {
-        string key = $"{source}@{targetW}x{targetH}";
+        var key = new SourceKey(source, targetW, targetH);
         if (_byKey.TryGetValue(key, out int id))
         {
             _byId[id].LastUsed = _clock++;

@@ -1,3 +1,4 @@
+using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -15,12 +16,42 @@ public readonly struct LaidGlyph
     public LaidGlyph(ushort gid, nint face, float x, float y) { Gid = gid; Face = face; X = x; Y = y; }
 }
 
+/// <summary>Source mapping for one laid glyph — the hit-test companion to <see cref="LaidGlyph"/> (parallel to
+/// <see cref="TextLayoutEngine.Glyphs"/> minus the synthetic trim ellipsis): the UTF-16 index of the cluster's first
+/// source char (taken from the shaper's cluster map, never re-derived from char counts), the glyph's leading pen X and
+/// advance on its line, and its line index. Entries are stored in the VISUAL order glyphs were placed (after BiDi L2
+/// reordering), so an in-order scan walks the line left→right.</summary>
+public readonly struct LaidCluster
+{
+    public readonly int Cluster;
+    public readonly float X;
+    public readonly float Advance;
+    public readonly int Line;
+    public LaidCluster(int cluster, float x, float advance, int line) { Cluster = cluster; X = x; Advance = advance; Line = line; }
+}
+
+/// <summary>One laid-out line: the UTF-16 source range it covers — [StartChar, EndChar), where EndChar is the next
+/// line's StartChar (the text length on the last line) — its vertical band (Top/Height), its rendered advance width
+/// (including a trim ellipsis), and its window [FirstGlyph, FirstGlyph + GlyphCount) into
+/// <see cref="TextLayoutEngine.Clusters"/>. Chars dropped by trimming have no cluster entry; queries clamp them to the
+/// trimmed edge.</summary>
+public struct LaidLine
+{
+    public int StartChar, EndChar;
+    public float Top, Height, Width;
+    public int FirstGlyph, GlyphCount;
+}
+
 /// <summary>
 /// The DirectWrite layout engine (text.md §8): itemize → shape (per run) → wrap (UAX #14 break opportunities) → position,
 /// with BiDi L2 reordering per line. Drives BOTH measurement (metrics) and rendering (positioned glyphs) so they layout
-/// identically. Owns its itemizer + shaper + face cache; reusable, single-thread-confined. Results live in reused buffers
-/// (valid until the next <see cref="Layout"/>). v1: design-advance shaping with kerning/ligatures/complex-script; font
-/// fallback + color glyphs are layered on in later phases.
+/// identically — and the editor queries (<see cref="HitTest"/>/<see cref="CaretAt"/>/<see cref="RangeRects"/>) read the
+/// retained per-glyph cluster + per-line tables of the SAME layout, so hit-testing matches rendering exactly. Owns its
+/// itemizer + shaper + face cache; reusable, single-thread-confined. Results live in reused grow-only buffers
+/// (valid until the next <see cref="Layout"/>; queries fire per keystroke/pointer-move with 0 steady-state allocation).
+/// v1: design-advance shaping with kerning/ligatures/complex-script; font fallback + color glyphs are layered on in
+/// later phases; query edge mapping is leading=left (LTR — BiDi-correct edges arrive with the RTL workstream, but the
+/// scan is already cluster-correct and walks the visual order).
 /// </summary>
 public sealed unsafe class TextLayoutEngine : IDisposable
 {
@@ -29,7 +60,10 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private readonly DWriteItemizer _itemizer;
     private readonly DWriteTextShaper _shaper;
     private readonly Dictionary<(string fam, bool bold), nint> _faces = new();
-    private readonly Dictionary<(string fam, bool bold), (ushort em, short asc, short desc)> _metrics = new();
+    private readonly Dictionary<(string fam, bool bold), FaceMetrics> _metrics = new();
+
+    /// <summary>Cached per-face design metrics (design units; positive-up from the baseline as DWrite reports them).</summary>
+    private struct FaceMetrics { public ushort Em; public short Asc, Desc, UnderPos, StrikePos; public ushort UnderThk; }
     // Font fallback (Phase 6): split a run by glyph coverage so CJK/emoji/symbols resolve to a covering face.
     private IDWriteFontFallback* _fallback;
     private IDWriteFontCollection* _sysColl;
@@ -42,13 +76,31 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private int _glyphCount;
     private LaidGlyph[] _laid = new LaidGlyph[64];
     private int _laidCount;
+    // Editor-query retention (grow-only, reused across Layout calls): per-laid-glyph cluster map + per-line table.
+    private LaidCluster[] _clusters = new LaidCluster[64];
+    private int _clusterCount;
+    private LaidLine[] _lines = new LaidLine[4];
+    private int _lineRecCount;
+    private int _textLen;
     private ushort _ellGid; private float _ellAdv; private nint _ellFace;
 
     public float Width { get; private set; }
     public float Height { get; private set; }
     public float Baseline { get; private set; }
     public int LineCount { get; private set; }
+    /// <summary>Underline bar position for the laid family/size, measured DOWN from the line top (top-down DIP;
+    /// DWrite's positive-up design value is flipped over <see cref="Baseline"/>). Per-line: add the line's Top.</summary>
+    public float UnderlineY { get; private set; }
+    public float UnderlineThickness { get; private set; }
+    /// <summary>Strikethrough bar position, measured DOWN from the line top (same frame as <see cref="UnderlineY"/>).</summary>
+    public float StrikeY { get; private set; }
     public ReadOnlySpan<LaidGlyph> Glyphs => _laid.AsSpan(0, _laidCount);
+    /// <summary>Cluster map of the current layout, in placement (visual) order — parallel to <see cref="Glyphs"/> minus
+    /// the synthetic trim ellipsis. Valid until the next <see cref="Layout"/>.</summary>
+    public ReadOnlySpan<LaidCluster> Clusters => _clusters.AsSpan(0, _clusterCount);
+    /// <summary>Per-line table of the current layout (always ≥ 1 entry, even for empty text). Valid until the next
+    /// <see cref="Layout"/>.</summary>
+    public ReadOnlySpan<LaidLine> Lines => _lines.AsSpan(0, _lineRecCount);
 
     private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; }
 
@@ -59,7 +111,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         _dw = f;
         _itemizer = new DWriteItemizer();
         _shaper = new DWriteTextShaper(_dw);
-        ResolveFace(DefaultFamily, false, out _, out _, out _);
+        ResolveFace(DefaultFamily, false, out _);
 
         // Best-effort system font fallback (null ⇒ base-face only, no coverage splitting).
         IDWriteFactory2* f2;
@@ -78,14 +130,26 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// are the TextWrap/TextTrim enum ints; <paramref name="size"/> is DIP.</summary>
     public void Layout(ReadOnlySpan<char> text, string family, bool bold, float size, float maxWidth, int wrap, int trim, int maxLines)
     {
-        _glyphCount = 0; _laidCount = 0;
-        var face = ResolveFace(family, bold, out ushort em, out short asc, out short desc);
-        float scale = em > 0 ? size / em : size / 2048f;
-        float lineHeight = (asc + desc) * scale;
+        _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
+        var face = ResolveFace(family, bold, out FaceMetrics fm);
+        float scale = fm.Em > 0 ? size / fm.Em : size / 2048f;
+        float lineHeight = (fm.Asc + fm.Desc) * scale;
         if (lineHeight <= 0f) lineHeight = size * 1.3f;
-        Baseline = asc * scale;
+        Baseline = fm.Asc * scale;
+        // Decoration bars: DWrite reports positions positive-UP from the baseline (underline usually negative = below);
+        // engine Y runs top-down, so flip over the baseline. A face with no underline thickness gets a 1-DIP-ish bar.
+        UnderlineY = Baseline - fm.UnderPos * scale;
+        UnderlineThickness = fm.UnderThk > 0 ? fm.UnderThk * scale : MathF.Max(1f, size / 14f);
+        StrikeY = Baseline - fm.StrikePos * scale;
         int n = text.Length;
-        if (n == 0) { Width = 0; Height = lineHeight; LineCount = 1; return; }
+        _textLen = n;
+        if (n == 0)
+        {
+            Width = 0; Height = lineHeight; LineCount = 1;
+            EnsureLines(1);
+            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = 0, Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
+            return;
+        }
 
         // Ellipsis glyph for this face (for trim) — a single glyph, no shaping needed.
         _ellFace = (nint)face; _ellGid = 0; _ellAdv = 0f;
@@ -168,6 +232,15 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         LineCount = Math.Max(1, line);
         Width = float.IsInfinity(maxWidth) ? maxLineW : MathF.Min(maxLineW, maxWidth);
         Height = LineCount * lineHeight;
+
+        // Seal the retained line table: each line ends where the next begins; the last line runs to the text length.
+        // (Degenerate shaping that produced zero glyphs still gets one empty line so queries always have a band.)
+        if (_lineRecCount == 0)
+        {
+            EnsureLines(1);
+            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = _textLen, Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
+        }
+        for (int li = 0; li + 1 < _lineRecCount; li++) _lines[li].EndChar = _lines[li + 1].StartChar;
     }
 
     // Position glyphs [start,end) on one line with BiDi L2 reordering; trim+ellipsize if the line overflows; append to _laid.
@@ -178,8 +251,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         int len = end - start;
         Span<int> order = len <= 256 ? stackalloc int[len] : new int[len];
         for (int i = 0; i < len; i++) order[i] = start + i;
-        byte maxLevel = 0, minOdd = 255;
-        for (int i = start; i < end; i++) { byte l = _glyphs[i].Level; if (l > maxLevel) maxLevel = l; if ((l & 1) != 0 && l < minOdd) minOdd = l; }
+        byte maxLevel = 0, minOdd = 255; int minCluster = int.MaxValue;
+        for (int i = start; i < end; i++)
+        {
+            byte l = _glyphs[i].Level; if (l > maxLevel) maxLevel = l; if ((l & 1) != 0 && l < minOdd) minOdd = l;
+            int c = _glyphs[i].Cluster; if (c < minCluster) minCluster = c;
+        }
         for (int lvl = maxLevel; lvl >= (minOdd == 255 ? maxLevel + 1 : minOdd); lvl--)
         {
             int i = 0;
@@ -209,10 +286,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
         float x = 0f;
         EnsureLaid(_laidCount + useLen + 1);
+        EnsureClusters(_clusterCount + useLen);
+        int firstGlyph = _clusterCount;
         for (int k = 0; k < useLen; k++)
         {
             ref readonly var g = ref _glyphs[order[k]];
             _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY);
+            _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
         if (ellipsize && _ellFace != 0)
@@ -221,10 +301,131 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             x += _ellAdv;
         }
         if (x > maxLineW) maxLineW = x;
+
+        // Retain the line record. lineIndex == _lineRecCount by construction (every recorded line is emitted in order);
+        // EndChar is provisional — WrapAndPosition seals it to the next line's StartChar once that line is known.
+        EnsureLines(_lineRecCount + 1);
+        _lines[_lineRecCount++] = new LaidLine
+        {
+            StartChar = minCluster, EndChar = _textLen,
+            Top = lineIndex * lineHeight, Height = lineHeight, Width = x,
+            FirstGlyph = firstGlyph, GlyphCount = useLen,
+        };
+    }
+
+    // ── Editor queries (against the CURRENT layout — call Layout first; 0 alloc, retained tables only) ──
+
+    /// <summary>Point → UTF-16 insertion index. The index is SNAPPED to the nearest edge of the hit glyph cluster — its
+    /// leading edge when the point falls in the left half, its trailing edge (= the next cluster's start, or the line
+    /// end) in the right half — and <paramref name="trailing"/> reports which. Out-of-bounds points clamp: above → first
+    /// line, below → last line, left → line start, right → line end; a hard-broken line clamps to the position BEFORE
+    /// its terminator cluster, so a click past the text never jumps the caret to the next line. Multi-glyph clusters
+    /// (base + marks) are walked as one box; an index is never produced inside a cluster.</summary>
+    public int HitTest(Point2 point, out bool trailing)
+    {
+        trailing = false;
+        if (_lineRecCount == 0 || _textLen == 0) return 0;
+        int li = _lineRecCount - 1;
+        for (int i = 0; i < _lineRecCount; i++)
+            if (point.Y < _lines[i].Top + _lines[i].Height) { li = i; break; }
+        ref readonly var line = ref _lines[li];
+        if (line.GlyphCount == 0) return line.StartChar;
+        int g = line.FirstGlyph, gEnd = line.FirstGlyph + line.GlyphCount;
+        if (point.X <= _clusters[g].X) return _clusters[g].Cluster;   // left of the line → leading edge of the first cluster
+        int k = g;
+        while (k < gEnd)
+        {
+            int c = _clusters[k].Cluster;
+            float cx = _clusters[k].X, adv = _clusters[k].Advance;
+            int j = k + 1;
+            while (j < gEnd && _clusters[j].Cluster == c) { adv += _clusters[j].Advance; j++; }   // one box per cluster
+            if (point.X < cx + adv)
+            {
+                if (point.X < cx + adv * 0.5f) return c;                                  // leading half
+                trailing = true;
+                return j < gEnd ? _clusters[j].Cluster : LineEndInsertion(li);            // trailing half → after the cluster
+            }
+            k = j;
+        }
+        trailing = true;
+        return LineEndInsertion(li);   // past the right edge
+    }
+
+    /// <summary>Caret geometry for a UTF-16 index. Returns the LEADING position of <paramref name="charIndex"/>: at a
+    /// soft-wrap boundary that is the START of the continuation line — trailing affinity (pinning the caret to the END
+    /// of the wrapped line) is the caller's job; <paramref name="charIndex"/> == text length → the trailing edge of the
+    /// last line. An index inside a multi-char cluster (ligature/surrogate pair) snaps forward to the cluster's
+    /// trailing edge. Out-of-range indices clamp.</summary>
+    public void CaretAt(int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex)
+    {
+        if (_lineRecCount == 0) { x = 0f; lineTop = 0f; lineHeight = Height; lineIndex = 0; return; }
+        if (charIndex < 0) charIndex = 0; else if (charIndex > _textLen) charIndex = _textLen;
+        int li = _lineRecCount - 1;
+        for (int i = 0; i < _lineRecCount; i++)
+            if (charIndex < _lines[i].EndChar) { li = i; break; }     // boundary index belongs to the NEXT line (leading)
+        ref readonly var line = ref _lines[li];
+        x = CaretXOnLine(li, charIndex);
+        lineTop = line.Top; lineHeight = line.Height; lineIndex = li;
+    }
+
+    /// <summary>One rect per line fragment covered by [<paramref name="start"/>, <paramref name="end"/>): per line,
+    /// [max(start, lineStart), min(end, lineEnd)) → x-from/x-to via cluster edges. Returns the count written
+    /// (≤ <paramref name="rects"/>.Length; excess fragments are dropped — callers size generously). Zero-width ranges —
+    /// and fragments whose clusters have no advance (e.g. a bare line terminator) — produce nothing.</summary>
+    public int RangeRects(int start, int end, Span<RectF> rects)
+    {
+        if (start < 0) start = 0;
+        if (end > _textLen) end = _textLen;
+        if (end <= start) return 0;
+        int written = 0;
+        for (int li = 0; li < _lineRecCount && written < rects.Length; li++)
+        {
+            ref readonly var line = ref _lines[li];
+            int s = start > line.StartChar ? start : line.StartChar;
+            int e = end < line.EndChar ? end : line.EndChar;
+            if (s >= e) continue;
+            float x0 = CaretXOnLine(li, s);
+            float x1 = CaretXOnLine(li, e);
+            if (x1 <= x0) continue;
+            rects[written++] = new RectF(x0, line.Top, x1 - x0, line.Height);
+        }
+        return written;
+    }
+
+    /// <summary>Caret X for <paramref name="charIndex"/> on line <paramref name="li"/>: the leading edge of the first
+    /// cluster at-or-after the index (a mid-cluster index thus snaps to the containing cluster's trailing edge); past
+    /// every retained cluster — including a trim-dropped tail — the trailing edge of the line's last cluster.</summary>
+    private float CaretXOnLine(int li, int charIndex)
+    {
+        ref readonly var line = ref _lines[li];
+        if (line.GlyphCount == 0) return 0f;
+        int gEnd = line.FirstGlyph + line.GlyphCount;
+        for (int i = line.FirstGlyph; i < gEnd; i++)
+            if (_clusters[i].Cluster >= charIndex) return _clusters[i].X;
+        ref readonly var last = ref _clusters[gEnd - 1];
+        return last.X + last.Advance;
+    }
+
+    /// <summary>The insertion index for a hit past a line's right edge. Normally the line's EndChar (== the next line's
+    /// start at a soft wrap — affinity is the caller's job); a HARD-broken line (UAX #14 MustBreak before the next line)
+    /// returns the terminator cluster's start instead, keeping the caret on the clicked line. (TextEditCore feeds
+    /// single-char '\r' hard breaks, so the terminator is one cluster.)</summary>
+    private int LineEndInsertion(int li)
+    {
+        ref readonly var line = ref _lines[li];
+        if (li + 1 < _lineRecCount && line.GlyphCount > 0)
+        {
+            int nextStart = _lines[li + 1].StartChar;
+            if (nextStart >= 0 && nextStart < _breaks.Count && _breaks[nextStart].BreakBefore == BreakOpp.MustBreak)
+                return _clusters[line.FirstGlyph + line.GlyphCount - 1].Cluster;
+        }
+        return line.EndChar;
     }
 
     private void EnsureGlyphs(int n) { if (_glyphs.Length < n) Array.Resize(ref _glyphs, Math.Max(n, _glyphs.Length * 2)); }
     private void EnsureLaid(int n) { if (_laid.Length < n) Array.Resize(ref _laid, Math.Max(n, _laid.Length * 2)); }
+    private void EnsureClusters(int n) { if (_clusters.Length < n) Array.Resize(ref _clusters, Math.Max(n, _clusters.Length * 2)); }
+    private void EnsureLines(int n) { if (_lines.Length < n) Array.Resize(ref _lines, Math.Max(n, _lines.Length * 2)); }
 
     // Pick the face covering [pos, pos+subLen) via system fallback; subLen is the coverage-run length DWrite reports.
     private void ResolveRunFace(string family, bool bold, IDWriteFontFace* baseFace, int pos, int remaining, out IDWriteFontFace* subFace, out int subLen)
@@ -292,17 +493,26 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         return face;
     }
 
-    private IDWriteFontFace* ResolveFace(string family, bool bold, out ushort em, out short asc, out short desc)
+    private IDWriteFontFace* ResolveFace(string family, bool bold, out FaceMetrics m)
     {
         if (string.IsNullOrEmpty(family)) family = DefaultFamily;
         var key = (family, bold);
-        if (_faces.TryGetValue(key, out var cached)) { var m = _metrics[key]; em = m.em; asc = m.asc; desc = m.desc; return (IDWriteFontFace*)cached; }
+        if (_faces.TryGetValue(key, out var cached)) { m = _metrics[key]; return (IDWriteFontFace*)cached; }
         IDWriteFontFace* face;
         try { face = CreateFaceFor(family, bold); } catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
-        if (face == null) { em = 2048; asc = 1500; desc = 500; return null; }
+        if (face == null)
+        {
+            // Faceless fallback: Segoe-ish design ratios (per 2048 em) so metrics-dependent callers stay sane.
+            m = new FaceMetrics { Em = 2048, Asc = 1500, Desc = 500, UnderPos = -200, UnderThk = 140, StrikePos = 600 };
+            return null;
+        }
         DWRITE_FONT_METRICS fm; face->GetMetrics(&fm);
-        em = fm.designUnitsPerEm; asc = (short)fm.ascent; desc = (short)fm.descent;
-        _faces[key] = (nint)face; _metrics[key] = (em, asc, desc);
+        m = new FaceMetrics
+        {
+            Em = fm.designUnitsPerEm, Asc = (short)fm.ascent, Desc = (short)fm.descent,
+            UnderPos = fm.underlinePosition, UnderThk = fm.underlineThickness, StrikePos = fm.strikethroughPosition,
+        };
+        _faces[key] = (nint)face; _metrics[key] = m;
         return face;
     }
 

@@ -90,8 +90,18 @@ public sealed class SceneStore : ISceneBackend
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
     private readonly Dictionary<int, BrushAnim> _brushAnims = new();
     private readonly List<int> _brushScratch = new();
+    // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
+    // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
+    private readonly Dictionary<int, TextEditState> _textEdits = new();
+    private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditSelRects = new();
+    private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditUnderlineRects = new();
 
     public NodeHandle Root { get; set; }
+
+    /// <summary>Optional interner for text-id lifetime accounting: when set, freeing a node (or rewriting its dynamic
+    /// text) releases its <c>paint.Text</c> / <c>TextStyle.Family</c> refs so streamed virtual-list text is reclaimed
+    /// instead of accumulating for the process lifetime. Wired by the reconciler at composition.</summary>
+    public StringTable? Strings { get; set; }
 
     public SceneStore(int capacity = 64)
     {
@@ -169,6 +179,11 @@ public sealed class SceneStore : ISceneBackend
             c = next;
         }
         DetachFromParent(idx);
+        if (Strings is { } st)
+        {
+            st.Release(_paint[idx].Text);
+            st.Release(_layout[idx].TextStyle.Family);
+        }
         _click[idx] = null;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
@@ -195,6 +210,9 @@ public sealed class SceneStore : ISceneBackend
         _acrylics.Remove(idx);
         _measureCache.Remove(idx);
         _brushAnims.Remove(idx);
+        _textEdits.Remove(idx);
+        _textEditSelRects.Remove(idx);
+        _textEditUnderlineRects.Remove(idx);
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -321,6 +339,81 @@ public sealed class SceneStore : ISceneBackend
         }
     }
 
+    // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
+    /// <summary>Get-or-create the text-edit row for an editor's text node (caret/IME/focus PODs).</summary>
+    public ref TextEditState TextEditRef(NodeHandle h)
+        => ref CollectionsMarshal.GetValueRefOrAddDefault(_textEdits, (int)h.Raw.Index, out _);
+
+    public bool HasTextEdit(NodeHandle h) => _textEdits.ContainsKey((int)h.Raw.Index);
+
+    /// <summary>Read the text-edit row by value (false + default if the node is not an editor).</summary>
+    public bool TryGetTextEdit(NodeHandle h, out TextEditState s) => _textEdits.TryGetValue((int)h.Raw.Index, out s);
+
+    /// <summary>Drop the node's text-edit row AND its pooled decoration-rect slots (editor unmounted / no longer editable).</summary>
+    public void ClearTextEdit(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        _textEdits.Remove(idx);
+        _textEditSelRects.Remove(idx);
+        _textEditUnderlineRects.Remove(idx);
+    }
+
+    /// <summary>Any editor currently focused with a blink-visible caret (cheap host gate; O(editors), usually 0–1).</summary>
+    public bool AnyTextEditCaretVisible
+    {
+        get
+        {
+            const byte on = TextEditState.CaretVisible | TextEditState.Focused;
+            foreach (var kv in _textEdits)
+                if ((kv.Value.Flags & on) == on) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Publish this frame's selection-highlight + IME-clause-underline rects for an editor's text node (TEXT-NODE-LOCAL
+    /// coords, computed by the control at edit/drag time). Backing arrays are per-node pooled and grow-only — reused
+    /// across frames so a selection drag at pointer rate is 0-alloc once grown. Empty spans clear (count → 0, array kept).
+    /// </summary>
+    public void SetTextEditRects(NodeHandle node, ReadOnlySpan<RectF> selection, ReadOnlySpan<RectF> compUnderlines)
+    {
+        int idx = (int)node.Raw.Index;
+        StoreRects(_textEditSelRects, idx, selection);
+        StoreRects(_textEditUnderlineRects, idx, compUnderlines);
+    }
+
+    /// <summary>The node's published selection-highlight rects (empty span when no selection).</summary>
+    public ReadOnlySpan<RectF> GetTextEditSelectionRects(NodeHandle h)
+        => _textEditSelRects.TryGetValue((int)h.Raw.Index, out var s) && s.Arr is not null
+            ? s.Arr.AsSpan(0, s.Count) : default;
+
+    /// <summary>The node's published IME composition-underline rects (empty span when no composition).</summary>
+    public ReadOnlySpan<RectF> GetTextEditUnderlineRects(NodeHandle h)
+        => _textEditUnderlineRects.TryGetValue((int)h.Raw.Index, out var s) && s.Arr is not null
+            ? s.Arr.AsSpan(0, s.Count) : default;
+
+    private static void StoreRects(Dictionary<int, (RectF[]? Arr, int Count)> table, int idx, ReadOnlySpan<RectF> rects)
+    {
+        if (rects.IsEmpty)
+        {
+            // Clear without dropping the pooled array; never create an entry just to say "empty".
+            ref var existing = ref CollectionsMarshal.GetValueRefOrNullRef(table, idx);
+            if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref existing)) existing.Count = 0;
+            return;
+        }
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(table, idx, out _);
+        RectF[]? arr = slot.Arr;
+        if (arr is null || arr.Length < rects.Length)
+        {
+            int cap = arr is { Length: > 0 } ? arr.Length : 4;
+            while (cap < rects.Length) cap *= 2;
+            arr = new RectF[cap];   // grow-only; steady-state (selection drags) reuses with zero alloc
+            slot.Arr = arr;
+        }
+        rects.CopyTo(arr);
+        slot.Count = rects.Length;
+    }
+
     /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).</summary>
     public NodeHandle FindAccelerator(int key, KeyModifiers mods)
     {
@@ -368,7 +461,10 @@ public sealed class SceneStore : ISceneBackend
         {
             var kind = _dynamicText[i];
             if (kind == DynamicTextKind.None) continue;
-            _paint[i].Text = resolve(kind);
+            var next = resolve(kind);
+            if (next == _paint[i].Text) continue;
+            if (Strings is { } st) { st.AddRef(next); st.Release(_paint[i].Text); }   // per-frame ids (FPS/ms) reclaim instead of accreting
+            _paint[i].Text = next;
         }
     }
 

@@ -10,6 +10,14 @@ public readonly record struct FocusVisualStyle(ColorF Outer, ColorF Inner, float
     public bool Enabled => Outer.A > 0f || Inner.A > 0f;
 }
 
+/// <summary>The text-edit decoration brushes (WinUI TextControlSelectionHighlightColor = AccentFillColorSelectedTextBackgroundBrush,
+/// TextOnAccentFillColorSelectedTextBrush, and the caret = the text foreground). Passed into the recorder by the host
+/// (which reads the theme), like <see cref="FocusVisualStyle"/>; default = disabled, so existing paths are untouched.</summary>
+public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF SelectedText, ColorF CaretColor)
+{
+    public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
+}
+
 public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount);
 
 /// <summary>
@@ -35,14 +43,14 @@ public static class SceneRecorder
     }
 
     public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
-                                          ColorF scrollThumb = default, ColorF scrollTrack = default)
+                                          ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default)
     {
         dl.Reset();
         if (scene.Root.IsNull) return default;
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -50,13 +58,13 @@ public static class SceneRecorder
         for (int i = 0; i < scene.OrphanCount; i++)
         {
             var o = scene.OrphanAt(i, out float px, out float py);
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, ref stats);
         }
         return stats.ToStats();
     }
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
-                             int depth, RectF clip, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack,
+                             int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                              float parentScaleX, float parentScaleY, ref RecordAccumulator stats)
     {
         NodeFlags flags = scene.Flags(node);
@@ -217,12 +225,62 @@ public static class SceneRecorder
                 }
                 break;
             }
-            case VisualKind.Text when !p.Text.IsEmpty:
+            case VisualKind.Text:
             {
                 ref var li = ref scene.Layout(node);
                 ColorF textColor = ResolveTextColor(scene, node, flags, in p);
-                dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
-                    (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
+
+                // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
+                // WinUI-exact emit order: selection highlight UNDER the glyphs → base glyph run → per-rect clipped
+                // glyph re-emit in the on-accent selected-text color → IME clause underline bars → the caret bar.
+                TextEditState tes = default;
+                bool hasEdit = textEdit.Enabled && scene.TryGetTextEdit(node, out tes);
+                ReadOnlySpan<RectF> selRects = hasEdit ? scene.GetTextEditSelectionRects(node) : default;
+
+                // (a) selection highlight (TextControlSelectionHighlightColor): plain rects (radius 0) under the run.
+                if (textEdit.SelectionFill.A > 0f)
+                    for (int i = 0; i < selRects.Length; i++)
+                        dl.FillRoundRect(selRects[i], default, textEdit.SelectionFill, world, opacity, key);
+
+                // (b) the base glyph run — the existing path, unchanged.
+                if (!p.Text.IsEmpty)
+                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
+                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
+
+                // (c) selected-text recolor: re-emit the SAME run scissored to each selection rect (device-space,
+                // intersected with the active clip like every PushClip the recorder emits). Glyph cost ×2 only while
+                // a selection exists — exactly WinUI's selected-text recolor, no per-glyph splitting.
+                if (!p.Text.IsEmpty && textEdit.SelectedText.A > 0f)
+                    for (int i = 0; i < selRects.Length; i++)
+                    {
+                        RectF selDevice = world.TransformBounds(selRects[i]).Intersect(childClip);
+                        if (selDevice.IsEmpty) continue;
+                        dl.PushClip(selDevice, key | 0x1);
+                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key | 0x1);
+                        dl.PopClip(key | 0x1);
+                    }
+
+                // (d) IME composition clause underlines: thin bars in the text foreground (the control computes
+                // thickness/position from the face metrics — the rects are used as given).
+                if (hasEdit)
+                {
+                    ReadOnlySpan<RectF> ulRects = scene.GetTextEditUnderlineRects(node);
+                    for (int i = 0; i < ulRects.Length; i++)
+                        dl.FillRoundRect(ulRects[i], default, textColor, world, opacity, key | 0x2);
+                }
+
+                // (e) the caret: a 1px bar, drawn only while focused AND blink-visible, pixel-snapped in device space
+                // (round the device X, push the delta back through the world scale).
+                if (hasEdit && textEdit.CaretColor.A > 0f && tes.CaretH > 0f
+                    && (tes.Flags & (TextEditState.CaretVisible | TextEditState.Focused))
+                       == (TextEditState.CaretVisible | TextEditState.Focused))
+                {
+                    float sx = world.M11 != 0f ? world.M11 : 1f;
+                    float devX = world.Transform(new Point2(tes.CaretX, tes.CaretTop)).X;
+                    float caretX = tes.CaretX + (MathF.Round(devX) - devX) / sx;
+                    dl.FillRoundRect(new RectF(caretX, tes.CaretTop, 1f, tes.CaretH), default, textEdit.CaretColor, world, opacity, key | 0x4);
+                }
                 break;
             }
             case VisualKind.Image:
@@ -249,7 +307,7 @@ public static class SceneRecorder
         }
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
+            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a

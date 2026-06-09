@@ -205,6 +205,22 @@ public struct BrushAnim
     public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
 }
 
+/// <summary>
+/// Sparse text-edit state for an editor's TEXT node (side-table, O(editors)): caret geometry + caret-follow scroll +
+/// in-flight IME composition span + focus/blink flags. Written by the editing control (UI thread, edit/drag time) and
+/// the <c>CaretBlinker</c> phase-7 ticker; the recorder only READS it (plus the pooled decoration rects on
+/// <see cref="SceneStore.SetTextEditRects"/>) to emit selection highlight / selected-text recolor / IME underlines /
+/// the caret bar — retained scene state, never composed elements (0 alloc in phases 6–13).
+/// </summary>
+public struct TextEditState
+{
+    public int CompStart, CompLen;          // in-flight IME composition span (document indices); CompLen 0 = none
+    public float ScrollX;                   // horizontal caret-follow offset (applied by the control as a transform)
+    public float CaretX, CaretTop, CaretH;  // caret bar geometry in TEXT-NODE-LOCAL coords (already scrolled)
+    public byte Flags;
+    public const byte CaretVisible = 1, Focused = 2, SelectionActive = 4;
+}
+
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {

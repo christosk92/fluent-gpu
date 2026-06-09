@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -339,12 +340,15 @@ float4 PSMain(VSOut i) : SV_Target
         }
 
         // Miss (new/changed run): shape once into the scratch buffer, cache the baked local-space quads, then replay.
+        // The quad array is POOLED (returned on eviction) so scroll-storms of fresh text don't churn Gen0 per run.
         _scratch.Clear();
         ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
-        var arr = _scratch.Count > 0 ? _scratch.ToArray() : Array.Empty<ShapedGlyph>();
-        _runCache[key] = new ShapedRun { Glyphs = arr, Count = arr.Length, LastUsedFrame = _frame };
+        int n = _scratch.Count;
+        var arr = n > 0 ? ArrayPool<ShapedGlyph>.Shared.Rent(n) : Array.Empty<ShapedGlyph>();
+        for (int i = 0; i < n; i++) arr[i] = _scratch[i];
+        _runCache[key] = new ShapedRun { Glyphs = arr, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
-        Replay(arr.AsSpan(), color, world, opacity, outList);
+        Replay(arr.AsSpan(0, n), color, world, opacity, outList);
     }
 
     private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, bool bold, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale)
@@ -421,12 +425,14 @@ float4 PSMain(VSOut i) : SV_Target
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         if (w > 0 && h > 0)
         {
-            byte[] rgb = new byte[w * h * 3];
+            byte[] rgb = ArrayPool<byte>.Shared.Rent(w * h * 3);
             fixed (byte* pr = rgb)
-                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
-            byte[] gray = new byte[w * h];
+                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)(w * h * 3)), "CreateAlphaTexture");
+            byte[] gray = ArrayPool<byte>.Shared.Rent(w * h);
             for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
             Pack(ref e, gray, w, h);
+            ArrayPool<byte>.Shared.Return(gray);
+            ArrayPool<byte>.Shared.Return(rgb);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
@@ -454,7 +460,9 @@ float4 PSMain(VSOut i) : SV_Target
         int maxAge = _runCache.Count > 4096 ? 60 : 240;
         foreach (var kv in _runCache)
             if (_frame - kv.Value.LastUsedFrame > maxAge) _evictScratch.Add(kv.Key);
-        foreach (var k in _evictScratch) _runCache.Remove(k);
+        foreach (var k in _evictScratch)
+            if (_runCache.Remove(k, out var dead) && dead.Glyphs.Length > 0)
+                ArrayPool<ShapedGlyph>.Shared.Return(dead.Glyphs);
         _evictScratch.Clear();
     }
 

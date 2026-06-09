@@ -53,6 +53,7 @@ public sealed class AppHost : IDisposable
     private readonly InteractionAnimator _interact;
     private readonly ScrollAnimator _scrollAnim;
     private readonly RepeatTicker _repeat;
+    private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
     private readonly Dictionary<NodeHandle, RectF> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
 
@@ -144,13 +145,16 @@ public sealed class AppHost : IDisposable
     public AnimEngine Animation => _anim;
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
-        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _scene.HasBrushAnims
+        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _caretBlinker.HasActive || _scene.HasBrushAnims
         || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
 
     public ImageCache Images => _images;
+
+    /// <summary>The focused-editor caret-blink ticker (phase 7). Text-input controls Focus/Blur/ResetBlink it.</summary>
+    public CaretBlinker CaretBlinker => _caretBlinker;
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null)
@@ -170,6 +174,7 @@ public sealed class AppHost : IDisposable
         _interact = new InteractionAnimator(_scene);
         _scrollAnim = new ScrollAnimator(_scene);
         _repeat = new RepeatTicker(_scene);
+        _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
 
         // A reactive write (anywhere) requests a frame.
@@ -320,14 +325,18 @@ public sealed class AppHost : IDisposable
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
+            _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
+            // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),
+            // selected glyphs = TextOnAccentFillColorSelectedTextBrush, caret = the text foreground.
+            var textEdit = new TextEditStyle(Tok.AccentSelectedTextBackground, Tok.TextOnAccentSelectedText, Tok.TextPrimary);
             UpdateDynamicDiagnosticsText();
-            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
+            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit); // 8 record
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit

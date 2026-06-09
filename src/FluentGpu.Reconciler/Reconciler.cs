@@ -70,7 +70,17 @@ public sealed class TreeReconciler
     {
         _scene = scene;
         _strings = strings;
+        _scene.Strings = strings;   // text-id lifetime accounting: FreeSubtree releases paint.Text / TextStyle.Family
         Runtime = runtime ?? new ReactiveRuntime();
+    }
+
+    /// <summary>Swap a node's text id with ownership accounting (the scene's text column holds a ref per live node, so
+    /// streamed virtual-list strings are reclaimed by the StringTable once no node shows them).</summary>
+    private void SetPaintText(ref NodePaint paint, StringId next)
+    {
+        _strings.AddRef(next);
+        _strings.Release(paint.Text);
+        paint.Text = next;
     }
 
     /// <summary>Publish an ambient context (e.g. Viewport.Size) as a host-owned signal consumers can read.</summary>
@@ -435,7 +445,7 @@ public sealed class TreeReconciler
                     var next = _strings.Intern(txb());
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Text == next) return;
-                    paint.Text = next;
+                    SetPaintText(ref paint, next);
                     _scene.Mark(node, NodeFlags.LayoutDirty);
                 }, owner: null, runNow: true));
             if (t.ColorBind is { } cb)
@@ -502,16 +512,11 @@ public sealed class TreeReconciler
             int idx = first + i;
             int oldSlot = idx - prevFirst;
             Element? el = prev is not null && (uint)oldSlot < (uint)entry.PrevLen ? prev[oldSlot] : null;
-            if (el is null)
-            {
-                el = ve.RenderItem(idx);
-                string key = ve.KeyOf?.Invoke(idx) ?? ("#" + idx);
-                el = el with { Key = key };
-            }
-            cur[i] = el;
+            cur[i] = el ?? ve.RenderItem(idx);   // overlap reuses the element OBJECT — no keys, no `with` clone
         }
 
-        ReconcileChildren(content, cur.AsSpan(0, w), entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen));
+        ReconcileWindow(content, cur.AsSpan(0, w),
+            entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst);
 
         if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
         entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
@@ -522,6 +527,110 @@ public sealed class TreeReconciler
     }
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
+
+    /// <summary>
+    /// Window-diff for virtualization (virtualization.md: recycle, don't churn). Overlapping rows reuse their element
+    /// OBJECT (identity-matched to their existing node — a no-op). Every other new row RECYCLES a scrolled-out node of
+    /// the same shape: its columns are rewritten in place (text/fill/image rebind) with NO scene mount/unmount, no key
+    /// strings, and no per-realize dictionary — the thumb-drag storm becomes a column rewrite instead of a tree rebuild.
+    /// Non-recyclable subtrees (components, Show/For, providers, scrollers, reactive binds — identity fixed at mount)
+    /// fall back to mount+remove. <paramref name="shift"/> = newFirst − prevFirst (the overlap slot mapping).
+    /// </summary>
+    private void ReconcileWindow(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids, int shift)
+    {
+        int oldN = oldKids.Length, newN = newKids.Length;
+        if (oldN == 0 && newN == 0) return;
+
+        Span<NodeHandle> oldNodes = oldN <= 128 ? stackalloc NodeHandle[oldN] : new NodeHandle[oldN];
+        {
+            int i = 0;
+            for (var c = _scene.FirstChild(node); !c.IsNull && i < oldN; c = _scene.NextSibling(c)) oldNodes[i++] = c;
+        }
+
+        Span<bool> used = oldN <= 128 ? stackalloc bool[oldN] : new bool[oldN];
+        Span<NodeHandle> newNodes = newN <= 128 ? stackalloc NodeHandle[newN] : new NodeHandle[newN];
+
+        // Pass 1: overlap — a reused element object keeps its node untouched.
+        for (int i = 0; i < newN; i++)
+        {
+            int os = i + shift;
+            if ((uint)os < (uint)oldN && ReferenceEquals(newKids[i], oldKids[os]))
+            {
+                newNodes[i] = oldNodes[os];
+                used[os] = true;
+            }
+            else newNodes[i] = NodeHandle.Null;
+        }
+
+        // Pass 2: fresh rows recycle scrolled-out nodes (column rewrite via Update); mount only when none is left.
+        bool structural = false;
+        int cursor = 0;
+        for (int i = 0; i < newN; i++)
+        {
+            if (!newNodes[i].IsNull) continue;
+            Element nk = newKids[i];
+
+            int match = -1;
+            if (IsRecyclable(nk))
+            {
+                while (cursor < oldN && used[cursor]) cursor++;
+                if (cursor < oldN && oldKids[cursor].ElementTypeId == nk.ElementTypeId) match = cursor;
+            }
+
+            if (match >= 0)
+            {
+                used[match] = true;
+                newNodes[i] = oldNodes[match];
+                Update(oldNodes[match], nk, oldKids[match]);
+                // The node now shows a DIFFERENT item: transient interaction state must not travel with it (the old
+                // code freed the node, which dropped this state implicitly).
+                _scene.Unmark(oldNodes[match], NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
+            }
+            else
+            {
+                var child = _scene.CreateNode(nk.ElementTypeId);
+                Mount(child, nk);
+                newNodes[i] = child;
+                structural = true;
+            }
+        }
+
+        for (int j = 0; j < oldN; j++)
+            if (!used[j]) { Remove(oldNodes[j]); structural = true; }
+
+        for (int i = 0; i < newN; i++)
+        {
+            _scene.Detach(newNodes[i]);
+            _scene.AppendChild(node, newNodes[i]);
+        }
+
+        // The window moved (children are positioned by FirstRealized + document order) or changed size/shape → re-arrange.
+        if (structural || newN != oldN || shift != 0) _scene.Mark(node, NodeFlags.LayoutDirty);
+    }
+
+    /// <summary>True if the subtree is a PLAIN visual tree (box/grid/text/image/polyline, no reactive binds, no
+    /// OnRealized): safe to rebind onto a recycled node. Components/flow/providers/scrollers and bound elements capture
+    /// identity at mount — they must mount fresh.</summary>
+    private static bool IsRecyclable(Element el)
+    {
+        switch (el)
+        {
+            case TextEl t:
+                return t.TextBind is null && t.ColorBind is null;
+            case ImageEl or PolylineStrokeEl:
+                return true;
+            case BoxEl b:
+                if (b.TransformBind is not null || b.OpacityBind is not null || b.FillBind is not null
+                    || b.WidthBind is not null || b.HeightBind is not null || b.OnRealized is not null) return false;
+                foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
+                return true;
+            case GridEl g:
+                foreach (var c in g.Children) if (!IsRecyclable(c)) return false;
+                return true;
+            default:
+                return false;   // ComponentEl / ShowEl / ForEl / ContextProviderEl / ScrollEl / VirtualListEl / unknown
+        }
+    }
 
     // ── Keyed child reconcile (the structural engine, retained) ──────────────────────────────────
 
@@ -968,11 +1077,13 @@ public sealed class TreeReconciler
                 if (t.TextBind is null)
                 {
                     var newText = _strings.Intern(t.Text);
-                    if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); _scene.Mark(node, NodeFlags.LayoutDirty); }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
-                li.TextStyle = new TextStyle(_strings.Intern(t.FontFamily), t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);
+                var famId = _strings.Intern(t.FontFamily);
+                if (li.TextStyle.Family != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.Family); }
+                li.TextStyle = new TextStyle(famId, t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
