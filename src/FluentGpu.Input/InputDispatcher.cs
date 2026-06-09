@@ -788,16 +788,35 @@ public sealed class InputDispatcher
 
     private int TabKey(NodeHandle n) { int t = _scene.Interaction(n).TabIndex; return t > 0 ? t : int.MaxValue; }
 
-    /// <summary>Move focus. <paramref name="visual"/> = show the focus ring (keyboard/Tab); pointer focus passes false.</summary>
+    /// <summary>Move focus. <paramref name="visual"/> = show the focus ring (keyboard/Tab); pointer focus passes false.
+    /// Focus-visual transitions mark the affected nodes PaintDirty and request a frame — the ring is paint state.</summary>
     public void SetFocus(NodeHandle node, bool visual = false)
     {
         if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
         if (!_spaceArmed.IsNull && node != _spaceArmed) CancelSpaceArm(fire: false);  // focus moved while Space held → no activation
-        if (!_focused.IsNull && _scene.IsLive(_focused)) _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
+        bool repaint = false;
+        if (!_focused.IsNull && _scene.IsLive(_focused))
+        {
+            if ((_scene.Flags(_focused) & NodeFlags.FocusVisual) != 0)
+            {
+                _scene.Mark(_focused, NodeFlags.PaintDirty);   // the old ring must disappear
+                repaint = true;
+            }
+            _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
+        }
         _focused = node;
-        if (node.IsNull) return;
-        _scene.Flags(node) |= NodeFlags.Focused;
-        if (visual) _scene.Flags(node) |= NodeFlags.FocusVisual; else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
+        if (!node.IsNull)
+        {
+            _scene.Flags(node) |= NodeFlags.Focused;
+            if (visual)
+            {
+                _scene.Flags(node) |= NodeFlags.FocusVisual;
+                _scene.Mark(node, NodeFlags.PaintDirty);
+                repaint = true;
+            }
+            else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
+        }
+        if (repaint) RequestRerender();
     }
 
     private void Collect(NodeHandle node, List<NodeHandle> into)

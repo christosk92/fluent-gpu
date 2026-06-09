@@ -265,7 +265,7 @@ public static class SceneRecorder
 
         // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children ──
         if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
-            EmitFocusRing(dl, b, p.Corners, world, opacity, in focus, key | 0x10);
+            EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);
@@ -483,18 +483,35 @@ public static class SceneRecorder
         dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }
 
-    /// <summary>WinUI dual focus visual: a 1px inner secondary stroke at the control edge + a 2px outer primary stroke
-    /// just outside it. Real SDF strokes, so they're correct over any fill/background.</summary>
-    private static void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
+    /// <summary>WinUI dual focus visual, margin-aware: the focus rect is the bounds expanded by −FocusVisualMargin
+    /// (templates use −3 ⇒ 3px out; Slider −7,0,−7,0). The 2px PRIMARY (outer) stroke hugs the inside of the focus
+    /// rect's edge; the 1px SECONDARY (inner) stroke sits immediately inside it — with the default margin the pair
+    /// lands exactly on the control edge (edge → 1px inner → 2px outer). Centerline SDF strokes, so each rect insets
+    /// by half its thickness; corner radii grow with the expansion to stay concentric.</summary>
+    private static void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
     {
-        if (f.Inner.A > 0f)
-            dl.StrokeRoundRect(new RectF(0f, 0f, b.W, b.H), corners, f.Inner, 1f, world, opacity, key);
-        if (f.Outer.A > 0f)
+        // Per-side expansion (negative WinUI margin = grow outward). Clamp ≥ 0 — a positive margin never shrinks inside.
+        float eL = MathF.Max(0f, -margin.Left), eT = MathF.Max(0f, -margin.Top);
+        float eR = MathF.Max(0f, -margin.Right), eB = MathF.Max(0f, -margin.Bottom);
+        float tP = MathF.Max(1f, f.Thickness);   // primary (outer) thickness — WinUI FocusVisualPrimaryThickness = 2
+
+        // The focus rect in node-local space.
+        var fr = new RectF(-eL, -eT, b.W + eL + eR, b.H + eT + eB);
+        // Corner radius grows by the smaller adjacent expansion so the arc stays concentric with the control corner.
+        var fc = new CornerRadius4(
+            corners.TopLeft + MathF.Min(eL, eT), corners.TopRight + MathF.Min(eR, eT),
+            corners.BottomRight + MathF.Min(eR, eB), corners.BottomLeft + MathF.Min(eL, eB));
+
+        if (f.Outer.A > 0f)   // primary band [edge-tP .. edge] inside the focus rect → centerline inset tP/2
+            dl.StrokeRoundRect(
+                new RectF(fr.X + tP * 0.5f, fr.Y + tP * 0.5f, MathF.Max(0f, fr.W - tP), MathF.Max(0f, fr.H - tP)),
+                InsetCorners(fc, tP * 0.5f), f.Outer, tP, world, opacity, key);
+        if (f.Inner.A > 0f)   // secondary 1px band immediately inside the primary → centerline inset tP + 0.5
         {
-            float g = MathF.Max(1f, f.Thickness);
-            var grown = new RectF(-g, -g, b.W + 2f * g, b.H + 2f * g);
-            var gc = new CornerRadius4(corners.TopLeft + g, corners.TopRight + g, corners.BottomRight + g, corners.BottomLeft + g);
-            dl.StrokeRoundRect(grown, gc, f.Outer, f.Thickness, world, opacity, key);
+            float i = tP + 0.5f;
+            dl.StrokeRoundRect(
+                new RectF(fr.X + i, fr.Y + i, MathF.Max(0f, fr.W - 2f * i), MathF.Max(0f, fr.H - 2f * i)),
+                InsetCorners(fc, i), f.Inner, 1f, world, opacity, key);
         }
     }
 

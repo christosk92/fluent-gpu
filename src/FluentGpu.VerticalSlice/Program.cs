@@ -73,6 +73,25 @@ sealed class HoverProbe : Component
     public override Element Render() => Button.Accent("hi", () => { });
 }
 
+// Two bare clickable boxes for the E1 focus-ring geometry checks: default FocusVisualMargin (−3) and the Slider
+// asymmetric −7,0,−7,0. Bare BoxEls (no border/gradient) so LastStrokes carries ONLY the focus rings.
+sealed class FocusRingProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 20, Padding = Edges4.All(20),
+        Children =
+        [
+            new BoxEl { Width = 100, Height = 40, Fill = ColorF.FromRgba(0x20, 0x20, 0x20), OnClick = () => { } },
+            new BoxEl
+            {
+                Width = 100, Height = 40, Fill = ColorF.FromRgba(0x20, 0x20, 0x20), OnClick = () => { },
+                FocusVisualMargin = new Edges4(-7, 0, -7, 0),
+            },
+        ],
+    };
+}
+
 sealed class AnimProbe : Component
 {
     public float Target;
@@ -3305,6 +3324,59 @@ static class Slice
         }
     }
 
+    // E1 — the WinUI focus visual: 2px primary + 1px secondary BOTH outside the bounds (FocusVisualMargin −3 default),
+    // keyboard-only, margin-aware (Slider −7,0,−7,0), light-theme inner alpha #B3FFFFFF.
+    static void FocusRingChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("focusring", new Size2(300, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new FocusRingProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        // Pointer focus: click the button — NO ring may appear (keyboard-only focus visuals).
+        var btn = Child(host.Scene, host.Scene.Root, 0);
+        ClickNode(host, window, btn);
+        host.RunFrame();
+        bool pointerSilent = device.LastStrokes.Count == 0;
+
+        // Keyboard focus: the click focused button1, so Tab lands on button2 — the ASYMMETRIC margin (−7,0,−7,0):
+        // 100×40 ⇒ focus rect (−7,0,114,40); primary centerline inset 1 ⇒ (−6,1,112,38).
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+        host.RunFrame();
+        DrawRoundRectStrokeCmd p2 = default;
+        foreach (var s in device.LastStrokes) if (Near(s.StrokeWidth, 2f)) p2 = s;
+        bool asym = Near(p2.Rect.X, -6f) && Near(p2.Rect.Y, 1f) && Near(p2.Rect.W, 112f) && Near(p2.Rect.H, 38f);
+        Check("E1.b FocusVisualMargin −7,0,−7,0 widens the ring horizontally only (Slider shape)", asym,
+            $"prim=({p2.Rect.X:0.#},{p2.Rect.Y:0.#} {p2.Rect.W:0.#}x{p2.Rect.H:0.#})");
+
+        // Second Tab wraps to button1 — the DEFAULT margin −3: focus rect (−3,−3,106,46); primary inset 1; secondary 2.5.
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+        host.RunFrame();
+        DrawRoundRectStrokeCmd primary = default, secondary = default;
+        foreach (var s in device.LastStrokes)
+        {
+            if (Near(s.StrokeWidth, 2f)) primary = s;
+            else if (Near(s.StrokeWidth, 1f)) secondary = s;
+        }
+        bool primaryGeom = Near(primary.Rect.X, -2f) && Near(primary.Rect.Y, -2f) && Near(primary.Rect.W, 104f) && Near(primary.Rect.H, 44f);
+        bool secondaryGeom = Near(secondary.Rect.X, -0.5f) && Near(secondary.Rect.Y, -0.5f) && Near(secondary.Rect.W, 101f) && Near(secondary.Rect.H, 41f);
+        bool colors = ColorClose(primary.Color, Tok.FocusOuter, 0.004f) && ColorClose(secondary.Color, Tok.FocusInner, 0.004f);
+        Check("E1.a keyboard focus draws the WinUI dual ring OUTSIDE the bounds (pointer focus stays bare)",
+            pointerSilent && primaryGeom && secondaryGeom && colors,
+            $"ptr={pointerSilent} prim=({primary.Rect.X:0.#},{primary.Rect.Y:0.#} {primary.Rect.W:0.#}x{primary.Rect.H:0.#}) " +
+            $"sec=({secondary.Rect.X:0.#},{secondary.Rect.Y:0.#} {secondary.Rect.W:0.#}x{secondary.Rect.H:0.#}) colors={colors}");
+
+        // Light theme: FocusStrokeColorInner is #B3FFFFFF (white @ 0.70) — the audit's alpha fix.
+        var light = Tok.Light.FocusInner;
+        Check("E1.c Light FocusStrokeColorInner = #B3FFFFFF (alpha corrected)",
+            ColorClose(light, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3), 0.004f),
+            $"A={light.A:0.###} R={light.R:0.###}");
+    }
+
     static void FocusNavChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -4454,6 +4526,7 @@ static class Slice
         ClipChannelChecks();
         FocusNavChecks(strings);
         InputVocabularyChecks(strings);
+        FocusRingChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

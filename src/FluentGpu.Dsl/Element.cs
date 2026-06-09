@@ -79,6 +79,9 @@ public sealed record BoxEl : Element
     public bool IsEnabled { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
+    /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
+    /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>
+    public Edges4? FocusVisualMargin { get; init; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
     public AutomationRole Role { get; init; }
 

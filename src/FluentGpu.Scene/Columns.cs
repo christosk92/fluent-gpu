@@ -200,6 +200,9 @@ public struct InteractionInfo
     public int TabIndex;
     /// <summary>Access-key mnemonic (Alt+letter; uppercase VK 'A'..'Z' / '0'..'9'). 0 = none.</summary>
     public char AccessKey;
+    /// <summary>WinUI FocusVisualMargin (negative = the focus ring expands OUTSIDE the bounds; WinUI templates use −3,
+    /// Slider −7,0,−7,0). Written resolved by the reconciler (default −3 all around).</summary>
+    public Edges4 FocusVisualMargin;
     /// <summary>Keyboard-accelerator chord: invoked from anywhere once focused routing leaves the key unhandled. 0 = none.</summary>
     public int AccelKey;
     public KeyModifiers AccelMods;

@@ -798,6 +798,7 @@ public sealed class TreeReconciler
 
                 ii.Focusable = b.Focusable || b.OnClick is not null;
                 ii.TabIndex = b.TabIndex;
+                ii.FocusVisualMargin = b.FocusVisualMargin ?? Edges4.All(-3f);   // the WinUI template default
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
                 break;
             }
