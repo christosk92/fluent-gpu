@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Reconciler;
 
@@ -22,6 +23,11 @@ public sealed record VirtualListEl : Element
     public int ItemCount { get; init; }
     public Func<int, Element> RenderItem { get; init; } = static _ => new BoxEl();
     public Func<int, string>? KeyOf { get; init; }
+    /// <summary>Signals-first BOUND row template (the recycler fast path): the template runs ONCE per visible slot
+    /// with an index SIGNAL; scrolling rebinds a slot by writing its signal, so only the row's reactive binds
+    /// (TextBind/FillBind/SourceBind/…) re-run — zero element rebuild, zero reconcile, zero keys. When set,
+    /// <see cref="RenderItem"/>/<see cref="KeyOf"/> are ignored.</summary>
+    public Func<IReadSignal<int>, Element>? RowBind { get; init; }
     public IVirtualLayout? Layout { get; init; }      // fixed-geometry (stack/grid/custom); null ⇒ variable Fenwick
     public float EstimatedExtent { get; init; } = 48f;// variable path: seed extent for unmeasured rows
     public int Overscan { get; init; } = 4;

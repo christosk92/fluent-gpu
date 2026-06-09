@@ -789,11 +789,15 @@ public sealed class InputDispatcher
     private int TabKey(NodeHandle n) { int t = _scene.Interaction(n).TabIndex; return t > 0 ? t : int.MaxValue; }
 
     /// <summary>Move focus. <paramref name="visual"/> = show the focus ring (keyboard/Tab); pointer focus passes false.
-    /// Focus-visual transitions mark the affected nodes PaintDirty and request a frame — the ring is paint state.</summary>
+    /// Focus-visual transitions mark the affected nodes PaintDirty and request a frame — the ring is paint state.
+    /// When focus actually MOVES, the old node's <c>OnFocusChanged</c> handler fires with false and the new node's with
+    /// true (WinUI LostFocus → GotFocus order), AFTER all flag updates — so a GotFocus handler can read
+    /// <see cref="NodeFlags.FocusVisual"/> to distinguish keyboard focus (select-all) from pointer focus.</summary>
     public void SetFocus(NodeHandle node, bool visual = false)
     {
         if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
         if (!_spaceArmed.IsNull && node != _spaceArmed) CancelSpaceArm(fire: false);  // focus moved while Space held → no activation
+        var prev = _focused;
         bool repaint = false;
         if (!_focused.IsNull && _scene.IsLive(_focused))
         {
@@ -815,6 +819,14 @@ public sealed class InputDispatcher
                 repaint = true;
             }
             else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
+        }
+        if (prev != node)
+        {
+            if (!prev.IsNull && _scene.IsLive(prev) && (_scene.Interaction(prev).HandlerMask & InteractionInfo.FocusBit) != 0)
+                _scene.GetFocusChanged(prev)?.Invoke(false);
+            if (!node.IsNull && _scene.IsLive(node) && node == _focused &&   // a LostFocus handler may have re-moved focus
+                (_scene.Interaction(node).HandlerMask & InteractionInfo.FocusBit) != 0)
+                _scene.GetFocusChanged(node)?.Invoke(true);
         }
         if (repaint) RequestRerender();
     }

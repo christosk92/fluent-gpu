@@ -1077,7 +1077,10 @@ sealed class VirtualizationPage : Component
     // hammering the CDN with 100k unique downloads. 32px display → bucket 64 → these pack into the small-image atlas.
     static string Cover(int i) => $"https://picsum.photos/seed/fgrow{i % 120}/80/80";
 
-    Element Row(int i)
+    // BOUND row template (Virtual.ListBound): built ONCE per visible slot with an index SIGNAL — scrolling rebinds the
+    // slot by writing the signal, so only these TextBind/FillBind/SourceBind thunks re-run (no element rebuild, no
+    // reconcile, no node churn). This is the recycler fast path a 100k thumb-drag storm exercises.
+    static Element Row(FluentGpu.Signals.IReadSignal<int> idx)
     {
         return new BoxEl
         {
@@ -1086,16 +1089,21 @@ sealed class VirtualizationPage : Component
             Gap = 12f,
             AlignItems = FlexAlign.Center,
             Padding = new Edges4(16, 0, 16, 0),
-            Fill = (i % 2 == 0) ? RowEven : RowOdd,
+            FillBind = () => (idx.Value % 2 == 0) ? RowEven : RowOdd,
             HoverFill = RowHover,
             Children =
             [
                 new BoxEl
                 {
                     Width = 64f,
-                    Children = [new TextEl($"{i + 1}") { Size = 13f, Color = IndexGrey }],
+                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, TextBind = () => $"{idx.Value + 1}" }],
                 },
-                Image(Cover(i), 32f, 32f, 8f, TileTint(i)),   // real thumbnail; tint shows until it decodes, then cross-fades in
+                // real thumbnail; tint shows until it decodes, then cross-fades in
+                new ImageEl
+                {
+                    Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
+                    SourceBind = () => Cover(idx.Value), PlaceholderBind = () => TileTint(idx.Value),
+                },
                 new BoxEl
                 {
                     Direction = 1,
@@ -1104,7 +1112,7 @@ sealed class VirtualizationPage : Component
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl($"Item {i}") { Size = 14f, Color = Theme.WindowText },
+                        new TextEl("") { Size = 14f, Color = Theme.WindowText, TextBind = () => $"Item {idx.Value}" },
                         new TextEl("subtitle") { Size = 12f, Color = SubGrey },
                     ],
                 },
@@ -1123,13 +1131,9 @@ sealed class VirtualizationPage : Component
             Children =
             [
                 Heading("List virtualization"),
-                Text("100,000 rows with real CDN thumbnails — only the visible window is realized and recycled over a slab free-list; images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.")
+                Text("100,000 rows with real CDN thumbnails — visible slots are built once and REBOUND via index signals as you scroll (no element rebuild); images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.")
                     with { Wrap = TextWrap.Wrap },   // wraps to the content-frame width (the layout measures grow children against availW − fixed siblings)
-                Virtual.List(
-                    100000,
-                    48f,
-                    i => Row(i),
-                    keyOf: i => "r" + i) with { Grow = 1f },
+                Virtual.ListBound(100000, 48f, Row) with { Grow = 1f },
             ],
         };
     }

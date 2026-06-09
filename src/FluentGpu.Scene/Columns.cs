@@ -244,4 +244,7 @@ public struct InteractionInfo
     public const ushort RepeatBit = 16;   // clickable opts into press-and-hold auto-repeat (RepeatButton)
     public const ushort PressedBit = 32;  // position-aware press carrying click-count/modifiers (OnPointerPressed)
     public const ushort ContextBit = 64;  // right-click / Menu-key context request (OnContextRequested)
+    public const ushort FocusBit = 128;   // focus-change handler present (OnFocusChanged) — reached via the dispatcher's
+                                          // SetFocus (WinUI GotFocus/LostFocus), never via hit-testing; the bit lets the
+                                          // dispatcher skip the handler-column lookup on every focus move
 }

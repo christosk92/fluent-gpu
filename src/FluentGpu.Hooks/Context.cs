@@ -1,5 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Pal;
+using FluentGpu.Text;
 
 namespace FluentGpu.Hooks;
 
@@ -51,6 +53,33 @@ public sealed class InputHooks
     /// (WinUI window-deactivation dismiss). Invoked from the dispatcher's WindowBlur via the host wiring.</summary>
     public Action? WindowBlurred;
     public void NotifyWindowBlur() => WindowBlurred?.Invoke();
+
+    // ── Text-editing seams (host-wired in the AppHost ctor; consumed by EditableText) ───────────────────────────────
+    // Wiring choice: the PAL seam INTERFACES are exposed directly (Hooks → Pal is a new interface-only edge; the
+    // alternative — re-declaring delegate twins of IClipboard/ITextInputSink here — would duplicate a contract the
+    // ownership map says Pal owns). Caret-blink and IME-caret-rect stay DELEGATE-shaped because the host owns knowledge
+    // the control must not have: the CaretBlinker instance, and the window Scale for the DIP→physical-px conversion.
+
+    /// <summary>The system clipboard (UI-thread only; <c>IPlatformApp.Clipboard</c>).</summary>
+    public IClipboard? Clipboard;
+    /// <summary>The focused window's IME/text-services seam (<c>IPlatformWindow.TextInput</c>): the focused editor
+    /// registers its composition sink and flips <c>SetEditable</c> here. (Candidate-window placement goes through
+    /// <see cref="ImeSetCaretRect"/> instead — it needs the host's DIP→px scale.)</summary>
+    public IPlatformTextInput? TextInput;
+    /// <summary>The host's text seam — the SAME layout pipeline the renderer measures with, so editor hit-test/caret
+    /// queries agree with drawn glyph positions exactly.</summary>
+    public IFontSystem? Fonts;
+
+    /// <summary>Arm the caret blinker for a (newly focused) editor's TEXT node; float = blink half-period ms
+    /// (<c>IPlatformTextInput.CaretBlinkMs</c>).</summary>
+    public Action<NodeHandle, float>? CaretFocus;
+    /// <summary>Stop blinking for an editor's text node (focus lost).</summary>
+    public Action<NodeHandle>? CaretBlur;
+    /// <summary>An edit happened: snap the caret visible and restart the blink phase.</summary>
+    public Action<NodeHandle>? CaretReset;
+    /// <summary>Position the IME candidate window: the caret rect in window DIP — the HOST converts to physical px
+    /// (it owns the window scale) before calling <c>IPlatformTextInput.SetCaretRectPx</c>.</summary>
+    public Action<RectF>? ImeSetCaretRect;
 
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
 

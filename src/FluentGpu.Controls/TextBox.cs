@@ -22,8 +22,10 @@ public static class TextBox
     {
         float w = Math.Max(width, MinWidth);
 
+        // ShowDeleteButton: the WinUI TextBox DeleteButton (✕ while focused ∧ non-empty) — TextBox is the one composer
+        // that turns it on (PasswordBox/NumberBox put their reveal/spin affixes in that lane instead).
         if (header is null)
-            return Embed.Comp(() => new EditableText { Placeholder = placeholder, Width = w });
+            return Embed.Comp(() => new EditableText { Placeholder = placeholder, Width = w, ShowDeleteButton = true });
 
         return new BoxEl
         {
@@ -32,7 +34,7 @@ public static class TextBox
             Children = new Element[]
             {
                 new TextEl(header) { Size = 14f, Color = Tok.TextSecondary },
-                Embed.Comp(() => new EditableText { Placeholder = placeholder, Width = w }),
+                Embed.Comp(() => new EditableText { Placeholder = placeholder, Width = w, ShowDeleteButton = true }),
             },
         };
     }

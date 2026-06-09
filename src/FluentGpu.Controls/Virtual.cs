@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using FluentGpu.Reconciler;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -45,4 +46,16 @@ public static class Virtual
             ItemCount = itemCount, Layout = null, EstimatedExtent = estimatedExtent, RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
+
+    /// <summary>Signals-first BOUND list (the recycler fast path): <paramref name="row"/> runs ONCE per visible slot
+    /// with an index SIGNAL; scrolling rebinds a slot by writing its signal — zero element rebuild, zero reconcile,
+    /// zero keys. Express anything that varies by index as a reactive bind (<c>TextBind</c>/<c>FillBind</c>/
+    /// <c>SourceBind</c>/<c>PlaceholderBind</c>), never a captured value. The fastest path for huge uniform lists
+    /// (the WaveeMusic 100k track list under a scrollbar thumb-drag).</summary>
+    public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row, int overscan = 4)
+        => new() { ItemCount = itemCount, Layout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f };
+
+    /// <summary>Signals-first BOUND uniform card grid — <see cref="ListBound"/> semantics over <see cref="GridVirtualLayout"/>.</summary>
+    public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row, int overscan = 2)
+        => new() { ItemCount = itemCount, Layout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f };
 }

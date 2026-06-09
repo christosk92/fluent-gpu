@@ -112,6 +112,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _acrylic = new AcrylicCompositor();
         _acrylic.Init(_device);
         _glyphs = new GlyphRenderer();
+        _glyphs.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
         _glyphs.Init(_device);
         _imageTextures = new ImageTextureStore();
         _imageTextures.Init(_device);

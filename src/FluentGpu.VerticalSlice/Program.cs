@@ -194,6 +194,25 @@ sealed class CountingVirtualProbe : Component
            with { Width = 300, Height = 200 };
 }
 
+// A BOUND 10k-row list (Virtual.ListBound): the template runs once per slot; scrolling rebinds index signals only.
+sealed class BoundVirtualProbe : Component
+{
+    public const int N = 10_000;
+    public int TemplateCalls;
+    public override Element Render()
+        => Virtual.ListBound(N, 40f, idx =>
+           {
+               TemplateCalls++;
+               return new BoxEl
+               {
+                   Height = 40,
+                   FillBind = () => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50)),
+                   Children = [new TextEl("") { Size = 12f, TextBind = () => $"row {idx.Value}" }],
+               };
+           })
+           with { Width = 300, Height = 400 };
+}
+
 sealed class NavProbe : Component
 {
     public override Element Render() => Embed.Comp(() => new NavigationView
@@ -629,6 +648,45 @@ sealed class EditTextProbe : Component
         var t = UseSignal("");
         Text = t;
         return Embed.Comp(() => new EditableText { Text = t, Width = 160, Sanitize = s => s.Length > 8 ? s[..8] : s });
+    }
+}
+
+// W0e — the full EditableText-on-TextEditCore matrix: caret/selection/clipboard/undo/IME/mask/multi-line/delete-button.
+sealed class W0eProbe : Component
+{
+    public Signal<string>? Text;
+    public EditableText? Edit;
+    public string Initial = "";
+    public bool Multi;
+    public bool MaskOn;
+    public bool ReadOnly;
+    public int MaxLen;
+    public bool ShowDelete;
+    public Func<string, bool>? Before;
+    public float W = 160f;
+    public float H = 32f;
+    public int CancelCount;
+    public string? Committed;
+    public readonly List<(int Start, int Len)> SelLog = new();
+
+    public override Element Render()
+    {
+        var t = UseSignal(Initial);
+        Text = t;
+        return Embed.Comp(() =>
+        {
+            var e = new EditableText
+            {
+                Text = t, Width = W, Height = H,
+                AcceptsReturn = Multi, Mask = MaskOn, IsReadOnly = ReadOnly, MaxLength = MaxLen,
+                ShowDeleteButton = ShowDelete, BeforeTextChanging = Before,
+                OnCommit = s => Committed = s,
+                OnCancel = () => CancelCount++,
+                OnSelectionChanged = (s, l) => SelLog.Add((s, l)),
+            };
+            Edit = e;
+            return e;
+        });
     }
 }
 
@@ -2025,6 +2083,96 @@ static class Slice
         bool reusedOverlap = guardHeld && countedScroll.FirstRealized > 0 && calls1 <= 5;
         Check("40a. virtual scroll keeps overscan guard and reuses overlapping item elements",
             reusedOverlap, $"guardCalls={guardCalls} first={countedScroll.FirstRealized} newTemplateCalls={calls1}");
+
+        // Far jump (zero overlap — the scrollbar thumb-drag storm): the window's scene NODES are recycled in place
+        // (columns rebound to the new items), not mounted/removed — the drag path becomes a column rewrite.
+        var beforeNodes = new List<NodeHandle>();
+        for (var c = host.Scene.FirstChild(content); !c.IsNull; c = host.Scene.NextSibling(c)) beforeNodes.Add(c);
+        long liveBeforeJump = host.Scene.LiveCount;
+        window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, -400_000f));   // end → top: no overlap with the old window
+        host.RunFrame();
+        var afterNodes = new HashSet<NodeHandle>();
+        for (var c = host.Scene.FirstChild(content); !c.IsNull; c = host.Scene.NextSibling(c)) afterNodes.Add(c);
+        host.Scene.TryGetScroll(vp, out var scTop);
+        int recycledCount = 0;
+        foreach (var n in beforeNodes) if (afterNodes.Contains(n)) recycledCount++;
+        var firstRowText = host.Scene.FirstChild(host.Scene.FirstChild(content));
+        string rebound = strings.Resolve(host.Scene.Paint(firstRowText).Text);
+        bool recycledOk = scTop.FirstRealized == 0 && afterNodes.Count == beforeNodes.Count
+            && recycledCount == beforeNodes.Count && host.Scene.LiveCount == liveBeforeJump && rebound == "row 0";
+        Check("40b. far-jump realize recycles the window's scene nodes (rebind, no mount/remove)",
+            recycledOk, $"first={scTop.FirstRealized} recycled={recycledCount}/{beforeNodes.Count} live {liveBeforeJump}→{host.Scene.LiveCount} text='{rebound}'");
+
+        // Streaming thousands of unique row strings must NOT accrete in the interner: scrolled-out text releases its
+        // ref, the map entry drops immediately, and the slot clears behind the reader quarantine (StringTable.Tick).
+        int mapBase = strings.MapCount;
+        for (int s = 0; s < 40; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 5_000f)); host.RunFrame(); }
+        for (int s = 0; s < 25; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, s % 2 == 0 ? 1f : -1f)); host.RunFrame(); }   // settle past the quarantine (painted frames tick the table)
+        int mapAfter = strings.MapCount;
+        host.Scene.TryGetScroll(vp, out var scStream);
+        bool streamed = scStream.FirstRealized > 3000;
+        bool reclaimed = mapAfter - mapBase < 200 && strings.PendingReclaim < 200;
+        Check("40c. scrolled-out row text is reclaimed by the interner (no per-row string accretion)",
+            streamed && reclaimed, $"first={scStream.FirstRealized} map {mapBase}→{mapAfter} pending={strings.PendingReclaim}");
+
+        // BOUND list (Virtual.ListBound): the template runs once per visible slot; a far jump rebinds index SIGNALS
+        // only — same nodes, same elements, zero template re-runs, text/fill rebound in the same frame.
+        var bound = new BoundVirtualProbe();
+        using var app3 = new HeadlessPlatformApp();
+        var window3 = new HeadlessWindow(new WindowDesc("virt-bound", new Size2(640, 480), 1f));
+        window3.Show();
+        using var host3 = new AppHost(app3, window3, new HeadlessGpuDevice(), fonts, strings, bound);
+        host3.RunFrame();
+        var vp3 = host3.Scene.Root;
+        host3.Scene.TryGetScroll(vp3, out var bsc0);
+        var content3 = bsc0.ContentNode;
+
+        // First jump to mid-list (the window stabilizes at full size: overscan extends both directions), THEN measure.
+        window3.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, 100_000f));
+        host3.RunFrame();
+        int slots0 = host3.Scene.ChildCount(content3);
+        int templateCalls0 = bound.TemplateCalls;
+        var slotNodes = new HashSet<NodeHandle>();
+        for (var c = host3.Scene.FirstChild(content3); !c.IsNull; c = host3.Scene.NextSibling(c)) slotNodes.Add(c);
+
+        window3.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, 100_000f));   // far jump: zero overlap
+        host3.RunFrame();
+        host3.Scene.TryGetScroll(vp3, out var bsc1);
+        int slots1 = host3.Scene.ChildCount(content3);
+        bool sameNodes = true;
+        for (var c = host3.Scene.FirstChild(content3); !c.IsNull; c = host3.Scene.NextSibling(c)) sameNodes &= slotNodes.Contains(c);
+        var boundFirstText = strings.Resolve(host3.Scene.Paint(host3.Scene.FirstChild(host3.Scene.FirstChild(content3))).Text);
+        bool boundOk = bsc1.FirstRealized > 4000 && bound.TemplateCalls == templateCalls0 && slots1 == slots0
+            && sameNodes && boundFirstText == $"row {bsc1.FirstRealized}";
+        Check("40d. bound list rebinds via index signals on a far jump (no template re-run, no node churn)",
+            boundOk, $"first={bsc1.FirstRealized} template {templateCalls0}→{bound.TemplateCalls} slots {slots0}→{slots1} sameNodes={sameNodes} text='{boundFirstText}'");
+
+        // Scrollbar THUMB DRAG on a bound list (the 100k storm path): grab the thumb, drag in small steps — the
+        // offset must track the thumb the whole way (the drag must never silently disengage mid-travel).
+        window3.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, -10_000_000f));   // back to the top
+        host3.RunFrame();
+        float laneX = 294f;
+        window3.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(laneX, 10f), 0, 0));
+        host3.RunFrame();
+        window3.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(laneX, 10f), 0, 0));
+        host3.RunFrame();
+        float lastOff = 0f;
+        int advanceSteps = 0;
+        const int dragSteps = 120;
+        for (int s = 1; s <= dragSteps; s++)
+        {
+            window3.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(laneX, 10f + s * 2.5f), 0, 0));
+            host3.RunFrame();
+            host3.Scene.TryGetScroll(vp3, out var dsc);
+            if (dsc.OffsetY > lastOff) advanceSteps++;
+            lastOff = dsc.OffsetY;
+        }
+        window3.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(laneX, 10f + dragSteps * 2.5f), 0, 0));
+        host3.RunFrame();
+        host3.Scene.TryGetScroll(vp3, out var dragEnd);
+        bool dragOk = advanceSteps >= dragSteps - 5 && dragEnd.OffsetY > 100_000f && dragEnd.FirstRealized > 2000;
+        Check("40e. scrollbar thumb drag tracks the full travel on a bound list (never disengages)",
+            dragOk, $"advanced {advanceSteps}/{dragSteps} off={dragEnd.OffsetY:0} first={dragEnd.FirstRealized}");
     }
 
     // The Fenwick extent table: O(log n) prefix-sum (OffsetOf) + binary-lift (IndexAt) + O(log n) correction.
@@ -3448,6 +3596,479 @@ static class Slice
         public void OnCompositionEnd() => Log.Add("end");
     }
 
+    // W0e — EditableText rebuilt on TextEditCore: the full WinUI editing matrix, exercised headlessly against the
+    // deterministic advance model (advance = 0.55×size, line = 1.4×size @ FontSize 14) — geometry asserts are exact math.
+    static void EditableTextCoreChecks(StringTable strings)
+    {
+        const float Adv = 14f * 0.55f;     // 7.7 dip per UTF-16 unit
+        const float LineH = 14f * 1.4f;    // 19.6 dip per line
+
+        static NodeHandle TextVisual(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (s.Paint(n).VisualKind == VisualKind.Text) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = TextVisual(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        // ── "hello world": caret click, keyboard selection, double/triple click, drag rects (+0-alloc), clipboard ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Initial = "hello world" };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            var ta = scene.AbsoluteRect(tn);
+
+            void Press(float x, float y, uint t, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t + 10));
+                host.RunFrame();
+            }
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+
+            // W0e.1 — caret click placement round-trips the advance model; pointer focus arms the blinker.
+            Press(ta.X + 3f * Adv + 1f, ta.Y + ta.H / 2f, 1_000);
+            scene.TryGetTextEdit(tn, out var tes1);
+            const byte focusedBits = TextEditState.Focused | TextEditState.CaretVisible;
+            Check("W0e.1 caret click placement round-trips the headless advance model; focus arms the blinker",
+                root.Edit!.Core.Active == 3 && Near(tes1.CaretX, 3f * Adv)
+                && (tes1.Flags & focusedBits) == focusedBits && (scene.Flags(field) & NodeFlags.Focused) != 0,
+                $"caret={root.Edit!.Core.Active} caretX={tes1.CaretX:0.##} flags={tes1.Flags}");
+
+            // W0e.2 — Shift+arrow / Ctrl+Shift+arrow word / Ctrl+A selection states (+SelectionChanged fires).
+            Key(Keys.Right, KeyModifiers.Shift);
+            Key(Keys.Right, KeyModifiers.Shift);
+            bool s1 = root.Edit!.SelectionStart == 3 && root.Edit!.SelectionLength == 2 && root.Edit!.SelectedText == "lo";
+            Key(Keys.Right, KeyModifiers.Shift | KeyModifiers.Ctrl);
+            bool s2 = root.Edit!.SelectionStart == 3 && root.Edit!.SelectionLength == 3 && root.Edit!.SelectedText == "lo ";
+            Key(Keys.A, KeyModifiers.Ctrl);
+            bool s3 = root.Edit!.SelectionStart == 0 && root.Edit!.SelectionLength == 11;
+            Check("W0e.2 Shift+arrow extends, Ctrl+Shift+arrow extends by word, Ctrl+A selects all (+SelectionChanged)",
+                s1 && s2 && s3 && root.SelLog.Count >= 3, $"s1={s1} s2={s2} s3={s3} selEvents={root.SelLog.Count}");
+
+            // W0e.3 — double-click selects the word at the hit; triple-click selects all (ClickCount synthesis).
+            float wx = ta.X + 7f * Adv + 1f;   // inside "world"
+            float wy = ta.Y + ta.H / 2f;
+            Press(wx, wy, 5_000);
+            Press(wx, wy, 5_100);              // chained within slop+window → ClickCount 2
+            bool dbl = root.Edit!.SelectedText == "world" && root.Edit!.SelectionStart == 6;
+            Press(wx, wy, 5_200);              // → ClickCount 3
+            bool trp = root.Edit!.SelectionStart == 0 && root.Edit!.SelectionLength == 11;
+            Check("W0e.3 double-click selects the word at the hit; triple-click selects all", dbl && trp, $"dbl={dbl} trp={trp}");
+
+            // W0e.4 — drag-select publishes rects into the scene slab (count + X/W math) while the button is held.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 1f * Adv + 1f, wy), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 9_000));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(ta.X + 7f * Adv + 1f, wy), 0, 0));
+            host.RunFrame();
+            var selRects = scene.GetTextEditSelectionRects(tn);
+            scene.TryGetTextEdit(tn, out var tes4);
+            bool dragSel = selRects.Length == 1 && Near(selRects[0].X, 1f * Adv) && Near(selRects[0].W, 6f * Adv)
+                && root.Edit!.SelectionStart == 1 && root.Edit!.SelectionLength == 6
+                && (tes4.Flags & TextEditState.SelectionActive) != 0;
+            Check("W0e.4 drag-select updates the selection rects in the scene slab (count + first-rect X/W math)",
+                dragSel, $"rects={selRects.Length} x={(selRects.Length > 0 ? selRects[0].X : -1f):0.##} w={(selRects.Length > 0 ? selRects[0].W : -1f):0.##}");
+
+            for (int i = 0; i < 5; i++)        // warm the pooled slab, then a steady pointer-rate drag frame
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(ta.X + (i % 2 == 0 ? 6f : 7f) * Adv + 1f, wy), 0, 0));
+                host.RunFrame();
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(ta.X + 8f * Adv + 1f, wy), 0, 0));
+            var dragSteady = host.RunFrame();
+            Check("W0e.4b drag-select frame is 0-alloc on phases 6–13 (pooled slab, no re-render)",
+                dragSteady.HotPhaseAllocBytes == 0, $"{dragSteady.HotPhaseAllocBytes} bytes");
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 8f * Adv + 1f, wy), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 9_500));
+            host.RunFrame();
+
+            // W0e.5 — clipboard round-trip via the HeadlessClipboard seam.
+            var clip = (HeadlessClipboard)app.Clipboard;
+            root.Edit!.Select(6, 5);           // "world"
+            Key(Keys.C, KeyModifiers.Ctrl);
+            bool copied = clip.TryGetText(out var c1) && c1 == "world";
+            root.Edit!.Select(0, 6);           // "hello "
+            Key(Keys.X, KeyModifiers.Ctrl);
+            bool cutOk = clip.TryGetText(out var c2) && c2 == "hello " && root.Text!.Peek() == "world";
+            Key(Keys.End);
+            Key(Keys.V, KeyModifiers.Ctrl);
+            bool pasted = root.Text!.Peek() == "worldhello ";
+            Check("W0e.5 clipboard: Ctrl+C copies, Ctrl+X removes, Ctrl+V inserts at the caret",
+                copied && cutOk && pasted, $"copy='{c1}' cut='{c2}' text='{root.Text!.Peek()}'");
+        }
+
+        // ── W0e.6 — PasswordBox mask: '●' display, copy/cut blocked, paste allowed ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-mask", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Initial = "secret", MaskOn = true };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            ClickNode(host, window, field);
+            Key(Keys.A, KeyModifiers.Ctrl);
+            var clip = (HeadlessClipboard)app.Clipboard;
+            clip.Clear();
+            Key(Keys.C, KeyModifiers.Ctrl);
+            bool copyBlocked = !clip.TryGetText(out _);
+            Key(Keys.X, KeyModifiers.Ctrl);
+            bool cutBlocked = root.Text!.Peek() == "secret" && !clip.TryGetText(out _);
+            clip.SetText("pw");
+            Key(Keys.V, KeyModifiers.Ctrl);    // paste replaces the (kept) select-all
+            host.RunFrame();
+            string disp = strings.Resolve(scene.Paint(tn).Text);
+            Check("W0e.6 Mask blocks copy/cut, allows paste; display is '\\u25CF' per grapheme (model text real)",
+                copyBlocked && cutBlocked && root.Text!.Peek() == "pw" && disp == "●●",
+                $"copyBlocked={copyBlocked} cutBlocked={cutBlocked} text='{root.Text!.Peek()}' disp='{disp}'");
+        }
+
+        // ── W0e.7 — undo coalescing: a typing burst is ONE step; paste is its own step; Ctrl+Z/Ctrl+Y replay ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-undo", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            void Type(string s)
+            {
+                foreach (char c in s) window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+                host.RunFrame();
+            }
+            ClickNode(host, window, field);
+            Type("abc");
+            bool oneStep = root.Edit!.Core.UndoDepth == 1 && root.Text!.Peek() == "abc";
+            Key(Keys.Z, KeyModifiers.Ctrl);
+            bool undone = root.Text!.Peek() == "";
+            Key(Keys.Y, KeyModifiers.Ctrl);
+            bool redone = root.Text!.Peek() == "abc";
+            ((HeadlessClipboard)app.Clipboard).SetText("XY");
+            Key(Keys.End);
+            Key(Keys.V, KeyModifiers.Ctrl);
+            bool pasteStep = root.Text!.Peek() == "abcXY" && root.Edit!.Core.UndoDepth == 2;
+            Type("z");
+            bool thirdStep = root.Edit!.Core.UndoDepth == 3;
+            Key(Keys.Z, KeyModifiers.Ctrl);
+            Key(Keys.Z, KeyModifiers.Ctrl);
+            bool back = root.Text!.Peek() == "abc";
+            Check("W0e.7 undo coalescing: 'abc' = one step back to empty; paste = its own step; Ctrl+Z/Ctrl+Y replay",
+                oneStep && undone && redone && pasteStep && thirdStep && back,
+                $"one={oneStep} undo={undone} redo={redone} paste={pasteStep} depth3={thirdStep} back='{root.Text!.Peek()}'");
+        }
+
+        // ── W0e.8 — MaxLength clamp + BeforeTextChanging rejection ──
+        bool maxClamp;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-max", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { MaxLen = 5 };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Text));
+            foreach (char c in "abcdefgh") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            maxClamp = root.Text!.Peek() == "abcde";
+        }
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-before", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Before = s => s.Length <= 3 };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Text));
+            foreach (char c in "abcde") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            Check("W0e.8 MaxLength clamps inserts at the limit; BeforeTextChanging(false) rejects the proposed edit",
+                maxClamp && root.Text!.Peek() == "abc", $"maxLen→'{(maxClamp ? "abcde" : "?")}' gated='{root.Text!.Peek()}'");
+        }
+
+        // ── W0e.9 — IsReadOnly: caret + selection + copy work, typing gated, IME stays disabled ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-ro", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Initial = "locked", ReadOnly = true };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            var ta = scene.AbsoluteRect(tn);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + ta.H / 2f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
+            host.RunFrame();
+            bool caretOk = root.Edit!.Core.Active == 2;
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
+            host.RunFrame();
+            bool typingGated = root.Text!.Peek() == "locked";
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            Key(Keys.A, KeyModifiers.Ctrl);
+            Key(Keys.C, KeyModifiers.Ctrl);
+            bool copyOk = ((HeadlessClipboard)app.Clipboard).TryGetText(out var t) && t == "locked";
+            bool imeOff = !((HeadlessTextInput)window.TextInput).Editable;
+            Check("W0e.9 IsReadOnly gates typing but allows caret placement, selection and copy (IME disabled)",
+                caretOk && typingGated && copyOk && imeOff, $"caret={root.Edit!.Core.Active} text='{root.Text!.Peek()}' copy='{t}' imeOff={imeOff}");
+        }
+
+        // ── W0e.10 — Enter commits + KEEPS focus; Escape reverts to the focus-time snapshot + cancels + blurs ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-esc", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Initial = "seed" };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            void Type(string s)
+            {
+                foreach (char c in s) window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+                host.RunFrame();
+            }
+            ClickNode(host, window, field);    // center is beyond the text → caret at end
+            Type("XY");
+            Key(Keys.Enter);
+            bool committed = root.Committed == "seedXY" && (scene.Flags(field) & NodeFlags.Focused) != 0;
+            Type("Z");
+            Key(Keys.Escape);
+            scene.TryGetTextEdit(tn, out var tesEsc);
+            bool reverted = root.Text!.Peek() == "seed" && root.CancelCount == 1
+                && (scene.Flags(field) & NodeFlags.Focused) == 0 && (tesEsc.Flags & TextEditState.Focused) == 0;
+            Check("W0e.10 Enter commits and KEEPS focus (WinUI); Escape reverts to the focus-time snapshot, cancels, blurs",
+                committed && reverted, $"committed='{root.Committed}' text='{root.Text!.Peek()}' cancels={root.CancelCount}");
+        }
+
+        // ── W0e.11/12 — IME composition lifecycle + caret blink ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-ime", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            ClickNode(host, window, field);
+            var ti = (HeadlessTextInput)window.TextInput;
+            bool editable = ti.Editable;
+
+            ti.BeginComposition();
+            ti.UpdateComposition("にほ", 2, new ImeClause(0, 2, ImeClauseKind.Input));
+            host.RunFrame();
+            scene.TryGetTextEdit(tn, out var ic);
+            var ul = scene.GetTextEditUnderlineRects(tn);
+            // The honest contract under test: the provisional composition lives in the DOC (display shows it) while the
+            // SIGNAL stays unchanged until commit.
+            bool provisional = strings.Resolve(scene.Paint(tn).Text) == "にほ" && root.Text!.Peek().Length == 0
+                && ic.CompStart == 0 && ic.CompLen == 2 && ul.Length == 1 && Near(ul[0].H, 1f);
+
+            ti.UpdateComposition("日本", 2, new ImeClause(0, 2, ImeClauseKind.TargetConverted));
+            host.RunFrame();
+            var ul2 = scene.GetTextEditUnderlineRects(tn);
+            bool targetThick = ul2.Length == 1 && Near(ul2[0].H, 2f);
+
+            ti.Commit("日本");
+            host.RunFrame();
+            scene.TryGetTextEdit(tn, out var ic2);
+            bool committed = root.Text!.Peek() == "日本" && strings.Resolve(scene.Paint(tn).Text) == "日本"
+                && ic2.CompLen == 0 && scene.GetTextEditUnderlineRects(tn).Length == 0 && root.Edit!.Core.UndoDepth == 1;
+
+            ti.BeginComposition();
+            ti.UpdateComposition("か", 1, new ImeClause(0, 1, ImeClauseKind.Input));
+            host.RunFrame();
+            bool midCancel = strings.Resolve(scene.Paint(tn).Text) == "日本か" && root.Text!.Peek() == "日本";
+            ti.Cancel();
+            host.RunFrame();
+            bool cancelled = strings.Resolve(scene.Paint(tn).Text) == "日本" && root.Text!.Peek() == "日本";
+            bool caretRect = Near(ti.LastCaretRectPx.X, scene.AbsoluteRect(tn).X + 2f * Adv);
+            Check("W0e.11 IME: provisional in the DOC only (signal commits on commit), clause underline kinds, cancel restores, caret-rect placed",
+                editable && provisional && targetThick && committed && midCancel && cancelled && caretRect,
+                $"editable={editable} prov={provisional} thick={targetThick} commit={committed} mid={midCancel} cancel={cancelled} rectX={ti.LastCaretRectPx.X:0.#}");
+
+            // W0e.12 — caret blink toggles CaretVisible over frames (500ms half-period @16ms fixed dt) + resets on edit.
+            bool wentOff = false;
+            int frames = 0;
+            for (; frames < 90 && !wentOff; frames++)
+            {
+                host.RunFrame();
+                scene.TryGetTextEdit(tn, out var bf);
+                wentOff = (bf.Flags & TextEditState.CaretVisible) == 0;
+            }
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'x'));
+            host.RunFrame();
+            scene.TryGetTextEdit(tn, out var br);
+            bool resetOn = (br.Flags & TextEditState.CaretVisible) != 0;
+            Check("W0e.12 caret blink toggles CaretVisible over frames and snaps visible on edit",
+                wentOff && resetOn, $"offAfter={frames}f resetOn={resetOn}");
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            var blinkSteady = host.RunFrame();
+            Check("W0e.12b focused steady (caret blink) frame allocates 0 on phases 6–13",
+                blinkSteady.HotPhaseAllocBytes == 0, $"{blinkSteady.HotPhaseAllocBytes} bytes");
+        }
+
+        // ── W0e.13 — Tab (keyboard) focus selects all; the DeleteButton clears + keeps focus + hides when empty ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-del", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { Initial = "abc", ShowDelete = true };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            host.RunFrame();   // the focus re-render mounts the delete button
+            bool selAll = root.Edit!.SelectionStart == 0 && root.Edit!.SelectionLength == 3;
+            bool visual = (scene.Flags(field) & NodeFlags.FocusVisual) != 0;
+            var btns = Roles(scene, AutomationRole.Button);
+            bool shown = btns.Count == 1;
+            if (shown) ClickNode(host, window, btns[0]);
+            host.RunFrame();
+            bool cleared = root.Text!.Peek() == "" && (scene.Flags(field) & NodeFlags.Focused) != 0;
+            bool gone = Roles(scene, AutomationRole.Button).Count == 0;
+            Check("W0e.13 Tab keyboard-focus selects all; DeleteButton (E894) clears, keeps focus, hides when empty",
+                selAll && visual && shown && cleared && gone,
+                $"selAll={selAll} visual={visual} shown={shown} cleared={cleared} gone={gone}");
+        }
+
+        // ── W0e.14 — caret-follow: ScrollX clamps the caret into the viewport; the wrapper transform applies -ScrollX ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-scroll", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0eProbe { W = 80f };   // lane viewport = 80 − (10+6) padding = 64
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            ClickNode(host, window, field);
+            for (int i = 0; i < 20; i++) window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'm'));
+            host.RunFrame();
+            scene.TryGetTextEdit(tn, out var tf);
+            // caret = 20×7.7 = 154; follow wants 154−(64−8) = 98, clamped to maxScroll = (154+2)−64 = 92.
+            bool follow = Near(tf.CaretX, 154f) && Near(tf.ScrollX, 92f);
+            host.RunFrame();   // the TransformBind flush applies -ScrollX to the wrapper
+            var scroller = scene.Parent(tn);
+            float appliedDx = scene.Paint(scroller).LocalTransform.Dx;
+            bool applied = Near(appliedDx, -92f);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Home));
+            host.RunFrame();
+            scene.TryGetTextEdit(tn, out var th);
+            bool home = Near(th.ScrollX, 0f);
+            Check("W0e.14 caret-follow clamps ScrollX (caret stays inside the viewport) and the wrapper transform applies -ScrollX",
+                follow && applied && home, $"caretX={tf.CaretX:0.#} scrollX={tf.ScrollX:0.#} dx={appliedDx:0.#} home={th.ScrollX:0.#}");
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            var idle = host.RunFrame();
+            Check("W0e.14b typing-burst-then-idle steady frame allocates 0 on phases 6–13",
+                idle.HotPhaseAllocBytes == 0, $"{idle.HotPhaseAllocBytes} bytes");
+        }
+
+        // ── W0e.15 — multi-line: Up/Down honor the StickyX goal column over wrapped lines; Enter inserts '\r' ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0e-multi", new Size2(420, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            // wrap width 144 → "aaaa bbbb cccc " | "dddd eeee" (greedy word wrap of the headless model)
+            var root = new W0eProbe { Multi = true, W = 160f, H = 64f, Initial = "aaaa bbbb cccc dddd eeee" };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            var ta = scene.AbsoluteRect(tn);
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(ta.X + 2f * Adv + 1f, ta.Y + LineH * 0.5f), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_010));
+            host.RunFrame();
+            bool caretLine1 = root.Edit!.Core.Active == 2;
+            Key(Keys.Down);
+            bool down1 = root.Edit!.Core.Active == 17;     // line 2 starts at 15; sticky column 2 → 15+2
+            Key(Keys.Down);
+            bool down2 = root.Edit!.Core.Active == 17;     // clamped at the last line
+            Key(Keys.Up);
+            bool up1 = root.Edit!.Core.Active == 2;        // StickyX goal column held across the round-trip
+            Key(Keys.Down, KeyModifiers.Shift);
+            bool extended = root.Edit!.SelectionStart == 2 && root.Edit!.SelectionLength == 15;
+            Key(Keys.Right);                                // collapse to the selection end (17)
+            Key(Keys.Enter);                                // multi-line Enter inserts a hard '\r' break
+            string after = root.Text!.Peek();
+            bool newline = after.Length == 25 && after[17] == '\r';
+            Check("W0e.15 multi-line: Up/Down/StickyX over wrapped lines (clamped at edges); Shift+Down extends; Enter inserts '\\r'",
+                caretLine1 && down1 && down2 && up1 && extended && newline,
+                $"caret={caretLine1} d1={down1} d2={down2} up={up1} ext={extended} nl={newline}");
+        }
+    }
+
     // E3 — implicit BrushTransition: a logical flip cross-fades fill + foreground over 83ms (no snap), then settles
     // exactly at the target and the frame loop idles again (the row self-removes).
     static void BrushTransitionChecks(StringTable strings)
@@ -4639,6 +5260,7 @@ static class Slice
         FocusRingChecks(strings);
         BrushTransitionChecks(strings);
         TextServicesSeamChecks();
+        EditableTextCoreChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

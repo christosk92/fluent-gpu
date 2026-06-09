@@ -84,6 +84,13 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly Dictionary<RunKey, ShapedRun> _runCache = new();
     private readonly List<ShapedGlyph> _scratch = new(256);   // reused miss-path shaping buffer
     private readonly List<RunKey> _evictScratch = new();      // reused eviction sweep buffer (off the hot path)
+    // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
+    // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
+    // this list retains every returned array, so steady-state churn reuses instead of allocating.
+    private readonly Stack<ShapedGlyph[]>[] _quadPool = new Stack<ShapedGlyph[]>[14];   // buckets 1<<0 .. 1<<13
+    // Liveness source for the run cache: a reclaimed text id resolves to "" (StringTable), so its runs can never be
+    // hit again — evict them promptly instead of waiting out the age backstop (keeps the free-list small under storms).
+    private StringTable? _liveness;
     private int _frame;
     private int _runsCached, _runsShaped;                     // per-frame diagnostics
 #if DEBUG
@@ -344,11 +351,31 @@ float4 PSMain(VSOut i) : SV_Target
         _scratch.Clear();
         ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
         int n = _scratch.Count;
-        var arr = n > 0 ? ArrayPool<ShapedGlyph>.Shared.Rent(n) : Array.Empty<ShapedGlyph>();
+        var arr = RentQuads(n);
         for (int i = 0; i < n; i++) arr[i] = _scratch[i];
         _runCache[key] = new ShapedRun { Glyphs = arr, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
         Replay(arr.AsSpan(0, n), color, world, opacity, outList);
+    }
+
+    /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
+    public void SetLivenessSource(StringTable strings) => _liveness = strings;
+
+    private ShapedGlyph[] RentQuads(int count)
+    {
+        if (count == 0) return Array.Empty<ShapedGlyph>();
+        int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
+        if (bucket >= _quadPool.Length) return new ShapedGlyph[count];   // pathological run — don't pool
+        var stack = _quadPool[bucket];
+        return stack is { Count: > 0 } ? stack.Pop() : new ShapedGlyph[1 << bucket];
+    }
+
+    private void ReturnQuads(ShapedGlyph[] arr)
+    {
+        if (arr.Length == 0) return;
+        int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
+        if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
+        (_quadPool[bucket] ??= new Stack<ShapedGlyph[]>()).Push(arr);
     }
 
     private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, bool bold, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale)
@@ -454,15 +481,22 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     // Drop runs not referenced for a while so the cache tracks the live (e.g. virtualized) working set. Off the hot path —
-    // called from BeginFrame on a stride. The age threshold tightens when the cache grows large (a bounded backstop).
+    // called from BeginFrame on a stride. The age threshold tightens when the cache grows large (a bounded backstop),
+    // and a run whose text id was RECLAIMED by the interner (resolves empty — no live node shows it, the draw list
+    // can't reference it) is dropped after a short grace, so storm-shaped runs recycle their quad arrays promptly.
     private void EvictStaleRuns()
     {
         int maxAge = _runCache.Count > 4096 ? 60 : 240;
         foreach (var kv in _runCache)
-            if (_frame - kv.Value.LastUsedFrame > maxAge) _evictScratch.Add(kv.Key);
+        {
+            int idle = _frame - kv.Value.LastUsedFrame;
+            if (idle > maxAge
+                || (idle > 2 && kv.Key.TextId != 0 && _liveness is { } st && st.Resolve(new StringId(kv.Key.TextId)).Length == 0))
+                _evictScratch.Add(kv.Key);
+        }
         foreach (var k in _evictScratch)
-            if (_runCache.Remove(k, out var dead) && dead.Glyphs.Length > 0)
-                ArrayPool<ShapedGlyph>.Shared.Return(dead.Glyphs);
+            if (_runCache.Remove(k, out var dead))
+                ReturnQuads(dead.Glyphs);
         _evictScratch.Clear();
     }
 
@@ -666,7 +700,10 @@ float4 PSMain(VSOut i) : SV_Target
         _frame++;
         _runsCached = 0;
         _runsShaped = 0;
-        if ((_frame & 63) == 0) EvictStaleRuns();   // sweep stale shaped runs every 64 frames
+        // Sweep stale shaped runs: every 64 frames at rest, every 8 under churn (a scroll storm fills the cache with
+        // dead-id runs — sweeping sooner keeps their pooled quad arrays cycling instead of piling up).
+        int stride = _runCache.Count > 2048 ? 7 : 63;
+        if ((_frame & stride) == 0) EvictStaleRuns();
     }
 
     public void Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH)

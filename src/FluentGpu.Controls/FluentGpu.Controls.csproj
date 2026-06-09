@@ -9,5 +9,9 @@
     <ProjectReference Include="..\FluentGpu.Animation\FluentGpu.Animation.csproj" />
     <ProjectReference Include="..\FluentGpu.Scene\FluentGpu.Scene.csproj" />
     <ProjectReference Include="..\FluentGpu.Reconciler\FluentGpu.Reconciler.csproj" />
+    <!-- TextEditCore + IFontSystem (already transitive via Scene; explicit because EditableText consumes them). -->
+    <ProjectReference Include="..\FluentGpu.Text\FluentGpu.Text.csproj" />
+    <!-- PAL seam INTERFACES only (ITextInputSink for the IME session; IClipboard / IPlatformTextInput via InputHooks). -->
+    <ProjectReference Include="..\FluentGpu.Pal\FluentGpu.Pal.csproj" />
   </ItemGroup>
 </Project>

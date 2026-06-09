@@ -64,6 +64,7 @@ public sealed class SceneStore : ISceneBackend
     private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
     private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
     private Action<Point2>?[] _contextRequested;           // right-click / Menu-key context request (local coords)
+    private Action<bool>?[] _focusChanged;                 // dispatcher focus moved onto (true) / off (false) this node (GotFocus/LostFocus)
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly Dictionary<int, ScrollState> _scroll = new();
@@ -130,6 +131,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerExit = new Action?[capacity];
         _pointerPressed = new Action<PointerEventArgs>?[capacity];
         _contextRequested = new Action<Point2>?[capacity];
+        _focusChanged = new Action<bool>?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -162,6 +164,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
         _contextRequested[idx] = null;
+        _focusChanged[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -182,7 +185,7 @@ public sealed class SceneStore : ISceneBackend
         if (Strings is { } st)
         {
             st.Release(_paint[idx].Text);
-            st.Release(_layout[idx].TextStyle.Family);
+            st.Release(_layout[idx].TextStyle.FontFamily);
         }
         _click[idx] = null;
         _keyHandler[idx] = null;
@@ -193,6 +196,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
         _contextRequested[idx] = null;
+        _focusChanged[idx] = null;
         ClearDynamicText(idx);
         _scroll.Remove(idx);
         _extents.Remove(idx);
@@ -314,6 +318,8 @@ public sealed class SceneStore : ISceneBackend
     public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[h.Raw.Index];
     public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[h.Raw.Index] = handler;
     public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[h.Raw.Index];
+    public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[h.Raw.Index] = handler;
+    public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[h.Raw.Index];
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
@@ -609,6 +615,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _contextRequested, n);
+        Array.Resize(ref _focusChanged, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

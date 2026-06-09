@@ -194,6 +194,19 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
 
+        // Text-editing seams for EditableText (clipboard / IME / caret blink / shared text metrics) — see InputHooks.
+        _inputHooks.Clipboard = app.Clipboard;
+        _inputHooks.TextInput = window.TextInput;
+        _inputHooks.Fonts = fonts;
+        _inputHooks.CaretFocus = (n, blinkMs) => _caretBlinker.Focus(n, blinkMs);
+        _inputHooks.CaretBlur = _caretBlinker.Blur;
+        _inputHooks.CaretReset = _caretBlinker.ResetBlink;
+        _inputHooks.ImeSetCaretRect = dip =>   // controls pass DIP; the host owns the window scale → physical px
+        {
+            float s = _window.Scale <= 0f ? 1f : _window.Scale;
+            _window.TextInput.SetCaretRectPx(new RectF(dip.X * s, dip.Y * s, dip.W * s, dip.H * s));
+        };
+
         _reconciler.Anim = _anim;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
@@ -292,6 +305,7 @@ public sealed class AppHost : IDisposable
 
             _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
             bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+            if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
@@ -345,6 +359,7 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             DrainPassiveEffects();                             // 12 passive effects
+            _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) Probe(SegEffects, db, dt0);
 
             UpdateFrameTiming(frameStart);

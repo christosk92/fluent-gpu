@@ -28,7 +28,12 @@ public sealed class TreeReconciler
     private readonly List<Component> _live = new();
 
     // The previously-realized window per virtual-list viewport (the keyed-diff's oldKids). Rented from ArrayPool.
-    private sealed class VirtualEntry { public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El; }
+    // Bound (RowBind) viewports keep persistent SLOTS instead: one (index signal, mounted element) per visible row.
+    private sealed class VirtualEntry
+    {
+        public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
+        public List<(Signal<int> Index, Element El)>? Slots;
+    }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
     // Context provider value signals, keyed by provider node index (a consumer resolves by walking ancestors).
@@ -451,6 +456,28 @@ public sealed class TreeReconciler
             if (t.ColorBind is { } cb)
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
         }
+        else if (el is ImageEl ime)
+        {
+            if (ime.SourceBind is { } sbind)
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    string src = sbind();
+                    int newId = Images is not null && src.Length > 0
+                        ? Images.Request(src, (int)ime.Width, (int)ime.Height, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
+                    ref var paint = ref _scene.Paint(node);
+                    if (newId == paint.ImageId) return;
+                    if (Images is not null)
+                    {
+                        if (paint.ImageId != 0) Images.Unpin(new ImageHandle(paint.ImageId));
+                        if (newId != 0) Images.Pin(new ImageHandle(newId));
+                    }
+                    paint.ImageId = newId;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
+            if (ime.PlaceholderBind is { } pbind)
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+        }
     }
 
     // ── Scroll / Virtualization (unchanged behavior) ────────────────────────────────────────────
@@ -504,6 +531,12 @@ public sealed class TreeReconciler
         if (last < first) last = first;
         int w = last - first;
 
+        if (ve.RowBind is { } rowBind)
+        {
+            RealizeBoundWindow(node, content, entry, rowBind, first, last, w);
+            return;
+        }
+
         var prev = reuseOverlap ? entry.Prev : null;
         int prevFirst = entry.PrevFirst;
         var cur = ArrayPool<Element>.Shared.Rent(Math.Max(1, w));
@@ -527,6 +560,55 @@ public sealed class TreeReconciler
     }
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
+
+    /// <summary>
+    /// Bound (signals-first) realize: slots are PERSISTENT — recycling a slot = writing its index signal, which
+    /// re-runs only that row's reactive binds (TextBind/FillBind/SourceBind). No element rebuild, no reconcile, no
+    /// node churn: the thumb-drag storm degenerates to signal writes + granular column updates. The host flushes the
+    /// runtime again after re-realize so the rebinds land in the SAME frame.
+    /// </summary>
+    private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
+                                    Func<IReadSignal<int>, Element> rowBind, int first, int last, int w)
+    {
+        var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
+        bool structural = false;
+
+        while (slots.Count < w)   // grow: the template runs ONCE per slot; its element tree is never rebuilt
+        {
+            var sig = new Signal<int>(first + slots.Count);
+            Element el = rowBind(sig);
+            var child = _scene.CreateNode(el.ElementTypeId);
+            _scene.AppendChild(content, child);
+            Mount(child, el);
+            slots.Add((sig, el));
+            structural = true;
+        }
+        while (slots.Count > w)   // shrink (viewport got smaller): drop the trailing slot
+        {
+            var c = _scene.FirstChild(content);
+            for (int ord = 1; !c.IsNull && ord < slots.Count; ord++) c = _scene.NextSibling(c);
+            if (!c.IsNull) Remove(c);
+            slots.RemoveAt(slots.Count - 1);
+            structural = true;
+        }
+
+        for (int i = 0; i < w; i++)
+        {
+            var sig = slots[i].Index;
+            int idx = first + i;
+            if (sig.Peek() != idx) sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
+        }
+
+        bool moved = structural || first != entry.PrevFirst || w != entry.PrevLen;
+        entry.PrevFirst = first;
+        entry.PrevLen = w;
+        if (moved) _scene.Mark(content, NodeFlags.LayoutDirty);   // children are positioned by FirstRealized + order
+        if (structural) _reconciled = true;
+
+        ref ScrollState scw = ref _scene.ScrollRef(node);
+        scw.FirstRealized = first; scw.LastRealized = last;
+        _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+    }
 
     /// <summary>
     /// Window-diff for virtualization (virtualization.md: recycle, don't churn). Overlapping rows reuse their element
@@ -617,7 +699,9 @@ public sealed class TreeReconciler
         {
             case TextEl t:
                 return t.TextBind is null && t.ColorBind is null;
-            case ImageEl or PolylineStrokeEl:
+            case ImageEl im:
+                return im.SourceBind is null && im.PlaceholderBind is null;
+            case PolylineStrokeEl:
                 return true;
             case BoxEl b:
                 if (b.TransformBind is not null || b.OpacityBind is not null || b.FillBind is not null
@@ -926,6 +1010,19 @@ public sealed class TreeReconciler
                     _scene.SetContextRequested(node, null);
                 }
 
+                // Focus-change notification (WinUI GotFocus/LostFocus): no hit-test participation — the dispatcher
+                // delivers it on SetFocus; the bit only lets it skip the handler-column lookup.
+                if (b.OnFocusChanged is not null)
+                {
+                    ii.HandlerMask |= InteractionInfo.FocusBit;
+                    _scene.SetFocusChanged(node, b.OnFocusChanged);
+                }
+                else
+                {
+                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.FocusBit);
+                    _scene.SetFocusChanged(node, null);
+                }
+
                 if (b.Accelerator is { } accel) { ii.AccelKey = accel.Key; ii.AccelMods = accel.Mods; }
                 else { ii.AccelKey = 0; ii.AccelMods = KeyModifiers.None; }
                 ii.AccessKey = b.AccessKey;
@@ -1026,20 +1123,23 @@ public sealed class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Image;
-                paint.Fill = im.Placeholder;
+                if (im.PlaceholderBind is null) paint.Fill = im.Placeholder;   // bound rows tint via the binding
                 paint.Corners = im.Corners;
 
                 int oldId = paint.ImageId;
-                int newId = (Images is not null && im.Source.Length > 0)
-                    ? Images.Request(im.Source, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
-                if (newId != oldId)
+                if (im.SourceBind is null)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
-                    if (Images is not null)
+                    int newId = (Images is not null && im.Source.Length > 0)
+                        ? Images.Request(im.Source, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
+                    if (newId != oldId)
                     {
-                        if (oldId != 0) Images.Unpin(new ImageHandle(oldId));
-                        if (newId != 0) Images.Pin(new ImageHandle(newId));
+                        if (Images is not null)
+                        {
+                            if (oldId != 0) Images.Unpin(new ImageHandle(oldId));
+                            if (newId != 0) Images.Pin(new ImageHandle(newId));
+                        }
+                        paint.ImageId = newId;
                     }
-                    paint.ImageId = newId;
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -1082,7 +1182,7 @@ public sealed class TreeReconciler
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 var famId = _strings.Intern(t.FontFamily);
-                if (li.TextStyle.Family != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.Family); }
+                if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;

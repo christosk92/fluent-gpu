@@ -69,6 +69,10 @@ public sealed record BoxEl : Element
     /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
     /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
     public Action? OnPointerExit { get; init; }
+    /// <summary>Fired when the dispatcher moves keyboard/pointer focus ONTO (true) or OFF (false) this node — the WinUI
+    /// GotFocus/LostFocus pair. Delivered by <c>InputDispatcher.SetFocus</c> directly (never via hit-testing); editable
+    /// controls use it to arm the caret blinker / IME and capture the Escape-revert snapshot.</summary>
+    public Action<bool>? OnFocusChanged { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
@@ -293,6 +297,11 @@ public sealed record ImageEl : Element
     public float Height { get; init; } = float.NaN;
     public CornerRadius4 Corners { get; init; }
     public ColorF Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);
+    /// <summary>Reactive source binding (bound virtual rows): re-requests the image when the thunk's signals change —
+    /// the recycled slot swaps art without an element rebuild. Overrides <see cref="Source"/> when set.</summary>
+    public Func<string>? SourceBind { get; init; }
+    /// <summary>Reactive placeholder-tint binding (pairs with <see cref="SourceBind"/>). Overrides <see cref="Placeholder"/>.</summary>
+    public Func<ColorF>? PlaceholderBind { get; init; }
     /// <summary>Optional BlurHash string — a tiny blurred LQIP preview shown instantly (decoded to a small texture)
     /// until the full-res art lands. Falls back to the flat <see cref="Placeholder"/> tint when null.</summary>
     public string? BlurHash { get; init; }
