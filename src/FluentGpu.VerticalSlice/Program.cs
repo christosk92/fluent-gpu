@@ -3403,6 +3403,51 @@ static class Slice
             $"A={light.A:0.###} R={light.R:0.###}");
     }
 
+    // W0a — the clipboard + IME PAL seams (headless fakes drive the full composition lifecycle deterministically).
+    static void TextServicesSeamChecks()
+    {
+        using var app = new HeadlessPlatformApp();
+        var clip = app.Clipboard;
+        uint seq0 = clip.SequenceNumber;
+        clip.SetText("héllo ✂");
+        bool roundTrip = clip.TryGetText(out var read) && read == "héllo ✂" && clip.SequenceNumber == seq0 + 1;
+        ((HeadlessClipboard)clip).Clear();
+        bool cleared = !clip.TryGetText(out _) && clip.SequenceNumber == seq0 + 2;
+        Check("W0a.1 clipboard seam: unicode round-trip + epoch bumps + clear", roundTrip && cleared,
+            $"read='{read}' seq={clip.SequenceNumber - seq0}");
+
+        var window = new HeadlessWindow(new WindowDesc("ime", new Size2(100, 100), 1f));
+        var ti = (HeadlessTextInput)window.TextInput;
+        var sink = new RecordingSink();
+        ti.SetSink(sink);
+        ti.BeginComposition();                       // not editable yet → must no-op
+        bool gated = sink.Log.Count == 0;
+        ti.SetEditable(true);
+        ti.BeginComposition();
+        ti.UpdateComposition("にほ", 2, new ImeClause(0, 2, ImeClauseKind.Input));
+        ti.UpdateComposition("日本", 2, new ImeClause(0, 2, ImeClauseKind.TargetConverted));
+        ti.Commit("日本");
+        bool flow = sink.Log.Count == 5 && sink.Log[0] == "start" && sink.Log[1] == "upd:にほ@2:Input"
+                    && sink.Log[2] == "upd:日本@2:TargetConverted" && sink.Log[3] == "commit:日本" && sink.Log[4] == "end";
+        sink.Log.Clear();
+        ti.BeginComposition();
+        ti.UpdateComposition("か", 1, new ImeClause(0, 1, ImeClauseKind.Input));
+        ti.SetEditable(false);                       // focus leaves the editor mid-composition → cancel (empty update + end)
+        bool cancelled = sink.Log.Count == 4 && sink.Log[2] == "upd:@0:" && sink.Log[3] == "end";
+        Check("W0a.2 IME seam: editable gate, composition lifecycle, cancel-on-blur", gated && flow && cancelled,
+            $"gated={gated} flow={flow} cancel={cancelled} log=[{string.Join("|", sink.Log)}]");
+    }
+
+    private sealed class RecordingSink : FluentGpu.Pal.ITextInputSink
+    {
+        public readonly List<string> Log = new();
+        public void OnCompositionStart() => Log.Add("start");
+        public void OnCompositionUpdate(ReadOnlySpan<char> text, int caret, ReadOnlySpan<FluentGpu.Pal.ImeClause> clauses)
+            => Log.Add($"upd:{text.ToString()}@{caret}:{(clauses.Length > 0 ? clauses[0].Kind.ToString() : "")}");
+        public void OnCompositionCommit(ReadOnlySpan<char> text) => Log.Add($"commit:{text.ToString()}");
+        public void OnCompositionEnd() => Log.Add("end");
+    }
+
     // E3 — implicit BrushTransition: a logical flip cross-fades fill + foreground over 83ms (no snap), then settles
     // exactly at the target and the frame loop idles again (the row self-removes).
     static void BrushTransitionChecks(StringTable strings)
@@ -4593,6 +4638,7 @@ static class Slice
         InputVocabularyChecks(strings);
         FocusRingChecks(strings);
         BrushTransitionChecks(strings);
+        TextServicesSeamChecks();
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

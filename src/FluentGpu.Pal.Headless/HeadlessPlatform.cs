@@ -6,6 +6,7 @@ namespace FluentGpu.Pal.Headless;
 public sealed class HeadlessPlatformApp : IPlatformApp
 {
     public IPlatformWindow CreateWindow(in WindowDesc desc) => new HeadlessWindow(desc);
+    public IClipboard Clipboard { get; } = new HeadlessClipboard();
     public void Dispose() { }
 }
 
@@ -41,5 +42,6 @@ public sealed class HeadlessWindow : IPlatformWindow
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
     public void Show() => Shown = true;
+    public IPlatformTextInput TextInput { get; } = new HeadlessTextInput();
     public void Dispose() { }
 }

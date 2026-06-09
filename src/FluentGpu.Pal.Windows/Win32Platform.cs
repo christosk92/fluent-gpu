@@ -16,6 +16,7 @@ public sealed unsafe partial class Win32App : IPlatformApp
     public Win32App() => SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
 
     public IPlatformWindow CreateWindow(in WindowDesc desc) => new Win32Window(desc);
+    public IClipboard Clipboard { get; } = new Win32Clipboard();
     public void Dispose() { }
 }
 
@@ -28,7 +29,10 @@ public sealed unsafe class Win32Window : IPlatformWindow
                        WM_MOUSEWHEEL = 0x020A, WM_MOUSEHWHEEL = 0x020E,
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
-                       WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215;
+                       WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
+                       WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
+                       WM_IME_SETCONTEXT = 0x0281;
+    private const long ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000L;
     private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     private const int HTCLIENT = 1;
     // DIP scrolled per wheel notch (120 units). ~3 lines × ~16px — the conventional Windows feel.
@@ -52,6 +56,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     private readonly HWND _hwnd;
     private readonly GCHandle _self;
     private readonly Queue<InputEvent> _queue = new();
+    private Win32TextInput _textInput = null!;   // created right after the HWND exists (WndProc IME cases route to it)
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
@@ -94,6 +99,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
                 HWND.NULL, HMENU.NULL, hinst, (void*)GCHandle.ToIntPtr(_self));
         }
         s_constructing = null;
+        _textInput = new Win32TextInput(_hwnd);
 
         uint dpi = GetDpiForWindow(_hwnd);
         _scale = dpi == 0 ? 1f : dpi / 96f;
@@ -135,6 +141,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
     }
 
     public void SetTitle(StringId title) { }
+    public IPlatformTextInput TextInput => _textInput;
 
     private CursorId _cursor = CursorId.Arrow;
 
@@ -267,6 +274,21 @@ public sealed unsafe class Win32Window : IPlatformWindow
                     _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0, TimestampMs: Now()));
                 }
                 return true;
+            // IME composition: we render the composition inline, so the system composition window is suppressed
+            // (WM_IME_SETCONTEXT strips ISC_SHOWUICOMPOSITIONWINDOW; WM_IME_STARTCOMPOSITION is consumed) and the
+            // composition events flow to the sink directly (strings can't ride the POD ring).
+            case WM_IME_SETCONTEXT:
+                result = DefWindowProcW(hWnd, msg, wParam, (LPARAM)(nint)(lp & ~ISC_SHOWUICOMPOSITIONWINDOW));
+                return true;
+            case WM_IME_STARTCOMPOSITION:
+                _textInput?.OnStartComposition();   // null only during CreateWindowExW
+                return true;   // consumed → no default composition window
+            case WM_IME_COMPOSITION:
+                _textInput?.OnComposition(lp);
+                return true;
+            case WM_IME_ENDCOMPOSITION:
+                _textInput?.OnEndComposition();
+                return false;  // let DefWindowProc finish the IME teardown
         }
         return false;
     }

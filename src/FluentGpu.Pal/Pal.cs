@@ -50,6 +50,9 @@ public sealed class InputEventRing
 public interface IPlatformApp : IDisposable
 {
     IPlatformWindow CreateWindow(in WindowDesc desc);
+
+    /// <summary>The system clipboard (UI-thread only).</summary>
+    IClipboard Clipboard { get; }
 }
 
 /// <summary><paramref name="Composited"/> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels.</summary>
@@ -80,6 +83,9 @@ public interface IPlatformWindow : IDisposable
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);
     void Show();
+
+    /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
+    IPlatformTextInput TextInput { get; }
 }
 
 /// <summary>Versioned external-store-shaped locale seam (modeled on ISystemColors). L9.</summary>
