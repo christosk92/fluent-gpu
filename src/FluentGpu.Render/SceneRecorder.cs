@@ -321,12 +321,14 @@ public static class SceneRecorder
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 
-        // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children ──
-        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
-            EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
-
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);
+
+        // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children. Emitted AFTER the
+        // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
+        // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
+        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
+            EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
         // are not chopped at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar

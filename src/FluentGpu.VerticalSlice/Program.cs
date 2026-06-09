@@ -3549,6 +3549,50 @@ static class Slice
         Check("E1.c Light FocusStrokeColorInner = #B3FFFFFF (alpha corrected)",
             ColorClose(light, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3), 0.004f),
             $"A={light.A:0.###} R={light.R:0.###}");
+
+        // E1.d — a focused ClipsToBounds control (a TextBox field) must NOT scissor away its own ring: the ring is
+        // recorded AFTER the node's clip pops, so its strokes decode at the PARENT clip depth (0 here), full geometry.
+        {
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("focusclip", new Size2(300, 200), 1f));
+            window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var root2 = new FocusClipProbe();
+            using var host2 = new AppHost(app2, window2, device2, fonts, strings, root2);
+            host2.RunFrame();
+            window2.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host2.RunFrame();
+            bool ringFound = false, outsideClip = true, geom = false;
+            for (int i = 0; i < device2.LastStrokes.Count; i++)
+            {
+                var s = device2.LastStrokes[i];
+                if (!Near(s.StrokeWidth, 2f)) continue;
+                ringFound = true;
+                outsideClip &= device2.LastStrokeClipDepths[i] == 0;
+                geom = Near(s.Rect.X, -2f) && Near(s.Rect.W, 104f);
+            }
+            Check("E1.d focus ring escapes the focused node's OWN ClipsToBounds scissor (clipped-TextBox-ring fix)",
+                ringFound && outsideClip && geom && device2.LastClips.Count > 0,
+                $"found={ringFound} depth0={outsideClip} geom={geom} clips={device2.LastClips.Count}");
+        }
+    }
+
+    // E1.d — one clipping, clickable field (the EditableText shape: ClipToBounds + focusable).
+    sealed class FocusClipProbe : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Padding = Edges4.All(30),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 100, Height = 40, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+                    ClipToBounds = true, OnClick = () => { },
+                    Children = [new TextEl("clip") { Size = 12f }],
+                },
+            ],
+        };
     }
 
     // W0a — the clipboard + IME PAL seams (headless fakes drive the full composition lifecycle deterministically).

@@ -38,6 +38,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawImageCmd> LastImages => _imageDraws;
     /// <summary>SDF outlines (focus rings / stroked borders) drawn this frame.</summary>
     public IReadOnlyList<DrawRoundRectStrokeCmd> LastStrokes => _strokes;
+    /// <summary>The clip-stack depth at the moment each stroke was decoded (parallel to <see cref="LastStrokes"/>) —
+    /// asserts a focus ring records OUTSIDE its ClipsToBounds node's own clip (depth of the parent context).</summary>
+    public IReadOnlyList<int> LastStrokeClipDepths => _strokeClipDepth;
+    private readonly List<int> _strokeClipDepth = new(16);
     /// <summary>Soft drop shadows drawn this frame.</summary>
     public IReadOnlyList<DrawShadowCmd> LastShadows => _shadows;
     /// <summary>Circular-arc strokes (ProgressRing) drawn this frame.</summary>
@@ -79,6 +83,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _clips.Clear();
         _imageDraws.Clear();
         _strokes.Clear();
+        _strokeClipDepth.Clear();
         _shadows.Clear();
         _arcs.Clear();
         _polylines.Clear();
@@ -119,6 +124,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     break;
                 case DrawOp.DrawRoundRectStroke:
                     _strokes.Add(MemoryMarshal.Read<DrawRoundRectStrokeCmd>(drawList.Slice(pos)));
+                    _strokeClipDepth.Add(balance);
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
                     break;
                 case DrawOp.DrawShadow:
