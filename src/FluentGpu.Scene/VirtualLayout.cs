@@ -22,6 +22,25 @@ public interface IVirtualLayout
     RectF ItemRect(int index, float crossSize);
 }
 
+/// <summary>Decides whether a scroll offset needs a virtual-window refresh, using the realized overscan as a guard band.</summary>
+public static class VirtualWindowing
+{
+    public static bool NeedsRealize(in ScrollState sc, int visibleFirst, int visibleLast)
+    {
+        if (sc.ItemCount <= 0) return false;
+        visibleFirst = Math.Clamp(visibleFirst, 0, sc.ItemCount);
+        visibleLast = Math.Clamp(visibleLast, visibleFirst, sc.ItemCount);
+
+        if (sc.LastRealized <= sc.FirstRealized) return true;
+        if (visibleFirst < sc.FirstRealized || visibleLast > sc.LastRealized) return true;
+
+        int guard = Math.Max(1, sc.Overscan / 2);
+        if (sc.FirstRealized > 0 && visibleFirst < sc.FirstRealized + guard) return true;
+        if (sc.LastRealized < sc.ItemCount && visibleLast > sc.LastRealized - guard) return true;
+        return false;
+    }
+}
+
 /// <summary>Uniform 1-D stack (the WaveeMusic track-list shape) — O(1) windowing. <paramref name="horizontal"/> scrolls X.</summary>
 public sealed class StackVirtualLayout : IVirtualLayout
 {

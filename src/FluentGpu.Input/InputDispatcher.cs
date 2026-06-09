@@ -240,12 +240,12 @@ public sealed class InputDispatcher
         if (horizontal) { sc.OffsetX = next; sc.TargetX = next; }
         else { sc.OffsetY = next; sc.TargetY = next; }
         sc.IdleMs = 0f;
-        ApplyScrollPosition(n, ref sc, horizontal, old, next);
+        ApplyScrollPosition(n, ref sc, horizontal, next);
         OnScrollArmed?.Invoke(n);
         return true;
     }
 
-    private void ApplyScrollPosition(NodeHandle n, ref ScrollState sc, bool horizontal, float old, float next)
+    private void ApplyScrollPosition(NodeHandle n, ref ScrollState sc, bool horizontal, float next)
     {
         // Layout-free scroll: the -ScrollOffset is the content child's LocalTransform (TransformDirty only).
         var content = sc.ContentNode;
@@ -256,24 +256,23 @@ public sealed class InputDispatcher
             _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         }
 
-        // Virtualization: re-realize the window ONLY when the offset crosses an item boundary (else transform-only).
+        // Virtualization: keep transform-only scroll while the visible band remains inside the realized guard band.
         if (sc.ItemCount > 0)
         {
-            int oldFirst, newFirst;
-            if (sc.Layout is not null)   // fixed-geometry (stack/grid/custom) — re-realize when the window's first item moves
+            int visibleFirst, visibleLast;
+            float vp = horizontal ? sc.ViewportW : sc.ViewportH;
+            if (sc.Layout is not null)   // fixed-geometry (stack/grid/custom)
             {
                 float cross = horizontal ? sc.ViewportH : sc.ViewportW;
-                float vp = horizontal ? sc.ViewportW : sc.ViewportH;
-                sc.Layout.Window(sc.ItemCount, cross, vp, old, sc.Overscan, out oldFirst, out _);
-                sc.Layout.Window(sc.ItemCount, cross, vp, next, sc.Overscan, out newFirst, out _);
+                sc.Layout.Window(sc.ItemCount, cross, vp, next, 0, out visibleFirst, out visibleLast);
             }
             else if (_scene.TryGetExtents(n, out var t) && t is not null)   // variable (extent table)
             {
-                oldFirst = t.IndexAt(old);
-                newFirst = t.IndexAt(next);
+                visibleFirst = t.IndexAt(next);
+                visibleLast = Math.Min(sc.ItemCount, t.IndexAt(next + vp) + 1);
             }
-            else { oldFirst = newFirst = 0; }
-            if (oldFirst != newFirst) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
+            else { visibleFirst = visibleLast = 0; }
+            if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
         }
     }
 

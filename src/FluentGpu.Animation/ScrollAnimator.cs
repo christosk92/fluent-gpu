@@ -5,7 +5,7 @@ namespace FluentGpu.Animation;
 
 /// <summary>
 /// Smooth scrolling (phase 7): eases each armed viewport's live offset toward its target (the WinUI inertial wheel feel),
-/// applies the content's -offset transform, re-realizes the virtual window on item-boundary crossings, and drives the
+/// applies the content's -offset transform, re-realizes the virtual window at guard-band edges, and drives the
 /// auto-hiding scrollbar fade. Only viewports actively scrolling are ticked; zero work / zero alloc once everything
 /// settles and the thumb has faded out (<see cref="HasActive"/> == false).
 /// </summary>
@@ -74,19 +74,18 @@ public sealed class ScrollAnimator
                     cp.LocalTransform = Affine2D.Translation(horizontal ? -off : 0f, horizontal ? 0f : -off);
                     _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
                 }
-                if (sc.ItemCount > 0)   // virtualization: re-realize when the window's first item crosses
+                if (sc.ItemCount > 0)   // virtualization: re-realize only when visible range approaches realized-window edge
                 {
-                    int oldFirst, newFirst;
+                    int visibleFirst, visibleLast;
+                    float vp = horizontal ? sc.ViewportW : sc.ViewportH;
                     if (sc.Layout is not null)
                     {
                         float cross = horizontal ? sc.ViewportH : sc.ViewportW;
-                        float vpx = horizontal ? sc.ViewportW : sc.ViewportH;
-                        sc.Layout.Window(sc.ItemCount, cross, vpx, oldOff, sc.Overscan, out oldFirst, out _);
-                        sc.Layout.Window(sc.ItemCount, cross, vpx, off, sc.Overscan, out newFirst, out _);
+                        sc.Layout.Window(sc.ItemCount, cross, vp, off, 0, out visibleFirst, out visibleLast);
                     }
-                    else if (_scene.TryGetExtents(n, out var t) && t is not null) { oldFirst = t.IndexAt(oldOff); newFirst = t.IndexAt(off); }
-                    else { oldFirst = newFirst = 0; }
-                    if (oldFirst != newFirst) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
+                    else if (_scene.TryGetExtents(n, out var t) && t is not null) { visibleFirst = t.IndexAt(off); visibleLast = Math.Min(sc.ItemCount, t.IndexAt(off + vp) + 1); }
+                    else { visibleFirst = visibleLast = 0; }
+                    if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
                 }
             }
 

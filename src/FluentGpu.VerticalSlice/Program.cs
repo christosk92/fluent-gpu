@@ -1967,13 +1967,19 @@ static class Slice
         using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, counted);
         host2.RunFrame();
         int calls0 = counted.RenderItemCalls;
-        window2.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 100), 0, 0, 200f));
+        window2.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 100), 0, 0, 80f));
+        var guardFrame = host2.RunFrame();
+        int guardCalls = counted.RenderItemCalls - calls0;
+        host2.Scene.TryGetScroll(host2.Scene.Root, out var guardScroll);
+        bool guardHeld = !guardFrame.Rendered && guardScroll.FirstRealized == 0 && guardCalls == 0;
+
+        window2.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 100), 0, 0, 120f));
         host2.RunFrame();
-        int calls1 = counted.RenderItemCalls - calls0;
+        int calls1 = counted.RenderItemCalls - calls0 - guardCalls;
         host2.Scene.TryGetScroll(host2.Scene.Root, out var countedScroll);
-        bool reusedOverlap = countedScroll.FirstRealized > 0 && calls1 <= 5;
-        Check("40a. virtual scroll reuses overlapping realized item elements",
-            reusedOverlap, $"first={countedScroll.FirstRealized} newTemplateCalls={calls1}");
+        bool reusedOverlap = guardHeld && countedScroll.FirstRealized > 0 && calls1 <= 5;
+        Check("40a. virtual scroll keeps overscan guard and reuses overlapping item elements",
+            reusedOverlap, $"guardCalls={guardCalls} first={countedScroll.FirstRealized} newTemplateCalls={calls1}");
     }
 
     // The Fenwick extent table: O(log n) prefix-sum (OffsetOf) + binary-lift (IndexAt) + O(log n) correction.
