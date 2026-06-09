@@ -29,8 +29,12 @@ public sealed class Expander : Component
     public static Element Create(string header, Element content, bool initiallyExpanded = false)
         => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded });
 
-    // WinUI ExpandCollapse motion: ControlFastAnimationDuration = 167ms with the standard ease.
-    const float MotionMs = 167f;
+    // WinUI Expander motion (Expander.xaml / _perf2026 storyboards): the content reveal is ASYMMETRIC —
+    // expand = 333ms with KeySpline 0,0,0,1 (FluentPopOpen); collapse = 167ms with KeySpline 1,1,0,1 (FluentAccelerate).
+    // The chevron rotate is the ControlFast 167ms.
+    const float ChevronMs = 167f;
+    const float ExpandMs = 333f;
+    const float CollapseMs = 167f;
 
     public override Element Render()
     {
@@ -53,7 +57,7 @@ public sealed class Expander : Component
                 anim.Animate(chevronRef.Value, AnimChannel.Rotation, to, to, 1f, Easing.Linear);   // seed the resting angle, no visible motion
                 return;
             }
-            anim.Animate(chevronRef.Value, AnimChannel.Rotation, open ? 0f : 180f, to, MotionMs, Easing.FluentStandard);
+            anim.Animate(chevronRef.Value, AnimChannel.Rotation, open ? 0f : 180f, to, ChevronMs, Easing.FluentStandard);
         }, open);
 
         // Trailing 32x32 rounded chevron button: only this gets the subtle hover/press, not the whole header.
@@ -70,8 +74,8 @@ public sealed class Expander : Component
             OnRealized = h => chevronRef.Value = h,               // capture for the rotation tween (AnimEngine-owned LocalTransform)
             Children =
             [
-                // ExpanderChevronGlyphSize = 12. ExpanderChevronForeground = TextFillColorSecondary. One glyph, rotated.
-                new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
+                // ExpanderChevronGlyphSize = 12. ExpanderChevronForeground = TextFillColorPrimaryBrush. One glyph, rotated.
+                new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont },
             ],
         };
 
@@ -101,13 +105,15 @@ public sealed class Expander : Component
             Direction = 1,                       // vertical content area: stretch the child to full width so wrapping text reserves its true height
             Padding = Edges4.All(16),
             Fill = Tok.FillCardSecondary,
-            // Reveal in on expand / out (orphaned) on collapse: a height clip-reveal + fade, clipped by the card.
+            // Reveal in on expand / out (orphaned) on collapse: a height clip-reveal + fade, clipped by the card. Asymmetric
+            // WinUI timing: expand 333ms (0,0,0,1), collapse 167ms (1,1,0,1) via the new LayoutTransition.ExitDynamics.
             Animate = new LayoutTransition(
                 TransitionChannels.Size | TransitionChannels.Opacity,
-                TransitionDynamics.Tween(MotionMs, Easing.FluentStandard),
+                TransitionDynamics.Tween(ExpandMs, Easing.FluentPopOpen),
                 SizeMode.Reveal,
                 Enter: new EnterExit(Opacity: 0f, Active: true),
-                Exit: new EnterExit(Opacity: 0f, Active: true)),
+                Exit: new EnterExit(Opacity: 0f, Active: true),
+                ExitDynamics: TransitionDynamics.Tween(CollapseMs, Easing.FluentAccelerate)),
             Children = [Content],
         };
 
@@ -119,7 +125,8 @@ public sealed class Expander : Component
             BorderColor = Tok.StrokeCardDefault,
             ClipToBounds = true,
             // The card's own height animates as content is added/removed, so siblings below reflow smoothly (live relayout).
-            Animate = LayoutTransition.BoundsT(SizeMode.Relayout) with { Dynamics = TransitionDynamics.Tween(MotionMs, Easing.FluentStandard) },
+            // The size-change path uses Dynamics (expand-matched 333ms / 0,0,0,1); the content reveal above carries the asymmetry.
+            Animate = LayoutTransition.BoundsT(SizeMode.Relayout) with { Dynamics = TransitionDynamics.Tween(ExpandMs, Easing.FluentPopOpen) },
             Children = settings.ContentVisible ? new Element[] { header, content } : new Element[] { header },
         };
     }

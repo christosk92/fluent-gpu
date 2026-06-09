@@ -496,6 +496,31 @@ sealed class TextRampProbe : Component
     }
 }
 
+// A real HyperlinkButton for the accent-text / accent-override checks.
+sealed class HyperlinkProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Padding = Edges4.All(10),
+        Children = [HyperlinkButton.Create("link-text", () => { })],
+    };
+}
+
+// Two real Buttons (one enabled, one disabled via the adopted IsEnabled gate) for the Wave-2 control checks.
+sealed class ButtonProbe : Component
+{
+    public int Clicks;
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Width = 220, Padding = Edges4.All(10), Gap = 8,
+        Children =
+        [
+            Button.Standard("enabled-btn", () => Clicks++),
+            Button.Standard("disabled-btn", () => Clicks++, isEnabled: false),
+        ],
+    };
+}
+
 // Hosts an overlay layer with a focusable anchor button, so a test can verify the overlay restores focus to the
 // pre-open node when it closes. Exercises P5 focus-restoration.
 sealed class FocusRestoreProbe : Component
@@ -720,6 +745,10 @@ static class Slice
     }
 
     static ColorF FirstGradientC0(HeadlessGpuDevice dev) => dev.LastGradients.Count > 0 ? dev.LastGradients[0].C0 : default;
+
+    // Full-ARGB color comparison (WinUI foreground state changes are often ALPHA-only, so RGB-only checks are too weak).
+    static bool ColorClose(ColorF a, ColorF b, float tol)
+        => MathF.Abs(a.R - b.R) < tol && MathF.Abs(a.G - b.G) < tol && MathF.Abs(a.B - b.B) < tol && MathF.Abs(a.A - b.A) < tol;
 
     static bool Near(float a, float b) => MathF.Abs(a - b) < 0.5f;
     static bool Near(float a, float b, float tol) => MathF.Abs(a - b) < tol;
@@ -2583,6 +2612,81 @@ static class Slice
         Check("62a. RepeatButton: idle after release does no work (no busy loop)", !host.HasActiveWork);
     }
 
+    // Wave 2 — the button/input-state controls adopt the Wave-1 primitives: the IsEnabled engine gate (P1) and the
+    // TextEl foreground ramps (P2). Verified end-to-end through the real Button factory.
+    static void Wave2ControlChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("wave2", new Size2(320, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new ButtonProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();
+        var buttons = Roles(host.Scene, AutomationRole.Button);
+        var enabledBtn = buttons[0];
+        var disabledBtn = buttons[1];
+        var restFg = GlyphColor(device, strings, "enabled-btn");   // resting foreground (ButtonForeground = TextPrimary)
+
+        // W2.a the disabled Button swallows the click (the control now sets IsEnabled=false instead of nulling handlers).
+        ClickNode(host, window, disabledBtn);
+        int afterDisabledClick = root.Clicks;
+        ClickNode(host, window, enabledBtn);
+        Check("W2.a Button adopts the IsEnabled gate (disabled swallows click; enabled clicks)",
+            afterDisabledClick == 0 && root.Clicks == 1, $"disabledClicks={afterDisabledClick} enabled={root.Clicks}");
+
+        // W2.b the disabled Button's label resolves ButtonForegroundDisabled — matched on FULL ARGB (WinUI dims via ALPHA),
+        // and proven actually dimmer than the resting foreground (not just the same white RGB).
+        var disFg = GlyphColor(device, strings, "disabled-btn");
+        var disExpect = Tok.TextDisabled;
+        bool disMatchesToken = ColorClose(disFg, disExpect, 0.03f);
+        bool disActuallyDimmer = disFg.A < restFg.A - 0.05f;
+        Check("W2.b disabled Button label = DisabledForeground (ARGB) and is dimmer than resting",
+            disMatchesToken && disActuallyDimmer,
+            $"label=({disFg.R:0.00},{disFg.G:0.00},{disFg.B:0.00},A={disFg.A:0.00}) token A={disExpect.A:0.00} restA={restFg.A:0.00}");
+
+        // W2.c pressing the enabled Button ramps its label to ButtonForegroundPressed (TextSecondary) — full ARGB, and
+        // the alpha actually changed from resting (the WinUI press dim).
+        var c = CenterOf(host.Scene, enabledBtn);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+        for (int i = 0; i < 20; i++) host.RunFrame();
+        var pressFg = GlyphColor(device, strings, "enabled-btn");
+        var pressExpect = Tok.TextSecondary;
+        bool pressMatchesToken = ColorClose(pressFg, pressExpect, 0.06f);
+        bool pressChangedFromRest = MathF.Abs(pressFg.A - restFg.A) > 0.02f || !ColorClose(pressFg, restFg, 0.02f);
+        window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+        host.RunFrame();
+        Check("W2.c pressed Button label ramps to PressedForeground (ARGB, changed from resting)",
+            pressMatchesToken && pressChangedFromRest,
+            $"label=({pressFg.R:0.00},{pressFg.G:0.00},{pressFg.B:0.00},A={pressFg.A:0.00}) pressTokenA={pressExpect.A:0.00} restA={restFg.A:0.00}");
+
+        // W2.d HyperlinkButton uses the accent TEXT palette (AccentTextPrimary), NOT the accent FILL (AccentDefault),
+        // and that foreground tracks a live accent override (OS accent / Tok.SetAccent) by recomputing its shade.
+        ColorF LinkForeground(string id)
+        {
+            using var a = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc(id, new Size2(240, 120), 1f)); w.Show();
+            var dev = new HeadlessGpuDevice();
+            using var h = new AppHost(a, w, dev, new HeadlessFontSystem(strings), strings, new HyperlinkProbe());
+            h.RunFrame();
+            return GlyphColor(dev, strings, "link-text");
+        }
+
+        var defFg = LinkForeground("hlink");
+        bool usesAccentText = ColorClose(defFg, Tok.AccentTextPrimary, 0.02f) && !ColorClose(defFg, Tok.AccentDefault, 0.02f);
+
+        Tok.SetAccent(ColorF.FromRgba(0xE0, 0x40, 0x40));   // developer/OS override (red)
+        var ovFg = LinkForeground("hlink2");
+        Tok.SetAccent(null);                                 // clear the override (revert to theme default)
+        bool tracksOverride = !ColorClose(ovFg, defFg, 0.05f) && ovFg.R > ovFg.B + 0.1f;   // now reddish, changed
+
+        Check("W2.d HyperlinkButton foreground = accent TEXT (not fill) and tracks the accent override",
+            usesAccentText && tracksOverride,
+            $"def=({defFg.R:0.00},{defFg.G:0.00},{defFg.B:0.00}) override=({ovFg.R:0.00},{ovFg.G:0.00},{ovFg.B:0.00}) accentFill=({Tok.AccentDefault.R:0.00},{Tok.AccentDefault.G:0.00},{Tok.AccentDefault.B:0.00})");
+    }
+
     // Wave 1 / P3 — typed computed "TemplateSettings" convention: the Expander derives ExpanderTemplateSettings once from
     // its open state and feeds them into channels — the chevron ROTATION (one glyph, down→up) and the content reveal.
     static void ExpanderSettingsChecks(StringTable strings)
@@ -3509,6 +3613,9 @@ static class Slice
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);
+
+        // Wave 2 — buttons & input-state controls adopt the Wave-1 primitives.
+        Wave2ControlChecks(strings);
 
         // Basic-input infrastructure (Part A): repeat timing, text input, anchored overlays.
         RepeatButtonChecks(strings);

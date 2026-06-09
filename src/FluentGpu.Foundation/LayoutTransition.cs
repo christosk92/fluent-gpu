@@ -65,7 +65,10 @@ public readonly record struct LayoutTransition(
     SizeMode Size = SizeMode.Auto,
     EnterExit Enter = default,
     EnterExit Exit = default,
-    ushort CustomCurveId = 0)
+    ushort CustomCurveId = 0,
+    // Optional separate dynamics for the EXIT (disappear/collapse) leg — for controls whose WinUI open/close timings are
+    // asymmetric (e.g. Expander expand 333ms / collapse 167ms). Null ⇒ exit reuses <see cref="Dynamics"/>.
+    TransitionDynamics? ExitDynamics = null)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

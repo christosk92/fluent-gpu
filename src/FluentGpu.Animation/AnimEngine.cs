@@ -284,7 +284,7 @@ public sealed class AnimEngine
     /// tracks settle (<see cref="HasTracks"/> == false) the host reclaims it.</summary>
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
-        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);   // asymmetric exit timing when set
         SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn);   // always (the exit-settle signal)
         if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn);
         if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn);

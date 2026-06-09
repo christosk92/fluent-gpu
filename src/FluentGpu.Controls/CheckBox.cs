@@ -87,7 +87,8 @@ public static partial class CheckBox
                 : [];
 
         // The box keeps a 1px ring in every state; the engine eases Fill/BorderColor toward the Hover/Pressed legs of the
-        // ramp with the element's interaction timing. Disabled = a flat swap (no interaction).
+        // ramp with the row's interaction timing. The disabled leg is the resting swap (Resting(enabled)) — when the row is
+        // IsEnabled=false the engine routes no hover/press progress down, so the Hover/Pressed legs are never reached.
         var box = new BoxEl
         {
             Width = s.BoxSize, Height = s.BoxSize,
@@ -95,11 +96,11 @@ public static partial class CheckBox
             Corners = Radii.ControlAll,
             BorderWidth = 1f,
             Fill = fill.Resting(enabled),
-            HoverFill = enabled ? fill.Hover : fill.Disabled,
-            PressedFill = enabled ? fill.Pressed : fill.Disabled,
+            HoverFill = fill.Hover,
+            PressedFill = fill.Pressed,
             BorderColor = stroke.Resting(enabled),
-            HoverBorderColor = enabled ? stroke.Hover : stroke.Disabled,
-            PressedBorderColor = enabled ? stroke.Pressed : stroke.Disabled,
+            HoverBorderColor = stroke.Hover,
+            PressedBorderColor = stroke.Pressed,
             Children = markChildren,
         };
 
@@ -110,8 +111,22 @@ public static partial class CheckBox
             Gap = 10f,
             MinHeight = s.MinHeight,
             Role = AutomationRole.CheckBox,
-            OnClick = enabled ? () => onClick(state) : null,
-            Children = [box, new TextEl(label) { Size = s.FontSize, Color = s.LabelFg.Resting(enabled) }],
+            // Engine disabled gate: it stops hit-test/focus/keyboard when IsEnabled=false, so OnClick stays wired
+            // (no manual null) and the label TextEl picks its disabled leg from the nearest interactive ancestor.
+            IsEnabled = enabled,
+            OnClick = () => onClick(state),
+            Children =
+            [
+                box,
+                new TextEl(label)
+                {
+                    Size = s.FontSize,
+                    Color = s.LabelFg.Rest,
+                    HoverColor = s.LabelFg.Hover,
+                    PressedColor = s.LabelFg.Pressed,
+                    DisabledColor = s.LabelFg.Disabled,
+                },
+            ],
         };
     }
 }

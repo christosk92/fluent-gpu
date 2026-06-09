@@ -183,7 +183,7 @@ public sealed class AppHost : IDisposable
         try
         {
             long frameStart = Stopwatch.GetTimestamp();
-            EnsureSize();
+            bool resized = EnsureSize();
             var layoutSize = ClientSizeDip();
             PublishViewport(layoutSize);
 
@@ -191,9 +191,12 @@ public sealed class AppHost : IDisposable
             // Skip on the very first layout — freshly-mounted nodes are unmeasured (0-size), so FLIPping them would animate
             // a spurious 0→full reveal that clips content. (Nodes mounted on later frames are created during Flush, AFTER
             // this capture, so they're correctly never captured.)
+            // Also skip on a window RESIZE: the pre-resize rects are stale, so FLIPping them animates the resize delta —
+            // a content slide that, when a NavigationView pane also auto-collapses at the breakpoint, leaves a stale
+            // presented translation (content shifted, backdrop revealed). Resizes SNAP; state-driven changes still FLIP.
             bool willReconcile = _runtime.HasPending || _needFullLayout;
             bool capturedProjections = false;
-            if (willReconcile && _everLaidOut && !_scene.Root.IsNull)
+            if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
                 CaptureProjections(_scene.Root);
@@ -429,14 +432,17 @@ public sealed class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
-    /// <summary>Resize the swapchain to match the window's client size; force a full re-layout on change.</summary>
-    private void EnsureSize()
+    /// <summary>Resize the swapchain to match the window's client size; force a full re-layout on change.
+    /// Returns true if the client size changed this frame (so the caller can SNAP layout — a window resize must not
+    /// FLIP-animate content; the pre-resize rects are stale and projecting them shifts the content + reveals the backdrop).</summary>
+    private bool EnsureSize()
     {
         var s = _window.ClientSizePx;
-        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height) return;
+        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height) return false;
         _lastSize = s;
         _swapchain.Resize(s);
         _needFullLayout = true;
+        return true;
     }
 
     private Size2 ClientSizeDip()

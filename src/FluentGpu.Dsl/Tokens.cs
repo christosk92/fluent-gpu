@@ -54,6 +54,12 @@ public sealed record TokenSet
     public required ColorF AccentTertiary { get; init; }
     public required ColorF AccentDisabled { get; init; }
     public required ColorF AccentSubtle { get; init; }           // accent @ ~.16 (nav selection, info card)
+    // Accent TEXT (distinct from the accent FILL above): WinUI AccentTextFillColor{Primary,Secondary,Tertiary} =
+    // SystemAccentColorLight3/Light3/Light2 (dark) and Dark2/Dark3/Dark1 (light). Used for link text (HyperlinkButton),
+    // accent labels — readability-adjusted and SOLID (never the alpha-reduced fill). Disabled = TextDisabled.
+    public required ColorF AccentTextPrimary { get; init; }
+    public required ColorF AccentTextSecondary { get; init; }
+    public required ColorF AccentTextTertiary { get; init; }
 
     // Focus
     public required ColorF FocusOuter { get; init; }
@@ -117,8 +123,9 @@ public static class Tok
 
     public static void Use(ThemeKind kind) { Theme = kind; T = kind == ThemeKind.Light ? Light : Dark; }
 
-    /// <summary>Inject the OS accent (host startup). Derived shades recompute from it.</summary>
-    public static void SetAccent(ColorF c) => _accent = c;
+    /// <summary>Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
+    /// subtle + hero + attention) recompute from it. Pass <c>null</c> to clear the override and revert to the theme default.</summary>
+    public static void SetAccent(ColorF? c) => _accent = c;
     public static void SetWindowBackground(ColorF c) => _windowBg = c;
 
     // Fill
@@ -174,6 +181,23 @@ public static class Tok
     public static ColorF AccentTertiary => _accent is { } a ? a with { A = 0.80f } : T.AccentTertiary;
     public static ColorF AccentDisabled => T.AccentDisabled;
     public static ColorF AccentSubtle => _accent is { } a ? a with { A = 0.16f } : T.AccentSubtle;
+    // Accent TEXT shades. With a live accent override (OS accent or Tok.SetAccent) these recompute from the base by
+    // SHADING (lighten in dark / darken in light) toward the WinUI AccentTextFillColor ramp — NOT alpha-reduction, which
+    // would make link text translucent. With no override, the exact WinUI default values baked in the TokenSet are used.
+    public static ColorF AccentTextPrimary   => _accent is { } a ? AccentTextShade(a, 0) : T.AccentTextPrimary;
+    public static ColorF AccentTextSecondary => _accent is { } a ? AccentTextShade(a, 1) : T.AccentTextSecondary;
+    public static ColorF AccentTextTertiary  => _accent is { } a ? AccentTextShade(a, 2) : T.AccentTextTertiary;
+
+    // level 0=Primary 1=Secondary 2=Tertiary. Dark lightens (→ Light3/Light3/Light2); light darkens (→ Dark2/Dark3/Dark1).
+    // Mix factors tuned to the #0078D4 default anchors; the default (no-override) path uses the exact baked values above.
+    private static ColorF AccentTextShade(ColorF accent, int level)
+    {
+        bool light = Theme == ThemeKind.Light;
+        float t = light ? level switch { 0 => 0.45f, 1 => 0.66f, _ => 0.22f }
+                        : level switch { 0 => 0.55f, 1 => 0.55f, _ => 0.28f };
+        var target = light ? ColorF.FromRgba(0x00, 0x00, 0x00) : ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+        return new ColorF(accent.R + (target.R - accent.R) * t, accent.G + (target.G - accent.G) * t, accent.B + (target.B - accent.B) * t, 1f);
+    }
 
     // Focus
     public static ColorF FocusOuter => T.FocusOuter;
@@ -248,7 +272,11 @@ public static class Tok
         AccentDefault = ColorF.FromRgba(0x60, 0xCD, 0xFF),
         AccentSecondary = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xCC),
-        AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x29),
+        // WinUI dark: AccentTextFillColorPrimary/Secondary = SystemAccentColorLight3 (#A6D8FF), Tertiary = Light2 (#76B9ED).
+        AccentTextPrimary   = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
+        AccentTextSecondary = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
+        AccentTextTertiary  = ColorF.FromRgba(0x76, 0xB9, 0xED),
+        AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),   // WinUI AccentFillColorDisabled = #28FFFFFF
         AccentSubtle    = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0x29),
         FocusOuter = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         FocusInner = ColorF.FromRgba(0x00, 0x00, 0x00, 0xB3),
@@ -312,6 +340,10 @@ public static class Tok
         AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),
+        // WinUI light: AccentTextFillColorPrimary = SystemAccentColorDark2 (#004275), Secondary = Dark3 (#002642), Tertiary = Dark1 (#005FB8).
+        AccentTextPrimary   = ColorF.FromRgba(0x00, 0x42, 0x75),
+        AccentTextSecondary = ColorF.FromRgba(0x00, 0x26, 0x42),
+        AccentTextTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         AccentSubtle    = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0x24),
         FocusOuter = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
