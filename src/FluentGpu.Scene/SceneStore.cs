@@ -65,6 +65,11 @@ public sealed class SceneStore : ISceneBackend
     private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
     private Action<Point2>?[] _contextRequested;           // right-click / Menu-key context request (local coords)
     private Action<bool>?[] _focusChanged;                 // dispatcher focus moved onto (true) / off (false) this node (GotFocus/LostFocus)
+    // Drag-reorder lifecycle (E5): fired by Input.DragController once a CanDrag press crosses the drag threshold.
+    private Action<DragEventArgs>?[] _dragStarted;         // threshold crossed → the gesture is a drag (WinUI DragStarting)
+    private Action<DragEventArgs>?[] _dragDelta;           // every pointer move while the drag is active (coords + velocity)
+    private Action<DragEventArgs>?[] _dragCompleted;       // released after an active drag (the click is suppressed)
+    private Action?[] _dragCanceled;                       // Escape / capture loss / window blur aborted the drag
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly Dictionary<int, ScrollState> _scroll = new();
@@ -132,6 +137,10 @@ public sealed class SceneStore : ISceneBackend
         _pointerPressed = new Action<PointerEventArgs>?[capacity];
         _contextRequested = new Action<Point2>?[capacity];
         _focusChanged = new Action<bool>?[capacity];
+        _dragStarted = new Action<DragEventArgs>?[capacity];
+        _dragDelta = new Action<DragEventArgs>?[capacity];
+        _dragCompleted = new Action<DragEventArgs>?[capacity];
+        _dragCanceled = new Action?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -165,6 +174,10 @@ public sealed class SceneStore : ISceneBackend
         _pointerPressed[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
+        _dragStarted[idx] = null;
+        _dragDelta[idx] = null;
+        _dragCompleted[idx] = null;
+        _dragCanceled[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -197,6 +210,10 @@ public sealed class SceneStore : ISceneBackend
         _pointerPressed[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
+        _dragStarted[idx] = null;
+        _dragDelta[idx] = null;
+        _dragCompleted[idx] = null;
+        _dragCanceled[idx] = null;
         ClearDynamicText(idx);
         _scroll.Remove(idx);
         _extents.Remove(idx);
@@ -320,6 +337,15 @@ public sealed class SceneStore : ISceneBackend
     public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[h.Raw.Index];
     public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[h.Raw.Index] = handler;
     public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[h.Raw.Index];
+    // Drag-reorder lifecycle columns (E5) — set by the reconciler from BoxEl.CanDrag, read by Input.DragController.
+    public void SetDragStarted(NodeHandle h, Action<DragEventArgs>? handler) => _dragStarted[h.Raw.Index] = handler;
+    public Action<DragEventArgs>? GetDragStarted(NodeHandle h) => _dragStarted[h.Raw.Index];
+    public void SetDragDelta(NodeHandle h, Action<DragEventArgs>? handler) => _dragDelta[h.Raw.Index] = handler;
+    public Action<DragEventArgs>? GetDragDelta(NodeHandle h) => _dragDelta[h.Raw.Index];
+    public void SetDragCompleted(NodeHandle h, Action<DragEventArgs>? handler) => _dragCompleted[h.Raw.Index] = handler;
+    public Action<DragEventArgs>? GetDragCompleted(NodeHandle h) => _dragCompleted[h.Raw.Index];
+    public void SetDragCanceled(NodeHandle h, Action? handler) => _dragCanceled[h.Raw.Index] = handler;
+    public Action? GetDragCanceled(NodeHandle h) => _dragCanceled[h.Raw.Index];
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
@@ -616,6 +642,8 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);
+        Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
+        Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

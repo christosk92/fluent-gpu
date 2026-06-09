@@ -135,7 +135,8 @@ public struct ScrollState
 
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
-    public IVirtualLayout? Layout;        // pluggable fixed-geometry layout (stack/grid/custom); null ⇒ variable (extent table)
+    public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent
+                                          // estimate-then-correct + anchoring); null ⇒ the legacy Fenwick extent-table path
     public int   Overscan;                // rows realized beyond the viewport on each side
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
@@ -247,4 +248,6 @@ public struct InteractionInfo
     public const ushort FocusBit = 128;   // focus-change handler present (OnFocusChanged) — reached via the dispatcher's
                                           // SetFocus (WinUI GotFocus/LostFocus), never via hit-testing; the bit lets the
                                           // dispatcher skip the handler-column lookup on every focus move
+    public const ushort DragBit = 256;    // drag-reorder source (BoxEl.CanDrag): hit-testable; a press arms
+                                          // Input.DragController and the drag lifecycle columns fire past the 4px box
 }

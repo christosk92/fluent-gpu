@@ -1767,15 +1767,18 @@ static class Slice
         var modded = Button.Accent("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
         bool overridden = modded.Fill == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
 
+        // Wave-1 parity: WinUI Button storyboards swap brushes ONLY (Button_themeresources.xaml:176-229 — no scale),
+        // so the default Button must have NO press scale; IconButton (engine media-transport control) keeps its
+        // deliberate glyph pop, proving the scale CHANNEL still works for controls that opt in.
         var animatedButton = Button.Standard("z", () => { });
         var animatedIcon = IconButton.Create("i", () => { });
-        bool animation = animatedButton.PressScale < 1f
+        bool animation = animatedButton.PressScale == 1f && animatedButton.HoverScale == 1f
             && animatedIcon.Children[0] is BoxEl iconGlyph
             && iconGlyph.HoverScale > 1f
             && iconGlyph.PressScale < 1f;
 
         Check("27. controls are user-styleable + animated (ButtonStyle, modifiers, AnimatedIcon)", styled && overridden && animation,
-            "custom style + .Background().Rounded() + press/icon scale");
+            "custom style + .Background().Rounded() + WinUI no-scale Button / opt-in icon scale");
     }
 
     // UseAnimatedValue eases toward a changed target across renders, then settles (React/framer-style transition).
@@ -3316,7 +3319,8 @@ static class Slice
         // Anchor near the top: a free flyout opens BELOW (default) and still keeps all corners rounded.
         var high = new RectF(20, 10, 100, 24);
         var pb = FlyoutPositioner.Place(in high, new Size2(100, 120), in vp, FlyoutPlacement.BottomLeft);
-        bool below = !pb.OpensUp && pb.Y >= high.Y + high.H + 7.5f && pb.CornerJoin == CornerJoin.None;
+        // WinUI FlyoutBase::FlyoutMargin = 4 (FlyoutBase_Partial.cpp:65) — the flyout sits 4px off the anchor edge.
+        bool below = !pb.OpensUp && pb.Y >= high.Y + high.H + 3.5f && pb.CornerJoin == CornerJoin.None;
 
         // Attached stretch dropdowns (ComboBox/AutoSuggest style) stay flush and join the field edge.
         var attach = FlyoutPositioner.Place(in high, new Size2(100, 120), in vp, FlyoutPlacement.BottomStretch);
@@ -3355,9 +3359,22 @@ static class Slice
         window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
         host.RunFrame();
         bool movedAway = (host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) == 0;
+        void DumpP5b(NodeHandle n, int d)
+        {
+            var fl = host.Scene.Flags(n);
+            Console.Error.WriteLine($"[DBG-P5b] {new string(' ', d * 2)}{n} focusable={(fl & NodeFlags.Focusable) != 0} focused={(fl & NodeFlags.Focused) != 0} role={host.Scene.Interaction(n).Role}");
+            for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) DumpP5b(c, d + 1);
+        }
+        DumpP5b(host.Scene.Root, 0);
 
+        Console.Error.WriteLine($"[DBG-P5b] beforeClose anchor={root.AnchorNode}");
         root.Handle.Close();
-        for (int i = 0; i < 30; i++) host.RunFrame();   // close fade settles → Finalize → restore
+        Console.Error.WriteLine($"[DBG-P5b] afterClose anchorFocused={(host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) != 0}");
+        for (int i = 0; i < 30; i++)
+        {
+            host.RunFrame();   // close fade settles → Finalize → restore
+            if (i < 5 || i == 29) Console.Error.WriteLine($"[DBG-P5b] f{i} anchorFocused={(host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) != 0}");
+        }
         bool restored = (host.Scene.Flags(root.AnchorNode) & NodeFlags.Focused) != 0;
 
         Check("W1-P5.b overlay restores focus to the pre-open node on close",

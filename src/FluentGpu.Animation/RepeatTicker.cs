@@ -21,8 +21,10 @@ public sealed class RepeatTicker
 
     public bool HasActive => !_node.IsNull;
 
+    // WinUI RepeatButton DP metadata defaults: Delay = 500ms, Interval = 33ms
+    // (microsoft-ui-xaml dxaml\xcp\components\dependencyObject\DependencyProperty.cpp:714-720).
     private const float InitialDelayMs = 500f;
-    private const float IntervalMs = 60f;
+    private const float IntervalMs = 33f;
 
     /// <summary>Begin auto-repeat for <paramref name="node"/>: fire the click once now, then schedule the repeat.</summary>
     public void Arm(NodeHandle node)

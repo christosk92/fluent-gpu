@@ -63,6 +63,27 @@ public sealed class PointerEventArgs
     public bool Handled;
 }
 
+/// <summary>
+/// Drag-reorder lifecycle payload for <c>OnDragStarted</c>/<c>OnDragDelta</c>/<c>OnDragCompleted</c>: the pointer in
+/// the dragged node's CURRENT box (<see cref="Local"/> stays ≈ the grab offset) and in window space, the accumulated
+/// gesture translation since the arming press, and the smoothed pointer velocity (px/s, ~50ms EMA) for flick/settle
+/// decisions. ONE instance is reused for the whole gesture (0 steady-state alloc per move) — handlers must copy
+/// fields they keep, never hold the reference.
+/// </summary>
+public sealed class DragEventArgs
+{
+    /// <summary>Pointer position in the dragged node's CURRENT (moving) box.</summary>
+    public Point2 Local;
+    /// <summary>Pointer position in window space.</summary>
+    public Point2 Absolute;
+    /// <summary>Accumulated translation since the arming press — feed to <c>ReorderList.Update</c>.</summary>
+    public float TotalDx, TotalDy;
+    /// <summary>Smoothed pointer velocity (px/s; ~50ms exponential-moving-average horizon).</summary>
+    public float VelocityX, VelocityY;
+    public KeyModifiers Mods;
+    public PointerKind Kind;
+}
+
 /// <summary>A keyboard accelerator chord (WinUI KeyboardAccelerator): <see cref="Key"/> + <see cref="Mods"/> invoke the
 /// owning node's click handler from anywhere (dispatched after focused routing leaves the key unhandled).</summary>
 public readonly record struct KeyAccelerator(int Key, KeyModifiers Mods);

@@ -42,15 +42,19 @@ public static class SceneRecorder
         public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount);
     }
 
+    /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
+    /// into their own popup window instead (E4 windowed popups; see <see cref="RecordSubtree"/>). The subtrees stay in
+    /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
     public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
-                                          ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default)
+                                          ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
+                                          ReadOnlySpan<NodeHandle> skipRoots = default)
     {
         dl.Reset();
         if (scene.Root.IsNull) return default;
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -58,15 +62,52 @@ public static class SceneRecorder
         for (int i = 0; i < scene.OrphanCount; i++)
         {
             var o = scene.OrphanAt(i, out float px, out float py);
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
         }
         return stats.ToStats();
     }
 
+    /// <summary>
+    /// Record ONE subtree into its own DrawList, re-origined so the subtree's on-screen top-left lands at the
+    /// DrawList's (0,0) — the root-override path for E4 out-of-bounds popup windows (the popup subtree stays in the
+    /// single SceneStore; the host presents this list on the popup window's own swapchain). <paramref name="originDip"/>
+    /// is the subtree's window-DIP top-left (= the popup's placed position): the walk starts at the subtree root with
+    /// a parent-world translation of (parentAbs − origin), so every node's own bounds/transform chain composes exactly
+    /// as in the main pass, shifted into popup-window space. No orphan pass — exit orphans belong to the main window.
+    /// </summary>
+    public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus,
+                                                 ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit,
+                                                 NodeHandle root, Point2 originDip)
+    {
+        dl.Reset();
+        if (root.IsNull || !scene.IsLive(root)) return default;
+
+        float pax = 0f, pay = 0f;
+        var parent = scene.Parent(root);
+        if (!parent.IsNull)
+        {
+            var pr = scene.AbsoluteRect(parent);   // translation-only ancestor chain (the overlay positioning hosts)
+            pax = pr.X;
+            pay = pr.Y;
+        }
+        var stats = new RecordAccumulator();
+        Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
+        return stats.ToStats();
+    }
+
+    private static bool ContainsNode(ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    {
+        for (int i = 0; i < roots.Length; i++)
+            if (roots[i] == node) return true;
+        return false;
+    }
+
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, ref RecordAccumulator stats)
+                             float parentScaleX, float parentScaleY, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
     {
+        if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
         stats.NodesVisited++;
@@ -307,7 +348,7 @@ public static class SceneRecorder
         }
 
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
+            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a

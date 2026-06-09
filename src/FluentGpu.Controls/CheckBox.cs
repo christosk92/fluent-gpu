@@ -21,10 +21,16 @@ public static partial class CheckBox
 {
     public sealed record Style
     {
-        public float BoxSize { get; init; } = 20f;          // CheckBoxSize
-        public float GlyphSize { get; init; } = 12f;        // CheckBoxGlyphSize
+        public float BoxSize { get; init; } = 20f;          // CheckBoxSize (CheckBox_themeresources.xaml:270)
+        public float GlyphSize { get; init; } = 12f;        // CheckBoxGlyphSize (CheckBox_themeresources.xaml:271)
         public float FontSize { get; init; } = 14f;         // ControlContentThemeFontSize
-        public float MinHeight { get; init; } = 32f;        // CheckBoxHeight
+        public float MinHeight { get; init; } = 32f;        // CheckBoxHeight (CheckBox_themeresources.xaml:272/291)
+        public float MinWidth { get; init; } = 120f;        // CheckBoxMinWidth (CheckBox_themeresources.xaml:273/290)
+        /// <summary>Box→label gap: CheckBoxPadding 8,5,0,0 — the ContentPresenter's left margin off the Auto (20px)
+        /// glyph column (CheckBox_themeresources.xaml:274/283 + grid columns :598-601).</summary>
+        public float ContentGap { get; init; } = 8f;
+        /// <summary>WinUI CheckBoxFocusVisualMargin −7,−3,−7,−3 (CheckBox_themeresources.xaml:275/293); engine-drawn (E1).</summary>
+        public Edges4 FocusVisualMargin { get; init; } = new(-7f, -3f, -7f, -3f);
 
         // Unchecked box: fill = ControlAltFillColor ramp; stroke = ControlStrongStroke (DIMS to Disabled on press, per WinUI).
         public StateBrush OffFill { get; init; }
@@ -108,12 +114,20 @@ public static partial class CheckBox
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
-            Gap = 10f,
+            Gap = s.ContentGap,                  // CheckBoxPadding 8,5,0,0 (CheckBox_themeresources.xaml:274)
             MinHeight = s.MinHeight,
+            MinWidth = s.MinWidth,               // CheckBoxMinWidth 120 (CheckBox_themeresources.xaml:273/290)
             Role = AutomationRole.CheckBox,
             // Engine disabled gate: it stops hit-test/focus/keyboard when IsEnabled=false, so OnClick stays wired
             // (no manual null) and the label TextEl picks its disabled leg from the nearest interactive ancestor.
             IsEnabled = enabled,
+            // Keyboard focus: UseSystemFocusVisuals + CheckBoxFocusVisualMargin −7,−3,−7,−3
+            // (CheckBox_themeresources.xaml:292-293); the engine draws the ring (E1). Space/Enter activation = the
+            // engine's focused-clickable contract → OnClick (WinUI CheckBox toggles via ButtonBase Space-on-keyup).
+            // NOTE deliberately NO BrushTransitionMs: every CheckBox state-brush change is a DiscreteObjectKeyFrame at
+            // KeyTime 0 (e.g. CheckedNormal, CheckBox_themeresources.xaml:378-401) — WinUI does not cross-fade here.
+            Focusable = true,
+            FocusVisualMargin = s.FocusVisualMargin,
             OnClick = () => onClick(state),
             Children =
             [

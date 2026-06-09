@@ -348,7 +348,8 @@ public sealed class FlexLayout
         float padL = li.Padding.Left, padT = li.Padding.Top;
 
         (float contentW, float contentH) =
-              sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
+              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
+            : sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0                           ? ArrangeVirtualVariable(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
             :                                               ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
 
@@ -437,6 +438,50 @@ public sealed class FlexLayout
 
         // Re-pin the anchor so corrections to rows above the visible top do not shift the viewport.
         float pinned = table.OffsetOf(anchorIndex) + anchorWithin;
+        float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
+        pinned = Math.Clamp(pinned, 0f, maxOff);
+        ref ScrollState scw = ref _scene.ScrollRef(node);
+        if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
+        scw.AnchorIndex = anchorIndex;
+        ref NodePaint cp = ref _scene.Paint(content);
+        cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
+        return (contentW, contentH);
+    }
+
+    // Measured-seam virtualization (E11-L0): the same estimate-then-correct + scroll-anchoring contract as the
+    // built-in Fenwick path (ArrangeVirtualVariable), but the extents/prefix sums live behind the user-implementable
+    // IMeasuredVirtualLayout — custom layouts can be variable/sliver-like. virtualization.md §6.2 semantics.
+    private (float w, float h) ArrangeVirtualMeasured(NodeHandle node, IMeasuredVirtualLayout layout, in ScrollState sc,
+                                                      NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
+    {
+        if (content.IsNull) return (0f, 0f);
+        int first = sc.FirstRealized;
+        float cross = horizontal ? innerH : innerW;
+
+        // Anchor: the topmost-visible item + its sub-item offset, captured BEFORE this frame's corrections.
+        float offset = horizontal ? sc.OffsetX : sc.OffsetY;
+        int anchorIndex = layout.IndexAt(offset, cross);
+        float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
+
+        int ord = 0;
+        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            int index = first + ord;
+            var cs = Measure(rc);                                  // the row's natural main extent
+            float main = horizontal ? cs.Width : cs.Height;
+            layout.SetMeasured(index, main, cross);                // estimate-then-correct through the seam (O(log n))
+            var rect = layout.ItemRect(index, cross);              // post-correction content-space rect
+            if (horizontal) Arrange(rc, rect.X, rect.Y, main, innerH);
+            else            Arrange(rc, rect.X, rect.Y, innerW, main);
+        }
+
+        float mainContent = layout.ContentExtent(sc.ItemCount, cross);
+        float contentW = horizontal ? mainContent : innerW;
+        float contentH = horizontal ? innerH : mainContent;
+        _scene.Bounds(content) = new RectF(padL, padT, contentW, contentH);
+
+        // Re-pin the anchor so corrections to rows above the visible top do not shift the viewport.
+        float pinned = layout.OffsetOf(anchorIndex, cross) + anchorWithin;
         float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
         pinned = Math.Clamp(pinned, 0f, maxOff);
         ref ScrollState scw = ref _scene.ScrollRef(node);

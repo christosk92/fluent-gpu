@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -32,13 +33,45 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
 /// channel directly — a compositor-only frame with no render/reconcile/layout. The host drains the reactive runtime
 /// once per frame (phase 3), runs (scoped) layout only when a reconcile/layout-bind changed something, then records.
 /// </summary>
+/// <summary>
+/// One out-of-bounds popup window leased by an overlay (E4 windowed popups — WinUI windowed <c>CPopup</c>): a PAL
+/// popup window + its own swapchain + its own DrawList, re-recorded each frame from the popup SUBTREE (which stays in
+/// the single SceneStore — the recorder root-override). Exposed for headless verification: decode <see cref="DrawList"/>
+/// with a scratch <c>HeadlessGpuDevice.SubmitDrawList</c> and assert against <see cref="BoundsDip"/>/<see cref="Window"/>.
+/// </summary>
+public sealed class PopupWindowSlot
+{
+    internal PopupWindowSlot(int token, IPlatformPopupWindow window, NodeHandle root)
+    {
+        Token = token;
+        Window = window;
+        Root = root;
+    }
+
+    public int Token { get; }
+    public IPlatformPopupWindow Window { get; }
+    /// <summary>The overlay wrapper node whose subtree renders into this popup window.</summary>
+    public NodeHandle Root { get; }
+    /// <summary>Popup bounds in main-window DIP space (origin = main-window client (0,0)) — the record origin.</summary>
+    public RectF BoundsDip { get; internal set; }
+    public ISwapchain? Swapchain { get; internal set; }
+    /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
+    public DrawList DrawList { get; } = new();
+}
+
 public sealed class AppHost : IDisposable
 {
+    private readonly IPlatformApp _app;
     private readonly IPlatformWindow _window;
     private readonly IGpuDevice _device;
     private readonly ISwapchain _swapchain;
     private readonly Component _root;
     private readonly StringTable _strings;
+
+    // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
+    private readonly List<PopupWindowSlot> _popupWindows = new(2);
+    private readonly List<NodeHandle> _popupSkipRoots = new(2);
+    private int _popupTokenSeq;
 
     private readonly SceneStore _scene = new();
     private readonly ReactiveRuntime _runtime = new();
@@ -156,10 +189,27 @@ public sealed class AppHost : IDisposable
     /// <summary>The focused-editor caret-blink ticker (phase 7). Text-input controls Focus/Blur/ResetBlink it.</summary>
     public CaretBlinker CaretBlinker => _caretBlinker;
 
+    /// <summary>
+    /// Whether out-of-bounds popup WINDOWS are available (the engine's <c>CPopup::DoesPlatformSupportWindowedPopup</c>
+    /// gate). Defaults to true only on the headless path: the headless device creates independent swapchains, so the
+    /// COMPLETE windowed-popup pipeline (PAL window + own swapchain + subtree DrawList) runs and is verifiable.
+    /// needs-pixels — D3D12 stays false until the per-target submit lands: <c>IGpuDevice.SubmitDrawList</c> has no
+    /// present-target parameter and <c>D3D12Device.CreateSwapchain</c> is a one-shot device init (D3D12Device.cs:95-122),
+    /// so a second swapchain cannot be rendered yet. When false, overlays asking for
+    /// <c>PopupOptions.ConstrainToRootBounds = false</c> silently fall back to in-window clamped placement (exactly
+    /// WinUI on platforms without windowed-popup support).
+    /// </summary>
+    public bool PopupWindowsEnabled { get; set; }
+
+    /// <summary>Live out-of-bounds popup windows (E4) — for headless checks (decode each slot's DrawList).</summary>
+    public IReadOnlyList<PopupWindowSlot> PopupWindows => _popupWindows;
+
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null)
     {
+        _app = app;
         _window = window;
+        PopupWindowsEnabled = window.Handle.Kind == NativeHandleKind.Headless;   // see the property doc (needs-pixels D3D12)
         _device = device;
         _root = root;
         _strings = strings;
@@ -191,11 +241,27 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
+        _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
+        _inputHooks.MoveFocusVisual = h => _dispatcher.SetFocus(h, visual: true);   // roving arrow-key focus shows the ring (RadioButtons)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
 
+        // E5 drop-settle: the released drag visual glides from the drop point into its (possibly reordered) slot via
+        // the same FLIP pipeline that moves displaced siblings — the seeded spring is retargeted velocity-continuously
+        // by ApplyProjections when the OnDragCompleted commit re-lays-out. No Animate transition ⇒ the visual snaps.
+        _dispatcher.Drag.OnSettle = (node, fromAbs, toAbs) =>
+        {
+            if (Motion.ReducedMotion) return;   // reduced motion: snap into the slot (no glide)
+            if (_anim.TryGetTransition(node, out var spec)) _anim.AnimateBounds(node, fromAbs, toAbs, spec);
+        };
+
         // Text-editing seams for EditableText (clipboard / IME / caret blink / shared text metrics) — see InputHooks.
         _inputHooks.Clipboard = app.Clipboard;
+        _inputHooks.OpenUri = app.OpenUri;
+        // Static factories (HyperlinkButton.Create) have no component scope → no UseContext: mirror the seam onto
+        // the InputHooks.Current channel-default instance too (last-constructed host wins — matches the
+        // single-window v1 host model; headless checks construct hosts sequentially).
+        InputHooks.Current.Default.OpenUri = app.OpenUri;
         _inputHooks.TextInput = window.TextInput;
         _inputHooks.Fonts = fonts;
         _inputHooks.CaretFocus = (n, blinkMs) => _caretBlinker.Focus(n, blinkMs);
@@ -206,6 +272,14 @@ public sealed class AppHost : IDisposable
             float s = _window.Scale <= 0f ? 1f : _window.Scale;
             _window.TextInput.SetCaretRectPx(new RectF(dip.X * s, dip.Y * s, dip.W * s, dip.H * s));
         };
+
+        // E4 windowed out-of-bounds popups: the OverlayHost asks for monitor work areas + popup-window leases through
+        // these hooks; the host owns the DIP↔screen-px conversion (window scale + client origin) and the render side
+        // (own swapchain + per-popup DrawList via the recorder root-override).
+        _inputHooks.GetWorkArea = GetWorkAreaDip;
+        _inputHooks.OpenPopupWindow = OpenPopupWindow;
+        _inputHooks.SetPopupWindowBounds = SetPopupWindowBounds;
+        _inputHooks.ClosePopupWindow = ClosePopupWindow;
 
         _reconciler.Anim = _anim;
         _reconciler.Images = _images;
@@ -350,7 +424,15 @@ public sealed class AppHost : IDisposable
             // selected glyphs = TextOnAccentFillColorSelectedTextBrush, caret = the text foreground.
             var textEdit = new TextEditStyle(Tok.AccentSelectedTextBackground, Tok.TextOnAccentSelectedText, Tok.TextPrimary);
             UpdateDynamicDiagnosticsText();
-            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit); // 8 record
+            // Out-of-bounds popup subtrees render into their OWN popup windows — exclude them from the main pass
+            // (they stay in the one SceneStore for layout/hit-test; only their pixels move).
+            _popupSkipRoots.Clear();
+            for (int i = 0; i < _popupWindows.Count; i++)
+                if (!_popupWindows[i].Root.IsNull && _scene.IsLive(_popupWindows[i].Root))
+                    _popupSkipRoots.Add(_popupWindows[i].Root);
+            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit,
+                CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
+            RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
@@ -390,6 +472,95 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    // ── E4 windowed out-of-bounds popups ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Window-DIP point → the containing monitor's work area, translated back into window-DIP space (the
+    /// container rect the FlyoutPositioner clamps windowed popups against — WinUI FlyoutBase_Partial.cpp:3382-3392
+    /// <c>useMonitorBounds</c>). The host owns the scale + client-origin conversion.</summary>
+    private RectF GetWorkAreaDip(Point2 dipPoint)
+    {
+        float s = _window.Scale <= 0f ? 1f : _window.Scale;
+        var origin = _window.ClientOriginPx;
+        var work = _app.GetWorkArea(new Point2(origin.X + dipPoint.X * s, origin.Y + dipPoint.Y * s));
+        return new RectF((work.X - origin.X) / s, (work.Y - origin.Y) / s, work.W / s, work.H / s);
+    }
+
+    /// <summary>Lease a popup window for an overlay subtree. Returns -1 when windowed popups are unavailable
+    /// (<see cref="PopupWindowsEnabled"/> false, or the PAL declined) — callers fall back to constrained placement.</summary>
+    private int OpenPopupWindow(NodeHandle subtreeRoot)
+    {
+        if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
+        var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default));
+        if (palWindow is null) return -1;
+        var slot = new PopupWindowSlot(++_popupTokenSeq, palWindow, subtreeRoot)
+        {
+            Swapchain = _device.CreateSwapchain(new SwapchainDesc(palWindow.Handle, new Size2(1, 1))),
+        };
+        _popupWindows.Add(slot);
+        WakeFrame();
+        return slot.Token;
+    }
+
+    /// <summary>Place a leased popup window: bounds arrive in main-window DIP (the overlay's placement space); the
+    /// host converts to physical virtual-screen px (client origin + scale), resizes the popup swapchain, and shows the
+    /// window (never activating — focus stays here).</summary>
+    private void SetPopupWindowBounds(int token, RectF dipBounds)
+    {
+        for (int i = 0; i < _popupWindows.Count; i++)
+        {
+            var slot = _popupWindows[i];
+            if (slot.Token != token) continue;
+            slot.BoundsDip = dipBounds;
+            float s = _window.Scale <= 0f ? 1f : _window.Scale;
+            var origin = _window.ClientOriginPx;
+            var px = new RectF(origin.X + dipBounds.X * s, origin.Y + dipBounds.Y * s, dipBounds.W * s, dipBounds.H * s);
+            slot.Window.SetBoundsPx(in px);
+            slot.Swapchain?.Resize(new Size2(MathF.Max(1f, px.W), MathF.Max(1f, px.H)));
+            if (!slot.Window.IsShown) slot.Window.Show();
+            WakeFrame();
+            return;
+        }
+    }
+
+    private void ClosePopupWindow(int token)
+    {
+        for (int i = 0; i < _popupWindows.Count; i++)
+        {
+            var slot = _popupWindows[i];
+            if (slot.Token != token) continue;
+            slot.Window.Hide();
+            slot.Swapchain?.Dispose();
+            slot.Window.Dispose();
+            _popupWindows.RemoveAt(i);
+            WakeFrame();
+            return;
+        }
+    }
+
+    /// <summary>Phase 8b: re-record each popup window's subtree into its own DrawList (recorder root-override,
+    /// re-origined to the popup's placed top-left) and present its swapchain.</summary>
+    private void RecordPopupWindows(in FocusVisualStyle focus, in TextEditStyle textEdit)
+    {
+        for (int i = 0; i < _popupWindows.Count; i++)
+        {
+            var slot = _popupWindows[i];
+            if (slot.Root.IsNull || !_scene.IsLive(slot.Root)) continue;
+            SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit,
+                slot.Root, new Point2(slot.BoundsDip.X, slot.BoundsDip.Y));
+            // needs-pixels: the popup DrawList is recorded and its swapchain presented, but NOT GPU-submitted —
+            // IGpuDevice.SubmitDrawList has no present-target parameter and D3D12Device.CreateSwapchain is a one-shot
+            // device init (D3D12Device.cs:95-122: it stores ONE hwnd and inits the device + pipelines), so a second
+            // swapchain cannot be rendered yet. The exact remaining D3D12 step:
+            //   1) RHI: give SubmitDrawList a present-target (or an ISwapchain-scoped submit) — Rhi.cs:21,
+            //   2) D3D12Device: hoist backbuffer/RTV/DComp-visual state into a per-swapchain struct (device,
+            //      pipelines, glyph/image stores stay shared; the render thread owns every ComPtr as today),
+            //   3) here: _device.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys, popupFrameInfo, slot.Swapchain).
+            // Until then PopupWindowsEnabled stays false on D3D12 (constrained fallback). Headless verification is
+            // complete: decode slot.DrawList with a scratch HeadlessGpuDevice and assert the swapchain PresentCount.
+            slot.Swapchain?.Present();
+        }
+    }
+
     private void PublishViewport(Size2 dip)
     {
         if (dip.Width == _lastViewportDip.Width && dip.Height == _lastViewportDip.Height) return;
@@ -418,6 +589,7 @@ public sealed class AppHost : IDisposable
         foreach (var kv in _projectBefore)
         {
             var n = kv.Key;
+            if (n == _dispatcher.Drag.ActiveNode) continue;   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
             if (!_anim.TryGetTransition(n, out var spec)) continue;
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
@@ -573,6 +745,12 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        for (int i = _popupWindows.Count - 1; i >= 0; i--)
+        {
+            _popupWindows[i].Swapchain?.Dispose();
+            _popupWindows[i].Window.Dispose();
+        }
+        _popupWindows.Clear();
         _swapchain.Dispose();
         _device.Dispose();
         _window.Dispose();

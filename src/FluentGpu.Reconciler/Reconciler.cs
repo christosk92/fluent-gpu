@@ -499,6 +499,7 @@ public sealed class TreeReconciler
         _scene.ScrollRef(node).ContentNode = content;
         _virtuals[node] = new VirtualEntry { El = ve };
         RealizeWindow(node, ve);
+        ve.OnRealized?.Invoke(node);   // E11: viewport-handle escape hatch (ItemsView StartBringItemIntoView / sticky pinning)
     }
 
     private void RealizeWindow(NodeHandle node, VirtualListEl ve, bool reuseOverlap = false)
@@ -531,11 +532,13 @@ public sealed class TreeReconciler
         if (last < first) last = first;
         int w = last - first;
 
-        if (ve.RowBind is { } rowBind)
+        if (ve.RowBind is not null)
         {
-            RealizeBoundWindow(node, content, entry, rowBind, first, last, w);
+            RealizeBoundWindow(node, content, entry, ve, first, last, w);
             return;
         }
+
+        int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
         var prev = reuseOverlap ? entry.Prev : null;
         int prevFirst = entry.PrevFirst;
@@ -557,6 +560,24 @@ public sealed class TreeReconciler
         ref ScrollState scw = ref _scene.ScrollRef(node);
         scw.FirstRealized = first; scw.LastRealized = last;
         _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+
+        FireWindowLifecycle(ve, oldFirst, oldLast, first, last);   // E11: Prepared/Clearing/VisibleRange (cold realize edge)
+    }
+
+    /// <summary>E11 lifecycle: Clearing for indices that left [oldFirst,oldLast), Prepared for indices that entered
+    /// [newFirst,newLast) (a recycled row = Clearing(old) + Prepared(new) — the WinUI ItemsRepeater recycle order),
+    /// plus the visible-range prefetch hook. Fires only when the window actually moved (steady transform-only scroll
+    /// frames never reach here), so null callbacks cost nothing.</summary>
+    private static void FireWindowLifecycle(VirtualListEl ve, int oldFirst, int oldLast, int newFirst, int newLast)
+    {
+        if (oldFirst == newFirst && oldLast == newLast) return;
+        if (ve.OnItemClearing is { } clearing)
+            for (int i = oldFirst; i < oldLast; i++)
+                if (i < newFirst || i >= newLast) clearing(i);
+        if (ve.OnItemPrepared is { } prepared)
+            for (int i = newFirst; i < newLast; i++)
+                if (i < oldFirst || i >= oldLast) prepared(i);
+        ve.OnVisibleRange?.Invoke(newFirst, newLast);
     }
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
@@ -568,10 +589,12 @@ public sealed class TreeReconciler
     /// runtime again after re-realize so the rebinds land in the SAME frame.
     /// </summary>
     private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
-                                    Func<IReadSignal<int>, Element> rowBind, int first, int last, int w)
+                                    VirtualListEl ve, int first, int last, int w)
     {
+        var rowBind = ve.RowBind!;
         var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
         bool structural = false;
+        int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
         while (slots.Count < w)   // grow: the template runs ONCE per slot; its element tree is never rebuilt
         {
@@ -596,7 +619,12 @@ public sealed class TreeReconciler
         {
             var sig = slots[i].Index;
             int idx = first + i;
-            if (sig.Peek() != idx) sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
+            int prevIdx = sig.Peek();
+            if (prevIdx != idx)
+            {
+                sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
+                ve.OnItemIndexChanged?.Invoke(prevIdx, idx);   // E11: a persistent bound slot moved indices
+            }
         }
 
         bool moved = structural || first != entry.PrevFirst || w != entry.PrevLen;
@@ -608,6 +636,8 @@ public sealed class TreeReconciler
         ref ScrollState scw = ref _scene.ScrollRef(node);
         scw.FirstRealized = first; scw.LastRealized = last;
         _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+
+        FireWindowLifecycle(ve, oldFirst, oldLast, first, last);
     }
 
     /// <summary>
@@ -999,6 +1029,26 @@ public sealed class TreeReconciler
                     _scene.SetPointerPressed(node, null);
                 }
 
+                // Drag-reorder promotion (WinUI CanDragItems/CanReorderItems): the DragBit makes the node hit-testable
+                // and arms Input.DragController on press; the lifecycle handler columns fire past the drag threshold.
+                if (b.CanDrag)
+                {
+                    ii.HandlerMask |= InteractionInfo.DragBit;
+                    _scene.SetDragStarted(node, b.OnDragStarted);
+                    _scene.SetDragDelta(node, b.OnDragDelta);
+                    _scene.SetDragCompleted(node, b.OnDragCompleted);
+                    _scene.SetDragCanceled(node, b.OnDragCanceled);
+                    _scene.Mark(node, NodeFlags.WantsPointer);
+                }
+                else
+                {
+                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.DragBit);
+                    _scene.SetDragStarted(node, null);
+                    _scene.SetDragDelta(node, null);
+                    _scene.SetDragCompleted(node, null);
+                    _scene.SetDragCanceled(node, null);
+                }
+
                 if (b.OnContextRequested is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.ContextBit;
@@ -1028,7 +1078,10 @@ public sealed class TreeReconciler
                 ii.AccessKey = b.AccessKey;
                 if (b.Cursor is { } cursor) ii.Cursor = cursor;   // explicit override beats the OnClick hand default
 
-                ii.Focusable = b.Focusable || b.OnClick is not null;
+                // WinUI Control.IsTabStop: an explicit TabStop beats the clickable⇒focusable auto-derive (the overlay
+                // light-dismiss catcher is clickable but must never enter the tab order — WinUI's dismiss layer is
+                // not a tab stop, so Tab from a flyout's invoker reaches the flyout content, not the catcher).
+                ii.Focusable = b.TabStop ?? (b.Focusable || b.OnClick is not null);
                 ii.TabIndex = b.TabIndex;
                 ii.FocusVisualMargin = b.FocusVisualMargin ?? Edges4.All(-3f);   // the WinUI template default
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);

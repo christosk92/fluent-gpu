@@ -4,83 +4,111 @@ using FluentGpu.Dsl;
 namespace FluentGpu.Controls;
 
 /// <summary>
-/// A WinUI RadioButton: a ring + (when selected) a filled accent dot, plus a label. Mutual exclusion comes from a
-/// shared selected index — use <see cref="Group"/> to render a set of options over one selected-index callback, or
-/// <see cref="Create"/> for a single button you wire up yourself. Controlled.
+/// A WinUI RadioButton — style values from microsoft-ui-xaml controls\dev\CommonStyles\RadioButton_themeresources.xaml
+/// ("the template"; ThemeDictionaries Default=dark :4-61 / Light :120-177): a 20px ring (OuterEllipse/CheckOuterEllipse,
+/// :371/373) + (when selected) a TextOnAccent dot (CheckGlyph, :374) that grows 12→14 on hover / shrinks →10 on press
+/// over ControlNormalAnimationDuration (250ms) with the ControlFastOutSlowInKeySpline (:255-260/:292-297), plus the
+/// unchecked-pressed 4px proto-dot (PressedCheckGlyph, :376) revealing toward 10 over ControlFastAnimationDuration
+/// (167ms, :298-306). Mutual exclusion comes from a shared selected index — use <see cref="Group"/> (an ad-hoc set) or
+/// the full <see cref="RadioButtons"/> container (header, columns, roving keyboard). Controlled.
 /// </summary>
 public static partial class RadioButton
 {
     internal static class RadioButtonMotion
     {
-        public const float ControlFastMs = 167f;     // Common_themeresources_any.xaml ControlFastAnimationDuration
-        public const float ControlNormalMs = 250f;   // Common_themeresources_any.xaml ControlNormalAnimationDuration
-        public static readonly EasingSpec FastOutSlowIn = Easing.FluentPopOpen; // ControlFastOutSlowInKeySpline = 0,0,0,1
+        public const float ControlFastMs = 167f;     // Common_themeresources_any.xaml:604 ControlFastAnimationDuration
+        public const float ControlNormalMs = 250f;   // Common_themeresources_any.xaml:603 ControlNormalAnimationDuration
+        public static readonly EasingSpec FastOutSlowIn = Easing.FluentPopOpen; // ControlFastOutSlowInKeySpline = 0,0,0,1 (:602)
     }
 
     public sealed record Style
     {
-        public float RingSize { get; init; } = 20f;        // OuterEllipse Width/Height
-        public float DotSize { get; init; } = 12f;         // RadioButtonCheckGlyphSize (rest)
-        public float DotHoverSize { get; init; } = 14f;    // RadioButtonCheckGlyphPointerOverSize
-        public float DotPressedSize { get; init; } = 10f;  // RadioButtonCheckGlyphPressedOverSize
-        public float PressedDotSize { get; init; } = 4f;   // PressedCheckGlyph Width/Height (rest)
-        public float FontSize { get; init; } = 14f;        // ControlContentThemeFontSize
-        public float MinHeight { get; init; } = 32f;
+        public float RingSize { get; init; } = 20f;        // OuterEllipse Width/Height (template:371/373)
+        public float DotSize { get; init; } = 12f;         // RadioButtonCheckGlyphSize (template:179)
+        public float DotHoverSize { get; init; } = 14f;    // RadioButtonCheckGlyphPointerOverSize (template:180)
+        public float DotPressedSize { get; init; } = 10f;  // RadioButtonCheckGlyphPressedOverSize (template:181)
+        public float DotDisabledSize { get; init; } = 14f; // Disabled storyboard animates CheckGlyph W/H → 14 (template:338-343)
+        public float PressedDotSize { get; init; } = 4f;   // PressedCheckGlyph Width/Height (template:376)
+        public float FontSize { get; init; } = 14f;        // ControlContentThemeFontSize (template:193)
+        public float MinHeight { get; init; } = 32f;       // glyph grid Height=32 (template:370)
+        public float MinWidth { get; init; } = 120f;       // DefaultRadioButtonStyle MinWidth (template:194)
+        public float ContentGap { get; init; } = 8f;       // Padding 8,6,0,0 → 8px between the 20px glyph column and the label (template:187/366-367)
+        /// <summary>WinUI FocusVisualMargin −7,−3,−7,−3 (template:196); the engine draws the ring (E1).</summary>
+        public Edges4 FocusVisualMargin { get; init; } = new(-7f, -3f, -7f, -3f);
 
         // Unchecked ellipse — ControlAltFillColor* fill + ControlStrongStrokeColor* ring
-        public ColorF OffFill { get; init; }               // RadioButtonOuterEllipseFill → ControlAltFillColorSecondary
-        public ColorF OffHover { get; init; }              // ...FillPointerOver → ControlAltFillColorTertiary
-        public ColorF OffPressed { get; init; }            // ...FillPressed → ControlAltFillColorQuaternary
-        public ColorF OffBorder { get; init; }             // RadioButtonOuterEllipseStroke → ControlStrongStrokeColorDefault
+        public ColorF OffFill { get; init; }               // RadioButtonOuterEllipseFill → ControlAltFillColorSecondary (template:22/138)
+        public ColorF OffHover { get; init; }              // ...FillPointerOver → ControlAltFillColorTertiary (template:23/139)
+        public ColorF OffPressed { get; init; }            // ...FillPressed → ControlAltFillColorQuarternary (template:24/140)
+        public ColorF OffBorder { get; init; }             // RadioButtonOuterEllipseStroke → ControlStrongStrokeColorDefault; PointerOver SAME (template:18-19/134-135)
+        public ColorF OffBorderPressed { get; init; }      // ...StrokePressed → ControlStrongStrokeColorDisabled (template:20/136)
 
-        // Checked ellipse — accent fill + accent ring (the 1px ring is retained, stroke == fill)
-        public ColorF OnRing { get; init; }                // RadioButtonOuterEllipseCheckedFill → AccentDefault
-        public ColorF OnHover { get; init; }               // ...CheckedFillPointerOver → AccentSecondary
-        public ColorF OnPressed { get; init; }             // ...CheckedFillPressed → AccentTertiary
-        public ColorF OnBorder { get; init; }              // RadioButtonOuterEllipseCheckedStroke → AccentDefault
+        // Checked ellipse — accent fill + accent ring (stroke == fill at rest; hover/press recolor BOTH)
+        public ColorF OnRing { get; init; }                // RadioButtonOuterEllipseCheckedFill/Stroke → AccentFillColorDefault (template:26,30/142,146)
+        public ColorF OnHover { get; init; }               // ...CheckedFill/StrokePointerOver → AccentFillColorSecondary (template:27,31/143,147)
+        public ColorF OnPressed { get; init; }             // ...CheckedFill/StrokePressed → AccentFillColorTertiary (template:28,32/144,148)
+        public ColorF OnBorder { get; init; }              // RadioButtonOuterEllipseCheckedStroke → AccentFillColorDefault (template:26/142)
 
-        public ColorF Dot { get; init; }                   // RadioButtonCheckGlyphFill → TextOnAccentPrimary
-        public GradientSpec? DotBorder { get; init; }      // RadioButtonCheckGlyphStrokeChecked → AccentControlElevationBorder
-        public ColorF Foreground { get; init; }            // RadioButtonForeground → TextPrimary (also Pressed/PointerOver in WinUI)
-        public ColorF DisabledForeground { get; init; }    // RadioButtonForegroundDisabled → TextDisabled
+        public ColorF Dot { get; init; }                   // RadioButtonCheckGlyphFill → TextOnAccentFillColorPrimary (template:34-36/150-152)
+        public GradientSpec? DotBorder { get; init; }      // RadioButtonCheckGlyphStrokeChecked → AccentControlElevationBorder (template:42-44/158-160)
+        public GradientSpec? DotBorderDisabled { get; init; } // ...StrokeCheckedDisabled → ControlElevationBorder (template:45/161)
+        public GradientSpec? PressedDotBorder { get; init; }  // PressedCheckGlyph BorderBrush = RadioButtonCheckGlyphStroke → CircleElevationBorder (template:38/154 + :376)
+        public ColorF Foreground { get; init; }            // RadioButtonForeground → TextFillColorPrimary (== PointerOver/Pressed, template:6-8/122-124)
+        public ColorF DisabledForeground { get; init; }    // RadioButtonForegroundDisabled → TextFillColorDisabled (template:9/125)
 
-        // Disabled resting swaps — WinUI recolors the ring + glyph in the Disabled visual state, not just the label.
-        public ColorF OffFillDisabled { get; init; }       // ...FillDisabled → ControlAltFillColorDisabled
-        public ColorF OffBorderDisabled { get; init; }     // ...StrokeDisabled → ControlStrongStrokeColorDisabled
-        public ColorF OnRingDisabled { get; init; }        // ...CheckedFillDisabled / CheckedStrokeDisabled → AccentFillColorDisabled
-        public ColorF DotDisabled { get; init; }           // RadioButtonCheckGlyphFillDisabled → TextOnAccentDisabled
+        // Disabled resting swaps — WinUI recolors ring + glyph in the Disabled visual state (template:309-345).
+        public ColorF OffFillDisabled { get; init; }       // ...FillDisabled → ControlAltFillColorDisabled (template:25/141)
+        public ColorF OffBorderDisabled { get; init; }     // ...StrokeDisabled → ControlStrongStrokeColorDisabled (template:21/137)
+        public ColorF OnRingDisabled { get; init; }        // ...CheckedFill/StrokeDisabled → AccentFillColorDisabled (template:29,33/145,149)
+        public ColorF DotDisabled { get; init; }           // RadioButtonCheckGlyphFillDisabled → TextOnAccentFillColorPrimary — NOT the Disabled token (template:37/153)
     }
 
     public static Style? StyleOverride;
     public static Style DefaultStyle => StyleOverride ?? new Style
     {
         OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
-        OffBorder = Tok.StrokeControlStrongDefault,
+        OffBorder = Tok.StrokeControlStrongDefault, OffBorderPressed = Tok.StrokeControlStrongDisabled,
         OnRing = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnBorder = Tok.AccentDefault,
         Dot = Tok.TextOnAccentPrimary, DotBorder = Tok.AccentControlElevationBorder,
+        DotBorderDisabled = Tok.ControlElevationBorder, PressedDotBorder = Tok.CircleElevationBorder,
         Foreground = Tok.TextPrimary, DisabledForeground = Tok.TextDisabled,
         OffFillDisabled = Tok.FillControlAltDisabled, OffBorderDisabled = Tok.StrokeControlStrongDisabled,
-        OnRingDisabled = Tok.AccentDisabled, DotDisabled = Tok.TextOnAccentDisabled,
+        OnRingDisabled = Tok.AccentDisabled, DotDisabled = Tok.TextOnAccentPrimary,
     };
 
     public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null, bool isEnabled = true)
+        => Build(label, null, selected, onSelect, style ?? DefaultStyle, isEnabled,
+                 focusable: true, onKeyDown: null, onRealized: null);
+
+    /// <summary>
+    /// The shared item factory — also the <see cref="RadioButtons"/> container seam: <paramref name="content"/>
+    /// replaces the plain text label (WinUI RadioButtons item content), <paramref name="focusable"/> implements the
+    /// container's roving single tab stop (RadioButtons.xaml:5-6 IsTabStop=False + TabNavigation=Once), and
+    /// <paramref name="onKeyDown"/>/<paramref name="onRealized"/> wire the arrow-key roving focus.
+    /// </summary>
+    internal static BoxEl Build(string? label, Element? content, bool selected, Action onSelect, Style s, bool isEnabled,
+                                bool focusable, Action<KeyEventArgs>? onKeyDown, Action<NodeHandle>? onRealized)
     {
-        var s = style ?? DefaultStyle;
         float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
         float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
         float pressedDotScale = s.PressedDotSize > 0f ? s.DotPressedSize / s.PressedDotSize : 1f;
-        // Disabled is a flat resting swap (mirrors CheckBox.Resting(enabled)): with IsEnabled=false the engine routes no
-        // hover/press progress down, so the Hover/Pressed legs are never reached and only the resting Fill/Border/Dot recolor.
+        // Disabled is a resting swap for the RING (no hover/press progress reaches a disabled node), but the GLYPH gets
+        // an animated resize 12→14 over ControlFastAnimationDuration on Disabled entry (template:338-343).
         ColorF ringFill = !isEnabled ? (selected ? s.OnRingDisabled : s.OffFillDisabled) : (selected ? s.OnRing : s.OffFill);
         ColorF ringBorder = !isEnabled ? (selected ? s.OnRingDisabled : s.OffBorderDisabled) : (selected ? s.OnBorder : s.OffBorder);
-        ColorF dotFill = !isEnabled ? s.DotDisabled : s.Dot;
+        float dotSize = isEnabled ? s.DotSize : s.DotDisabledSize;
         var ring = new BoxEl
         {
             Width = s.RingSize, Height = s.RingSize,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.Circle(s.RingSize),
-            BorderWidth = 1f,
+            BorderWidth = 1f,                              // RadioButtonBorderThemeThickness (template:5/121)
             BorderColor = ringBorder,
+            // The stroke is stateful too: unchecked hover KEEPS ControlStrongDefault / pressed dims to StrongDisabled
+            // (template:18-20/134-136); checked hover/pressed recolor to AccentSecondary/Tertiary (template:26-28/142-144).
+            // Explicit values defeat the recorder's A==0 auto-lighten fallback (Element.cs:27-28).
+            HoverBorderColor = selected ? s.OnHover : s.OffBorder,
+            PressedBorderColor = selected ? s.OnPressed : s.OffBorderPressed,
             Fill = ringFill,
             HoverFill = selected ? s.OnHover : s.OffHover,
             PressedFill = selected ? s.OnPressed : s.OffPressed,
@@ -88,30 +116,37 @@ public static partial class RadioButton
                 ? [new BoxEl
                 {
                     Key = "CheckGlyph",
-                    Width = s.DotSize, Height = s.DotSize,
-                    Corners = Radii.Circle(s.DotSize),
-                    Fill = dotFill,
-                    BorderBrush = s.DotBorder,
-                    BorderWidth = s.DotBorder is null ? 0f : 1f,
-                    HoverScale = hoverScale,
-                    PressScale = pressScale,
-                    HoverDurationMs = RadioButtonMotion.ControlNormalMs,
-                    PressDurationMs = RadioButtonMotion.ControlNormalMs,
+                    Width = dotSize, Height = dotSize,
+                    Corners = Radii.Circle(dotSize),
+                    Fill = !isEnabled ? s.DotDisabled : s.Dot,
+                    BorderBrush = !isEnabled ? s.DotBorderDisabled : s.DotBorder,   // StrokeChecked / StrokeCheckedDisabled (template:42/45)
+                    BorderWidth = (isEnabled ? s.DotBorder : s.DotBorderDisabled) is null ? 0f : 1f,   // Ellipse default StrokeThickness = 1
+                    HoverScale = isEnabled ? hoverScale : 1f,
+                    PressScale = isEnabled ? pressScale : 1f,
+                    HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
+                    PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
                     HoverEasing = RadioButtonMotion.FastOutSlowIn,
                     PressEasing = RadioButtonMotion.FastOutSlowIn,
+                    // Disabled entry animates the resize 12→14 over 167ms FastOutSlowIn (template:338-343); the spec is
+                    // attached only on the disabled render, so re-enabling reverts instantly (no Normal-state keyframes).
+                    Animate = isEnabled
+                        ? null
+                        : new LayoutTransition(TransitionChannels.Bounds,
+                                               TransitionDynamics.Tween(RadioButtonMotion.ControlFastMs, Easing.FluentPopOpen),
+                                               SizeMode.ScaleCorrect),
                 }]
                 : [new BoxEl
                 {
                     Key = "PressedCheckGlyph",
                     Width = s.PressedDotSize, Height = s.PressedDotSize,
                     Corners = Radii.Circle(s.PressedDotSize),
-                    Fill = dotFill,
-                    BorderBrush = s.DotBorder,
-                    BorderWidth = s.DotBorder is null ? 0f : 1f,
+                    Fill = !isEnabled ? s.DotDisabled : s.Dot,             // PressedCheckGlyph Background = RadioButtonCheckGlyphFill (template:376)
+                    BorderBrush = s.PressedDotBorder,                      // BorderBrush = RadioButtonCheckGlyphStroke → CircleElevation (template:38/376)
+                    BorderWidth = s.PressedDotBorder is null ? 0f : 1f,
                     Opacity = 0f,
-                    PressedOpacity = 1f,
-                    PressScale = pressedDotScale,
-                    PressDurationMs = RadioButtonMotion.ControlFastMs,
+                    PressedOpacity = 1f,                                   // Opacity → 1 at KeyTime 0 (template:298-300)
+                    PressScale = pressedDotScale,                          // 4 → 10 (template:301-306)
+                    PressDurationMs = RadioButtonMotion.ControlFastMs,     // 167ms
                     PressEasing = RadioButtonMotion.FastOutSlowIn,
                 }],
         };
@@ -120,17 +155,27 @@ public static partial class RadioButton
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
-            Gap = 10f,
+            Gap = s.ContentGap,                                            // Padding 8,6,0,0 (template:187)
             MinHeight = s.MinHeight,
+            MinWidth = s.MinWidth,                                         // 120 (template:194)
             Role = AutomationRole.RadioButton,
             IsEnabled = isEnabled,
+            Focusable = focusable && isEnabled,                            // roving tab stop inside RadioButtons
+            FocusVisualMargin = s.FocusVisualMargin,                       // −7,−3,−7,−3 (template:196)
             OnClick = onSelect,
+            OnKeyDown = onKeyDown,
+            OnRealized = onRealized,
             // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
-            Children = [ring, new TextEl(label) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground }],
+            Children =
+            [
+                ring,
+                content ?? new TextEl(label ?? "") { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground },
+            ],
         };
     }
 
-    /// <summary>A mutually-exclusive group: renders one radio per option; clicking option i invokes <paramref name="onSelect"/>(i).</summary>
+    /// <summary>A mutually-exclusive group: renders one radio per option; clicking option i invokes <paramref name="onSelect"/>(i).
+    /// Ad-hoc (every item is a tab stop, no arrow roving) — prefer <see cref="RadioButtons"/> for the WinUI container semantics.</summary>
     public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null, bool isEnabled = true)
     {
         var children = new Element[options.Count];

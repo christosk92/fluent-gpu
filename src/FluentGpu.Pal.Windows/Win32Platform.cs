@@ -17,6 +17,39 @@ public sealed unsafe partial class Win32App : IPlatformApp
 
     public IPlatformWindow CreateWindow(in WindowDesc desc) => new Win32Window(desc);
     public IClipboard Clipboard { get; } = new Win32Clipboard();
+
+    // MONITOR_DEFAULTTONEAREST = 2 (WinUser.h) — the monitor nearest the point, never null.
+    private const uint MonitorDefaultToNearest = 2;
+
+    /// <summary>Work area (desktop minus taskbar) of the monitor containing the point, in physical virtual-screen px.
+    /// The same data WinUI's windowed popups place against (FlyoutBase_Partial.cpp:3382-3388 monitor bounds;
+    /// Popup.cpp windowed placement) — <c>MonitorFromPoint(MONITOR_DEFAULTTONEAREST)</c> + <c>GetMonitorInfoW().rcWork</c>.</summary>
+    public RectF GetWorkArea(Point2 screenPointPx)
+    {
+        POINT pt = new() { x = (int)MathF.Round(screenPointPx.X), y = (int)MathF.Round(screenPointPx.Y) };
+        HMONITOR mon = MonitorFromPoint(pt, MonitorDefaultToNearest);
+        if (mon == HMONITOR.NULL) return RectF.Infinite;
+        MONITORINFO mi = default;
+        mi.cbSize = (uint)sizeof(MONITORINFO);
+        if (!GetMonitorInfoW(mon, &mi)) return RectF.Infinite;
+        return new RectF(mi.rcWork.left, mi.rcWork.top, mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top);
+    }
+
+    /// <summary>A WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP owned window — the engine
+    /// analogue of WinUI's windowed CPopup HWND (Popup_Partial.cpp:1019 SetIsWindowed). Never activates; mouse input
+    /// over it is forwarded to the owner <see cref="Win32Window"/> translated into owner-client DIP.</summary>
+    public IPlatformPopupWindow? CreatePopupWindow(in PopupWindowDesc desc)
+        => desc.Owner.Kind == NativeHandleKind.Hwnd ? new Win32PopupWindow(desc) : null;
+
+    // ShellExecuteW = the Win32 equivalent of Launcher::LaunchUriAsync: "open" verb → the OS default protocol
+    // handler (browser/mailto). Returns an HINSTANCE-alike (>32 = success) — ignored, best-effort like WinUI's
+    // TryInvokeLauncher (HyperLinkButton_Partial.cpp:172). nShowCmd 1 = SW_SHOWNORMAL.
+    [LibraryImport("shell32.dll", EntryPoint = "ShellExecuteW", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint ShellExecuteW(nint hwnd, string lpOperation, string lpFile, string? lpParameters, string? lpDirectory, int nShowCmd);
+
+    /// <summary>WinUI HyperlinkButton NavigateUri launch (HyperLinkButton_Partial.cpp:172).</summary>
+    public void OpenUri(string uri) => ShellExecuteW(0, "open", uri, null, null, 1);
+
     public void Dispose() { }
 }
 
@@ -121,6 +154,23 @@ public sealed unsafe class Win32Window : IPlatformWindow
     public float Scale => _scale;
     public bool IsClosed => _closed;
     public Action? PaintRequested { get; set; }
+
+    /// <summary>Screen position of client (0,0) in physical px (<c>ClientToScreen</c>) — the DIP→screen bridge for
+    /// popup-window placement and per-monitor work-area queries.</summary>
+    public Point2 ClientOriginPx
+    {
+        get
+        {
+            POINT pt = default;
+            ClientToScreen(_hwnd, &pt);
+            return new Point2(pt.x, pt.y);
+        }
+    }
+
+    // ── popup-window support (Win32PopupWindow forwards its mouse input here, owner-client coords) ──────────────────
+    internal HWND Hwnd => _hwnd;
+    internal float ScaleInternal => _scale;
+    internal void EnqueueExternal(in InputEvent e) => _queue.Enqueue(e);
 
     public void Show()
     {
@@ -309,7 +359,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
         _queue.Enqueue(new InputEvent(InputKind.PointerUp, MousePt(lp), button, 0, Mods: Mods(), TimestampMs: Now()));
     }
 
-    private static KeyModifiers Mods()
+    internal static KeyModifiers Mods()
     {
         KeyModifiers m = KeyModifiers.None;
         if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) m |= KeyModifiers.Shift;
@@ -319,7 +369,7 @@ public sealed unsafe class Win32Window : IPlatformWindow
         return m;
     }
 
-    private static uint Now() => unchecked((uint)GetMessageTime());
+    internal static uint Now() => unchecked((uint)GetMessageTime());
 
     // Pointer arrives in PHYSICAL px (DPI-aware window); convert to DIP so it matches the DIP scene bounds.
     private Point2 MousePt(long lp)

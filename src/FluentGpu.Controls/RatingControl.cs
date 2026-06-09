@@ -57,28 +57,42 @@ public readonly record struct RatingControlTemplateSettings(
         return new RatingControlTemplateSettings(Math.Clamp(display, 0f, max), fg, bg);
     }
 
-    // ── Per-star hover SCALE (RatingControl::ApplyScaleExpressionAnimation) ──
-    // WinUI stamps each glyph at RenderingRatingFontSize=32, rests it at scale 0.5 (=16px on screen) and grows it toward
-    // 0.8 (=25.6px) near the cursor, falling off with horizontal distance:
-    //   scaleWinUI = max(-0.0005*pointerScalar*(starCenterX - focalX)^2 + pointerScalar, 0.5)   pointerScalar = 0.8
-    // Our glyphs are stamped at the ON-SCREEN size (StarSize == 16), so our resting scale is 1.0, not 0.5. Re-basing the
-    // WinUI curve by /0.5 gives peak 0.8/0.5 = 1.6 at the focal star and floor 0.5/0.5 = 1.0 away — the identical relative
-    // growth in our 16px-native space. The scale is applied to the whole star CELL (a single glyph, no overlay behind a
-    // filled star), so growing it never reveals an outline halo. focalX is the live pointer X; off-strip it is the
-    // sentinel (-100) which floors every star at 1.0.
-    public const float MouseOverScale = 0.8f;        // c_mouseOverScale
-    public const float NoPointerOverFocal = -100f;   // c_noPointerOverMagicNumber
+    // ── Per-star hover SCALE (RatingControl::ApplyScaleExpressionAnimation, RatingControl.cpp:350-371) ──
+    // WinUI stamps each glyph at RatingControlFontSizeForRendering = 32 (RatingControl_themeresources.xaml:39) and
+    // drives the star visual's Scale.X/Y with the composition expression (RatingControl.cpp:358-360):
+    //   scaleWinUI = max( -0.0005 · pointerScalar · (starCenterX − focalX)² + 1.0 · pointerScalar, 0.5 )
+    // about CenterPoint (16,16) — the glyph centre (c_scaleAnimationCenterPointX/YValue, RatingControl.cpp:14-15, 370).
+    // pointerScalar is the shared property-set scalar: c_mouseOverScale = 0.8 for mouse, c_touchOverScale = 1.0 for a
+    // touch contact (RatingControl.cpp:19-20; seeded mouse at :116). focalX is the pointer X over the strip — the
+    // expression's own comment (:355) documents it as updated from OnPointerMovedOverBackgroundStackPanel; off-strip it
+    // rests at the −100 sentinel (c_noPointerOverMagicNumber :21; reset at :115/:867/:1138) which floors every star at 0.5.
+    // COORDINATE SPACE: starCenterX comes from CalculateStarCenter (RatingControl.cpp:926-932) =
+    // ActualRatingFontSize·(i+0.5) + i·ItemSpacing, and ActualRatingFontSize = RenderingRatingFontSize/2 = 16
+    // (RatingControl.cpp:51-54) — i.e. panel-local ON-SCREEN px, the same space as our 16px-native strip (NOT the 32px
+    // double-render coordinates).
+    // RE-BASING: our glyphs are stamped at the on-screen 16px (≡ WinUI's 32px glyph at its 0.5 rest scale), so the
+    // equivalent cell scale is exactly 2 × the WinUI expression: rest 2·0.5 = 1.0 (16px), mouse focal peak
+    // 2·0.8 = 1.6 (25.6px), touch focal peak 2·1.0 = 2.0 (32px). The scale applies to the whole star CELL (a single
+    // glyph, no overlay behind a filled star), so growing it never reveals an outline halo.
+    public const float MouseOverScale = 0.8f;        // c_mouseOverScale  (RatingControl.cpp:19)
+    public const float TouchOverScale = 1.0f;        // c_touchOverScale  (RatingControl.cpp:20)
+    public const float NoPointerOverFocal = -100f;   // c_noPointerOverMagicNumber (RatingControl.cpp:21)
 
     /// <summary>The re-based per-star scale at <paramref name="starCenterX"/> given the live <paramref name="focalX"/>
-    /// (both panel-local px). 1.0 = resting (our 16px glyph), up to 1.6 at the focal star, floored at 1.0.</summary>
-    public static float StarScale(float starCenterX, float focalX)
+    /// (both panel-local on-screen px) and the device <paramref name="pointerScalar"/> (<see cref="MouseOverScale"/> /
+    /// <see cref="TouchOverScale"/>). 1.0 = resting (our 16px glyph); focal peak 1.6 (mouse) or 2.0 (touch).</summary>
+    public static float StarScale(float starCenterX, float focalX, float pointerScalar)
     {
         float d = starCenterX - focalX;
-        float s = (-0.0005f * MouseOverScale * d * d + MouseOverScale) / 0.5f;   // (-0.0008*d^2 + 1.6); floor 1.0
-        return MathF.Max(s, 1.0f);
+        // 2 × max(-0.0005·p·d² + 1.0·p, 0.5)  (RatingControl.cpp:358-360, re-based into 16px-native space — see above)
+        return 2f * MathF.Max(-0.0005f * pointerScalar * d * d + pointerScalar, 0.5f);
     }
 
-    /// <summary>Star center in panel-local px (RatingControl::CalculateStarCenter): StarSize*(i+0.5) + i*ItemSpacing.</summary>
+    /// <summary>Mouse-scalar convenience overload (the pre-touch-damping signature, kept for source compat).</summary>
+    public static float StarScale(float starCenterX, float focalX) => StarScale(starCenterX, focalX, MouseOverScale);
+
+    /// <summary>Star center in panel-local on-screen px (RatingControl::CalculateStarCenter, RatingControl.cpp:926-932):
+    /// ActualRatingFontSize·(index+0.5) + index·ItemSpacing, with ActualRatingFontSize = 32/2 = 16 (cpp:51-54).</summary>
     public static float StarCenter(int index, float starSize, float itemSpacing)
         => starSize * (index + 0.5f) + index * itemSpacing;
 
@@ -99,7 +113,10 @@ public readonly record struct RatingControlTemplateSettings(
 /// <see cref="PlaceholderValue"/> shown until a real value is set, and an optional <see cref="Caption"/>.</item>
 /// <item><b>Pointer preview</b> -- press-and-sweep fills the stars to the pointer (with a partial tail) and lifts the
 /// foreground to the pointer-over visual-state color; release commits. <see cref="IsClearEnabled"/> clears the rating
-/// when you click the star equal to the current value.</item>
+/// when you click the star equal to the current value. Implicit capture keeps the sweep alive OFF the strip while
+/// pressed, so dragging past the LEFT edge and releasing clears to <see cref="NoValueSet"/>
+/// (<c>RatingControl.cpp:799-805, 856-863, 888-906</c>). A TOUCH press lifts the hover-scale scalar to
+/// <c>c_touchOverScale</c> = 1.0 (vs mouse 0.8) so the focal star grows to full size under the finger.</item>
 /// <item><b>Keyboard</b> -- Left/Down -1, Right/Up +1, Home clears, End sets <see cref="MaxRating"/>
 /// (<c>RatingControl::OnKeyDown</c>).</item>
 /// <item><b>Read-only / disabled</b> -- <see cref="ReadOnly"/> renders a fixed rating with no interaction;
@@ -159,6 +176,15 @@ public sealed class RatingControl : Component
         // TransformBind on each star cell (no re-render). Off-strip it rests at the sentinel (-100) → every star floors at
         // 1.0. A FloatSignal so the scale follows the cursor without a re-render — WinUI's composition expression.
         var focal = UseFloatSignal(RatingControlTemplateSettings.NoPointerOverFocal);
+        // The shared pointerScalar (RatingControl.cpp:19-20, 116): c_mouseOverScale = 0.8 by default; a TOUCH press
+        // switches it to c_touchOverScale = 1.0 so the focal star grows to the full 32px under the finger. The device
+        // kind is only carried on PRESS (PointerEventArgs.Kind) — bare hover-move has no device kind in the engine, so
+        // the scalar persists from the last press (mouse damping as the default), noted as an accepted approximation.
+        var pointerScalar = UseFloatSignal(RatingControlTemplateSettings.MouseOverScale);
+        // m_isPointerDown (RatingControl.cpp:879, 901-905): while the pointer is held we keep implicit capture — the
+        // sweep continues OFF the strip (the drag-off-the-left-side-to-clear gesture, cpp:799-805, 856-863) and
+        // pointer-exit must NOT reset the preview/scale until release.
+        var downRef = UseRef(false);
 
         // Programmatic coercion (RatingControl::CoerceValueBetweenMinAndMax): a caller-set fractional value in (0,1]
         // snaps up to 1, a negative value snaps to the -1 "unset" sentinel; fractional values > 1 keep their tail.
@@ -188,19 +214,40 @@ public sealed class RatingControl : Component
             if (v != preview) setPreview(v);                    // live preview fill (foreground steps to the pointer-over color)
         }
 
+        // Press: record device kind for the scale damping + arm the pointer-down capture gate, then sweep.
+        // (OnPointerDown delivers the position; OnPointerPressed fires alongside it with the device kind.)
+        void PressInfo(PointerEventArgs e)
+        {
+            if (!interactive) return;
+            downRef.Value = true;
+            pointerScalar.Value = e.Kind == PointerKind.Touch
+                ? RatingControlTemplateSettings.TouchOverScale      // c_touchOverScale = 1.0 (RatingControl.cpp:20)
+                : RatingControlTemplateSettings.MouseOverScale;     // c_mouseOverScale = 0.8 (RatingControl.cpp:19)
+        }
+
+        // Release (OnPointerReleasedBackgroundStackPanel, RatingControl.cpp:888-906): commit the swept value — capture
+        // delivers the release even OFF the strip, so a drag past the left edge releases at a swept value of 0, which
+        // SetRatingTo turns into the cleared sentinel (drag-off-left-to-clear). The dispatcher routes a release outside
+        // the strip to this click handler via the captured OnDrag target.
         void Commit()
         {
+            downRef.Value = false;                              // m_isPointerDown = false (cpp:901-903)
             if (!interactive || previewRef.Value <= NoValueSet) return;   // Enter/Space reach the click handler too -- ignore unless swept
             float swept = previewRef.Value;
             previewRef.Value = NoValueSet;
             focal.Value = RatingControlTemplateSettings.NoPointerOverFocal;   // release -> stars settle back to 1.0
             SetRatingTo(swept, originatedFromMouse: true);
             setPreview(NoValueSet);                             // pointer released -> clear the preview (PointerExited)
+            // WinUI also plays ElementSound Invoke here (RatingControl.cpp:898) — pending the IPlatformSound PAL seam.
         }
 
-        // Pointer left the strip (PointerExited): drop the hover preview AND settle the scale so the stars revert.
+        // Pointer left the strip (PointerExited → PointerExitedImpl, RatingControl.cpp:844-873): drop the hover preview
+        // AND settle the scale — but ONLY when the pointer is not held: while m_isPointerDown the capture keeps the
+        // sweep (and the drag-off-left clear) alive outside the strip (cpp:856-863 "Only clear pointer capture when not
+        // holding pointer down for drag left to clear value scenario").
         void ClearPreview()
         {
+            if (downRef.Value) return;
             focal.Value = RatingControlTemplateSettings.NoPointerOverFocal;
             if (previewRef.Value <= NoValueSet && preview <= NoValueSet) return;
             previewRef.Value = NoValueSet;
@@ -256,18 +303,26 @@ public sealed class RatingControl : Component
                         },
                     },
                 };
-            // Per-star hover scale about the cell centre, driven compositor-only by the live `focal` pointer X. Scaling the
-            // WHOLE cell (a single glyph, or the self-contained outline+clipped-fill) keeps every layer aligned → no halo.
+            // Per-star hover scale about the cell centre, driven compositor-only by the live `focal` pointer X and the
+            // device pointerScalar (mouse 0.8 / touch 1.0). Scaling the WHOLE cell (a single glyph, or the
+            // self-contained outline+clipped-fill) keeps every layer aligned → no halo.
             stars[i] = cell with
             {
                 Margin = leadGap,
                 TransformOriginX = 0.5f, TransformOriginY = 0.5f,
-                TransformBind = () => { float s = RatingControlTemplateSettings.StarScale(starCenter, focal.Value); return Affine2D.Scale(s, s); },
+                TransformBind = () =>
+                {
+                    float s = RatingControlTemplateSettings.StarScale(starCenter, focal.Value, pointerScalar.Value);
+                    return Affine2D.Scale(s, s);
+                },
             };
         }
 
-        // Whole-panel interaction (RatingControl.cpp): OnHoverMove = bare mouse-over fill; OnDrag = press-and-sweep (incl.
-        // drag-off-left clear); OnPointerDown begins the sweep; OnClick commits on release; OnPointerExit drops the preview.
+        // Whole-panel interaction (RatingControl.cpp): OnHoverMove = bare mouse-over fill (:807-822); OnPointerDown
+        // begins the sweep and OnPointerPressed arms capture + the device scalar (:875-886); OnDrag = press-and-sweep
+        // (capture keeps it firing off-strip — the drag-off-left clear, :799-805); OnClick commits on release
+        // (:888-906; a release OUTSIDE the strip reaches it through the dispatcher's captured-drag release routing);
+        // OnPointerExit drops the preview only while not held (:849-873).
         var starRow = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
@@ -275,6 +330,7 @@ public sealed class RatingControl : Component
             IsEnabled = interactive,
             OnHoverMove = interactive ? Sweep : null,
             OnPointerDown = interactive ? Sweep : null,
+            OnPointerPressed = interactive ? PressInfo : null,
             OnDrag = interactive ? Sweep : null,
             OnClick = interactive ? Commit : null,
             OnPointerExit = interactive ? ClearPreview : null,

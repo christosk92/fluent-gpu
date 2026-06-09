@@ -26,13 +26,13 @@ public sealed class FlyoutButton : Component
     //   Padding   = FlyoutContentPadding 16,15,16,17
     //   MinWidth  = FlyoutThemeMinWidth  96
     //   MaxWidth  = FlyoutThemeMaxWidth  456
-    //   MinHeight = FlyoutThemeMinHeight 44
+    //   MinHeight = FlyoutThemeMinHeight 40   (generic_perf2026.xaml:52)
     //   MaxHeight = FlyoutThemeMaxHeight 758
     // Background/BorderBrush/BorderThickness/CornerRadius (AcrylicInAppFillColorDefault / SurfaceStrokeColorFlyout /
     // 1px / OverlayCornerRadius 8) are supplied by the shared FlyoutSurface, so the presenter card here is transparent
     // chrome over that surface — it owns only the content padding + size constraints.
     static readonly Edges4 FlyoutContentPadding = new(16f, 15f, 16f, 17f);
-    const float FlyoutThemeMinWidth = 96f, FlyoutThemeMaxWidth = 456f, FlyoutThemeMinHeight = 44f, FlyoutThemeMaxHeight = 758f;
+    const float FlyoutThemeMinWidth = 96f, FlyoutThemeMaxWidth = 456f, FlyoutThemeMinHeight = 40f, FlyoutThemeMaxHeight = 758f;
 
     public static Element Create(string label, Func<Element> content)
         => Embed.Comp(() => new FlyoutButton { Label = label, Content = content });

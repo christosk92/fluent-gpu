@@ -46,9 +46,18 @@ public sealed class InputDispatcher
     private const float ScrollbarMinCollapsedThumb = 32f;
     private const float ScrollbarSmallChange = 48f;
 
-    public InputDispatcher(SceneStore scene) => _scene = scene;
+    public InputDispatcher(SceneStore scene)
+    {
+        _scene = scene;
+        Drag = new DragController(scene, () => RequestRerender());
+    }
 
     public NodeHandle Focused => _focused;
+
+    /// <summary>The drag-reorder gesture engine (E5): armed by a press on a <c>CanDrag</c> chain, promoted past the
+    /// 4px drag box, owning the pointer until release/Escape. Constructed with the dispatcher so every host gets
+    /// item-drag without wiring; the host hooks <see cref="DragController.OnSettle"/> for the FLIP drop-glide.</summary>
+    public DragController Drag { get; }
 
     /// <summary>Set by the host: a virtual list crossing an item boundary on scroll requests the next render.</summary>
     public Action RequestRerender { get; set; } = static () => { };
@@ -105,6 +114,7 @@ public sealed class InputDispatcher
         if (!_dragTarget.IsNull && !_scene.IsLive(_dragTarget)) _dragTarget = NodeHandle.Null;
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_scrollDragNode.IsNull && !_scene.IsLive(_scrollDragNode)) _scrollDragNode = NodeHandle.Null;
+        Drag.PruneDead();   // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
 
         int handled = 0;
         foreach (ref readonly var e in events)
@@ -112,6 +122,24 @@ public sealed class InputDispatcher
             switch (e.Kind)
             {
                 case InputKind.PointerMove:
+                    if (Drag.IsActive)   // an active item-drag owns the pointer (capture): no hover/scroll/slider routing
+                    {
+                        Drag.Move(e.PositionPx, e.Mods, e.TimestampMs);
+                        handled++;
+                        break;
+                    }
+                    if (Drag.IsArmed && Drag.Move(e.PositionPx, e.Mods, e.TimestampMs))
+                    {
+                        // Promoted on this move: the gesture is a drag now — kill the click candidate, the transient
+                        // press/hover visuals and any pending auto-repeat (WinUI: crossing the drag box cancels them).
+                        if (!_down.IsNull && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                            OnRepeatReleased?.Invoke(_down);
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                        _dragTarget = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
                     UpdateScrollHover(e.PositionPx);
                     if (DragScrollbar(e.PositionPx))
@@ -160,9 +188,13 @@ public sealed class InputDispatcher
                                 Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
                             });
                         if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
+                        else
+                            // Arm a drag-reorder candidate on the nearest CanDrag ancestor (a press on a child of a
+                            // draggable row arms the row). A continuous OnDrag press (slider) keeps its semantics.
+                            Drag.TryArm(_down, e.PositionPx, e.Pointer, e.Mods, e.TimestampMs);
                         if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
                             OnRepeatArmed?.Invoke(_down);   // RepeatButton: fire click now, then repeat while held
-                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit)) != 0) handled++;
+                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit | InteractionInfo.DragBit)) != 0) handled++;
                     }
                     break;
 
@@ -175,6 +207,19 @@ public sealed class InputDispatcher
                         break;
                     }
                     if (e.Button != 0) break;
+
+                    if (Drag.IsActive)
+                    {
+                        // Release after an active item-drag: complete the lifecycle; the click is SUPPRESSED (WinUI —
+                        // a finished drag never raises the item's click/Tapped).
+                        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs);
+                        _down = NodeHandle.Null;
+                        _dragTarget = NodeHandle.Null;
+                        handled++;
+                        break;
+                    }
+                    Drag.Disarm();   // armed but never promoted → a plain click; fall through to normal release
 
                     if (!_scrollDragNode.IsNull)
                     {
@@ -191,6 +236,19 @@ public sealed class InputDispatcher
                     {
                         SetFocus(up, visual: false);        // pointer activation focuses but does NOT show the focus ring
                         if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
+                        handled++;
+                    }
+                    else if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget) &&
+                             (_scene.Flags(_dragTarget) & NodeFlags.Disabled) == 0)
+                    {
+                        // Implicit pointer capture for continuous OnDrag gestures (WinUI CapturePointer): a press that
+                        // began an OnDrag gesture (slider scrub, RatingControl sweep, ToggleSwitch knob drag) delivers
+                        // its RELEASE to that node even when the pointer ends outside it — the node's click handler is
+                        // its release/commit edge (RatingControl.cpp:875-906 capture → commit-on-release incl. the
+                        // drag-off-left clear; Slider_Partial.cpp:478-543/580-623 CapturePointer → PerformPointerUpAction).
+                        // PointerCancel still skips this (capture loss is not a commit), matching WinUI's cancel path.
+                        SetFocus(_dragTarget, visual: false);
+                        _scene.GetClickHandler(_dragTarget)?.Invoke();
                         handled++;
                     }
                     _down = NodeHandle.Null;
@@ -232,6 +290,7 @@ public sealed class InputDispatcher
     /// <summary>Clear all in-flight pointer interaction (capture lost / window deactivated).</summary>
     private void CancelPointer()
     {
+        Drag.Cancel();   // an in-flight item-drag aborts on capture loss (restores visuals, fires OnDragCanceled)
         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
         if (!_down.IsNull && (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0))
             OnRepeatReleased?.Invoke(_down);
@@ -560,6 +619,16 @@ public sealed class InputDispatcher
             case Keys.GamepadB: key = Keys.Escape; break;
         }
 
+        // An active item-drag is the most-modal gesture: Escape cancels it before any other routing (WinUI drag
+        // cancel). The pointer is still down — kill the click candidate so the eventual release does NOT click.
+        if (key == Keys.Escape && Drag.IsActive)
+        {
+            Drag.Cancel();
+            SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+            _down = NodeHandle.Null;
+            return;
+        }
+
         // Alt access-key bookkeeping: a bare Alt tap (down with nothing in between, then up) toggles access-key mode;
         // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path).
         if (key == Keys.Alt) { _altPending = !e.IsRepeat; return; }
@@ -822,13 +891,38 @@ public sealed class InputDispatcher
         }
         if (prev != node)
         {
-            if (!prev.IsNull && _scene.IsLive(prev) && (_scene.Interaction(prev).HandlerMask & InteractionInfo.FocusBit) != 0)
-                _scene.GetFocusChanged(prev)?.Invoke(false);
-            if (!node.IsNull && _scene.IsLive(node) && node == _focused &&   // a LostFocus handler may have re-moved focus
-                (_scene.Interaction(node).HandlerMask & InteractionInfo.FocusBit) != 0)
-                _scene.GetFocusChanged(node)?.Invoke(true);
+            // WinUI GotFocus/LostFocus are ROUTED (bubbling) events: an ancestor with an OnFocusChanged handler hears
+            // focus ENTERING/LEAVING its SUBTREE, fired only on boundary crossings. The focused node itself keeps the
+            // exact pre-existing self semantics. ToolTipService's keyboard-focus trigger hangs off this
+            // (microsoft-ui-xaml ToolTipService_Partial.cpp:1635 OnOwnerGotFocus on the OWNER element).
+            if (!prev.IsNull && _scene.IsLive(prev))
+            {
+                if ((_scene.Interaction(prev).HandlerMask & InteractionInfo.FocusBit) != 0)
+                    _scene.GetFocusChanged(prev)?.Invoke(false);
+                for (var n = _scene.Parent(prev); !n.IsNull; n = _scene.Parent(n))
+                    if ((_scene.Interaction(n).HandlerMask & InteractionInfo.FocusBit) != 0 && !IsSelfOrAncestorOf(n, node))
+                        _scene.GetFocusChanged(n)?.Invoke(false);
+            }
+            if (!node.IsNull && _scene.IsLive(node) && node == _focused)   // a LostFocus handler may have re-moved focus
+            {
+                if ((_scene.Interaction(node).HandlerMask & InteractionInfo.FocusBit) != 0)
+                    _scene.GetFocusChanged(node)?.Invoke(true);
+                for (var n = _scene.Parent(node); !n.IsNull && node == _focused; n = _scene.Parent(n))
+                    if ((_scene.Interaction(n).HandlerMask & InteractionInfo.FocusBit) != 0 && !IsSelfOrAncestorOf(n, prev))
+                        _scene.GetFocusChanged(n)?.Invoke(true);
+            }
         }
         if (repaint) RequestRerender();
+    }
+
+    /// <summary>True if <paramref name="root"/> is <paramref name="node"/> or one of its ancestors — i.e. focus stayed
+    /// inside <paramref name="root"/>'s subtree, so no enter/leave boundary was crossed for it.</summary>
+    private bool IsSelfOrAncestorOf(NodeHandle root, NodeHandle node)
+    {
+        if (node.IsNull || !_scene.IsLive(node)) return false;
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+            if (n == root) return true;
+        return false;
     }
 
     private void Collect(NodeHandle node, List<NodeHandle> into)
@@ -899,7 +993,7 @@ public sealed class InputDispatcher
         {
             ref InteractionInfo ii = ref _scene.Interaction(node);
             if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0 &&
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit)) != 0 &&
                 rect.Contains(p))
             {
                 result = node;

@@ -73,6 +73,23 @@ public sealed record BoxEl : Element
     /// GotFocus/LostFocus pair. Delivered by <c>InputDispatcher.SetFocus</c> directly (never via hit-testing); editable
     /// controls use it to arm the caret blinker / IME and capture the Escape-revert snapshot.</summary>
     public Action<bool>? OnFocusChanged { get; init; }
+    /// <summary>Marks this box a drag-reorder source (WinUI CanDragItems/CanReorderItems item container): a left press
+    /// on it (or any non-draggable descendant) arms the engine's DragController; pointer travel past the 4px drag box
+    /// (per-axis, ListViewBaseItem_Partial.cpp:1864-1878) promotes the press to a drag — the node follows the pointer
+    /// at WinUI ListViewItemDragThemeOpacity 0.80 (ListViewItem_themeresources.xaml:7) with a lifted shadow, stops
+    /// hit-testing, and the eventual release SUPPRESSES the click.</summary>
+    public bool CanDrag { get; init; }
+    /// <summary>Drag lifecycle (needs <see cref="CanDrag"/>): fired once when the press crosses the drag box (WinUI
+    /// DragItemsStarting). The args instance is reused for the whole gesture — copy what you keep.</summary>
+    public Action<DragEventArgs>? OnDragStarted { get; init; }
+    /// <summary>Every pointer move while the drag is active: accumulated gesture deltas + smoothed velocity — feed
+    /// <c>ReorderList.Update(e.TotalDy)</c> and re-render with its projected order / offset hints.</summary>
+    public Action<DragEventArgs>? OnDragDelta { get; init; }
+    /// <summary>Release after an active drag (WinUI DragItemsCompleted): commit the reorder here
+    /// (<c>ReorderList.Complete()</c>); the drop-glide and the displaced-sibling FLIP retarget off this commit.</summary>
+    public Action<DragEventArgs>? OnDragCompleted { get; init; }
+    /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing.</summary>
+    public Action? OnDragCanceled { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
@@ -82,6 +99,10 @@ public sealed record BoxEl : Element
     /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
     public bool IsEnabled { get; init; } = true;
     public bool Focusable { get; init; }
+    /// <summary>WinUI <c>Control.IsTabStop</c>: null = auto (clickable nodes are focusable), false = NEVER keyboard
+    /// focusable even when clickable (the light-dismiss catcher layer — WinUI's dismiss layer is not a tab stop),
+    /// true = force focusable.</summary>
+    public bool? TabStop { get; init; }
     public int TabIndex { get; init; }
     /// <summary>WinUI FocusVisualMargin: negative values push the keyboard-focus ring OUTSIDE the bounds. Null = the
     /// WinUI template default (−3 all around); Slider uses −7,0,−7,0.</summary>

@@ -18,6 +18,9 @@ public sealed record TokenSet
     public required ColorF FillControlStrong { get; init; }          // ControlStrongFillColorDefault — slider rail, scrollbar thumb
     public required ColorF FillControlStrongDisabled { get; init; }  // ControlStrongFillColorDisabled
     public required ColorF FillControlSolid { get; init; }           // ControlSolidFillColorDefault — slider thumb ring
+    // WinUI ControlOnImageFillColorDefault — near-solid chrome floated over media (the ItemContainer multi-select
+    // checkbox unchecked plate). Common_themeresources_any.xaml:34 dark #B31C1C1C / :238 light #C9FFFFFF.
+    public required ColorF FillControlOnImage { get; init; }
     public required ColorF FillSubtleTransparent { get; init; }
     public required ColorF FillSubtleSecondary { get; init; }    // subtle hover
     public required ColorF FillSubtleTertiary { get; init; }     // subtle pressed
@@ -162,6 +165,7 @@ public static class Tok
     public static ColorF FillControlStrong => T.FillControlStrong;
     public static ColorF FillControlStrongDisabled => T.FillControlStrongDisabled;
     public static ColorF FillControlSolid => T.FillControlSolid;
+    public static ColorF FillControlOnImage => T.FillControlOnImage;
     public static ColorF FillSubtleTransparent => T.FillSubtleTransparent;
     public static ColorF FillSubtleSecondary => T.FillSubtleSecondary;
     public static ColorF FillSubtleTertiary => T.FillSubtleTertiary;
@@ -194,6 +198,12 @@ public static class Tok
     /// <summary>WinUI AccentControlElevationBorderBrush: the on-accent variant (for accent buttons / checked toggles).</summary>
     public static GradientSpec AccentControlElevationBorder =>
         new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlOnAccentSecondary), new GradientStop(1f, StrokeControlOnAccentDefault)]);
+
+    /// <summary>WinUI CircleElevationBorderBrush (Common_themeresources_any.xaml:192-198 dark / :391-397 light): a
+    /// RelativeToBoundingBox vertical 2-stop gradient — ControlStrokeColorDefault @0.50 → ControlStrokeColorSecondary
+    /// @0.70 — the subtle rim on circular knobs/glyphs (ToggleSwitch SwitchKnobOn stroke, RadioButton glyph stroke).</summary>
+    public static GradientSpec CircleElevationBorder =>
+        new(GradientShape.Linear, 90f, [new GradientStop(0.50f, StrokeControlDefault), new GradientStop(0.70f, StrokeControlSecondary)]);
 
     // Text
     public static ColorF TextPrimary => T.TextPrimary;
@@ -284,6 +294,7 @@ public static class Tok
         FillControlStrong         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
         FillControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x3F),
         FillControlSolid          = ColorF.FromRgba(0x45, 0x45, 0x45),
+        FillControlOnImage   = ColorF.FromRgba(0x1C, 0x1C, 0x1C, 0xB3),   // #B31C1C1C (Common_themeresources_any.xaml:34)
         FillSubtleTransparent= ColorF.Transparent,
         FillSubtleSecondary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
         FillSubtleTertiary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
@@ -368,6 +379,7 @@ public static class Tok
         FillControlStrong         = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         FillControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x51),
         FillControlSolid          = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        FillControlOnImage   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC9),   // #C9FFFFFF (Common_themeresources_any.xaml:238)
         FillSubtleTransparent= ColorF.Transparent,
         FillSubtleSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
         FillSubtleTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),

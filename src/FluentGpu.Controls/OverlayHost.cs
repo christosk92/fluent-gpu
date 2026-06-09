@@ -25,8 +25,9 @@ public sealed class OverlayHandle
 /// positions the popup relative to the anchor's on-screen rect (flip/nudge into the viewport) and animates it open/closed
 /// with the WinUI MenuPopupThemeTransition. Resolve via <c>UseContext(Overlay.Service)</c> inside an <see cref="OverlayHost"/>.
 /// </summary>
-/// <summary>How a popup dismisses. <see cref="LightDismiss"/> = click-outside + Escape (the default); <see cref="Modal"/>
-/// = no light dismiss (ContentDialog); <see cref="None"/> = caller-controlled only.</summary>
+/// <summary>How a popup dismisses. <see cref="LightDismiss"/> = click-outside + Escape + window deactivation (the
+/// default); <see cref="Modal"/> = no light dismiss (ContentDialog — survives window deactivation); <see cref="None"/>
+/// = caller-controlled only (ToolTip).</summary>
 public enum DismissBehavior : byte { LightDismiss, Modal, None }
 
 /// <summary>Where an overlay close request came from; controls map this to their public close reason.</summary>
@@ -39,12 +40,36 @@ public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip }
 public readonly record struct PopupOptions(
     bool FocusTrap = false,
     DismissBehavior DismissBehavior = DismissBehavior.LightDismiss,
-    PopupChrome Chrome = PopupChrome.Flyout);
+    PopupChrome Chrome = PopupChrome.Flyout)
+{
+    private readonly bool _unconstrained;
+
+    /// <summary>
+    /// WinUI <c>Popup.ShouldConstrainToRootBounds</c> (Popup_Partial.cpp:951-970: read-only false for WINDOWED popups;
+    /// FlyoutBase_Partial.cpp:3181-3205 <c>SetIsWindowedPopup</c>). Default TRUE = the popup is clamped inside the
+    /// window (today's behavior). Set FALSE where WinUI windows its popups (menus, ComboBox tall dropdowns,
+    /// CommandBarFlyout): the host then asks the platform for a top-level popup window, places against the MONITOR
+    /// work area, and renders the subtree into the popup window's own swapchain. Falls back to constrained placement
+    /// when the platform/host cannot create popup windows (WinUI's <c>DoesPlatformSupportWindowedPopup</c> gate).
+    /// Stored inverted so <c>default(PopupOptions)</c> stays constrained.
+    /// </summary>
+    public bool ConstrainToRootBounds
+    {
+        get => !_unconstrained;
+        init => _unconstrained = !value;
+    }
+}
 
 public interface IOverlayService
 {
     OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomLeft);
     OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options);
+
+    /// <summary>Open anchored to an arbitrary window-DIP RECT instead of a scene node — pointer-relative placement
+    /// (ToolTip PlacementMode.Mouse, context menus at the right-tap point). <paramref name="owner"/> (optional) is the
+    /// logical owner node, used only to resolve the nested-overlay parent chain for cascade close.</summary>
+    OverlayHandle OpenAt(Func<RectF> anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options = default, Func<NodeHandle>? owner = null);
+
     void CloseTop();
     void CloseAll();
     bool AnyOpen { get; }
@@ -69,6 +94,7 @@ internal sealed class NullOverlayService : IOverlayService
     public static readonly NullOverlayService Instance = new();
     public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p) => new();
     public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p, PopupOptions o) => new();
+    public OverlayHandle OpenAt(Func<RectF> r, Func<Element> c, FlyoutPlacement p, PopupOptions o = default, Func<NodeHandle>? owner = null) => new();
     public void CloseTop() { }
     public void CloseAll() { }
     public bool AnyOpen => false;
@@ -78,19 +104,23 @@ internal sealed class OverlayEntry
 {
     public int Id;
     public required Func<NodeHandle> Anchor;
+    public Func<RectF>? AnchorRect;   // rect-anchored open (pointer placement) — wins over Anchor when set
     public required Func<Element> Content;
     public FlyoutPlacement Placement;
     public required OverlayHandle Handle;
     public NodeHandle WrapperNode;    // measured + translated for placement
-    public NodeHandle SurfaceNode;    // presenter surface: the SizeH clip-reveal + opacity animate this node
+    public NodeHandle SurfaceNode;    // presenter surface: the clip-reveal + translate + opacity animate this node
     public float MeasuredW;
     public float MeasuredH;
     public bool OpensUp;
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
-    public NodeHandle SavedFocus;     // focus captured at open time → restored when the overlay finishes closing
+    public NodeHandle SavedFocus;     // focus captured at open time → restored when the close STARTS (WinUI timing)
     public bool FocusTrap;
     public DismissBehavior DismissBehavior;
     public PopupChrome Chrome;
+    public bool ConstrainToRootBounds = true;
+    public int ParentId = -1;         // nested flyout chain: the entry whose subtree contains this entry's anchor
+    public int PopupWindowToken = -1; // host popup-window lease for an out-of-bounds popup (-1 = none/in-window)
     public OverlayPhase Phase;
     public bool OpenSeeded;
     public bool CloseSeeded;
@@ -102,7 +132,12 @@ internal enum OverlayPhase : byte { Opening, Open, Closing }
 
 internal sealed class OverlayServiceImpl : IOverlayService
 {
+    // WinUI MenuPopupThemeTransition unload opacity: 83ms linear (MenuPopupThemeTransition_Partial.h:23
+    // s_OpacityChangeDuration; LayoutTransition_partial.cpp:530-531 unload keyframes).
     const float OpacityMs = 83f;
+    // WinUI ToolTip FadeIn/FadeOutThemeAnimation: the OS-PVL opacity fade (WinTheme.cpp:169/182 TAS_FADEIN/TAS_FADEOUT),
+    // 167ms on stock Windows themes — used for PopupChrome.Raw (ToolTip) instead of the menu's 83ms.
+    internal const float RawFadeMs = 167f;
 
     private readonly Signal<int> _version;     // bump → OverlayHost re-renders
     private int _nextId;
@@ -113,6 +148,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public Action<NodeHandle>? RestoreFocus;
     public SceneStore? Scene;
     public AnimEngine? Anim;
+    public InputHooks? Hooks;   // popup-window + work-area host seams (E4 windowed popups)
     public NodeHandle ScrimNode;
 
     public OverlayServiceImpl(Signal<int> version) => _version = version;
@@ -135,21 +171,43 @@ internal sealed class OverlayServiceImpl : IOverlayService
         => Open(anchor, content, placement, default);
 
     public OverlayHandle Open(Func<NodeHandle> anchor, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
+        => OpenCore(anchor, null, content, placement, options);
+
+    public OverlayHandle OpenAt(Func<RectF> anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options = default, Func<NodeHandle>? owner = null)
+        => OpenCore(owner ?? (static () => NodeHandle.Null), anchorRect, content, placement, options);
+
+    private OverlayHandle OpenCore(Func<NodeHandle> anchor, Func<RectF>? anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
     {
         var handle = new OverlayHandle { IsOpen = true };
         var entry = new OverlayEntry
         {
-            Id = _nextId++, Anchor = anchor, Content = content, Placement = placement, Handle = handle,
+            Id = _nextId++, Anchor = anchor, AnchorRect = anchorRect, Content = content, Placement = placement, Handle = handle,
             FocusTrap = options.FocusTrap,
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
+            ConstrainToRootBounds = options.ConstrainToRootBounds,
             Phase = OverlayPhase.Opening,
             SavedFocus = GetFocus?.Invoke() ?? NodeHandle.Null,   // capture pre-open focus → restore on close
+            ParentId = ResolveParentId(anchor),
         };
         handle.CloseAction = cause => BeginClose(entry, cause);
         Entries.Add(entry);
         Bump();
         return handle;
+    }
+
+    /// <summary>Nested-flyout chain: the parent is the open entry whose wrapper subtree contains this entry's anchor
+    /// (a MenuFlyoutSubItem anchored to an item INSIDE another popup). Closing a parent cascade-closes its children.</summary>
+    private int ResolveParentId(Func<NodeHandle> anchor)
+    {
+        if (Scene is not { } scene) return -1;
+        var a = anchor();
+        if (a.IsNull || !scene.IsLive(a)) return -1;
+        for (var n = a; !n.IsNull; n = scene.Parent(n))
+            foreach (var e in Entries)
+                if (e.Phase != OverlayPhase.Closing && !e.WrapperNode.IsNull && e.WrapperNode == n)
+                    return e.Id;
+        return -1;
     }
 
     public void CloseTop()
@@ -166,15 +224,55 @@ internal sealed class OverlayServiceImpl : IOverlayService
         foreach (var e in Entries) BeginClose(e, OverlayCloseCause.Programmatic);
     }
 
-    // Start the close animation: keep the entry (so it stays on top and fades), mark it closing; the host seeds the
-    // fade-out and OverlayCloseDriver removes it once the animation settles.
+    /// <summary>Window lost activation → close every light-dismiss overlay; modal (ContentDialog) and caller-owned
+    /// (ToolTip) overlays stay. WinUI: <c>DismissalTriggerFlags::WindowDeactivated</c> is part of the default
+    /// light-dismiss trigger set (Popup_Partial.h:38); ContentDialog's modal popup excludes it.</summary>
+    public void OnWindowBlur()
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var e = Entries[i];
+            if (e.Phase != OverlayPhase.Closing && e.DismissBehavior == DismissBehavior.LightDismiss)
+                BeginClose(e, OverlayCloseCause.LightDismiss);
+        }
+    }
+
+    // Start the close: cascade-close child flyouts first, restore focus NOW (WinUI restores the saved focus when
+    // Hide() begins — Popup_Partial.h:63-64 SavedFocusState; FlyoutBase returns focus to the invoker synchronously on
+    // Hide, not after the close animation), then keep the entry (so it stays on top and fades) and mark it closing;
+    // the host seeds the fade-out and AfterAnimations removes it once the animation settles.
     private void BeginClose(OverlayEntry e, OverlayCloseCause cause)
     {
         if (e.Phase == OverlayPhase.Closing) return;
         if (e.Handle.ClosingAction is { } beforeClose && !beforeClose(cause)) return;
+
+        // Cascade: children close first (their focus restores into THIS popup's content, which then chains to the
+        // original invoker when this entry's own restore runs below) — WinUI nested MenuFlyoutSubItem close order.
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var c = Entries[i];
+            if (c.ParentId == e.Id && c.Phase != OverlayPhase.Closing) BeginClose(c, cause);
+        }
+
         e.CloseCause = cause;
         e.Phase = OverlayPhase.Closing;
         e.Handle.IsOpen = false;
+
+        // Per-level focus restore at close START. Restore only when focus still lives inside this overlay's subtree
+        // (or points at a dead/null node) — a popup that never took focus must not yank it from elsewhere
+        // (CPopup::Close restores its saved focus only while it owns focus).
+        if (!e.SavedFocus.IsNull && RestoreFocus is not null && Scene is { } sc)
+        {
+            var cur = GetFocus?.Invoke() ?? NodeHandle.Null;
+            bool inside = cur.IsNull || !sc.IsLive(cur);
+            if (!inside && !e.WrapperNode.IsNull)
+                for (var n = cur; !n.IsNull; n = sc.Parent(n))
+                    if (n == e.WrapperNode) { inside = true; break; }
+            Console.Error.WriteLine($"[DBG-BeginClose] saved={e.SavedFocus} cur={cur} wrapper={e.WrapperNode} inside={inside} savedLive={sc.IsLive(e.SavedFocus)}");
+            if (inside && sc.IsLive(e.SavedFocus)) RestoreFocus(e.SavedFocus);
+        }
+        else Console.Error.WriteLine($"[DBG-BeginClose] skipped: saved={e.SavedFocus} restoreNull={RestoreFocus is null} sceneNull={Scene is null}");
+
         SeedCloseIfNeeded(e);
         Bump();
     }
@@ -213,14 +311,18 @@ internal sealed class OverlayServiceImpl : IOverlayService
         }
         else
         {
+            // WinUI MenuPopupThemeTransition unload (LayoutTransition_partial.cpp:525-544): an 83ms linear fade; an
+            // interrupted load FREEZES the clip/translate at the interrupt offset (constant keyframes, cpp:538-543)
+            // rather than snapping open — cancel the load tracks and leave the last composed clip/transform in place.
             anim.Cancel(e.SurfaceNode, AnimChannel.SizeH);
+            anim.Cancel(e.SurfaceNode, AnimChannel.TranslateY);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipL);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipT);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipR);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipB);
-            surfacePaint.ClipRect = RectF.Infinite;
             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
-            anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, OpacityMs, Easing.Linear);
+            float fadeMs = e.Chrome == PopupChrome.Raw ? RawFadeMs : OpacityMs;
+            anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, fadeMs, Easing.Linear);
         }
     }
 
@@ -251,6 +353,12 @@ internal sealed class OverlayServiceImpl : IOverlayService
             else if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode))
                 HideSubtreeAndCancel(scene, Anim, e.SurfaceNode);
         }
+        // Release the out-of-bounds popup window (hide + dispose + drop the second swapchain) with the entry.
+        if (e.PopupWindowToken >= 0)
+        {
+            Hooks?.ClosePopupWindow?.Invoke(e.PopupWindowToken);
+            e.PopupWindowToken = -1;
+        }
         if (!Entries.Remove(e)) return;
         if (Entries.Count == 0 && Scene is { } sc && !ScrimNode.IsNull && sc.IsLive(ScrimNode))
         {
@@ -261,8 +369,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
         }
         e.Handle.ClosedAction?.Invoke();
         e.Handle.ClosedWithCauseAction?.Invoke(e.CloseCause);
-        // Restore the focus captured at open time, once nothing is left open (WinUI flyout focus-restoration).
-        if (!AnyOpen && !e.SavedFocus.IsNull) RestoreFocus?.Invoke(e.SavedFocus);
+        // NOTE: focus restoration happens at close START in BeginClose (WinUI Hide() timing), not here.
         Bump();
     }
 
@@ -290,14 +397,16 @@ internal sealed class OverlayServiceImpl : IOverlayService
 /// <summary>
 /// Wraps the app root and hosts anchored flyouts in a top-level ZStack.
 /// The base <see cref="Child"/> is always the first ZStack child (so opening/closing an overlay never remounts it).
-/// Open mirrors WinUI MenuPopupThemeTransition: a top-anchored SizeH clip-reveal of the presenter (content full size,
-/// revealed from the anchor edge) + a fade (250ms cubic-bezier(0,0,0,1); 83ms linear opacity). Close is an 83ms fade.
+/// Open mirrors WinUI MenuPopupThemeTransition (LayoutTransition_partial.cpp:441-506): a 250ms cubic-bezier(0,0,0,1)
+/// clip-reveal from the anchor edge whose CONTENT slides in with the reveal (TranslateY ±H·0.5 → 0 against a
+/// counter-translated clip); the presenter does NOT fade at load. Close is the 83ms linear unload fade.
 /// </summary>
 public sealed class OverlayHost : Component
 {
     public Element Child = new BoxEl();
 
-    // WinUI MenuPopupThemeTransition timings.
+    // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
+    // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 (MenuFlyout_Partial.cpp:253 closedRatioConstant).
     const float OpenMs = 250f, OpacityMs = 83f, ClosedRatio = 0.5f;
 
     public override Element Render()
@@ -315,27 +424,71 @@ public sealed class OverlayHost : Component
         hooks.SetAfterAnimations(svc, svc.AfterAnimations);
         svc.GetFocus = hooks.GetFocus;          // host-wired focus get/restore → flyout focus-restoration on close
         svc.RestoreFocus = hooks.RestoreFocus;
+        svc.Hooks = hooks;                      // popup-window + work-area seams (E4 out-of-bounds popups)
+        hooks.WindowBlurred = svc.OnWindowBlur; // window deactivation → light-dismiss overlays close (modal stays)
         var vp = UseContext(Viewport.Size);
 
-        // After layout (Bounds valid): place each popup, then seed its open (clip-unfold + fade) / close (fade) animation.
+        // After layout (Bounds valid): place each popup, then seed its open (clip-unfold + slide) / close (fade) animation.
         UseLayoutEffect(() =>
         {
             var scene = Context.Scene;
             var anim = Context.Anim;
             if (scene is null || anim is null) return;
+            var vpRect = new RectF(0f, 0f, vp.Width, vp.Height);
             foreach (var e in svc.Entries)
             {
                 if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode)) continue;
-                if (e.Chrome != PopupChrome.Modal)
+                // A CLOSING entry keeps its last placement (and its popup window, when windowed) while it fades —
+                // re-placing it could yank it back into the viewport mid-fade.
+                if (e.Chrome != PopupChrome.Modal && e.Phase != OverlayPhase.Closing)
                 {
-                    var anchor = e.Anchor();
-                    if (!anchor.IsNull && scene.IsLive(anchor))
+                    RectF aRect = default;
+                    bool haveAnchor = false;
+                    if (e.AnchorRect is { } rectThunk)
                     {
-                        var aRect = scene.AbsoluteRect(anchor);
+                        aRect = rectThunk();
+                        haveAnchor = true;
+                    }
+                    else
+                    {
+                        var anchor = e.Anchor();
+                        if (!anchor.IsNull && scene.IsLive(anchor))
+                        {
+                            aRect = scene.AbsoluteRect(anchor);
+                            haveAnchor = true;
+                        }
+                    }
+                    if (haveAnchor)
+                    {
                         var pRect = scene.AbsoluteRect(e.WrapperNode);
                         e.MeasuredW = pRect.W;
                         e.MeasuredH = pRect.H;
-                        var place = FlyoutPositioner.Place(in aRect, new Size2(pRect.W, pRect.H), in vp, e.Placement);
+                        var popupSize = new Size2(pRect.W, pRect.H);
+
+                        // Out-of-bounds (windowed) popups place against the MONITOR work area, in window-DIP space
+                        // (WinUI FlyoutBase_Partial.cpp:3382-3392 useMonitorBounds = IsWindowedPopup()); constrained
+                        // popups place against the viewport. The work-area seam is host-wired (AppHost → IPlatformApp
+                        // GetWorkArea via MonitorFromPoint/GetMonitorInfo).
+                        bool wantWindowed = !e.ConstrainToRootBounds && svc.Hooks is { OpenPopupWindow: not null };
+                        RectF container = vpRect;
+                        if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
+                            container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
+
+                        var place = FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed);
+
+                        if (wantWindowed)
+                        {
+                            // Lease a platform popup window for this subtree (host records it into its own DrawList +
+                            // swapchain; the subtree is skipped from the main-window record). -1 = the platform/device
+                            // can't (WinUI's DoesPlatformSupportWindowedPopup == false) → constrained fallback.
+                            if (e.PopupWindowToken < 0)
+                                e.PopupWindowToken = svc.Hooks!.OpenPopupWindow!(e.WrapperNode);
+                            if (e.PopupWindowToken >= 0)
+                                svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H));
+                            else
+                                place = FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false);
+                        }
+
                         e.OpensUp = place.OpensUp;
                         e.CornerJoin = place.CornerJoin;
                         e.PlacementInfo.Value = new OverlayPlacementInfo(
@@ -381,19 +534,43 @@ public sealed class OverlayHost : Component
                     anim.Animate(e.SurfaceNode, AnimChannel.ScaleY, 1.05f, 1f, OpenMs, Easing.FluentPopOpen);
                     anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OpacityMs, Easing.Linear);
                 }
+                else if (!e.OpenSeeded && e.Chrome == PopupChrome.Raw)
+                {
+                    e.OpenSeeded = true;
+                    e.Phase = OverlayPhase.Open;
+                    // WinUI ToolTip: FadeInThemeAnimation only (ToolTip_themeresources.xaml Opened visual state) — the
+                    // OS-PVL opacity fade (WinTheme.cpp:169 TAS_FADEIN, 167ms on stock themes). No clip reveal, no scale.
+                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OverlayServiceImpl.RawFadeMs, Easing.Linear);
+                }
                 else if (!e.OpenSeeded && e.MeasuredH > 0f)
                 {
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
                     float fullH = e.MeasuredH;
-                    // WinUI MenuPopupThemeTransition: the presenter clips open from the anchor edge — content stays full size
-                    // and is revealed top-down — plus a quick fade. A single top-anchored SizeH reveal on the surface drives
-                    // the acrylic + border + clipped content + shadow together; no per-node translate/scale to desync or glitch.
+                    // WinUI MenuPopupThemeTransition load (LayoutTransition_partial.cpp:441-506): BOTH a content
+                    // TranslateY (initialTranslateY = openedLength × ClosedRatio, signed by direction → 0) and a
+                    // counter-translated clip animate over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
+                    // (cpp:443-444 easing.cp3.X=0; MenuPopupThemeTransition_Partial.h:24). The menu unfolds from the
+                    // anchor edge WITH its content sliding in — and there is NO opacity keyframe on the presenter at
+                    // load (only the overlay element fades, cpp:508-519): it appears at 50% height instantly.
+                    // Our clip rect is node-local (it rides the surface's translate), so the counter-translation is
+                    // expressed by animating the NEAR clip edge against the slide — the anchor-side edge of the
+                    // visible window stays glued in parent space while the far edge expands.
+                    float slide = fullH * ClosedRatio;
                     if (e.OpensUp)
-                        anim.Animate(e.SurfaceNode, AnimChannel.ClipT, fullH * (1f - ClosedRatio), 0f, OpenMs, Easing.FluentPopOpen);
+                    {
+                        // Opens upward (WinUI AnimationDirection_Bottom): content slides UP into place; the visible
+                        // window's BOTTOM edge stays glued to the anchor while the top edge reveals upward.
+                        anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipB, fullH - slide, fullH, OpenMs, Easing.FluentPopOpen);
+                    }
                     else
-                        anim.Animate(e.SurfaceNode, AnimChannel.ClipB, fullH * ClosedRatio, fullH, OpenMs, Easing.FluentPopOpen);
-                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OpacityMs, Easing.Linear);
+                    {
+                        // Opens downward (WinUI AnimationDirection_Top): content slides DOWN into place; the visible
+                        // window's TOP edge stays glued to the anchor while the bottom edge reveals downward.
+                        anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, -slide, 0f, OpenMs, Easing.FluentPopOpen);
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipT, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                    }
                 }
             }
         }, ver, vp.Width, vp.Height);
@@ -419,6 +596,7 @@ public sealed class OverlayHost : Component
                 Opacity = 1f,
                 OnRealized = h => svc.ScrimNode = h,
                 HitTestVisible = svc.AnyOpen,
+                TabStop = false,   // WinUI: the light-dismiss layer is never a tab stop (focus restore depends on it)
                 OnClick = lightDismiss ? () => svc.CloseTop(OverlayCloseCause.LightDismiss) : (svc.AnyOpen ? () => { } : null),
                 OnPointerDown = svc.AnyOpen && !lightDismiss ? _ => { } : null,
             });
@@ -484,8 +662,9 @@ public sealed class OverlayHost : Component
 }
 
 /// <summary>WinUI MenuFlyoutPresenter surface: a transparent presenter over a frosted acrylic backdrop, a 1px flyout
-/// stroke, a soft elevation shadow, and rounded corners. The OverlayHost drives the open clip-reveal (SizeH) + fade on
-/// this single node; ClipToBounds clips the content to both the rounded corners and the revealing height.</summary>
+/// stroke, a soft elevation shadow, and rounded corners. The OverlayHost drives the open clip-reveal + content slide
+/// and the close fade on this single node; ClipToBounds clips the content to both the rounded corners and the
+/// revealing window.</summary>
 internal sealed class FlyoutSurface : Component
 {
     public Element Body = new BoxEl();

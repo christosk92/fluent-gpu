@@ -53,6 +53,63 @@ public interface IPlatformApp : IDisposable
 
     /// <summary>The system clipboard (UI-thread only).</summary>
     IClipboard Clipboard { get; }
+
+    /// <summary>Launch <paramref name="uri"/> in the OS default handler (browser/mail) — the WinUI
+    /// <c>Launcher::TryInvokeLauncher</c> step of HyperlinkButton.OnClick (Click raised first at :166, then the
+    /// launch at :172 — microsoft-ui-xaml dxaml\xcp\dxaml\lib\HyperLinkButton_Partial.cpp:149-177). Fire-and-forget
+    /// on the UI thread; failures are swallowed (WinUI's TryInvokeLauncher is equally best-effort). Headless
+    /// implementations record the URI instead of launching.</summary>
+    void OpenUri(string uri);
+
+    /// <summary>
+    /// The WORK AREA (desktop minus taskbar/docked bars) of the monitor containing <paramref name="screenPointPx"/>,
+    /// in physical virtual-screen px — the multi-monitor placement seam WinUI's windowed popups use
+    /// (Popup.cpp monitor-bounds placement; <c>DXamlCore::CalculateAvailableMonitorRect</c>,
+    /// FlyoutBase_Partial.cpp:3382-3388 <c>useMonitorBounds = IsWindowedPopup()</c>). Win32 backs this with
+    /// <c>MonitorFromPoint(MONITOR_DEFAULTTONEAREST)</c> + <c>GetMonitorInfoW().rcWork</c>; headless returns the
+    /// configurable <c>WorkArea</c>. Default: unbounded (no monitor information available).
+    /// </summary>
+    RectF GetWorkArea(Point2 screenPointPx) => RectF.Infinite;
+
+    /// <summary>
+    /// Create a top-level POPUP window (out-of-bounds overlay surface) owned by <see cref="PopupWindowDesc.Owner"/> —
+    /// the engine analogue of WinUI's windowed <c>CPopup</c> (Popup_Partial.cpp:1019 <c>SetIsWindowed</c> creates an
+    /// HWND via PopupSiteBridge so a flyout can render OUTSIDE the XAML window). Win32: a
+    /// <c>WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP</c> owned window that never takes
+    /// activation (focus stays on the main window) and forwards its mouse input to the owner; headless: a recorder.
+    /// Returns null when the platform cannot create popup windows (callers fall back to root-bounds-constrained
+    /// placement — exactly WinUI's <c>CPopup::DoesPlatformSupportWindowedPopup</c> gate, FlyoutBase_Partial.cpp:3188).
+    /// </summary>
+    IPlatformPopupWindow? CreatePopupWindow(in PopupWindowDesc desc) => null;
+}
+
+/// <summary>Creation parameters for a popup window. <paramref name="Owner"/> = the owning top-level window (the popup
+/// stays above it in z-order and never takes activation); <paramref name="BoundsPx"/> = initial bounds in physical
+/// virtual-screen px (may be empty — set real bounds via <see cref="IPlatformPopupWindow.SetBoundsPx"/> before Show).</summary>
+public readonly record struct PopupWindowDesc(NativeHandle Owner, RectF BoundsPx);
+
+/// <summary>
+/// A borderless, non-activating top-level popup surface (the PAL seam for WinUI windowed popups / E4 out-of-bounds
+/// flyouts; later the substrate for E10 tear-out windows). The host owns rendering into it (its own swapchain on
+/// <see cref="Handle"/>); the popup never owns engine state. All bounds are physical virtual-screen px.
+/// </summary>
+public interface IPlatformPopupWindow : IDisposable
+{
+    NativeHandle Handle { get; }
+
+    /// <summary>Last bounds set via <see cref="SetBoundsPx"/> (physical virtual-screen px).</summary>
+    RectF BoundsPx { get; }
+
+    /// <summary>Visible (a <see cref="Show"/> not yet followed by <see cref="Hide"/>/<see cref="IDisposable.Dispose"/>).</summary>
+    bool IsShown { get; }
+
+    /// <summary>Move/size the popup (physical virtual-screen px) WITHOUT activating it.</summary>
+    void SetBoundsPx(in RectF px);
+
+    /// <summary>Show without activating (Win32 <c>SW_SHOWNOACTIVATE</c>) — focus stays on the owner window.</summary>
+    void Show();
+
+    void Hide();
 }
 
 /// <summary><paramref name="Composited"/> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels.</summary>
@@ -63,6 +120,11 @@ public interface IPlatformWindow : IDisposable
     NativeHandle Handle { get; }
     Size2 ClientSizePx { get; }
     float Scale { get; }
+
+    /// <summary>The screen position of the client area's (0,0), in physical virtual-screen px — the window-DIP →
+    /// screen-px bridge for popup-window placement and per-monitor work-area queries (Win32 <c>ClientToScreen</c>;
+    /// headless: settable, default (0,0)).</summary>
+    Point2 ClientOriginPx => default;
 
     /// <summary>Drain queued OS input/window events into the ring (once per frame).</summary>
     int PumpInto(InputEventRing ring);
