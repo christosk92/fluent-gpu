@@ -719,11 +719,13 @@ public sealed class TreeReconciler
                 if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
                 else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
 
-                if (b.OnPointerDown is not null || b.OnDrag is not null)
+                if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null || b.OnPointerExit is not null)
                 {
-                    ii.HandlerMask |= InteractionInfo.PointerBit;
+                    ii.HandlerMask |= InteractionInfo.PointerBit;   // hit-testable so it receives press/drag AND bare-hover/exit
                     _scene.SetPointerDown(node, b.OnPointerDown);
                     _scene.SetDrag(node, b.OnDrag);
+                    _scene.SetHoverMove(node, b.OnHoverMove);
+                    _scene.SetPointerExit(node, b.OnPointerExit);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
                 else
@@ -731,6 +733,8 @@ public sealed class TreeReconciler
                     ii.HandlerMask &= unchecked((ushort)~InteractionInfo.PointerBit);
                     _scene.SetPointerDown(node, null);
                     _scene.SetDrag(node, null);
+                    _scene.SetHoverMove(node, null);
+                    _scene.SetPointerExit(node, null);
                 }
 
                 ii.Focusable = b.Focusable || b.OnClick is not null;

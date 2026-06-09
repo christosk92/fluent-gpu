@@ -643,11 +643,13 @@ sealed class ToggleSwitchProbe : Component
 sealed class RatingProbe : Component
 {
     public FloatSignal? Val;
+    public bool ReadOnly;
+    public float Initial = 0f;
     public override Element Render()
     {
-        var v = UseFloatSignal(0f);
+        var v = UseFloatSignal(Initial);
         Val = v;
-        return RatingControl.Create(v);
+        return RatingControl.Create(v, readOnly: ReadOnly);
     }
 }
 
@@ -742,6 +744,14 @@ static class Slice
         foreach (var g in dev.LastGlyphs)
             if (strings.Resolve(g.Text) == text) return g.Color;
         return default;
+    }
+
+    static int CountGlyph(HeadlessGpuDevice dev, StringTable strings, string text)
+    {
+        int n = 0;
+        foreach (var g in dev.LastGlyphs)
+            if (strings.Resolve(g.Text) == text) n++;
+        return n;
     }
 
     static ColorF FirstGradientC0(HeadlessGpuDevice dev) => dev.LastGradients.Count > 0 ? dev.LastGradients[0].C0 : default;
@@ -3407,18 +3417,81 @@ static class Slice
             host.RunFrame();
             var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
             var rr = host.Scene.AbsoluteRect(rating);
-            var p3 = new Point2(rr.X + 70f, rr.Y + rr.H / 2f);   // 3rd star (stride 28)
+            // WinUI percentage model: rating = ceil(x / actualRatingWidth * Max), actualRatingWidth = Max*16 + (Max-1)*8 = 112.
+            var p3 = new Point2(rr.X + 56f, rr.Y + rr.H / 2f);   // x=56 -> 56/112*5=2.5 -> ceil=3 (3rd star)
             window.QueueInput(new InputEvent(InputKind.PointerDown, p3, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerUp, p3, 0, 0));
             host.RunFrame();
             float v3 = root.Val!.Peek();
-            var p5 = new Point2(rr.X + 130f, rr.Y + rr.H / 2f); // sweep to 5th
+            var p5 = new Point2(rr.X + 110f, rr.Y + rr.H / 2f); // x=110 -> 110/112*5=4.91 -> ceil=5 (sweep to 5th)
             window.QueueInput(new InputEvent(InputKind.PointerDown, p3, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerMove, p5, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerUp, p5, 0, 0));
             host.RunFrame();
             float v5 = root.Val!.Peek();
             Check("69. RatingControl: click sets value, drag sweeps", Near(v3, 3f) && Near(v5, 5f), $"click={v3} drag={v5}");
+
+            // 69b. Keyboard (Left/Right/Home/End) + IsClearEnabled clear-on-reclick. The prior click focused the row,
+            // so arrow keys bubble to the control's OnKeyDown. Value starts at 5 (from the sweep above).
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Left));   // 5 -> 4
+            host.RunFrame(); float kLeft = root.Val!.Peek();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Home));   // -> clear (-1)
+            host.RunFrame(); float kHome = root.Val!.Peek();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));  // unset + Right -> InitialSetValue (1)
+            host.RunFrame(); float kRight = root.Val!.Peek();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.End));    // -> MaxRating (5)
+            host.RunFrame(); float kEnd = root.Val!.Peek();
+            // Re-click the current value (5) with IsClearEnabled (default true) -> clears to -1.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p5, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p5, 0, 0));
+            host.RunFrame(); float reClear = root.Val!.Peek();
+            Check("69b. RatingControl: keyboard range + clear-on-reclick",
+                Near(kLeft, 4f) && Near(kHome, -1f) && Near(kRight, 1f) && Near(kEnd, 5f) && Near(reClear, -1f),
+                $"L={kLeft} Home={kHome} R={kRight} End={kEnd} reclick={reClear}");
+        }
+
+        // 69c. RatingControl read-only: pointer + keyboard are inert (fixed rating).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rt-ro", new Size2(320, 120), 1f)); window.Show();
+            var root = new RatingProbe { ReadOnly = true, Initial = 3f };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
+            var rr = host.Scene.AbsoluteRect(rating);
+            var pp = new Point2(rr.X + 110f, rr.Y + rr.H / 2f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pp, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pp, 0, 0));
+            host.RunFrame();
+            Check("69c. RatingControl read-only: input is inert", Near(root.Val!.Peek(), 3f), $"val={root.Val!.Peek()}");
+        }
+
+        // 69d. RatingControl bare-hover PREVIEW: a pointer MOVE with NO button down fills the stars to the cursor
+        // (WinUI OnPointerMovedOverBackgroundStackPanel) -- the foreground clip layer widens to the hovered rating.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rt-hov", new Size2(320, 120), 1f)); window.Show();
+            var root = new RatingProbe { Initial = RatingControl.NoValueSet };   // unset -> resting foreground clipped to 0
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
+            var rr = host.Scene.AbsoluteRect(rating);
+            const string filledStar = "";   // RatingControl filled glyph (E735); each FULL star renders exactly one
+            int restFilled = CountGlyph(device, strings, filledStar);   // unset -> 0 filled (single-glyph rows, no overlay halo)
+            // BARE hover (no PointerDown): x=56 -> ceil(56/112*5)=3 stars filled.
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rr.X + 56f, rr.Y + rr.H / 2f), 0, 0));
+            host.RunFrame();
+            int hovFilled = CountGlyph(device, strings, filledStar);
+            bool committedNothing = root.Val!.Peek() <= RatingControl.NoValueSet;   // preview only — not committed
+            // Pointer EXIT (move far off the strip): the preview drops and the stars revert to the committed rating (0 filled).
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rr.Right + 240f, rr.Bottom + 240f), 0, 0));
+            host.RunFrame();
+            int exitFilled = CountGlyph(device, strings, filledStar);
+            bool coerce = Near(RatingControl.Coerce(0.5f, 5), 1f) && Near(RatingControl.Coerce(-3f, 5), -1f)
+                && Near(RatingControl.Coerce(0f, 5), 1f) && Near(RatingControl.Coerce(3.4f, 5), 3.4f) && Near(RatingControl.Coerce(9f, 5), 5f);
+            Check("69d. RatingControl: bare-hover fills 3 (single-glyph, no overlay), reverts on pointer-exit, no commit",
+                restFilled == 0 && hovFilled == 3 && committedNothing && exitFilled == 0 && coerce,
+                $"rest={restFilled} hov={hovFilled} exit={exitFilled} committed={!committedNothing} coerce={coerce}");
         }
 
         // ComboBox — closed selection.

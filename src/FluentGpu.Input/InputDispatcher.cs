@@ -89,6 +89,11 @@ public sealed class InputDispatcher
                         _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
                         handled++;
                     }
+                    else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
+                    {
+                        hm(LocalPos(_hovered, e.PositionPx));
+                        handled++;
+                    }
                     break;
 
                 case InputKind.PointerDown:
@@ -406,7 +411,11 @@ public sealed class InputDispatcher
     private void Notify(NodeFlags flag, NodeHandle node, bool on)
     {
         if (node.IsNull) return;
-        if (flag == NodeFlags.Hovered) OnHoverChanged?.Invoke(node, on);
+        if (flag == NodeFlags.Hovered)
+        {
+            OnHoverChanged?.Invoke(node, on);
+            if (!on && _scene.IsLive(node)) _scene.GetPointerExit(node)?.Invoke();   // pointer left → reset hover preview
+        }
         else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
     }
 

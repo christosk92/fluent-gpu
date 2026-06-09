@@ -98,6 +98,7 @@ public sealed record TokenSet
     public required ColorF SystemFillCautionBackground { get; init; }
     public required ColorF SystemFillSuccessBackground { get; init; }
     public required ColorF SystemFillAttentionBackground { get; init; }
+    public required ColorF SystemFillSolidNeutral { get; init; }   // WinUI SystemFillColorSolidNeutral (opaque gray) — InfoBadge Informational dot
     public required ColorF TextInverse { get; init; }    // WinUI TextFillColorInverse — text on a severity/inverse fill
 
     // Window
@@ -231,6 +232,7 @@ public static class Tok
     public static ColorF SystemFillCautionBackground => T.SystemFillCautionBackground;
     public static ColorF SystemFillSuccessBackground => T.SystemFillSuccessBackground;
     public static ColorF SystemFillAttentionBackground => T.SystemFillAttentionBackground;
+    public static ColorF SystemFillSolidNeutral => T.SystemFillSolidNeutral;
     public static ColorF TextInverse => T.TextInverse;
 
     public static ColorF WindowBackground => _windowBg ?? T.WindowBackground;
@@ -299,6 +301,7 @@ public static class Tok
         SystemFillCautionBackground   = ColorF.FromRgba(0x43, 0x35, 0x19),
         SystemFillSuccessBackground   = ColorF.FromRgba(0x39, 0x3D, 0x1B),
         SystemFillAttentionBackground = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
+        SystemFillSolidNeutral = ColorF.FromRgba(0x9D, 0x9D, 0x9D),
         TextInverse = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
         WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20),
     };
@@ -367,6 +370,7 @@ public static class Tok
         SystemFillCautionBackground   = ColorF.FromRgba(0xFF, 0xF4, 0xCE),
         SystemFillSuccessBackground   = ColorF.FromRgba(0xDF, 0xF6, 0xDD),
         SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
+        SystemFillSolidNeutral = ColorF.FromRgba(0x8A, 0x8A, 0x8A),
         TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         WindowBackground = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
     };

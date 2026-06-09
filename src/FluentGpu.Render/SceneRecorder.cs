@@ -114,8 +114,17 @@ public static class SceneRecorder
 
         // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
         // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
+        // The arc honors the StrokeTrim paint channels (AnimChannel.StrokeTrimStart/End) as a fraction of its sweep, so the
+        // indeterminate ring can "breathe" (animate its arc length) — not just rotate.
         if (scene.TryGetArc(node, out var arcS) && !arcS.IsNone && deviceBounds.Overlaps(clip))
-            dl.Arc(local, arcS.Color, arcS.Thickness, arcS.StartDeg, arcS.SweepDeg, arcS.RoundCaps, world, opacity, key);
+        {
+            float trimS = float.IsNaN(p.StrokeTrimStart) ? 0f : Math.Clamp(p.StrokeTrimStart, 0f, 1f);
+            float trimE = float.IsNaN(p.StrokeTrimEnd) ? 1f : Math.Clamp(p.StrokeTrimEnd, 0f, 1f);
+            float aStart = arcS.StartDeg + trimS * arcS.SweepDeg;
+            float aSweep = (trimE - trimS) * arcS.SweepDeg;
+            if (aSweep > 0.01f)
+                dl.Arc(local, arcS.Color, arcS.Thickness, aStart, aSweep, arcS.RoundCaps, world, opacity, key);
+        }
 
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor. An authored
         // clip-rect (AnimChannel.ClipL/T/R/B, node-local) composes with ClipsToBounds into a single combined scissor.

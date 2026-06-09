@@ -50,6 +50,12 @@ public sealed record BoxEl : Element
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
+    /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
+    public Action<Point2>? OnHoverMove { get; init; }
+    /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
+    /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
+    public Action? OnPointerExit { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
