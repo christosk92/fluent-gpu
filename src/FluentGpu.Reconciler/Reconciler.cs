@@ -768,6 +768,34 @@ public sealed class TreeReconciler
                     _scene.SetPointerExit(node, null);
                 }
 
+                if (b.OnPointerPressed is not null)
+                {
+                    ii.HandlerMask |= InteractionInfo.PressedBit;
+                    _scene.SetPointerPressed(node, b.OnPointerPressed);
+                    _scene.Mark(node, NodeFlags.WantsPointer);
+                }
+                else
+                {
+                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.PressedBit);
+                    _scene.SetPointerPressed(node, null);
+                }
+
+                if (b.OnContextRequested is not null)
+                {
+                    ii.HandlerMask |= InteractionInfo.ContextBit;
+                    _scene.SetContextRequested(node, b.OnContextRequested);
+                }
+                else
+                {
+                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.ContextBit);
+                    _scene.SetContextRequested(node, null);
+                }
+
+                if (b.Accelerator is { } accel) { ii.AccelKey = accel.Key; ii.AccelMods = accel.Mods; }
+                else { ii.AccelKey = 0; ii.AccelMods = KeyModifiers.None; }
+                ii.AccessKey = b.AccessKey;
+                if (b.Cursor is { } cursor) ii.Cursor = cursor;   // explicit override beats the OnClick hand default
+
                 ii.Focusable = b.Focusable || b.OnClick is not null;
                 ii.TabIndex = b.TabIndex;
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);

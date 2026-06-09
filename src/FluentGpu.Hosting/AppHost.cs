@@ -66,6 +66,66 @@ public sealed class AppHost : IDisposable
     private readonly Signal<int> _imageEpoch = new(0);   // bumped on any image status change → re-renders UseImage consumers
     private Size2 _lastViewportDip;
 
+    // ── FG_ALLOC_DIAG=1: once-per-second allocation/CPU attribution (stderr) ──
+    // UI-thread bytes + ticks per frame segment (GetAllocatedBytesForCurrentThread deltas) and the process-wide
+    // allocation total, so scroll-time churn can be pinned to a phase (or to a worker thread) without a profiler.
+    private static readonly bool s_allocDiag = Diag.EnvFlag("FG_ALLOC_DIAG");
+    private const int SegPump = 0, SegDispatch = 1, SegFlip = 2, SegFlush = 3, SegLayout = 4, SegAnim = 5,
+                      SegImages = 6, SegRecord = 7, SegSubmit = 8, SegEffects = 9, SegCount = 10;
+    private static readonly string[] s_segNames = ["pump", "dispatch", "flip", "flush", "layout", "anim", "images", "record", "submit", "effects"];
+    private readonly long[] _segBytes = new long[SegCount];
+    private readonly long[] _segTicks = new long[SegCount];
+    private long _diagUiBytes, _diagProcStart, _diagWindowStart;
+    private int _diagFrames;
+
+    private long Probe(int seg, long sinceBytes, long sinceTicks)
+    {
+        long nowTicks = Stopwatch.GetTimestamp();
+        long nowBytes = GC.GetAllocatedBytesForCurrentThread();
+        _segBytes[seg] += nowBytes - sinceBytes;
+        _segTicks[seg] += nowTicks - sinceTicks;
+        return nowBytes;
+    }
+
+    private void DiagMaybeReport()
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_diagWindowStart == 0)
+        {
+            _diagWindowStart = now;
+            _diagProcStart = GC.GetTotalAllocatedBytes(precise: false);
+            return;
+        }
+        double sec = (now - _diagWindowStart) / (double)Stopwatch.Frequency;
+        if (sec < 1.0) return;
+
+        long proc = GC.GetTotalAllocatedBytes(precise: false);
+        double total = (proc - _diagProcStart) / sec / 1024.0;
+        long segSum = 0;
+        foreach (long b in _segBytes) segSum += b;
+        double ui = _diagUiBytes / sec / 1024.0;
+        double untracked = (_diagUiBytes - segSum) / sec / 1024.0;
+        double other = total - ui;
+
+        var sb = new System.Text.StringBuilder(256);
+        sb.Append(CultureInfo.InvariantCulture, $"[allocdiag] total {total:0.0} KB/s | ui {ui:0.0} | other {other:0.0} | untracked {untracked:0.0} | frames {_diagFrames}");
+        for (int i = 0; i < SegCount; i++)
+        {
+            double kb = _segBytes[i] / sec / 1024.0;
+            double ms = _segTicks[i] * 1000.0 / Stopwatch.Frequency / sec;
+            if (kb >= 0.05 || ms >= 0.05)
+                sb.Append(CultureInfo.InvariantCulture, $" | {s_segNames[i]} {kb:0.0}KB {ms:0.00}ms");
+        }
+        Console.Error.WriteLine(sb.ToString());
+
+        Array.Clear(_segBytes);
+        Array.Clear(_segTicks);
+        _diagUiBytes = 0;
+        _diagFrames = 0;
+        _diagWindowStart = now;
+        _diagProcStart = proc;
+    }
+
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
     private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
     private bool _needFullLayout = true;     // first frame / resize / DPI / root structural change
@@ -125,6 +185,8 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
+        _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
+        _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
 
         _reconciler.Anim = _anim;
         _reconciler.Images = _images;
@@ -157,21 +219,34 @@ public sealed class AppHost : IDisposable
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
     {
+        long db = 0, dt = 0;
+        if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }
+        long diagUiStart = db;
+
         _ring.Clear();
         _window.PumpInto(_ring);              // 1 pump
+        if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
         int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch (handlers write signals → schedule effects)
+        if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
 
         if (!HasActiveWork)
         {
             int completed = _images.Pump();
+            if (s_allocDiag) db = Probe(SegImages, db, dt);
             if (completed == 0)
             {
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+                if (s_allocDiag)
+                {
+                    _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
+                    DiagMaybeReport();
+                }
                 return LastStats;
             }
             _frameNeeded = true;
         }
 
+        if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
         return Paint(clicks);
     }
 
@@ -180,6 +255,7 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
+        long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
         {
             long frameStart = Stopwatch.GetTimestamp();
@@ -196,18 +272,22 @@ public sealed class AppHost : IDisposable
             // presented translation (content shifted, backdrop revealed). Resizes SNAP; state-driven changes still FLIP.
             bool willReconcile = _runtime.HasPending || _needFullLayout;
             bool capturedProjections = false;
+            long db = 0, dt0 = 0;
+            if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt0 = Stopwatch.GetTimestamp(); }
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
                 CaptureProjections(_scene.Root);
                 capturedProjections = _projectBefore.Count > 0;
             }
+            if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             long before = GC.GetAllocatedBytesForCurrentThread();
 
             _runtime.Flush();                                  // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
             bool virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
+            if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
             if (layoutNeeded && !_scene.Root.IsNull)
@@ -227,6 +307,7 @@ public sealed class AppHost : IDisposable
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
             if (reconciled) DumpSceneOnce(layoutSize);
+            if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
             float dtMs = _frameTime.NextDeltaMs();
@@ -237,18 +318,23 @@ public sealed class AppHost : IDisposable
             _interact.Tick(dtMs);                              // 7 eased hover/press
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
+            if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
+            if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             UpdateDynamicDiagnosticsText();
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase); // 8 record
+            if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                              // 11 present
             long hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             DrainPassiveEffects();                             // 12 passive effects
+            if (s_allocDiag) Probe(SegEffects, db, dt0);
 
             UpdateFrameTiming(frameStart);
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
@@ -269,6 +355,12 @@ public sealed class AppHost : IDisposable
             _frameNeeded = false;
             if (_frameAfterPaint) { _frameNeeded = true; _frameAfterPaint = false; }
             _inPaint = false;
+            if (s_allocDiag)
+            {
+                _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
+                _diagFrames++;
+                DiagMaybeReport();
+            }
         }
     }
 

@@ -24,9 +24,13 @@ public sealed unsafe class Win32Window : IPlatformWindow
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_CLOSE = 0x0010, WM_SIZE = 0x0005,
                        WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202,
+                       WM_RBUTTONDOWN = 0x0204, WM_RBUTTONUP = 0x0205, WM_MBUTTONDOWN = 0x0207, WM_MBUTTONUP = 0x0208,
                        WM_MOUSEWHEEL = 0x020A, WM_MOUSEHWHEEL = 0x020E,
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
-                       WM_CHAR = 0x0102;
+                       WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
+                       WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215;
+    private const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+    private const int HTCLIENT = 1;
     // DIP scrolled per wheel notch (120 units). ~3 lines × ~16px — the conventional Windows feel.
     private const float WheelDipPerNotch = 48f;
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
@@ -131,7 +135,33 @@ public sealed unsafe class Win32Window : IPlatformWindow
     }
 
     public void SetTitle(StringId title) { }
-    public void SetCursor(CursorId id) { }
+
+    private CursorId _cursor = CursorId.Arrow;
+
+    /// <summary>Set the client-area cursor (applied immediately and re-asserted on every WM_SETCURSOR over the client).</summary>
+    public void SetCursor(CursorId id)
+    {
+        _cursor = id;
+        ApplyCursor();
+    }
+
+    private void ApplyCursor()
+        => TerraFX.Interop.Windows.Windows.SetCursor(LoadCursorW(default, (char*)IdcFor(_cursor)));
+
+    private static int IdcFor(CursorId id) => id.Value switch
+    {
+        1 => 32513,   // IDC_IBEAM
+        2 => 32649,   // IDC_HAND
+        3 => 32644,   // IDC_SIZEWE
+        4 => 32645,   // IDC_SIZENS
+        5 => 32642,   // IDC_SIZENWSE
+        6 => 32643,   // IDC_SIZENESW
+        7 => 32646,   // IDC_SIZEALL
+        8 => 32515,   // IDC_CROSS
+        9 => 32648,   // IDC_NO
+        10 => 32514,  // IDC_WAIT
+        _ => IDC_ARROW,
+    };
 
     public int PumpInto(InputEventRing ring)
     {
@@ -190,9 +220,13 @@ public sealed unsafe class Win32Window : IPlatformWindow
                 PaintRequested?.Invoke();
                 ValidateRect(hWnd, null);
                 return true;
-            case WM_MOUSEMOVE: _queue.Enqueue(new InputEvent(InputKind.PointerMove, MousePt(lp), 0, 0)); return true;
-            case WM_LBUTTONDOWN: _queue.Enqueue(new InputEvent(InputKind.PointerDown, MousePt(lp), 0, 0)); return true;
-            case WM_LBUTTONUP: _queue.Enqueue(new InputEvent(InputKind.PointerUp, MousePt(lp), 0, 0)); return true;
+            case WM_MOUSEMOVE: _queue.Enqueue(new InputEvent(InputKind.PointerMove, MousePt(lp), 0, 0, Mods: Mods(), TimestampMs: Now())); return true;
+            case WM_LBUTTONDOWN: ButtonDown(0, lp); return true;
+            case WM_LBUTTONUP: ButtonUp(0, lp); return true;
+            case WM_RBUTTONDOWN: ButtonDown(1, lp); return true;
+            case WM_RBUTTONUP: ButtonUp(1, lp); return true;
+            case WM_MBUTTONDOWN: ButtonDown(2, lp); return true;
+            case WM_MBUTTONUP: ButtonUp(2, lp); return true;
             case WM_MOUSEWHEEL:
             case WM_MOUSEHWHEEL:
             {
@@ -200,21 +234,70 @@ public sealed unsafe class Win32Window : IPlatformWindow
                 // so flip the sign to our "positive = toward content end" convention.
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
                 float dip = -(notch / 120f) * WheelDipPerNotch;
-                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip));
+                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dip, Mods(), TimestampMs: Now()));
                 return true;
             }
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
-                _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam));
+                // lParam bit 30 = the key was already down (keyboard auto-repeat).
+                _queue.Enqueue(new InputEvent(InputKind.Key, default, 0, (int)(nuint)wParam,
+                    Mods: Mods(), IsRepeat: (lp & (1L << 30)) != 0, TimestampMs: Now()));
+                // Swallow Alt-chord menu activation (we route access keys ourselves) — but keep Alt+F4 = system close.
+                return msg != WM_SYSKEYDOWN || (int)(nuint)wParam != 115 /* VK_F4 */;
+            case WM_KEYUP:
+            case WM_SYSKEYUP:
+                _queue.Enqueue(new InputEvent(InputKind.KeyUp, default, 0, (int)(nuint)wParam, Mods: Mods(), TimestampMs: Now()));
                 return true;
             case WM_CHAR:
                 // TranslateMessage (run in the pump) synthesizes WM_CHAR from WM_KEYDOWN → the layout/IME-resolved
                 // codepoint, carried in the InputEvent.KeyCode slot. Editing/navigation keys still arrive via WM_KEYDOWN.
-                _queue.Enqueue(new InputEvent(InputKind.Char, default, 0, (int)(nuint)wParam));
+                _queue.Enqueue(new InputEvent(InputKind.Char, default, 0, (int)(nuint)wParam, Mods: Mods(), TimestampMs: Now()));
+                return true;
+            case WM_ACTIVATE:
+                _queue.Enqueue(new InputEvent(((nuint)wParam & 0xFFFF) == 0 ? InputKind.WindowBlur : InputKind.WindowFocus, default, 0, 0, TimestampMs: Now()));
+                return true;
+            case WM_SETCURSOR:
+                // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
+                if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }
+                return false;
+            case WM_CAPTURECHANGED:
+                if (_buttonsDown != 0)
+                {
+                    _buttonsDown = 0;
+                    _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0, TimestampMs: Now()));
+                }
                 return true;
         }
         return false;
     }
+
+    private int _buttonsDown;   // bitmask by button index — capture is held while any button is down
+
+    private void ButtonDown(int button, long lp)
+    {
+        if (_buttonsDown == 0) SetCapture(_hwnd);   // drags + drag-selection keep streaming off-window
+        _buttonsDown |= 1 << button;
+        _queue.Enqueue(new InputEvent(InputKind.PointerDown, MousePt(lp), button, 0, Mods: Mods(), TimestampMs: Now()));
+    }
+
+    private void ButtonUp(int button, long lp)
+    {
+        _buttonsDown &= ~(1 << button);
+        if (_buttonsDown == 0) ReleaseCapture();
+        _queue.Enqueue(new InputEvent(InputKind.PointerUp, MousePt(lp), button, 0, Mods: Mods(), TimestampMs: Now()));
+    }
+
+    private static KeyModifiers Mods()
+    {
+        KeyModifiers m = KeyModifiers.None;
+        if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) m |= KeyModifiers.Shift;
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) m |= KeyModifiers.Ctrl;
+        if ((GetKeyState(VK_MENU) & 0x8000) != 0) m |= KeyModifiers.Alt;
+        if ((GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0) m |= KeyModifiers.Win;
+        return m;
+    }
+
+    private static uint Now() => unchecked((uint)GetMessageTime());
 
     // Pointer arrives in PHYSICAL px (DPI-aware window); convert to DIP so it matches the DIP scene bounds.
     private Point2 MousePt(long lp)

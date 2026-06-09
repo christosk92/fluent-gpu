@@ -193,14 +193,21 @@ public struct InteractionAnim
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key, bit2 = pointer, bit3 = char, bit4 = repeat
+    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key, bit2 = pointer, bit3 = char, bit4 = repeat, bit5 = pressed, bit6 = context
     public CursorId Cursor;
     public AutomationRole Role;   // semantic control role (set by control factories) → UIA ControlType / devtools / tests
     public bool Focusable;
     public int TabIndex;
+    /// <summary>Access-key mnemonic (Alt+letter; uppercase VK 'A'..'Z' / '0'..'9'). 0 = none.</summary>
+    public char AccessKey;
+    /// <summary>Keyboard-accelerator chord: invoked from anywhere once focused routing leaves the key unhandled. 0 = none.</summary>
+    public int AccelKey;
+    public KeyModifiers AccelMods;
     public const ushort ClickBit = 1;
     public const ushort KeyBit = 2;
     public const ushort PointerBit = 4;   // position-aware press/drag (slider/scrollbar)
     public const ushort CharBit = 8;      // text (character) input handler present
     public const ushort RepeatBit = 16;   // clickable opts into press-and-hold auto-repeat (RepeatButton)
+    public const ushort PressedBit = 32;  // position-aware press carrying click-count/modifiers (OnPointerPressed)
+    public const ushort ContextBit = 64;  // right-click / Menu-key context request (OnContextRequested)
 }

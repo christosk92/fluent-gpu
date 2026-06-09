@@ -50,6 +50,19 @@ public sealed record BoxEl : Element
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Position-aware press carrying click count (double/triple-click), modifier chord, button and device kind —
+    /// the text-selection / list-interaction press handler. Fires alongside <see cref="OnPointerDown"/> on left press.</summary>
+    public Action<PointerEventArgs>? OnPointerPressed { get; init; }
+    /// <summary>Context-menu request (WinUI ContextRequested): right-click release over this node, or the Menu key /
+    /// Shift+F10 while it has focus. Local coords (keyboard invocations pass the node's centre).</summary>
+    public Action<Point2>? OnContextRequested { get; init; }
+    /// <summary>Keyboard-accelerator chord (WinUI KeyboardAccelerator): invokes <see cref="OnClick"/> from anywhere once
+    /// focused routing leaves the chord unhandled (e.g. Ctrl+W close-tab).</summary>
+    public KeyAccelerator? Accelerator { get; init; }
+    /// <summary>Access-key mnemonic (WinUI AccessKey): Alt+letter invokes <see cref="OnClick"/>. Uppercase 'A'..'Z'/'0'..'9'.</summary>
+    public char AccessKey { get; init; }
+    /// <summary>Pointer cursor shown while hovering this node (overrides the OnClick hand default). Null = inherit.</summary>
+    public CursorId? Cursor { get; init; }
     /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
     /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
     public Action<Point2>? OnHoverMove { get; init; }

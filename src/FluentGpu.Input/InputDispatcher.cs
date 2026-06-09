@@ -26,6 +26,20 @@ public sealed class InputDispatcher
     private NodeHandle _scrollHovered;
     private NodeHandle _scrollDragNode;
     private float _scrollDragGrab;
+    private NodeHandle _contextDown;   // right-button press target — context menu fires on release over the same chain
+    private NodeHandle _spaceArmed;    // focused clickable held via Space — activates on key-UP (WinUI semantics)
+    private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
+    private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
+    private readonly List<NodeHandle> _focusScopes = new();
+    // Double/triple-click tracking (platform timestamps; slop + window per Win32 defaults, capped at 3).
+    private uint _lastDownMs;
+    private Point2 _lastDownPos;
+    private int _lastDownButton = -1;
+    private byte _clickCount = 1;
+    private CursorId _lastCursor = CursorId.Arrow;
+
+    public const float ClickSlopPx = 4f;
+    public const uint DoubleClickMs = 500;
 
     private const float ScrollbarSize = 12f;
     private const float ScrollbarMinExpandedThumb = 30f;
@@ -60,6 +74,27 @@ public sealed class InputDispatcher
     /// <summary>Set by the host: a global key preview run before focus routing (returns true = consumed). Lets a tree-level
     /// concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.</summary>
     public Func<int, bool>? OnKeyPreview;
+
+    /// <summary>Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
+    /// light-dismiss overlays here (WinUI window-deactivation dismiss).</summary>
+    public Action? OnWindowBlur;
+
+    /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
+    public Action<CursorId>? OnCursorChanged;
+
+    // ── focus scopes (modal focus trap: ContentDialog / flyout) ───────────────────────────────────
+    /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
+    public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
+    public void PopFocusScope() { if (_focusScopes.Count > 0) _focusScopes.RemoveAt(_focusScopes.Count - 1); }
+    private NodeHandle ScopeRoot
+    {
+        get
+        {
+            for (int i = _focusScopes.Count - 1; i >= 0; i--)
+                if (_scene.IsLive(_focusScopes[i])) return _focusScopes[i];
+            return _scene.Root;
+        }
+    }
 
     public int Dispatch(ReadOnlySpan<InputEvent> events)
     {
@@ -97,6 +132,13 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.PointerDown:
+                    if (e.Button == 1)   // right button: context-menu tracking only — never presses/activates
+                    {
+                        _contextDown = HitTestAny(e.PositionPx);
+                        break;
+                    }
+                    if (e.Button != 0) break;   // middle button: no default interaction
+
                     if (TryScrollbarPointerDown(e.PositionPx))
                     {
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
@@ -105,20 +147,35 @@ public sealed class InputDispatcher
                         break;
                     }
 
+                    TrackClickCount(in e);
                     _down = HitTest(e.PositionPx);
                     SetState(ref _pressed, _down, NodeFlags.Pressed);
                     if (!_down.IsNull)
                     {
                         var local = LocalPos(_down, e.PositionPx);
                         _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.PressedBit) != 0)
+                            _scene.GetPointerPressed(_down)?.Invoke(new PointerEventArgs
+                            {
+                                Local = local, ClickCount = _clickCount, Mods = e.Mods, Button = 0, Kind = e.Pointer,
+                            });
                         if (_scene.GetDrag(_down) is not null) _dragTarget = _down;  // begin a drag gesture
                         if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
                             OnRepeatArmed?.Invoke(_down);   // RepeatButton: fire click now, then repeat while held
-                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.RepeatBit)) != 0) handled++;
+                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit)) != 0) handled++;
                     }
                     break;
 
                 case InputKind.PointerUp:
+                    if (e.Button == 1)   // right button release → context request on the nearest handler in the chain
+                    {
+                        var ctxHit = HitTestAny(e.PositionPx);
+                        if (!ctxHit.IsNull && ctxHit == _contextDown && DispatchContextRequest(ctxHit, e.PositionPx)) handled++;
+                        _contextDown = NodeHandle.Null;
+                        break;
+                    }
+                    if (e.Button != 0) break;
+
                     if (!_scrollDragNode.IsNull)
                     {
                         _scrollDragNode = NodeHandle.Null;
@@ -141,7 +198,11 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.Key:
-                    OnKey(e.KeyCode);
+                    OnKey(in e);
+                    break;
+
+                case InputKind.KeyUp:
+                    OnKeyUp(in e);
                     break;
 
                 case InputKind.Char:
@@ -151,9 +212,59 @@ public sealed class InputDispatcher
                 case InputKind.Wheel:
                     if (ScrollAt(e.PositionPx, e.ScrollDelta)) handled++;
                     break;
+
+                case InputKind.PointerCancel:
+                    CancelPointer();
+                    break;
+
+                case InputKind.WindowBlur:
+                    CancelPointer();
+                    CancelSpaceArm(fire: false);
+                    SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                    _accessKeyMode = false; _altPending = false;
+                    OnWindowBlur?.Invoke();
+                    break;
             }
         }
         return handled;
+    }
+
+    /// <summary>Clear all in-flight pointer interaction (capture lost / window deactivated).</summary>
+    private void CancelPointer()
+    {
+        SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
+        if (!_down.IsNull && (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0))
+            OnRepeatReleased?.Invoke(_down);
+        _down = NodeHandle.Null;
+        _dragTarget = NodeHandle.Null;
+        _scrollDragNode = NodeHandle.Null;
+        _contextDown = NodeHandle.Null;
+    }
+
+    /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
+    private void TrackClickCount(in InputEvent e)
+    {
+        bool chained = _lastDownButton == e.Button
+                       && e.TimestampMs - _lastDownMs <= DoubleClickMs
+                       && MathF.Abs(e.PositionPx.X - _lastDownPos.X) <= ClickSlopPx
+                       && MathF.Abs(e.PositionPx.Y - _lastDownPos.Y) <= ClickSlopPx;
+        _clickCount = chained ? (byte)Math.Min(_clickCount + 1, 3) : (byte)1;
+        _lastDownMs = e.TimestampMs;
+        _lastDownPos = e.PositionPx;
+        _lastDownButton = e.Button;
+    }
+
+    /// <summary>Walk up from <paramref name="node"/> for the first enabled ContextBit handler and invoke it (local coords).</summary>
+    private bool DispatchContextRequest(NodeHandle node, Point2 abs)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.ContextBit) == 0) continue;
+            _scene.GetContextRequested(n)?.Invoke(LocalPos(n, abs));
+            return true;
+        }
+        return false;
     }
 
     // ── scrolling (layout-free: write the content's -ScrollOffset transform; never relayout) ──
@@ -409,6 +520,7 @@ public sealed class InputDispatcher
 
     private void Notify(NodeFlags flag, NodeHandle node, bool on)
     {
+        if (flag == NodeFlags.Hovered && on) UpdateCursor(node);   // resolve even for null (back to arrow)
         if (node.IsNull) return;
         if (flag == NodeFlags.Hovered)
         {
@@ -418,28 +530,147 @@ public sealed class InputDispatcher
         else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
     }
 
-    private void OnKey(int key)
+    /// <summary>Resolve the cursor for the hover chain (nearest explicit <c>Cursor</c> / clickable hand) and notify on change.</summary>
+    private void UpdateCursor(NodeHandle hover)
     {
-        if (OnKeyPreview is not null && OnKeyPreview(key)) return;   // an open overlay can swallow Escape here
-        if (key == Keys.Tab) { MoveFocus(forward: true); return; }
-        if (_focused.IsNull) return;
-
-        // Modality 2: Enter/Space activates a focused clickable (unless it's disabled).
-        if ((key == Keys.Enter || key == Keys.Space) &&
-            (_scene.Flags(_focused) & NodeFlags.Disabled) == 0 &&
-            (_scene.Interaction(_focused).HandlerMask & InteractionInfo.ClickBit) != 0)
+        CursorId resolved = CursorId.Arrow;
+        for (var n = hover; !n.IsNull; n = _scene.Parent(n))
         {
-            _scene.GetClickHandler(_focused)?.Invoke();
+            if (!_scene.IsLive(n)) break;
+            ref InteractionInfo ii = ref _scene.Interaction(n);
+            if (ii.Cursor != CursorId.Arrow && (_scene.Flags(n) & NodeFlags.Disabled) == 0) { resolved = ii.Cursor; break; }
+        }
+        if (resolved == _lastCursor) return;
+        _lastCursor = resolved;
+        OnCursorChanged?.Invoke(resolved);
+    }
+
+    private void OnKey(in InputEvent e)
+    {
+        int key = e.KeyCode;
+
+        // Gamepad translation (WinUI XYFocus): DPad/left-stick → directional focus, A → activate, B → cancel/Escape.
+        switch (key)
+        {
+            case Keys.GamepadDPadLeft or Keys.GamepadLeftThumbLeft: MoveFocusArrow(FocusDirection.Left); return;
+            case Keys.GamepadDPadRight or Keys.GamepadLeftThumbRight: MoveFocusArrow(FocusDirection.Right); return;
+            case Keys.GamepadDPadUp or Keys.GamepadLeftThumbUp: MoveFocusArrow(FocusDirection.Up); return;
+            case Keys.GamepadDPadDown or Keys.GamepadLeftThumbDown: MoveFocusArrow(FocusDirection.Down); return;
+            case Keys.GamepadA: key = Keys.Enter; break;
+            case Keys.GamepadB: key = Keys.Escape; break;
+        }
+
+        // Alt access-key bookkeeping: a bare Alt tap (down with nothing in between, then up) toggles access-key mode;
+        // a letter while Alt is held invokes the mnemonic directly (the WM_SYSKEYDOWN chord path).
+        if (key == Keys.Alt) { _altPending = !e.IsRepeat; return; }
+        _altPending = false;
+
+        if ((e.Mods & KeyModifiers.Alt) != 0 && Keys.IsAccessKeyCandidate(key))
+        {
+            if (InvokeAccessKey((char)key)) return;
+        }
+        if (_accessKeyMode)
+        {
+            _accessKeyMode = false;
+            if (Keys.IsAccessKeyCandidate(key) && InvokeAccessKey((char)key)) return;
+            if (key == Keys.Escape) return;   // Escape only exits access-key mode
+        }
+
+        if (OnKeyPreview is not null && OnKeyPreview(key)) return;   // an open overlay can swallow Escape here
+
+        if (key == Keys.Tab)
+        {
+            CancelSpaceArm(fire: false);
+            MoveFocus(forward: (e.Mods & KeyModifiers.Shift) == 0);
             return;
         }
 
-        // Otherwise route to the focused node and bubble up ancestors until Handled (disabled nodes don't receive keys).
-        var args = new KeyEventArgs(key);
-        for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+        // Escape cancels a held Space-activation without firing (WinUI button semantics).
+        if (key == Keys.Escape && !_spaceArmed.IsNull) { CancelSpaceArm(fire: false); return; }
+
+        // Context-menu key (VK_APPS) / Shift+F10 → context request on the focused node (keyboard passes its centre).
+        if ((key == Keys.Apps || (key == Keys.F10 && (e.Mods & KeyModifiers.Shift) != 0)) && !_focused.IsNull)
         {
-            if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
-            if (args.Handled) return;
+            var r = _scene.AbsoluteRect(_focused);
+            if (DispatchContextRequest(_focused, new Point2(r.X + r.W / 2f, r.Y + r.H / 2f))) return;
         }
+
+        if (!_focused.IsNull)
+        {
+            bool clickable = (_scene.Flags(_focused) & NodeFlags.Disabled) == 0 &&
+                             (_scene.Interaction(_focused).HandlerMask & InteractionInfo.ClickBit) != 0;
+
+            // Modality 2 (WinUI semantics): Enter activates on key-DOWN; Space shows pressed while held and activates on
+            // key-UP (a RepeatButton instead fires on every Space repeat, mirroring its pointer press-and-hold).
+            if (key == Keys.Enter && clickable)
+            {
+                _scene.GetClickHandler(_focused)?.Invoke();
+                return;
+            }
+            if (key == Keys.Space && clickable)
+            {
+                if ((_scene.Interaction(_focused).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                {
+                    _scene.GetClickHandler(_focused)?.Invoke();   // RepeatButton: every keydown (incl. auto-repeat) fires
+                    return;
+                }
+                if (!e.IsRepeat && _spaceArmed.IsNull)
+                {
+                    _spaceArmed = _focused;
+                    _scene.Flags(_focused) |= NodeFlags.Pressed;
+                    OnPressChanged?.Invoke(_focused, true);
+                }
+                return;
+            }
+
+            // Route to the focused node and bubble up ancestors until Handled (disabled nodes don't receive keys).
+            var args = new KeyEventArgs(key, e.Mods, e.IsRepeat);
+            for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+            {
+                if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
+                if (args.Handled) return;
+            }
+        }
+
+        // Keyboard accelerators (WinUI ProcessKeyboardAccelerators order: after focused routing leaves it unhandled).
+        if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt)) != 0 || (key >= Keys.F1 && key <= Keys.F12))
+        {
+            var owner = _scene.FindAccelerator(key, e.Mods);
+            if (!owner.IsNull) _scene.GetClickHandler(owner)?.Invoke();
+        }
+    }
+
+    private void OnKeyUp(in InputEvent e)
+    {
+        if (e.KeyCode == Keys.Alt)
+        {
+            if (_altPending) _accessKeyMode = !_accessKeyMode;   // bare Alt tap toggles access-key mode
+            _altPending = false;
+            return;
+        }
+        if (e.KeyCode == Keys.Space && !_spaceArmed.IsNull)
+            CancelSpaceArm(fire: true);   // Space released over the armed node → activate (WinUI key-up semantics)
+    }
+
+    /// <summary>Release a held Space-activation: clear the pressed visual; <paramref name="fire"/> = invoke the click.</summary>
+    private void CancelSpaceArm(bool fire)
+    {
+        var node = _spaceArmed;
+        _spaceArmed = NodeHandle.Null;
+        if (node.IsNull || !_scene.IsLive(node)) return;
+        _scene.Flags(node) &= ~NodeFlags.Pressed;
+        OnPressChanged?.Invoke(node, false);
+        if (fire && node == _focused && (_scene.Flags(node) & NodeFlags.Disabled) == 0)
+            _scene.GetClickHandler(node)?.Invoke();
+    }
+
+    private bool InvokeAccessKey(char key)
+    {
+        var owner = _scene.FindAccessKey(key);
+        if (owner.IsNull) return false;
+        _accessKeyMode = false;
+        _scene.GetClickHandler(owner)?.Invoke();
+        return true;
     }
 
     /// <summary>Route a text (character) codepoint to the focused node, bubbling up ancestors until Handled.</summary>
@@ -459,11 +690,12 @@ public sealed class InputDispatcher
         return false;
     }
 
-    /// <summary>Move focus to the next/previous focusable node in tab order (TabIndex, then document order; cycles).</summary>
+    /// <summary>Move focus to the next/previous focusable node in tab order (TabIndex, then document order; cycles).
+    /// Constrained to the active focus scope when one is pushed (dialog/flyout focus trap).</summary>
     public void MoveFocus(bool forward)
     {
         _focusables.Clear();
-        Collect(_scene.Root, _focusables);
+        Collect(ScopeRoot, _focusables);
         StableSortByTabIndex(_focusables);
         if (_focusables.Count == 0) { SetFocus(NodeHandle.Null); return; }
 
@@ -479,7 +711,7 @@ public sealed class InputDispatcher
     {
         if (_focused.IsNull) { MoveFocus(forward: true); return; }
         _focusables.Clear();
-        Collect(_scene.Root, _focusables);
+        Collect(ScopeRoot, _focusables);
         if (_focusables.Count == 0) return;
 
         var cur = _scene.AbsoluteRect(_focused);
@@ -560,6 +792,7 @@ public sealed class InputDispatcher
     public void SetFocus(NodeHandle node, bool visual = false)
     {
         if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
+        if (!_spaceArmed.IsNull && node != _spaceArmed) CancelSpaceArm(fire: false);  // focus moved while Space held → no activation
         if (!_focused.IsNull && _scene.IsLive(_focused)) _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
         _focused = node;
         if (node.IsNull) return;
@@ -635,7 +868,7 @@ public sealed class InputDispatcher
         {
             ref InteractionInfo ii = ref _scene.Interaction(node);
             if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0 &&
                 rect.Contains(p))
             {
                 result = node;

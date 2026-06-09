@@ -47,6 +47,11 @@ public sealed class InputHooks
     /// <summary>Restore focus to a node (host-wired to the dispatcher). Used by an overlay on close.</summary>
     public Action<NodeHandle>? RestoreFocus;
 
+    /// <summary>Set by the overlay host: the window lost activation → close every light-dismiss overlay
+    /// (WinUI window-deactivation dismiss). Invoked from the dispatcher's WindowBlur via the host wiring.</summary>
+    public Action? WindowBlurred;
+    public void NotifyWindowBlur() => WindowBlurred?.Invoke();
+
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
 
     /// <summary>

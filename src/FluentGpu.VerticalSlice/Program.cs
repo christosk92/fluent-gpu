@@ -3092,6 +3092,219 @@ static class Slice
 
     // Wave 1 / P6 — focus/keyboard navigation service: TabIndex-respecting tab order, XY arrow navigation, and scoped
     // roving (within an overlay/menu subtree). Drives the InputDispatcher directly (no AppHost needed).
+    // E2 — the widened input vocabulary: modifiers, Space-on-keyup activation, click count, right-tap context,
+    // accelerators, access keys, focus scopes, window blur, hover-resolved cursors.
+    static void InputVocabularyChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // E2.a — Shift+Tab walks focus backward.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 10,
+                Children =
+                [
+                    new BoxEl { Key = "A", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "B", Width = 20, Height = 20, OnClick = () => { } },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var a = Child(scene, scene.Root, 0); var b = Child(scene, scene.Root, 1);
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+            var f1 = disp.Focused;   // A
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab, Mods: KeyModifiers.Shift) });
+            var f2 = disp.Focused;   // wraps back to B
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab, Mods: KeyModifiers.Shift) });
+            var f3 = disp.Focused;   // back to A
+            Check("E2.a Shift+Tab walks focus backward (wraps)", f1 == a && f2 == b && f3 == a,
+                $"f1=A?{f1 == a} f2=B?{f2 == b} f3=A?{f3 == a}");
+        }
+
+        // E2.b/c/d — WinUI activation semantics: Enter fires on key-DOWN; Space arms (pressed visual) and fires on
+        // key-UP; Escape while Space is held cancels without firing.
+        {
+            var scene = new SceneStore();
+            int clicks = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnClick = () => clicks++ }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.MoveFocus(forward: true);
+            var node = disp.Focused;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
+            bool enterDown = clicks == 1;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
+            bool armedNoFire = clicks == 1 && (scene.Flags(node) & NodeFlags.Pressed) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
+            bool firedOnUp = clicks == 2 && (scene.Flags(node) & NodeFlags.Pressed) == 0;
+            Check("E2.b Enter activates on key-down; Space arms pressed and fires on key-up",
+                enterDown && armedNoFire && firedOnUp, $"enter={enterDown} armed={armedNoFire} up={firedOnUp}");
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
+            Check("E2.c Escape cancels a held Space without firing",
+                clicks == 2 && (scene.Flags(node) & NodeFlags.Pressed) == 0, $"clicks={clicks}");
+        }
+
+        // E2.e — double/triple-click promotion (timestamps + slop) surfaces in OnPointerPressed.ClickCount.
+        {
+            var scene = new SceneStore();
+            var counts = new List<byte>();
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 60, Height = 30, OnPointerPressed = e => counts.Add(e.ClickCount) }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var p = new Point2(10, 10);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0, TimestampMs: 1000) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 0, 0, TimestampMs: 1040) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0, TimestampMs: 1100) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 0, 0, TimestampMs: 1140) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0, TimestampMs: 1200) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 0, 0, TimestampMs: 1240) });
+            // A press 600ms later resets to 1; so does a press 5px away.
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0, TimestampMs: 2400) });
+            Check("E2.e click count promotes 1→2→3 inside the window and resets after it",
+                counts.Count == 4 && counts[0] == 1 && counts[1] == 2 && counts[2] == 3 && counts[3] == 1,
+                string.Join(",", counts));
+        }
+
+        // E2.f/g — right-click release fires OnContextRequested (left never does); the Menu key (VK_APPS) fires it
+        // on the focused node at its centre.
+        {
+            var scene = new SceneStore();
+            int ctx = 0; Point2 ctxAt = default;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 60, Height = 30, OnClick = () => { }, OnContextRequested = p => { ctx++; ctxAt = p; } }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var p = new Point2(20, 10);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 0, 0) });
+            bool leftSilent = ctx == 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 1, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 1, 0) });
+            bool rightFired = ctx == 1 && Near(ctxAt.X, 20) && Near(ctxAt.Y, 10);
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Apps) });   // focused by the left click
+            bool appsFired = ctx == 2 && Near(ctxAt.X, 30) && Near(ctxAt.Y, 15);             // node centre
+            Check("E2.f right-click release fires OnContextRequested (left stays silent)", leftSilent && rightFired,
+                $"left={leftSilent} right={rightFired} at=({ctxAt.X:0.#},{ctxAt.Y:0.#})");
+            Check("E2.g VK_APPS requests the context menu at the focused node's centre", appsFired,
+                $"ctx={ctx} at=({ctxAt.X:0.#},{ctxAt.Y:0.#})");
+        }
+
+        // E2.h/i — a Ctrl+K accelerator and an Alt+S access-key chord invoke their owner from anywhere.
+        {
+            var scene = new SceneStore();
+            int accel = 0, access = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 8,
+                Children =
+                [
+                    new BoxEl { Key = "plain", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "accel", Width = 20, Height = 20, OnClick = () => accel++, Accelerator = new KeyAccelerator(Keys.K, KeyModifiers.Ctrl) },
+                    new BoxEl { Key = "access", Width = 20, Height = 20, OnClick = () => access++, AccessKey = 'S' },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.MoveFocus(forward: true);   // focus the PLAIN node — accelerator must still find its owner
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.K, Mods: KeyModifiers.Ctrl) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.K) });   // bare K: no accelerator
+            Check("E2.h Ctrl+K accelerator invokes its owner from anywhere (bare K does not)", accel == 1, $"accel={accel}");
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.S, Mods: KeyModifiers.Alt) });
+            Check("E2.i Alt+S access-key chord invokes the mnemonic owner", access == 1, $"access={access}");
+        }
+
+        // E2.j — a pushed focus scope traps Tab inside its subtree until popped (dialog focus trap).
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    new BoxEl { Key = "outside", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "dialog", Direction = 0, Gap = 4, Children = [
+                        new BoxEl { Key = "d1", Width = 20, Height = 20, OnClick = () => { } },
+                        new BoxEl { Key = "d2", Width = 20, Height = 20, OnClick = () => { } } ] },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var outside = Child(scene, scene.Root, 0);
+            var dialog = Child(scene, scene.Root, 1);
+            var d1 = Child(scene, dialog, 0); var d2 = Child(scene, dialog, 1);
+            disp.PushFocusScope(dialog);
+            bool stays = true;
+            disp.MoveFocus(forward: true);
+            for (int i = 0; i < 4; i++)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+                stays &= disp.Focused == d1 || disp.Focused == d2;
+            }
+            disp.PopFocusScope();
+            bool escapes = false;   // scope released → full-tree cycling reaches the outside node again
+            for (int i = 0; i < 3 && !escapes; i++)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+                escapes = disp.Focused == outside;
+            }
+            Check("E2.j focus scope traps Tab inside the dialog subtree until popped", stays && escapes,
+                $"trapped={stays} released={escapes}");
+        }
+
+        // E2.k — WindowBlur clears pressed/hover state and raises the host blur hook (light-dismiss trigger).
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnClick = () => { } }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            bool blurred = false;
+            disp.OnWindowBlur = () => blurred = true;
+            var node = Child(scene, scene.Root, 0).IsNull ? scene.Root : scene.Root;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0) });
+            bool pressedBefore = (scene.Flags(scene.Root) & NodeFlags.Pressed) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.WindowBlur, default, 0, 0) });
+            bool clearedAfter = (scene.Flags(scene.Root) & NodeFlags.Pressed) == 0;
+            Check("E2.k WindowBlur clears pressed state and raises the blur hook",
+                pressedBefore && clearedAfter && blurred, $"before={pressedBefore} after={clearedAfter} hook={blurred}");
+        }
+
+        // E2.l — hover resolves the cursor: clickable → Hand by default; explicit Cursor=IBeam overrides; empty → Arrow.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 10, Padding = Edges4.All(0),
+                Children =
+                [
+                    new BoxEl { Key = "hand", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "ibeam", Width = 20, Height = 20, OnClick = () => { }, Cursor = CursorId.IBeam },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            CursorId last = CursorId.Arrow;
+            disp.OnCursorChanged = c => last = c;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0) });
+            bool hand = last == CursorId.Hand;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(40, 10), 0, 0) });
+            bool ibeam = last == CursorId.IBeam;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(200, 200), 0, 0) });
+            bool arrow = last == CursorId.Arrow;
+            Check("E2.l hover resolves the cursor (hand → explicit I-beam → arrow off-control)",
+                hand && ibeam && arrow, $"hand={hand} ibeam={ibeam} arrow={arrow}");
+        }
+    }
+
     static void FocusNavChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -4240,6 +4453,7 @@ static class Slice
         GradientRampChecks(strings);
         ClipChannelChecks();
         FocusNavChecks(strings);
+        InputVocabularyChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

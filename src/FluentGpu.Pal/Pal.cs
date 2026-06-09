@@ -2,14 +2,29 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Pal;
 
-public enum InputKind : byte { PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5, Char = 6 }
+public enum InputKind : byte
+{
+    PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5, Char = 6,
+    KeyUp = 7,
+    /// <summary>The platform cancelled an in-flight pointer interaction (capture lost, touch cancel).</summary>
+    PointerCancel = 8,
+    /// <summary>The window lost activation (WM_ACTIVATE WA_INACTIVE) — light-dismiss overlays close, pressed state clears.</summary>
+    WindowBlur = 9,
+    WindowFocus = 10,
+}
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
 /// <paramref name="ScrollDelta"/> (Wheel only) is in DIP, oriented so positive = scroll toward the content end
 /// (offset increases). The platform pump converts WM_MOUSEWHEEL notches → DIP and flips the sign there.
+/// <paramref name="Button"/>: 0 = left, 1 = right, 2 = middle. <paramref name="Mods"/> is the modifier chord at the
+/// time of the event (pump-captured); <paramref name="IsRepeat"/> = keyboard auto-repeat (lParam bit 30);
+/// <paramref name="TimestampMs"/> = the platform message time (drives double/triple-click detection in the dispatcher).
 /// </summary>
-public readonly record struct InputEvent(InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f);
+public readonly record struct InputEvent(
+    InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
+    KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
+    bool IsRepeat = false, uint TimestampMs = 0);
 
 /// <summary>Drained by the host each frame; the window writes POD events into it (move-coalesced).</summary>
 public sealed class InputEventRing
