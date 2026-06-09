@@ -38,7 +38,8 @@ sealed class RepeaterPage : Component
         [
             Heading("ItemsRepeater & custom layouts"),
             Text("One control: data + a template + a pluggable layout. Stack/Grid VIRTUALIZE (only the window realizes, recycled over the slab free-list, 0-alloc steady scroll); Wrap is non-virtual for small sets. Any IVirtualLayout you implement plugs in unchanged.")
-                .Foreground(Grey),
+                .Foreground(Grey)
+                .Wrapped(),
 
             Label("RepeatLayout.Wrap — non-virtual chips"),
             Repeater.ItemsRepeater(14, Chip, RepeatLayout.Wrap(8f)),

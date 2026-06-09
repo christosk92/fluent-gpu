@@ -73,6 +73,7 @@ public sealed class AnimEngine
         // eased / driven
         public Keyframe[] Keys = [];
         public float DurationMs, ElapsedMs;
+        public float DelayRemainingMs;
         public bool Loop;
         public int DrivenRef = -1;            // -1 = wall-clock; else index into the DrivenClockTable
         public bool JustSeeded;
@@ -151,19 +152,20 @@ public sealed class AnimEngine
     // ── Seeding ─────────────────────────────────────────────────────────────────────────────────
     /// <summary>Eased two-point tween (retargets any live track on the same node+channel).</summary>
     public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs,
-                        Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace)
-        => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite);
+                        Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
+        => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite, delayMs);
 
     public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs,
-                        EasingSpec easing, CompositeOp composite = CompositeOp.Replace)
-        => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite);
+                        EasingSpec easing, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
+        => Keyframes(node, channel, [new(0f, from, Easing.Linear), new(1f, to, easing)], durationMs, false, composite, delayMs);
 
     /// <summary>Multi-keyframe eased track (@keyframes). Offsets must be ascending in 0..1.</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
-                          bool loop = false, CompositeOp composite = CompositeOp.Replace)
+                          bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
+        t.DelayRemainingMs = MathF.Max(0f, delayMs);
         t.Loop = loop; t.DrivenRef = -1; t.Done = false; t.JustSeeded = true;
         if (Diag.Enabled) Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
     }
@@ -180,19 +182,21 @@ public sealed class AnimEngine
     /// <summary>Spring toward <paramref name="to"/>. If a spring already runs on this node+channel, it RETARGETS — keeping
     /// position + velocity (no snap), the iOS/Compose velocity-handoff.</summary>
     public void Spring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring,
-                       float? initial = null, CompositeOp composite = CompositeOp.Replace)
+                       float? initial = null, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
         Track? existing = Find(node, channel);
         if (existing is { Mode: IntegrationMode.Spring })
         {
             if (Diag.Enabled) Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
             existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite; existing.JustSeeded = false;
+            existing.DelayRemainingMs = 0f;   // interruption/retarget keeps moving; do not re-delay a live spring
             return;   // keep Pos + Vel → smooth handoff
         }
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
         // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
         t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false; t.JustSeeded = true;
+        t.DelayRemainingMs = MathF.Max(0f, delayMs);
         if (Diag.Enabled) Diag.Event("anim", $"spring SEED {channel} from={t.Pos:0.###} → {to:0.###} (k={spring.Stiffness:0} c={spring.Damping:0})");
     }
 
@@ -242,8 +246,8 @@ public sealed class AnimEngine
         TransitionDynamics dyn = Normalize(spec.Dynamics);
         if ((spec.Channels & TransitionChannels.Position) != 0)
         {
-            ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn);
-            ReframePosition(node, AnimChannel.TranslateY, fromAbs.Y - toAbs.Y, dyn);
+            ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn, spec.DelayMs);
+            ReframePosition(node, AnimChannel.TranslateY, fromAbs.Y - toAbs.Y, dyn, spec.DelayMs);
         }
         if ((spec.Channels & TransitionChannels.Size) != 0)
         {
@@ -251,16 +255,16 @@ public sealed class AnimEngine
             switch (mode)
             {
                 case SizeMode.Reveal:
-                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn);
-                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn);
+                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.ScaleCorrect:   // GPU scale toward 1 (children that opt in counter-scale in the recorder)
-                    if (toAbs.W > 0.5f) ScaleReveal(node, AnimChannel.ScaleX, fromAbs.W / toAbs.W, dyn);
-                    if (toAbs.H > 0.5f) ScaleReveal(node, AnimChannel.ScaleY, fromAbs.H / toAbs.H, dyn);
+                    if (toAbs.W > 0.5f) ScaleReveal(node, AnimChannel.ScaleX, fromAbs.W / toAbs.W, dyn, spec.DelayMs);
+                    if (toAbs.H > 0.5f) ScaleReveal(node, AnimChannel.ScaleY, fromAbs.H / toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:        // re-solve the subtree at the interpolated size each tick (live reflow)
-                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn);
-                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn);
+                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
             }
@@ -273,24 +277,24 @@ public sealed class AnimEngine
 
     // Presented-extent reveal: spring/tween the recorder's drawn size old → new (fresh starts at the old size; a running
     // reveal retargets keeping Pos+Vel). Works for grow AND shrink — the presented size can exceed the model bounds.
-    private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn)
+    private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs = 0f)
     {
         if (MathF.Abs(fromSize - toSize) < 0.5f && Find(node, ch) is null) return;   // no change and nothing in flight
         if (dyn.Kind == DynamicsKind.Spring)
-            Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize);
+            Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize, delayMs: delayMs);
         else
-            Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing);
+            Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     // ScaleCorrect: spring a scale channel from old/new → 1 (the recorder composites it about the node centre; opted-in
     // children counter-scale to stay undistorted). Cheap + compositor-only, but distorts text/borders — chrome only.
-    private void ScaleReveal(NodeHandle node, AnimChannel ch, float fromRatio, in TransitionDynamics dyn)
+    private void ScaleReveal(NodeHandle node, AnimChannel ch, float fromRatio, in TransitionDynamics dyn, float delayMs = 0f)
     {
         if (MathF.Abs(fromRatio - 1f) < 0.001f && Find(node, ch) is null) return;
         if (dyn.Kind == DynamicsKind.Spring)
-            Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio);
+            Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio, delayMs: delayMs);
         else
-            Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing);
+            Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     // ── enter / exit (appearing & disappearing nodes) ────────────────────────────────────────────
@@ -298,11 +302,11 @@ public sealed class AnimEngine
     public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
         TransitionDynamics dyn = Normalize(spec.Dynamics);
-        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity);
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy);
+        if (e.Opacity != 1f) SeedTerminal(node, AnimChannel.Opacity, 1f, dyn, initial: e.Opacity, delayMs: spec.DelayMs);
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, 0f, dyn, initial: e.Dx, delayMs: spec.DelayMs);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, 0f, dyn, initial: e.Dy, delayMs: spec.DelayMs);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: spec.DelayMs);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: spec.DelayMs);
     }
 
     /// <summary>A removed node (now an Exiting orphan) animates FROM its current state TO the exit terminal; when all its
@@ -310,19 +314,19 @@ public sealed class AnimEngine
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
         TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);   // asymmetric exit timing when set
-        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn);
+        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: spec.DelayMs);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: spec.DelayMs);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: spec.DelayMs);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: spec.DelayMs);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: spec.DelayMs);
     }
 
-    private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null)
+    private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null, float delayMs = 0f)
     {
         if (dyn.Kind == DynamicsKind.Spring)
-            Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial);
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial, delayMs: delayMs);
         else
-            Animate(node, ch, initial ?? CurrentValue(node, ch), to, dyn.DurationMs, dyn.Easing);
+            Animate(node, ch, initial ?? CurrentValue(node, ch), to, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     /// <summary>True while any track targets this node (used by the host to detect a settled exit orphan).</summary>
@@ -338,7 +342,7 @@ public sealed class AnimEngine
             ? (d.Response > 0f ? d : TransitionDynamics.Default)
             : (d.DurationMs > 0f ? d : TransitionDynamics.Tween(200f, d.Easing));
 
-    private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn)
+    private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn, float delayMs = 0f)
     {
         if (dyn.Kind == DynamicsKind.Spring)
         {
@@ -349,12 +353,12 @@ public sealed class AnimEngine
                 ex.Pos += delta;              // coordinate frame shifted by the layout move → shift offset, keep velocity
                 ex.Target = 0f; ex.Spring = sp; ex.Done = false;
             }
-            else Spring(node, ch, 0f, sp, initial: delta);   // fresh: presented stays put, the offset springs delta → 0
+            else Spring(node, ch, 0f, sp, initial: delta, delayMs: delayMs);   // fresh: presented stays put, the offset springs delta → 0
         }
         else
         {
             float cur = CurrentValue(node, ch);
-            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing);   // tween: interruption restarts (spring is default)
+            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);   // tween: interruption restarts (spring is default)
         }
     }
 
@@ -387,19 +391,34 @@ public sealed class AnimEngine
         {
             Track t = _tracks[i];
             if (!_scene.IsLive(t.Node)) { _tracks.RemoveAt(i); continue; }
+            float stepMs = dtMs;
+            if (!t.Done && t.DelayRemainingMs > 0f && stepMs > 0f)
+            {
+                float consume = MathF.Min(t.DelayRemainingMs, stepMs);
+                t.DelayRemainingMs -= consume;
+                stepMs -= consume;
+                if (t.DelayRemainingMs > 0f || stepMs <= 0f)
+                {
+                    // Hold the terminal's initial value while delayed. The track still contributes to scratch so the
+                    // first delayed frames are recorded at the authored starting transform/opacity instead of snapping.
+                    t.Value = t.Mode == IntegrationMode.Spring ? t.Pos : Sample(t.Keys, 0f);
+                    if (!_scratch.ContainsKey(t.Node)) _scratch[t.Node] = Accum.FromPaint(in _scene.Paint(t.Node));
+                    continue;
+                }
+            }
 
             if (t.Mode == IntegrationMode.Spring)
             {
                 if (!t.Done)
                 {
-                    if (t.JustSeeded || dtMs <= 0f)
+                    if (t.JustSeeded || stepMs <= 0f)
                     {
                         t.JustSeeded = false;
                     }
                     else
                     {
                         // semi-implicit (symplectic) Euler, sub-stepped for stability at frame spikes
-                        float dt = dtMs * 0.001f;
+                        float dt = stepMs * 0.001f;
                         int n = Math.Clamp((int)MathF.Ceiling(dt / 0.004f), 1, 8);
                         float h = dt / n;
                         for (int s = 0; s < n; s++)
@@ -426,7 +445,7 @@ public sealed class AnimEngine
                 else
                 {
                     if (t.JustSeeded) t.JustSeeded = false;
-                    else t.ElapsedMs += dtMs;
+                    else t.ElapsedMs += stepMs;
                     u = t.DurationMs <= 0f ? 1f : t.ElapsedMs / t.DurationMs;
                     if (t.Loop) u -= MathF.Floor(u); else if (u >= 1f) { u = 1f; t.Done = true; }
                 }

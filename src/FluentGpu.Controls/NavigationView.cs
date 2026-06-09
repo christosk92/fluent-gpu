@@ -46,9 +46,19 @@ public sealed class NavigationView : Component
     // Labels fade IN on expand; on collapse they are removed with the layout (no exit orphan) so no text ever lingers
     // over the rail/content. The pane reveal + content slide + staying icons carry the collapse motion.
     static readonly LayoutTransition LabelTransition = new(
-        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionChannels.Opacity,
         TransitionDynamics.Spring(0.16f, 1f), SizeMode.Reveal,
         Enter: new EnterExit(Dx: -8f, Opacity: 0f, Active: true));
+
+    // Whole-cell list reflow: existing rows below an expanded/collapsed group move as one unit (icon + label +
+    // chevron + selection/background), with a small engine-authored stagger. No Size channel: row heights/layout snap
+    // structurally; the compositor only carries the cells from their old Y to the new Y.
+    static LayoutTransition ItemReflowTransition(int visualIndex) => new(
+        TransitionChannels.Position,
+        TransitionDynamics.Spring(0.18f, 1f),
+        SizeMode.Reveal,
+        Enter: new EnterExit(Dx: -8f, Opacity: 0f, Active: true),
+        DelayMs: MathF.Min(visualIndex * 8f, 48f));
 
     // The pane's own width animates as a presented-size Reveal (translate + clip, no relayout); items reveal their
     // background; the content frame slides via the position projection as the pane width changes.
@@ -336,12 +346,12 @@ public sealed class NavigationView : Component
         };
 
         foreach (var it in Items)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, children.Count, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         children.Add(new BoxEl { Grow = 1 });
 
         foreach (var it in Footer)
-            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
+            children.Add(it.IsHeader ? new BoxEl { Height = 8 } : Item(it, 0, children.Count, selected, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false));
 
         return new BoxEl
         {
@@ -428,7 +438,7 @@ public sealed class NavigationView : Component
     {
         var result = new Element[flat.Count];
         for (int i = 0; i < flat.Count; i++)
-            result[i] = Item(flat[i].Item, flat[i].Depth, selected, focusedKey, expanded, activate, expandedLayout, ownIndicator, labelsVisible);
+            result[i] = Item(flat[i].Item, flat[i].Depth, i, selected, focusedKey, expanded, activate, expandedLayout, ownIndicator, labelsVisible);
 
         return result;
     }
@@ -453,7 +463,7 @@ public sealed class NavigationView : Component
         return -1000f;
     }
 
-    static Element Item(NavItem it, int depth, string selected, string focusedKey, string[] expanded,
+    static Element Item(NavItem it, int depth, int visualIndex, string selected, string focusedKey, string[] expanded,
                         Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible)
     {
         if (it.IsHeader)
@@ -502,9 +512,7 @@ public sealed class NavigationView : Component
             Key = it.Key,                       // keyed → reused across expanded/compact (icon glides, only the label exits)
             Direction = 0,
             Role = AutomationRole.NavigationItem,
-            // Do not attach the pane-width FLIP transition to every row: expanding one group inserts child rows and would
-            // project unrelated item/icon rows as if the whole pane were collapsing. The pane node owns width reveal; labels
-            // own their enter/exit fade/slide.
+            Animate = ItemReflowTransition(visualIndex),   // hierarchy reflow animates the entire cell, not subparts
             Width = expandedLayout ? float.NaN : PaneToggleWidth,
             Height = ItemHeight,
             Margin = new Edges4(ItemMarginX + indent, ItemMarginY, ItemMarginX, ItemMarginY),

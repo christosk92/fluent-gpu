@@ -68,7 +68,10 @@ public readonly record struct LayoutTransition(
     ushort CustomCurveId = 0,
     // Optional separate dynamics for the EXIT (disappear/collapse) leg — for controls whose WinUI open/close timings are
     // asymmetric (e.g. Expander expand 333ms / collapse 167ms). Null ⇒ exit reuses <see cref="Dynamics"/>.
-    TransitionDynamics? ExitDynamics = null)
+    TransitionDynamics? ExitDynamics = null,
+    // Optional start delay for layout-transition channels + enter/exit terminals. This keeps stagger as an engine
+    // primitive (a field on the transition spec), not a control-local timer or per-frame callback.
+    float DelayMs = 0f)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);
