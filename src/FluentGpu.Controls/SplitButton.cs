@@ -5,72 +5,196 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI SplitButton: a primary action button joined to a dropdown arrow. The two halves are independently
-/// clickable — the left runs <see cref="OnInvoke"/>, the right opens a <see cref="MenuFlyout"/> anchored to the whole control.</summary>
+/// <summary>
+/// A WinUI 3 <c>SplitButton</c>: a primary action button joined to a secondary dropdown half, sharing one rounded
+/// chrome with a 1px divider between them. The two halves are <b>independently</b> interactive — the primary half runs
+/// <see cref="OnInvoke"/> (the <c>Click</c> event / <c>OnClickPrimary</c>), the secondary half opens a
+/// <see cref="MenuFlyout"/> anchored below the whole control (<c>OnClickSecondary → OpenFlyout</c>). Each half carries
+/// its own hover/press fill + foreground ramp; the inner corner where each half meets the divider is squared so the
+/// pair reads as one control (WinUI PrimaryButtonBorder <c>4,0,0,4</c> / SecondaryButtonBorder <c>0,4,4,0</c>).
+///
+/// Source of truth: <c>microsoft-ui-xaml/controls/dev/SplitButton/SplitButton.xaml</c> (+ <c>_themeresources.xaml</c>,
+/// <c>SplitButton.cpp</c>). Tokens, sizes, padding, corners and the state matrix are 1:1 with that template.
+/// </summary>
 public sealed class SplitButton : Component
 {
+    // ── WinUI geometry (SplitButton.xaml / _themeresources.xaml) ──
+    public const float PrimaryButtonMinWidth = 35f;   // SplitButtonPrimaryButtonSize (PrimaryButtonColumn MinWidth)
+    public const float SecondaryButtonSize   = 35f;    // SplitButtonSecondaryButtonSize (SecondaryButtonColumn Width)
+    public const float ControlHeight         = 32f;    // effective SplitButton height
+    public const float DividerWidth          = 1f;     // Separator column
+    public const float DividerHeight         = ControlHeight; // DividerBackgroundGrid stretches the full control height
+    public const float FontSize              = 14f;    // ControlContentThemeFontSize
+    public const float ChevronSize           = 12f;    // AnimatedChevronDownSmall is 12x12
+    public const float ChevronGlyphSize      = 8f;     // fallback FontIconSource FontSize
+    public const float CornerRadius          = Radii.Control;   // ControlCornerRadius = 4
+    static readonly Edges4 PrimaryPadding    = new(11, 6, 11, 7);   // SplitButtonPadding
+    static readonly Edges4 SecondaryPadding  = new(0, 0, 12, 0);    // SecondaryButton Padding="0,0,12,0"
+
     public string Label = "";
     public string? Glyph;
     public Element? PrimaryContent;
     public Action? OnInvoke;
     public IReadOnlyList<MenuFlyoutItem> Items = [];
+    public bool IsEnabled = true;
+    public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
 
-    public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null)
-        => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph });
+    public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
+        => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph, IsEnabled = isEnabled });
 
-    public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items)
-        => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items });
+    public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
+        => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled });
 
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
+        var open = UseSignal(false);
+        var autoOpened = UseRef(false);
         var svc = UseContext(Overlay.Service);
+        bool enabled = IsEnabled;
+        bool menuOpen = open.Value;
 
+        // OnClickSecondary → OpenFlyout (BottomEdgeAlignedLeft); re-click closes (toggle). Focus is captured/restored
+        // by the overlay host; the menu is anchored to the WHOLE control (WinUI ShowAt(*this)).
         void ToggleMenu()
         {
             if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items, () => handle.Value?.Close()), FlyoutPlacement.BottomLeft);
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
+                FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: true));
+            handle.Value.ClosedAction = () => { handle.Value = null; open.Value = false; };
+            open.Value = true;
         }
 
-        Element[] primaryContent;
+        UseEffect(() =>
+        {
+            if (!OpenOnMount || autoOpened.Value) return;
+            autoOpened.Value = true;
+            ToggleMenu();
+        }, OpenOnMount);
+
+        // Keyboard (SplitButton.cpp OnSplitButtonKeyUp): Space/Enter → invoke the primary action; Down → open the menu
+        // (WinUI also opens on Alt+Down / F4, but those virtual keys are not in the slice's Keys table — see report).
+        void OnKey(KeyEventArgs e)
+        {
+            if (!enabled) return;
+            if (e.KeyCode == Keys.Enter || e.KeyCode == Keys.Space)
+            {
+                OnInvoke?.Invoke();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Down)
+            {
+                ToggleMenu();
+                e.Handled = true;
+            }
+        }
+
+        // ── Primary half content ──
+        Element[] primaryChildren;
         if (PrimaryContent is { } custom)
         {
-            primaryContent = [custom];
+            primaryChildren = [custom];
         }
         else
         {
-            var list = new List<Element>();
-            if (Glyph is { Length: > 0 } g) list.Add(new TextEl(g) { Size = 14f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont });
-            list.Add(new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary });
-            primaryContent = list.ToArray();
+            // Primary foreground ramp: rest TextPrimary; PointerOver TextPrimary; Pressed SplitButtonForegroundPressed =
+            // TextSecondary; Disabled SplitButtonForegroundDisabled = TextDisabled. (FlyoutOpen also dims to TextSecondary,
+            // handled via the box pressed fill — the label press ramp covers the visible foreground change.)
+            var label = new TextEl(Label)
+            {
+                Size = FontSize, Color = menuOpen ? Tok.TextSecondary : Tok.TextPrimary,
+                PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,
+            };
+            primaryChildren = Glyph is { Length: > 0 } g
+                ? [new TextEl(g)
+                    {
+                        Size = FontSize, Color = menuOpen ? Tok.TextSecondary : Tok.TextPrimary,
+                        PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,
+                        FontFamily = Theme.IconFont,
+                    }, label]
+                : [label];
         }
 
+        // The actual buttons in the WinUI template have BorderThickness=0 and no corner radius; the rounded border is
+        // drawn by overlay borders on top of the shared root chrome. Keep half backgrounds square and clip them by the
+        // root so hover/press cannot create extra rounded lobes at the divider.
         var primary = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Height = 32f, MinWidth = 35f,   // SplitButtonPrimaryButtonSize
-            Padding = new Edges4(11, 5, 11, 6),
-            Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-            Role = AutomationRole.Button, OnClick = OnInvoke,
-            Children = primaryContent,
-        };
-        var divider = new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeControlDefault, AlignSelf = FlexAlign.Center };  // SplitButtonBorderBrushDivider = StrokeControlDefault
-        var drop = new BoxEl
-        {
-            Width = 35f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,  // SplitButtonSecondaryButtonSize = 35
-            Fill = ColorF.Transparent, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-            Role = AutomationRole.Button, OnClick = ToggleMenu,
-            // SplitButtonForegroundSecondary = TextSecondary; chevron AnimatedIcon is 12x12.
-            Children = [new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont }],
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 8f,
+            Grow = 1f, MinWidth = PrimaryButtonMinWidth, Height = ControlHeight,
+            Padding = PrimaryPadding,
+            // Each half owns its own interaction ramp → hovering the primary leaves the secondary at rest, exactly as
+            // PrimaryPointerOver keeps SecondaryBackgroundGrid at SplitButtonBackground (and vice versa).
+            Fill = menuOpen ? Tok.FillControlTertiary : ColorF.Transparent,
+            HoverFill = Tok.FillControlSecondary,    // SplitButtonBackgroundPointerOver
+            PressedFill = Tok.FillControlTertiary,   // SplitButtonBackgroundPressed
+            HoverDurationMs = Motion.ControlFast, PressDurationMs = Motion.ControlFast,
+            HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,   // ControlFastOutSlowInKeySpline = 0,0,0,1
+            Role = AutomationRole.Button, IsEnabled = enabled, OnClick = OnInvoke,
+            Children = primaryChildren,
         };
 
+        // DividerBackgroundGrid: 1px, SplitButtonBorderBrushDivider = ControlStrokeColorDefaultBrush = StrokeControlDefault.
+        var divider = new BoxEl
+        {
+            Width = DividerWidth, Height = DividerHeight, AlignSelf = FlexAlign.Stretch,
+            Fill = enabled ? Tok.StrokeControlDefault : ColorF.Transparent,
+        };
+
+        // Secondary half: chevron, foreground SplitButtonForegroundSecondary = TextSecondary; PointerOver → TextPrimary
+        // (SplitButtonForegroundPointerOver), Pressed → SplitButtonForegroundSecondaryPressed = TextTertiary.
+        var drop = new BoxEl
+        {
+            Direction = 0, Width = SecondaryButtonSize, Height = ControlHeight,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+            Padding = SecondaryPadding,
+            Fill = menuOpen ? Tok.FillControlTertiary : ColorF.Transparent,
+            HoverFill = Tok.FillControlSecondary,    // SplitButtonBackgroundPointerOver
+            PressedFill = Tok.FillControlTertiary,   // SplitButtonBackgroundPressed
+            HoverDurationMs = Motion.ControlFast, PressDurationMs = Motion.ControlFast,
+            HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
+            Role = AutomationRole.Button, IsEnabled = enabled, OnClick = ToggleMenu,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = ChevronSize, Height = ChevronSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children =
+                    [
+                        new TextEl(Icons.ChevronDownSmall)
+                        {
+                            Size = ChevronGlyphSize, Color = menuOpen ? Tok.TextTertiary : Tok.TextSecondary,
+                            HoverColor = Tok.TextPrimary, PressedColor = Tok.TextTertiary, DisabledColor = Tok.TextDisabled,
+                            FontFamily = Theme.IconFont,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        // ── Joined chrome (RootGrid + Border) ──
+        // Background = SplitButtonBackground = ControlFillColorDefaultBrush; BorderBrush = ControlElevationBorderBrush;
+        // BorderThickness = 1; CornerRadius = ControlCornerRadius (4). Disabled: transparent fill + StrokeControlDefault
+        // border (SplitButtonBorderBrushDisabled), per the Disabled VisualState.
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
-            MinHeight = 32f,
-            Fill = Tok.FillControlDefault,
-            BorderWidth = 1f, BorderBrush = Tok.ControlElevationBorder, Corners = Radii.ControlAll,
+            MinHeight = ControlHeight,
+            Fill = enabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
+            BorderWidth = 1f,
+            BorderBrush = enabled
+                ? (menuOpen ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder)
+                : GradientSpec.Solid(Tok.StrokeControlDefault),
+            Corners = Radii.ControlAll,
             ClipToBounds = true,
+            // The outer node is the joined chrome + keyboard/focus host (WinUI RootGrid). The two HALVES carry the
+            // Button a11y role (PrimaryButton / SecondaryButton); the chrome itself is not a separate button role.
+            Focusable = enabled, IsEnabled = enabled,
+            OnKeyDown = OnKey,
             OnRealized = h => anchor.Value = h,
             Children = [primary, divider, drop],
         };

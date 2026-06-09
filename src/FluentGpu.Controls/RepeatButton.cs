@@ -24,7 +24,7 @@ public static partial class RepeatButton
         public GradientSpec? DisabledBorderBrush { get; init; }  // RepeatButtonBorderBrushDisabled = StrokeControlDefault
         public float BorderWidth { get; init; } = 1f;            // RepeatButtonBorderThemeThickness = 1 (NOT 2)
         public float CornerRadius { get; init; } = Radii.Control;
-        public Edges4 Padding { get; init; } = new(8, 4, 8, 5);  // ButtonPadding (merged generic.xaml)
+        public Edges4 Padding { get; init; } = new(11, 5, 11, 6);  // ButtonPadding 11,5,11,6 (CommonStyles override)
         public float FontSize { get; init; } = 14f;
         public float MinHeight { get; init; } = 32f;
         public float PressScale { get; init; } = 0.985f;
@@ -45,7 +45,7 @@ public static partial class RepeatButton
         DisabledBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault),
     };
 
-    public static BoxEl Create(string label, Action onClick, Style? style = null)
+    public static BoxEl Create(string label, Action onClick, Style? style = null, bool isEnabled = true)
     {
         var s = style ?? DefaultStyle;
         return new BoxEl
@@ -58,14 +58,22 @@ public static partial class RepeatButton
             Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(s.CornerRadius),
             BorderWidth = s.BorderWidth,
-            BorderBrush = s.BorderBrush,
-            Fill = s.Background,
+            BorderBrush = isEnabled ? s.BorderBrush : (s.DisabledBorderBrush ?? s.BorderBrush),
+            PressedBorderBrush = s.PressedBorderBrush,
+            Fill = isEnabled ? s.Background : s.DisabledBackground,
             HoverFill = s.HoverBackground,
             PressedFill = s.PressedBackground,
-            PressScale = s.PressScale,
+            PressScale = isEnabled ? s.PressScale : 1f,
             Repeats = true,
+            IsEnabled = isEnabled,   // engine gate also halts the RepeatTicker when disabled
             OnClick = onClick,
-            Children = [new TextEl(label) { Size = s.FontSize, Color = s.Foreground }],
+            Children = [new TextEl(label)
+            {
+                Size = s.FontSize,
+                Color = s.Foreground,
+                PressedColor = s.PressedForeground,
+                DisabledColor = s.DisabledForeground,
+            }],
         };
     }
 }

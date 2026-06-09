@@ -41,7 +41,14 @@ public static partial class RadioButton
 
         public ColorF Dot { get; init; }                   // RadioButtonCheckGlyphFill → TextOnAccentPrimary
         public GradientSpec? DotBorder { get; init; }      // RadioButtonCheckGlyphStrokeChecked → AccentControlElevationBorder
-        public ColorF Foreground { get; init; }            // RadioButtonForeground → TextPrimary
+        public ColorF Foreground { get; init; }            // RadioButtonForeground → TextPrimary (also Pressed/PointerOver in WinUI)
+        public ColorF DisabledForeground { get; init; }    // RadioButtonForegroundDisabled → TextDisabled
+
+        // Disabled resting swaps — WinUI recolors the ring + glyph in the Disabled visual state, not just the label.
+        public ColorF OffFillDisabled { get; init; }       // ...FillDisabled → ControlAltFillColorDisabled
+        public ColorF OffBorderDisabled { get; init; }     // ...StrokeDisabled → ControlStrongStrokeColorDisabled
+        public ColorF OnRingDisabled { get; init; }        // ...CheckedFillDisabled / CheckedStrokeDisabled → AccentFillColorDisabled
+        public ColorF DotDisabled { get; init; }           // RadioButtonCheckGlyphFillDisabled → TextOnAccentDisabled
     }
 
     public static Style? StyleOverride;
@@ -50,23 +57,31 @@ public static partial class RadioButton
         OffFill = Tok.FillControlAltSecondary, OffHover = Tok.FillControlAltTertiary, OffPressed = Tok.FillControlAltQuaternary,
         OffBorder = Tok.StrokeControlStrongDefault,
         OnRing = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnBorder = Tok.AccentDefault,
-        Dot = Tok.TextOnAccentPrimary, DotBorder = Tok.AccentControlElevationBorder, Foreground = Tok.TextPrimary,
+        Dot = Tok.TextOnAccentPrimary, DotBorder = Tok.AccentControlElevationBorder,
+        Foreground = Tok.TextPrimary, DisabledForeground = Tok.TextDisabled,
+        OffFillDisabled = Tok.FillControlAltDisabled, OffBorderDisabled = Tok.StrokeControlStrongDisabled,
+        OnRingDisabled = Tok.AccentDisabled, DotDisabled = Tok.TextOnAccentDisabled,
     };
 
-    public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null)
+    public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null, bool isEnabled = true)
     {
         var s = style ?? DefaultStyle;
         float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
         float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
         float pressedDotScale = s.PressedDotSize > 0f ? s.DotPressedSize / s.PressedDotSize : 1f;
+        // Disabled is a flat resting swap (mirrors CheckBox.Resting(enabled)): with IsEnabled=false the engine routes no
+        // hover/press progress down, so the Hover/Pressed legs are never reached and only the resting Fill/Border/Dot recolor.
+        ColorF ringFill = !isEnabled ? (selected ? s.OnRingDisabled : s.OffFillDisabled) : (selected ? s.OnRing : s.OffFill);
+        ColorF ringBorder = !isEnabled ? (selected ? s.OnRingDisabled : s.OffBorderDisabled) : (selected ? s.OnBorder : s.OffBorder);
+        ColorF dotFill = !isEnabled ? s.DotDisabled : s.Dot;
         var ring = new BoxEl
         {
             Width = s.RingSize, Height = s.RingSize,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.Circle(s.RingSize),
             BorderWidth = 1f,
-            BorderColor = selected ? s.OnBorder : s.OffBorder,
-            Fill = selected ? s.OnRing : s.OffFill,
+            BorderColor = ringBorder,
+            Fill = ringFill,
             HoverFill = selected ? s.OnHover : s.OffHover,
             PressedFill = selected ? s.OnPressed : s.OffPressed,
             Children = selected
@@ -75,7 +90,7 @@ public static partial class RadioButton
                     Key = "CheckGlyph",
                     Width = s.DotSize, Height = s.DotSize,
                     Corners = Radii.Circle(s.DotSize),
-                    Fill = s.Dot,
+                    Fill = dotFill,
                     BorderBrush = s.DotBorder,
                     BorderWidth = s.DotBorder is null ? 0f : 1f,
                     HoverScale = hoverScale,
@@ -90,7 +105,7 @@ public static partial class RadioButton
                     Key = "PressedCheckGlyph",
                     Width = s.PressedDotSize, Height = s.PressedDotSize,
                     Corners = Radii.Circle(s.PressedDotSize),
-                    Fill = s.Dot,
+                    Fill = dotFill,
                     BorderBrush = s.DotBorder,
                     BorderWidth = s.DotBorder is null ? 0f : 1f,
                     Opacity = 0f,
@@ -108,19 +123,21 @@ public static partial class RadioButton
             Gap = 10f,
             MinHeight = s.MinHeight,
             Role = AutomationRole.RadioButton,
+            IsEnabled = isEnabled,
             OnClick = onSelect,
-            Children = [ring, new TextEl(label) { Size = s.FontSize, Color = s.Foreground }],
+            // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
+            Children = [ring, new TextEl(label) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground }],
         };
     }
 
     /// <summary>A mutually-exclusive group: renders one radio per option; clicking option i invokes <paramref name="onSelect"/>(i).</summary>
-    public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null)
+    public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null, bool isEnabled = true)
     {
         var children = new Element[options.Count];
         for (int i = 0; i < options.Count; i++)
         {
             int idx = i;
-            children[i] = Create(options[i], i == selected, () => onSelect(idx), style);
+            children[i] = Create(options[i], i == selected, () => onSelect(idx), style, isEnabled);
         }
         return new BoxEl { Direction = horizontal ? (byte)0 : (byte)1, Gap = horizontal ? 16f : 4f, Children = children };
     }

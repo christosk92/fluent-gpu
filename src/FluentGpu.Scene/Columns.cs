@@ -70,6 +70,9 @@ public struct NodePaint
     // children to PresentedW/PresentedH instead of the laid-out Bounds — so a size change animates without relayout,
     // and the presented size may exceed the model bounds (shrink reveals). Written by AnimEngine (AnimChannel.SizeW/H).
     public float PresentedW, PresentedH;
+    // Authored clip-rect (node-local space): when not Infinite, the recorder intersects the child clip with it (composes
+    // with ClipsToBounds). Animated by AnimEngine ClipL/T/R/B (e.g. an Expander/CommandBarFlyout reveal). Default Infinite.
+    public RectF ClipRect;
     public float StrokeTrimStart, StrokeTrimEnd;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
@@ -80,6 +83,12 @@ public struct NodePaint
     public float BorderWidth;
     public CornerRadius4 Corners;
     public ColorF TextColor;
+    // Stateful foreground ramps (text/glyph). A==0 ⇒ no state color for that axis; the recorder leaves TextColor as-is.
+    // Hover/Pressed ease with the nearest interactive ancestor's progress; Disabled/Focused are steps (see ResolveTextColor).
+    public ColorF TextHoverColor;
+    public ColorF TextPressedColor;
+    public ColorF TextDisabledColor;
+    public ColorF TextFocusedColor;
     public StringId Text;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
     public VisualKind VisualKind;
@@ -94,6 +103,7 @@ public struct NodePaint
         OriginY = 0.5f,
         PresentedW = float.NaN,
         PresentedH = float.NaN,
+        ClipRect = RectF.Infinite,
         StrokeTrimStart = float.NaN,
         StrokeTrimEnd = float.NaN,
         Fill = ColorF.Transparent,
@@ -116,6 +126,7 @@ public struct ScrollState
     public float ContentW, ContentH;      // Layout-published full content extent (DIP)
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
+    public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)

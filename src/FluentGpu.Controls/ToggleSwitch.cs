@@ -30,6 +30,15 @@ public static partial class ToggleSwitch
         public ColorF OnKnob { get; init; }                    // ToggleSwitchKnobFillOn → TextOnAccentPrimary
         public ColorF Foreground { get; init; }
         public ColorF HeaderColor { get; init; }
+        // Disabled logical state (WinUI ToggleSwitch *Disabled brushes). The engine IsEnabled gate stops interaction;
+        // these are the resting visuals the control swaps in for that state.
+        public ColorF OffFillDisabled { get; init; }           // ToggleSwitchFillOffDisabled → ControlAltFillColorDisabled
+        public ColorF OffBorderDisabled { get; init; }         // ToggleSwitchStrokeOffDisabled → StrokeControlStrongDisabled
+        public ColorF OnFillDisabled { get; init; }            // ToggleSwitchFillOnDisabled → AccentFillColorDisabled
+        public ColorF OffKnobDisabled { get; init; }           // ToggleSwitchKnobFillOffDisabled → TextDisabled
+        public ColorF OnKnobDisabled { get; init; }            // ToggleSwitchKnobFillOnDisabled → TextOnAccentDisabled
+        public ColorF ForegroundDisabled { get; init; }        // ToggleSwitchContentForegroundDisabled → TextDisabled
+        public ColorF HeaderColorDisabled { get; init; }       // ToggleSwitchHeaderForegroundDisabled → TextDisabled
     }
 
     public static Style? StyleOverride;
@@ -39,9 +48,12 @@ public static partial class ToggleSwitch
         OffBorder = Tok.StrokeControlStrongDefault, OffKnob = Tok.TextSecondary,
         OnFill = Tok.AccentDefault, OnHover = Tok.AccentSecondary, OnPressed = Tok.AccentTertiary, OnKnob = Tok.TextOnAccentPrimary,
         Foreground = Tok.TextPrimary, HeaderColor = Tok.TextSecondary,
+        OffFillDisabled = Tok.FillControlAltDisabled, OffBorderDisabled = Tok.StrokeControlStrongDisabled,
+        OnFillDisabled = Tok.AccentDisabled, OffKnobDisabled = Tok.TextDisabled, OnKnobDisabled = Tok.TextOnAccentDisabled,
+        ForegroundDisabled = Tok.TextDisabled, HeaderColorDisabled = Tok.TextDisabled,
     };
 
-    public static BoxEl Create(bool isOn, Action onToggle, string? header = null, string? onContent = null, string? offContent = null, Style? style = null)
+    public static BoxEl Create(bool isOn, Action onToggle, string? header = null, string? onContent = null, string? offContent = null, bool isEnabled = true, Style? style = null)
     {
         var s = style ?? DefaultStyle;
         // Knob: 10px off / 12px on at rest, grown to 14 (hover) / 17 (press) via composited scale (no per-frame re-render).
@@ -49,6 +61,8 @@ public static partial class ToggleSwitch
         float pad = (s.TrackHeight - knob) / 2f;
         float travel = s.TrackWidth - knob - 2f * pad;          // 44 - 12 - 2*4 = 20 (WinUI KnobTranslateTransform X = 20)
 
+        // Disabled is a logical state: resting track/knob fill + border swap to the WinUI *Disabled tokens. The engine
+        // IsEnabled gate (on the control row) stops hit-test/focus/keyboard, so HoverFill/PressedFill stay wired but inert.
         var track = new BoxEl
         {
             Direction = 0,
@@ -58,8 +72,8 @@ public static partial class ToggleSwitch
             Padding = new Edges4(pad, 0, pad, 0),
             Corners = Radii.Circle(s.TrackHeight),
             BorderWidth = isOn ? 0f : 1f,                       // ToggleSwitchOnStrokeThickness=0 / OuterBorderStrokeThickness=1
-            BorderColor = isOn ? ColorF.Transparent : s.OffBorder,
-            Fill = isOn ? s.OnFill : s.OffFill,
+            BorderColor = isOn ? ColorF.Transparent : (isEnabled ? s.OffBorder : s.OffBorderDisabled),
+            Fill = isEnabled ? (isOn ? s.OnFill : s.OffFill) : (isOn ? s.OnFillDisabled : s.OffFillDisabled),
             HoverFill = isOn ? s.OnHover : s.OffHover,
             PressedFill = isOn ? s.OnPressed : s.OffPressed,
             Children =
@@ -67,7 +81,8 @@ public static partial class ToggleSwitch
                 new BoxEl { Width = isOn ? travel : 0f },   // leading spacer positions the knob; its width change drives the FLIP slide
                 new BoxEl
                 {
-                    Width = knob, Height = knob, Corners = Radii.Circle(knob), Fill = isOn ? s.OnKnob : s.OffKnob,
+                    Width = knob, Height = knob, Corners = Radii.Circle(knob),
+                    Fill = isEnabled ? (isOn ? s.OnKnob : s.OffKnob) : (isOn ? s.OnKnobDisabled : s.OffKnobDisabled),
                     HoverScale = s.HoverKnobSize / s.NormalKnobSize, PressScale = s.PressedKnobSize / s.NormalKnobSize,
                     Animate = LayoutTransition.Slide with { Dynamics = TransitionDynamics.Spring(0.20f, 0.85f) },
                 },
@@ -77,7 +92,7 @@ public static partial class ToggleSwitch
         var row = new List<Element> { track };
         string? side = isOn ? onContent : offContent;
         if (side is { Length: > 0 })
-            row.Add(new TextEl(side) { Size = s.FontSize, Color = s.Foreground });
+            row.Add(new TextEl(side) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.ForegroundDisabled });
 
         var control = new BoxEl
         {
@@ -86,12 +101,13 @@ public static partial class ToggleSwitch
             Gap = 12f,
             MinHeight = 32f,
             Role = AutomationRole.ToggleSwitch,
+            IsEnabled = isEnabled,
             OnClick = onToggle,
             Children = row.ToArray(),
         };
 
         if (header is { Length: > 0 })
-            return new BoxEl { Direction = 1, Gap = 6f, Children = [new TextEl(header) { Size = s.FontSize, Color = s.HeaderColor }, control] };
+            return new BoxEl { Direction = 1, Gap = 6f, Children = [new TextEl(header) { Size = s.FontSize, Color = isEnabled ? s.HeaderColor : s.HeaderColorDisabled }, control] };
         return control;
     }
 }

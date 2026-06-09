@@ -4,6 +4,9 @@ using FluentGpu.Scene;
 
 namespace FluentGpu.Input;
 
+/// <summary>Directional focus movement for roving/XY keyboard navigation (arrow keys in lists, grids, menus).</summary>
+public enum FocusDirection : byte { Left, Right, Up, Down }
+
 /// <summary>
 /// Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
 /// same node fires the click handler and focuses it; keyboard routes to the focused node and bubbles up ancestors
@@ -14,6 +17,7 @@ public sealed class InputDispatcher
 {
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _focusables = new();
+    private readonly List<NodeHandle> _scoped = new();   // reused buffer for scoped (within-a-root) focus collection
     private NodeHandle _down;
     private NodeHandle _focused;
     private NodeHandle _hovered;
@@ -83,6 +87,11 @@ public sealed class InputDispatcher
                     if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget))   // drag updates while held (slider/scrollbar)
                     {
                         _scene.GetDrag(_dragTarget)?.Invoke(LocalPos(_dragTarget, e.PositionPx));
+                        handled++;
+                    }
+                    else if (!_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)   // bare-hover preview (RatingControl)
+                    {
+                        hm(LocalPos(_hovered, e.PositionPx));
                         handled++;
                     }
                     break;
@@ -402,7 +411,11 @@ public sealed class InputDispatcher
     private void Notify(NodeFlags flag, NodeHandle node, bool on)
     {
         if (node.IsNull) return;
-        if (flag == NodeFlags.Hovered) OnHoverChanged?.Invoke(node, on);
+        if (flag == NodeFlags.Hovered)
+        {
+            OnHoverChanged?.Invoke(node, on);
+            if (!on && _scene.IsLive(node)) _scene.GetPointerExit(node)?.Invoke();   // pointer left → reset hover preview
+        }
         else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
     }
 
@@ -412,19 +425,20 @@ public sealed class InputDispatcher
         if (key == Keys.Tab) { MoveFocus(forward: true); return; }
         if (_focused.IsNull) return;
 
-        // Modality 2: Enter/Space activates a focused clickable.
+        // Modality 2: Enter/Space activates a focused clickable (unless it's disabled).
         if ((key == Keys.Enter || key == Keys.Space) &&
+            (_scene.Flags(_focused) & NodeFlags.Disabled) == 0 &&
             (_scene.Interaction(_focused).HandlerMask & InteractionInfo.ClickBit) != 0)
         {
             _scene.GetClickHandler(_focused)?.Invoke();
             return;
         }
 
-        // Otherwise route to the focused node and bubble up ancestors until Handled.
+        // Otherwise route to the focused node and bubble up ancestors until Handled (disabled nodes don't receive keys).
         var args = new KeyEventArgs(key);
         for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
         {
-            _scene.GetKeyHandler(n)?.Invoke(args);
+            if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
             if (args.Handled) return;
         }
     }
@@ -436,7 +450,8 @@ public sealed class InputDispatcher
         var args = new CharEventArgs(codepoint);   // cold path: only allocates while the user is typing
         for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
         {
-            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.CharBit) != 0)
+            if ((_scene.Flags(n) & NodeFlags.Disabled) == 0 &&
+                (_scene.Interaction(n).HandlerMask & InteractionInfo.CharBit) != 0)
             {
                 _scene.GetCharHandler(n)?.Invoke(args);
                 if (args.Handled) return true;
@@ -445,11 +460,12 @@ public sealed class InputDispatcher
         return false;
     }
 
-    /// <summary>Move focus to the next/previous focusable node in document order (cycles).</summary>
+    /// <summary>Move focus to the next/previous focusable node in tab order (TabIndex, then document order; cycles).</summary>
     public void MoveFocus(bool forward)
     {
         _focusables.Clear();
-        Collect(_scene.Root);
+        Collect(_scene.Root, _focusables);
+        StableSortByTabIndex(_focusables);
         if (_focusables.Count == 0) { SetFocus(NodeHandle.Null); return; }
 
         int idx = _focusables.IndexOf(_focused);
@@ -458,9 +474,93 @@ public sealed class InputDispatcher
         SetFocus(_focusables[next], visual: true);   // keyboard focus → show the focus ring
     }
 
+    /// <summary>Directional (arrow/XY) focus movement: from the focused node, pick the nearest focusable in
+    /// <paramref name="dir"/> (primary-axis distance dominates; cross-axis breaks ties). For roving lists/grids.</summary>
+    public void MoveFocusArrow(FocusDirection dir)
+    {
+        if (_focused.IsNull) { MoveFocus(forward: true); return; }
+        _focusables.Clear();
+        Collect(_scene.Root, _focusables);
+        if (_focusables.Count == 0) return;
+
+        var cur = _scene.AbsoluteRect(_focused);
+        float cx = cur.X + cur.W * 0.5f, cy = cur.Y + cur.H * 0.5f;
+        NodeHandle best = NodeHandle.Null;
+        float bestScore = float.MaxValue;
+        bool horizontal = dir is FocusDirection.Left or FocusDirection.Right;
+        foreach (var n in _focusables)
+        {
+            if (n == _focused) continue;
+            var r = _scene.AbsoluteRect(n);
+            float dx = (r.X + r.W * 0.5f) - cx, dy = (r.Y + r.H * 0.5f) - cy;
+            bool inDir = dir switch
+            {
+                FocusDirection.Left => dx < -1f,
+                FocusDirection.Right => dx > 1f,
+                FocusDirection.Up => dy < -1f,
+                FocusDirection.Down => dy > 1f,
+                _ => false,
+            };
+            if (!inDir) continue;
+            float primary = horizontal ? MathF.Abs(dx) : MathF.Abs(dy);
+            float cross = horizontal ? MathF.Abs(dy) : MathF.Abs(dx);
+            float score = primary + cross * 2f;   // bias toward staying on the same row/column
+            if (score < bestScore) { bestScore = score; best = n; }
+        }
+        if (!best.IsNull) SetFocus(best, visual: true);
+    }
+
+    /// <summary>First focusable within <paramref name="root"/>'s subtree (tab order) — for focus-trap entry / menus.</summary>
+    public NodeHandle FirstFocusableIn(NodeHandle root)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        return _scoped.Count > 0 ? _scoped[0] : NodeHandle.Null;
+    }
+
+    /// <summary>Last focusable within <paramref name="root"/>'s subtree (tab order) — for Shift-Tab focus-trap wrap.</summary>
+    public NodeHandle LastFocusableIn(NodeHandle root)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        return _scoped.Count > 0 ? _scoped[^1] : NodeHandle.Null;
+    }
+
+    /// <summary>Next/previous focusable within <paramref name="root"/>, cycling — roving-tabindex within a list/menu/overlay.</summary>
+    public NodeHandle NextFocusableIn(NodeHandle root, NodeHandle current, bool forward = true)
+    {
+        _scoped.Clear();
+        Collect(root, _scoped);
+        StableSortByTabIndex(_scoped);
+        if (_scoped.Count == 0) return NodeHandle.Null;
+        int idx = _scoped.IndexOf(current);
+        int n = _scoped.Count;
+        int next = idx < 0 ? (forward ? 0 : n - 1) : (forward ? (idx + 1) % n : (idx - 1 + n) % n);
+        return _scoped[next];
+    }
+
+    // Stable insertion sort by effective TabIndex (explicit positive indices first ascending; default 0/unset keep
+    // document order at the end). Stable + in-place + alloc-free; the focusable count is small (cold Tab/arrow path).
+    private void StableSortByTabIndex(List<NodeHandle> list)
+    {
+        for (int i = 1; i < list.Count; i++)
+        {
+            var node = list[i];
+            int key = TabKey(node);
+            int j = i - 1;
+            while (j >= 0 && TabKey(list[j]) > key) { list[j + 1] = list[j]; j--; }
+            list[j + 1] = node;
+        }
+    }
+
+    private int TabKey(NodeHandle n) { int t = _scene.Interaction(n).TabIndex; return t > 0 ? t : int.MaxValue; }
+
     /// <summary>Move focus. <paramref name="visual"/> = show the focus ring (keyboard/Tab); pointer focus passes false.</summary>
     public void SetFocus(NodeHandle node, bool visual = false)
     {
+        if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
         if (!_focused.IsNull && _scene.IsLive(_focused)) _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
         _focused = node;
         if (node.IsNull) return;
@@ -468,12 +568,12 @@ public sealed class InputDispatcher
         if (visual) _scene.Flags(node) |= NodeFlags.FocusVisual; else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
     }
 
-    private void Collect(NodeHandle node)
+    private void Collect(NodeHandle node, List<NodeHandle> into)
     {
         if (node.IsNull) return;
         ref InteractionInfo ii = ref _scene.Interaction(node);
-        if (ii.Focusable && (_scene.Flags(node) & NodeFlags.Visible) != 0) _focusables.Add(node);
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c);
+        if (ii.Focusable && (_scene.Flags(node) & (NodeFlags.Visible | NodeFlags.Disabled)) == NodeFlags.Visible) into.Add(node);
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into);
     }
 
     /// <summary>Event position (window space) → the node's LOCAL coords, clamped to its box (for slider/scrollbar drag).</summary>
@@ -535,7 +635,8 @@ public sealed class InputDispatcher
         if (result.IsNull)
         {
             ref InteractionInfo ii = ref _scene.Interaction(node);
-            if ((ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
+            if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit)) != 0 &&
                 rect.Contains(p))
             {
                 result = node;

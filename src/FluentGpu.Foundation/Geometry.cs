@@ -36,6 +36,9 @@ public readonly record struct RectF(float X, float Y, float W, float H)
 
     /// <summary>A sentinel "unbounded" clip — larger than any real surface; intersecting with it is a no-op.</summary>
     public static RectF Infinite => new(-1e9f, -1e9f, 2e9f, 2e9f);
+
+    /// <summary>True for the <see cref="Infinite"/> sentinel (a node with no authored clip-rect override).</summary>
+    public bool IsInfinite => X <= -1e9f;
 }
 
 /// <summary>Per-edge thickness (margin/padding/border). [InlineArray]-shaped logically; struct of 4 floats here.</summary>

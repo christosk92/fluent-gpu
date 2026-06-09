@@ -12,6 +12,7 @@ public sealed class Popup : Component
 {
     public string TriggerLabel = "Show popup";
     public string Text = "Popup content";
+    public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
 
     public static Element Create(string triggerLabel, string text)
         => Embed.Comp(() => new Popup { TriggerLabel = triggerLabel, Text = text });
@@ -21,6 +22,7 @@ public sealed class Popup : Component
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
+        var autoOpened = UseRef(false);
 
         void Toggle()
         {
@@ -39,6 +41,13 @@ public sealed class Popup : Component
                 },
                 FlyoutPlacement.BottomLeft);
         }
+
+        UseEffect(() =>
+        {
+            if (!OpenOnMount || autoOpened.Value) return;
+            autoOpened.Value = true;
+            Toggle();
+        }, OpenOnMount);
 
         return new BoxEl
         {

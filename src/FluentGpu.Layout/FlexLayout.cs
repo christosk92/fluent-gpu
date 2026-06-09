@@ -80,7 +80,7 @@ public sealed class FlexLayout
 
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
-        if (_scene.HasScroll(node)) return MeasureViewport(node, in li);
+        if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
 
@@ -291,10 +291,45 @@ public sealed class FlexLayout
 
     // ── Scroll / virtual viewport (layout.md §6: layout-free scroll; content arranged at content-box origin) ──
 
-    private Size2 MeasureViewport(NodeHandle node, in LayoutInput li)
+    private Size2 MeasureViewport(NodeHandle node, in LayoutInput li, float availW)
     {
-        float w = float.IsNaN(li.Width) ? 0f : li.Width;     // sized by parent (explicit / flex-grow), never content
-        float h = float.IsNaN(li.Height) ? 0f : li.Height;
+        // Default ScrollView is a hard viewport boundary: it should take the size assigned by parent flex/layout and
+        // publish overflow to the scroll system, not make the page/nav/sidebar grow to its full content height.
+        // Popup list presenters opt into ContentSized: auto-size to rows, then clamp by MaxHeight and scroll overflow.
+        _scene.TryGetScroll(node, out var sc);
+        var content = sc.ContentNode;
+        bool horizontal = sc.Orientation == 1;
+        float w = float.IsNaN(li.Width) ? float.NaN : li.Width;
+        float h = float.IsNaN(li.Height) ? float.NaN : li.Height;
+
+        if (!sc.ContentSized)
+        {
+            if (float.IsNaN(w)) w = 0f;
+            if (float.IsNaN(h)) h = 0f;
+            w = Clamp(w, li.MinW, li.MaxW);
+            h = Clamp(h, li.MinH, li.MaxH);
+            ref RectF vb = ref _scene.Bounds(node);
+            vb = new RectF(vb.X, vb.Y, w, h);
+            return new Size2(w, h);
+        }
+
+        if (content.IsNull || !_scene.IsLive(content))
+        {
+            if (float.IsNaN(w)) w = 0f;
+            if (float.IsNaN(h)) h = 0f;
+        }
+        else if (float.IsNaN(w) || float.IsNaN(h))
+        {
+            float outerW = DefiniteWidth(in li, availW);
+            float contentAvailW = horizontal
+                ? float.PositiveInfinity
+                : (!float.IsNaN(w) ? MathF.Max(0f, w - li.Padding.Horizontal)
+                   : !float.IsInfinity(outerW) ? MathF.Max(0f, outerW - li.Padding.Horizontal)
+                   : float.PositiveInfinity);
+            var cs = Measure(content, contentAvailW);
+            if (float.IsNaN(w)) w = cs.Width + li.Padding.Horizontal;
+            if (float.IsNaN(h)) h = cs.Height + li.Padding.Vertical;
+        }
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
         ref RectF b = ref _scene.Bounds(node);
@@ -337,9 +372,9 @@ public sealed class FlexLayout
     private (float w, float h) ArrangePlainScroll(NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
     {
         if (content.IsNull) return (0f, 0f);
-        // Fill the cross axis to the viewport; let the main (scroll) axis take its natural extent (it overflows).
-        ref LayoutInput cli = ref _scene.Layout(content);
-        if (horizontal) cli.Height = innerH; else cli.Width = innerW;
+        // Fill the cross axis to the viewport during ARRANGE; do not write LayoutInput.Width/Height here. LayoutInput is
+        // the reconciled model, not mutable layout scratch. Mutating it poisoned content-sized popup lists: the first
+        // arrange wrote the 96px menu minimum into the column, so the next measure clipped long menu labels to 96px.
         var cs = Measure(content, horizontal ? float.PositiveInfinity : innerW);   // vertical scroll: wrap text to the viewport width
         float contentW = horizontal ? cs.Width : MathF.Max(cs.Width, innerW);
         float contentH = horizontal ? MathF.Max(cs.Height, innerH) : cs.Height;

@@ -24,9 +24,11 @@ public sealed record TokenSet
     public required ColorF FillCardDefault { get; init; }
     public required ColorF FillCardSecondary { get; init; }
     public required ColorF FillLayerDefault { get; init; }       // flyout / expander body
+    public required ColorF FillLayerAlt { get; init; }           // WinUI LayerFillColorAltBrush (ContentDialog top overlay)
     public required ColorF FillSolidBase { get; init; }          // page background
     public required ColorF FillSolidBaseAlt { get; init; }       // pane / lower surface
     public required ColorF FillSolidSecondary { get; init; }
+    public required ColorF FillSolidTertiary { get; init; }
     public required ColorF FillSmoke { get; init; }              // dialog / overlay scrim
 
     // Stroke hierarchy
@@ -38,6 +40,7 @@ public sealed record TokenSet
     public required ColorF StrokeFlyoutDefault { get; init; }    // SurfaceStrokeColorFlyout — flyout/menu border
     public required ColorF StrokeControlOnAccentDefault { get; init; }
     public required ColorF StrokeControlOnAccentSecondary { get; init; }   // top stop of the accent elevation border gradient
+    public required ColorF StrokeControlOnAccentTertiary { get; init; }    // checked SplitButton divider (#37000000)
 
     // Text hierarchy
     public required ColorF TextPrimary { get; init; }
@@ -54,6 +57,12 @@ public sealed record TokenSet
     public required ColorF AccentTertiary { get; init; }
     public required ColorF AccentDisabled { get; init; }
     public required ColorF AccentSubtle { get; init; }           // accent @ ~.16 (nav selection, info card)
+    // Accent TEXT (distinct from the accent FILL above): WinUI AccentTextFillColor{Primary,Secondary,Tertiary} =
+    // SystemAccentColorLight3/Light3/Light2 (dark) and Dark2/Dark3/Dark1 (light). Used for link text (HyperlinkButton),
+    // accent labels — readability-adjusted and SOLID (never the alpha-reduced fill). Disabled = TextDisabled.
+    public required ColorF AccentTextPrimary { get; init; }
+    public required ColorF AccentTextSecondary { get; init; }
+    public required ColorF AccentTextTertiary { get; init; }
 
     // Focus
     public required ColorF FocusOuter { get; init; }
@@ -92,6 +101,7 @@ public sealed record TokenSet
     public required ColorF SystemFillCautionBackground { get; init; }
     public required ColorF SystemFillSuccessBackground { get; init; }
     public required ColorF SystemFillAttentionBackground { get; init; }
+    public required ColorF SystemFillSolidNeutral { get; init; }   // WinUI SystemFillColorSolidNeutral (opaque gray) — InfoBadge Informational dot
     public required ColorF TextInverse { get; init; }    // WinUI TextFillColorInverse — text on a severity/inverse fill
 
     // Window
@@ -117,8 +127,9 @@ public static class Tok
 
     public static void Use(ThemeKind kind) { Theme = kind; T = kind == ThemeKind.Light ? Light : Dark; }
 
-    /// <summary>Inject the OS accent (host startup). Derived shades recompute from it.</summary>
-    public static void SetAccent(ColorF c) => _accent = c;
+    /// <summary>Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
+    /// subtle + hero + attention) recompute from it. Pass <c>null</c> to clear the override and revert to the theme default.</summary>
+    public static void SetAccent(ColorF? c) => _accent = c;
     public static void SetWindowBackground(ColorF c) => _windowBg = c;
 
     // Fill
@@ -135,9 +146,11 @@ public static class Tok
     public static ColorF FillCardDefault => T.FillCardDefault;
     public static ColorF FillCardSecondary => T.FillCardSecondary;
     public static ColorF FillLayerDefault => T.FillLayerDefault;
+    public static ColorF FillLayerAlt => T.FillLayerAlt;
     public static ColorF FillSolidBase => T.FillSolidBase;
     public static ColorF FillSolidBaseAlt => T.FillSolidBaseAlt;
     public static ColorF FillSolidSecondary => T.FillSolidSecondary;
+    public static ColorF FillSolidTertiary => T.FillSolidTertiary;
     public static ColorF FillSmoke => T.FillSmoke;
 
     // Stroke
@@ -149,6 +162,7 @@ public static class Tok
     public static ColorF StrokeFlyoutDefault => T.StrokeFlyoutDefault;
     public static ColorF StrokeControlOnAccentDefault => T.StrokeControlOnAccentDefault;
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
+    public static ColorF StrokeControlOnAccentTertiary => T.StrokeControlOnAccentTertiary;
 
     /// <summary>WinUI ControlElevationBorderBrush: a 2-stop vertical gradient (secondary edge → default edge) — the
     /// signature Fluent control border. Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
@@ -174,6 +188,23 @@ public static class Tok
     public static ColorF AccentTertiary => _accent is { } a ? a with { A = 0.80f } : T.AccentTertiary;
     public static ColorF AccentDisabled => T.AccentDisabled;
     public static ColorF AccentSubtle => _accent is { } a ? a with { A = 0.16f } : T.AccentSubtle;
+    // Accent TEXT shades. With a live accent override (OS accent or Tok.SetAccent) these recompute from the base by
+    // SHADING (lighten in dark / darken in light) toward the WinUI AccentTextFillColor ramp — NOT alpha-reduction, which
+    // would make link text translucent. With no override, the exact WinUI default values baked in the TokenSet are used.
+    public static ColorF AccentTextPrimary   => _accent is { } a ? AccentTextShade(a, 0) : T.AccentTextPrimary;
+    public static ColorF AccentTextSecondary => _accent is { } a ? AccentTextShade(a, 1) : T.AccentTextSecondary;
+    public static ColorF AccentTextTertiary  => _accent is { } a ? AccentTextShade(a, 2) : T.AccentTextTertiary;
+
+    // level 0=Primary 1=Secondary 2=Tertiary. Dark lightens (→ Light3/Light3/Light2); light darkens (→ Dark2/Dark3/Dark1).
+    // Mix factors tuned to the #0078D4 default anchors; the default (no-override) path uses the exact baked values above.
+    private static ColorF AccentTextShade(ColorF accent, int level)
+    {
+        bool light = Theme == ThemeKind.Light;
+        float t = light ? level switch { 0 => 0.45f, 1 => 0.66f, _ => 0.22f }
+                        : level switch { 0 => 0.55f, 1 => 0.55f, _ => 0.28f };
+        var target = light ? ColorF.FromRgba(0x00, 0x00, 0x00) : ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+        return new ColorF(accent.R + (target.R - accent.R) * t, accent.G + (target.G - accent.G) * t, accent.B + (target.B - accent.B) * t, 1f);
+    }
 
     // Focus
     public static ColorF FocusOuter => T.FocusOuter;
@@ -207,6 +238,7 @@ public static class Tok
     public static ColorF SystemFillCautionBackground => T.SystemFillCautionBackground;
     public static ColorF SystemFillSuccessBackground => T.SystemFillSuccessBackground;
     public static ColorF SystemFillAttentionBackground => T.SystemFillAttentionBackground;
+    public static ColorF SystemFillSolidNeutral => T.SystemFillSolidNeutral;
     public static ColorF TextInverse => T.TextInverse;
 
     public static ColorF WindowBackground => _windowBg ?? T.WindowBackground;
@@ -226,9 +258,11 @@ public static class Tok
         FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
         FillCardSecondary    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
         FillLayerDefault     = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C),
+        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
         FillSolidBase        = ColorF.FromRgba(0x20, 0x20, 0x20),
         FillSolidBaseAlt     = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
-        FillSolidSecondary   = ColorF.FromRgba(0x28, 0x28, 0x28),
+        FillSolidSecondary   = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
+        FillSolidTertiary    = ColorF.FromRgba(0x28, 0x28, 0x28),
         FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
         StrokeControlDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12),
         StrokeControlSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18),
@@ -238,6 +272,7 @@ public static class Tok
         StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x33),   // SurfaceStrokeColorFlyout (dark): 20% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23),
+        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         TextPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         TextSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC5),
         TextTertiary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
@@ -248,7 +283,11 @@ public static class Tok
         AccentDefault = ColorF.FromRgba(0x60, 0xCD, 0xFF),
         AccentSecondary = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xCC),
-        AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x29),
+        // WinUI dark: AccentTextFillColorPrimary/Secondary = SystemAccentColorLight3 (#A6D8FF), Tertiary = Light2 (#76B9ED).
+        AccentTextPrimary   = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
+        AccentTextSecondary = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
+        AccentTextTertiary  = ColorF.FromRgba(0x76, 0xB9, 0xED),
+        AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),   // WinUI AccentFillColorDisabled = #28FFFFFF
         AccentSubtle    = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0x29),
         FocusOuter = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         FocusInner = ColorF.FromRgba(0x00, 0x00, 0x00, 0xB3),
@@ -271,6 +310,7 @@ public static class Tok
         SystemFillCautionBackground   = ColorF.FromRgba(0x43, 0x35, 0x19),
         SystemFillSuccessBackground   = ColorF.FromRgba(0x39, 0x3D, 0x1B),
         SystemFillAttentionBackground = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
+        SystemFillSolidNeutral = ColorF.FromRgba(0x9D, 0x9D, 0x9D),
         TextInverse = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
         WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20),
     };
@@ -290,9 +330,11 @@ public static class Tok
         FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
         FillCardSecondary    = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
         FillLayerDefault     = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80),
+        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         FillSolidBase        = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
         FillSolidBaseAlt     = ColorF.FromRgba(0xEB, 0xEB, 0xEB),
         FillSolidSecondary   = ColorF.FromRgba(0xEE, 0xEE, 0xEE),
+        FillSolidTertiary    = ColorF.FromRgba(0xF9, 0xF9, 0xF9),
         FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
         StrokeControlDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
         StrokeControlSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x29),
@@ -302,6 +344,7 @@ public static class Tok
         StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
         StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
         StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
         TextSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x9E),
         TextTertiary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
@@ -312,6 +355,10 @@ public static class Tok
         AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),
+        // WinUI light: AccentTextFillColorPrimary = SystemAccentColorDark2 (#004275), Secondary = Dark3 (#002642), Tertiary = Dark1 (#005FB8).
+        AccentTextPrimary   = ColorF.FromRgba(0x00, 0x42, 0x75),
+        AccentTextSecondary = ColorF.FromRgba(0x00, 0x26, 0x42),
+        AccentTextTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         AccentSubtle    = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0x24),
         FocusOuter = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
@@ -335,6 +382,7 @@ public static class Tok
         SystemFillCautionBackground   = ColorF.FromRgba(0xFF, 0xF4, 0xCE),
         SystemFillSuccessBackground   = ColorF.FromRgba(0xDF, 0xF6, 0xDD),
         SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
+        SystemFillSolidNeutral = ColorF.FromRgba(0x8A, 0x8A, 0x8A),
         TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         WindowBackground = ColorF.FromRgba(0xF3, 0xF3, 0xF3),
     };

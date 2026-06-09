@@ -427,7 +427,15 @@ public sealed class TreeReconciler
         else if (el is TextEl t)
         {
             if (t.TextBind is { } txb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Text = _strings.Intern(txb()); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    var next = _strings.Intern(txb());
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.Text == next) return;
+                    paint.Text = next;
+                    _scene.Mark(node, NodeFlags.LayoutDirty);
+                }, owner: null, runNow: true));
             if (t.ColorBind is { } cb)
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
         }
@@ -630,6 +638,10 @@ public sealed class TreeReconciler
                 if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
+                if (b.HoverGradient is { } hg) _scene.SetHoverGradient(node, hg); else _scene.ClearHoverGradient(node);
+                if (b.PressedGradient is { } pg) _scene.SetPressedGradient(node, pg); else _scene.ClearPressedGradient(node);
+                if (b.HoverBorderBrush is { } hbb) _scene.SetHoverBorderBrush(node, hbb); else _scene.ClearHoverBorderBrush(node);
+                if (b.PressedBorderBrush is { } pbb) _scene.SetPressedBorderBrush(node, pbb); else _scene.ClearPressedBorderBrush(node);
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
@@ -688,6 +700,8 @@ public sealed class TreeReconciler
                 }
                 else { Anim?.ClearTransition(node); _scene.Unmark(node, NodeFlags.BoundsAnimated); }
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
+                // Disabled gate (set unconditionally each reconcile — toggling IsEnabled must both set AND clear the bit).
+                if (b.IsEnabled) _scene.Unmark(node, NodeFlags.Disabled); else _scene.Mark(node, NodeFlags.Disabled);
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 ii.Role = b.Role;
@@ -713,11 +727,13 @@ public sealed class TreeReconciler
                 if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
                 else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
 
-                if (b.OnPointerDown is not null || b.OnDrag is not null)
+                if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null || b.OnPointerExit is not null)
                 {
-                    ii.HandlerMask |= InteractionInfo.PointerBit;
+                    ii.HandlerMask |= InteractionInfo.PointerBit;   // hit-testable so it receives press/drag AND bare-hover/exit
                     _scene.SetPointerDown(node, b.OnPointerDown);
                     _scene.SetDrag(node, b.OnDrag);
+                    _scene.SetHoverMove(node, b.OnHoverMove);
+                    _scene.SetPointerExit(node, b.OnPointerExit);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
                 else
@@ -725,6 +741,8 @@ public sealed class TreeReconciler
                     ii.HandlerMask &= unchecked((ushort)~InteractionInfo.PointerBit);
                     _scene.SetPointerDown(node, null);
                     _scene.SetDrag(node, null);
+                    _scene.SetHoverMove(node, null);
+                    _scene.SetPointerExit(node, null);
                 }
 
                 ii.Focusable = b.Focusable || b.OnClick is not null;
@@ -749,7 +767,9 @@ public sealed class TreeReconciler
                 li.AlignSelf = s.AlignSelf;
 
                 _scene.Mark(node, NodeFlags.ClipsToBounds);
-                _scene.ScrollRef(node).Orientation = s.Horizontal ? (byte)1 : (byte)0;
+                ref ScrollState ss = ref _scene.ScrollRef(node);
+                ss.Orientation = s.Horizontal ? (byte)1 : (byte)0;
+                ss.ContentSized = s.ContentSized;
                 break;
             }
             case VirtualListEl v:
@@ -845,9 +865,16 @@ public sealed class TreeReconciler
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Text;
                 paint.TextColor = t.Color;
+                paint.TextHoverColor = t.HoverColor;
+                paint.TextPressedColor = t.PressedColor;
+                paint.TextDisabledColor = t.DisabledColor;
+                paint.TextFocusedColor = t.FocusedColor;
                 _scene.SetDynamicText(node, t.DynamicText);
-                var newText = _strings.Intern(t.Text);
-                if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
+                if (t.TextBind is null)
+                {
+                    var newText = _strings.Intern(t.Text);
+                    if (paint.Text != newText) { paint.Text = newText; _scene.Mark(node, NodeFlags.LayoutDirty); }
+                }
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.TextStyle = new TextStyle(_strings.Intern(t.FontFamily), t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);

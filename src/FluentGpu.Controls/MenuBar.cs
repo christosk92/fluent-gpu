@@ -15,6 +15,7 @@ public sealed record MenuBarItem(string Title, IReadOnlyList<MenuFlyoutItem> Ite
 public sealed class MenuBar : Component
 {
     public IReadOnlyList<MenuBarItem> Menus = [];
+    public int OpenIndexOnMount = -1;   // deterministic visual-shot hook: open one top-level menu after first mount
 
     public static Element Create(IReadOnlyList<MenuBarItem> menus)
         => Embed.Comp(() => new MenuBar { Menus = menus });
@@ -25,7 +26,7 @@ public sealed class MenuBar : Component
         for (int i = 0; i < Menus.Count; i++)
         {
             var m = Menus[i];
-            buttons[i] = Embed.Comp(() => new MenuBarButton { Title = m.Title, Items = m.Items });
+            buttons[i] = Embed.Comp(() => new MenuBarButton { Title = m.Title, Items = m.Items, OpenOnMount = i == OpenIndexOnMount });
         }
 
         return new BoxEl
@@ -45,12 +46,15 @@ public sealed class MenuBar : Component
     {
         public string Title = "";
         public IReadOnlyList<MenuFlyoutItem> Items = [];
+        public bool OpenOnMount;
 
         public override Element Render()
         {
             var svc = UseContext(Overlay.Service);
             var anchor = UseRef<NodeHandle>(default);
             var handle = UseRef<OverlayHandle?>(null);
+            var autoOpened = UseRef(false);
+            var openSignal = UseSignal(false);
 
             void Toggle()
             {
@@ -59,11 +63,25 @@ public sealed class MenuBar : Component
                     () => anchor.Value,
                     () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                     FlyoutPlacement.BottomLeft);
+                handle.Value.ClosedAction = () => { handle.Value = null; openSignal.Value = false; };
+                openSignal.Value = true;
             }
+
+            void OpenWhenReady()
+            {
+                if (!OpenOnMount || autoOpened.Value || anchor.Value.IsNull) return;
+                autoOpened.Value = true;
+                Toggle();
+            }
+
+            UseLayoutEffect(() =>
+            {
+                OpenWhenReady();
+            }, OpenOnMount);
 
             // MenuBarItem 'Selected' state (flyout open) = SubtleFillColorTertiary, same as Pressed; at rest it is
             // MenuBarItemBackground = SubtleFillColorTransparent (explicit, not just defaulted-transparent).
-            bool open = handle.Value is { IsOpen: true };
+            bool open = openSignal.Value;
 
             return new BoxEl
             {
@@ -76,7 +94,7 @@ public sealed class MenuBar : Component
                 HoverFill = Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
                 Role = AutomationRole.MenuItem,
-                OnRealized = h => anchor.Value = h,
+                OnRealized = h => { anchor.Value = h; OpenWhenReady(); },
                 OnClick = Toggle,
                 Children = [new TextEl(Title) { Size = 14f, Color = Tok.TextPrimary }],
             };

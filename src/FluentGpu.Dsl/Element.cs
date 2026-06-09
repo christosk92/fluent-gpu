@@ -34,6 +34,12 @@ public sealed record BoxEl : Element
     public ArcSpec? Arc { get; init; }             // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get; init; }   // gradient fill — supersedes Fill at record time when set
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
+    // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
+    // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
+    public GradientSpec? HoverGradient { get; init; }
+    public GradientSpec? PressedGradient { get; init; }
+    public GradientSpec? HoverBorderBrush { get; init; }
+    public GradientSpec? PressedBorderBrush { get; init; }
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
 
     public Action? OnClick { get; init; }
@@ -44,10 +50,20 @@ public sealed record BoxEl : Element
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
+    /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
+    public Action<Point2>? OnHoverMove { get; init; }
+    /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
+    /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
+    public Action? OnPointerExit { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
     public bool HitTestVisible { get; init; } = true;
+    /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
+    /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
+    /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>
+    public bool IsEnabled { get; init; } = true;
     public bool Focusable { get; init; }
     public int TabIndex { get; init; }
     /// <summary>Semantic control role (set by the control factories; a button IS a BoxEl). Surfaced to a11y/devtools/tests.</summary>
@@ -208,6 +224,14 @@ public sealed record TextEl(string Text) : Element
     public float Size { get; init; } = 14f;
     public bool Bold { get; init; }
     public ColorF Color { get; init; } = ColorF.FromRgba(0xE6, 0xE6, 0xE6);
+    // Stateful foreground ramps (WinUI dims/recolors label & glyph foreground on hover/press/disabled/focus). A==0 ⇒
+    // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
+    // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).
+    // Disabled/Focused are steps gated by the ancestor's NodeFlags.Disabled / this node's NodeFlags.Focused.
+    public ColorF HoverColor { get; init; }
+    public ColorF PressedColor { get; init; }
+    public ColorF DisabledColor { get; init; }
+    public ColorF FocusedColor { get; init; }
     public string? FontFamily { get; init; }
     public DynamicTextKind DynamicText { get; init; }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>
@@ -266,6 +290,12 @@ public sealed record ScrollEl : Element
 
     public Element Content { get; init; } = new BoxEl();
     public bool Horizontal { get; init; }     // false = vertical scroll (the common case)
+    /// <summary>
+    /// Measure to content when auto-sized, then clamp by Min/Max. Default false keeps ScrollView a hard viewport
+    /// boundary for app/page/navigation scrolling; popup lists (ComboBox/MenuFlyout/AutoSuggest) opt in so short lists
+    /// size to their rows and tall lists scroll after MaxHeight.
+    /// </summary>
+    public bool ContentSized { get; init; }
 
     // The viewport participates in its parent's layout like a box (size + flex + margin + a backing fill).
     public float Width { get; init; } = float.NaN;

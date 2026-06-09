@@ -41,17 +41,16 @@ public static class AppBarButton
         HoverForeground = Tok.TextPrimary,                          // AppBarButtonForegroundPointerOver = TextFillColorPrimary
         PressedFill = Tok.FillSubtleTertiary,                       // AppBarButtonBackgroundPressed
         PressedForeground = Tok.TextSecondary,                      // AppBarButtonForegroundPressed = TextFillColorSecondary (WinUI dims on press)
-        DisabledFill = Tok.FillControlDisabled,                     // AppBarButtonBackgroundDisabled = SubtleFillColorDisabled (no FillSubtleDisabled token; FillControlDisabled is the nearest)
+        DisabledFill = Tok.FillSubtleTransparent,                   // AppBarButtonBackgroundDisabled = SubtleFillColorDisabled = #00FFFFFF (transparent)
         DisabledForeground = Tok.TextDisabled,                      // AppBarButtonForegroundDisabled = TextFillColorDisabled
     };
 
     public static BoxEl Create(string glyph, string label, Action onClick, bool enabled = true, Style? style = null)
     {
         var s = style ?? DefaultStyle;
-        // WinUI dims the foreground to TextSecondary on press via a per-state foreground; the engine BoxEl carries no
-        // per-pointer-state text color, so the surface swap to PressedFill carries the press. Disabled swaps fill +
-        // text to the disabled tokens up front (the engine has no IsEnabled gate on BoxEl).
-        var foreground = enabled ? s.RestForeground : s.DisabledForeground;
+        // The engine IsEnabled gate stops hit-test/focus/keyboard when disabled; the child TextEls inherit the box's
+        // eased hover/press progress (WinUI dims the foreground to TextSecondary on press) and fall back to
+        // DisabledColor under a disabled ancestor. Resting fill stays the control-chosen disabled token.
         return new BoxEl
         {
             Direction = 1,
@@ -63,15 +62,30 @@ public static class AppBarButton
             Padding = s.Padding,                                    // AppBarButtonInnerBorderMargin = 2,6,2,6
             Corners = CornerRadius4.All(s.CornerRadius),
             Fill = enabled ? s.RestFill : s.DisabledFill,
-            HoverFill = enabled ? s.HoverFill : s.DisabledFill,
-            PressedFill = enabled ? s.PressedFill : s.DisabledFill,
-            OnClick = enabled ? onClick : null,
-            HitTestVisible = enabled,
+            HoverFill = s.HoverFill,
+            PressedFill = s.PressedFill,
+            IsEnabled = enabled,
+            OnClick = onClick,
             Role = AutomationRole.Button,
             Children =
             [
-                new TextEl(glyph) { Size = s.IconHeight, Color = foreground, FontFamily = Theme.IconFont },
-                new TextEl(label) { Size = s.LabelFontSize, Color = foreground },
+                new TextEl(glyph)
+                {
+                    Size = s.IconHeight,
+                    Color = s.RestForeground,
+                    HoverColor = s.HoverForeground,
+                    PressedColor = s.PressedForeground,
+                    DisabledColor = s.DisabledForeground,
+                    FontFamily = Theme.IconFont,
+                },
+                new TextEl(label)
+                {
+                    Size = s.LabelFontSize,
+                    Color = s.RestForeground,
+                    HoverColor = s.HoverForeground,
+                    PressedColor = s.PressedForeground,
+                    DisabledColor = s.DisabledForeground,
+                },
             ],
         };
     }

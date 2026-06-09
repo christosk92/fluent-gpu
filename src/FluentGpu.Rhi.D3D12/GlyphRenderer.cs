@@ -68,6 +68,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu;
     private bool _atlasDirty = true;
+    private long _atlasNonZero;
     private bool _texInitialized;
     private int _shelfX = 1, _shelfY = 1, _shelfH;
 
@@ -137,7 +138,7 @@ float4 PSMain(VSOut i) : SV_Target
     public int CachedRuns => _runCache.Count;
     public int RunsCached => _runsCached;
     public int RunsShaped => _runsShaped;
-    public long AtlasNonZero { get { long n = 0; var c = _cpu; for (int i = 0; i < c.Length; i++) if (c[i] != 0) n++; return n; } }
+    public long AtlasNonZero => _atlasNonZero;
 
     private static void Check(HRESULT hr, string what)
     {
@@ -298,8 +299,19 @@ float4 PSMain(VSOut i) : SV_Target
         if (_shelfX + w + 1 > ATLAS) { _shelfX = 1; _shelfY += _shelfH + 1; _shelfH = 0; }
         if (_shelfY + h + 1 > ATLAS) return;   // atlas full (slice never hits this)
         e.X = _shelfX; e.Y = _shelfY;
+        long nonZero = _atlasNonZero;
         for (int row = 0; row < h; row++)
-            Array.Copy(src, row * w, _cpu, (e.Y + row) * ATLAS + e.X, w);
+        {
+            int srcOff = row * w;
+            int dstOff = (e.Y + row) * ATLAS + e.X;
+            for (int x = 0; x < w; x++)
+            {
+                byte v = src[srcOff + x];
+                _cpu[dstOff + x] = v;
+                if (v != 0) nonZero++;
+            }
+        }
+        _atlasNonZero = nonZero;
         _shelfX += w + 1;
         if (h > _shelfH) _shelfH = h;
     }

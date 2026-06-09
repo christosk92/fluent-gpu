@@ -47,10 +47,10 @@ sealed class PipsPagerPage : Component
 {
     public override Element Render()
     {
-        var (sel, setSel) = UseState(0);
+        var sel = UseSignal(0);
         return GalleryPage.Shell("PipsPager",
             "A glyph-based pager for navigating a small, fixed number of pages.",
-            ControlExample.Build("A PipsPager", PipsPager.Create(5, sel, setSel), output: GalleryPage.LiveText(() => $"Page {sel + 1} / 5")));
+            ControlExample.Build("A PipsPager", PipsPager.Create(5, sel.Value, i => sel.Value = i), output: GalleryPage.LiveText(() => $"Page {sel.Value + 1} / 5")));
     }
 }
 

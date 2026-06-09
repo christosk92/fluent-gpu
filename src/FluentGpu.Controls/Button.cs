@@ -22,9 +22,8 @@ public static partial class Button
         public ColorF HoverBackground { get; init; }
         public ColorF PressedBackground { get; init; }
         // WinUI ButtonBackgroundDisabled / ButtonForeground{PointerOver,Pressed,Disabled} / ButtonBorderBrush{Pressed,Disabled}.
-        // Hover/Pressed/Disabled foreground + Disabled fill + per-state border carry the WinUI-correct values; the engine
-        // wires box Fill/HoverFill/PressedFill and the static foreground/border directly (no text-color or disabled state
-        // machine on a leaf BoxEl/TextEl), so these document parity for theming/overrides and future disabled wiring.
+        // Now fully wired: Hover/Pressed/Disabled foreground → the TextEl interaction ramps (P2), per-state border →
+        // Hover/PressedBorderBrush (P4b), Disabled fill/border + IsEnabled gate (P1) drive the disabled logical state.
         public ColorF DisabledBackground { get; init; }
         public ColorF HoverForeground { get; init; }
         public ColorF PressedForeground { get; init; }
@@ -59,8 +58,8 @@ public static partial class Button
         PressedForeground = Tok.TextOnAccentSecondary,      // AccentButtonForegroundPressed
         DisabledForeground = Tok.TextOnAccentDisabled,      // AccentButtonForegroundDisabled
         HoverBorderBrush = Tok.AccentControlElevationBorder,
-        PressedBorderBrush = null,                          // AccentButtonBorderBrushPressed = ControlFillColorTransparent
-        DisabledBorderBrush = null,                         // AccentButtonBorderBrushDisabled = ControlFillColorTransparent
+        PressedBorderBrush = GradientSpec.Solid(ColorF.Transparent),  // AccentButtonBorderBrushPressed = ControlFillColorTransparent
+        DisabledBorderBrush = GradientSpec.Solid(ColorF.Transparent), // AccentButtonBorderBrushDisabled = ControlFillColorTransparent
     };
 
     public static Style StandardStyle => StandardStyleOverride ?? new Style
@@ -80,27 +79,42 @@ public static partial class Button
     };
 
     /// <summary>An accent (primary) button. Override the look by passing a <see cref="Style"/>.</summary>
-    public static BoxEl Accent(string label, Action onClick, Style? style = null) => Build(label, onClick, style ?? AccentStyle);
+    public static BoxEl Accent(string label, Action onClick, Style? style = null, bool isEnabled = true) => Build(label, onClick, style ?? AccentStyle, isEnabled);
 
     /// <summary>A neutral (standard) button.</summary>
-    public static BoxEl Standard(string label, Action onClick, Style? style = null) => Build(label, onClick, style ?? StandardStyle);
+    public static BoxEl Standard(string label, Action onClick, Style? style = null, bool isEnabled = true) => Build(label, onClick, style ?? StandardStyle, isEnabled);
 
-    private static BoxEl Build(string label, Action onClick, Style s) => new()
+    private static BoxEl Build(string label, Action onClick, Style s, bool enabled) => new()
     {
         Direction = 0,
         Role = AutomationRole.Button,
         Padding = s.Padding,
         MinHeight = s.MinHeight,
         AlignItems = FlexAlign.Center,
-        Fill = s.Background,
+        // Disabled is a logical state (no engine ramp): resting fill/border swap to the WinUI disabled tokens. Hover/Pressed
+        // never fire while disabled (the engine gate stops hit-test), so HoverFill/PressedFill stay wired but inert.
+        Fill = enabled ? s.Background : s.DisabledBackground,
         HoverFill = s.HoverBackground,
         PressedFill = s.PressedBackground,
-        BorderBrush = s.BorderBrush,
+        BorderBrush = enabled ? s.BorderBrush : (s.DisabledBorderBrush ?? s.BorderBrush),
+        HoverBorderBrush = s.HoverBorderBrush,           // P4b state-gradient border
+        PressedBorderBrush = s.PressedBorderBrush,
         BorderWidth = s.BorderWidth,
         Corners = CornerRadius4.All(s.CornerRadius),
-        HoverScale = s.HoverScale,
-        PressScale = s.PressScale,
+        HoverScale = enabled ? s.HoverScale : 1f,
+        PressScale = enabled ? s.PressScale : 1f,
+        IsEnabled = enabled,                              // P1 engine gate (no manual handler-nulling)
         OnClick = onClick,
-        Children = [new TextEl(label) { Size = s.FontSize, Bold = s.Bold, Color = s.Foreground }],
+        Children =
+        [
+            new TextEl(label)
+            {
+                Size = s.FontSize, Bold = s.Bold,
+                Color = s.Foreground,                    // P2 foreground ramp: rest → hover → pressed; disabled via the gate
+                HoverColor = s.HoverForeground,
+                PressedColor = s.PressedForeground,
+                DisabledColor = s.DisabledForeground,
+            },
+        ],
     };
 }

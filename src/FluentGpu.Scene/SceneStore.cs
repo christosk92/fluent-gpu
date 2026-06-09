@@ -60,6 +60,8 @@ public sealed class SceneStore : ISceneBackend
     private Action<CharEventArgs>?[] _charHandler;   // text (character) input handler
     private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
     private Action<Point2>?[] _drag;
+    private Action<Point2>?[] _hoverMove;     // position-aware bare-hover move (no press) — RatingControl preview, etc.
+    private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly Dictionary<int, ScrollState> _scroll = new();
@@ -74,6 +76,12 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, PolylineStrokeSpec> _polylines = new();
     private readonly Dictionary<int, GradientSpec> _gradients = new();
     private readonly Dictionary<int, GradientSpec> _borderBrushes = new();   // gradient border stroke (elevation edge)
+    // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
+    // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
+    private readonly Dictionary<int, GradientSpec> _hoverGradients = new();
+    private readonly Dictionary<int, GradientSpec> _pressedGradients = new();
+    private readonly Dictionary<int, GradientSpec> _hoverBorderBrushes = new();
+    private readonly Dictionary<int, GradientSpec> _pressedBorderBrushes = new();
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
@@ -103,6 +111,8 @@ public sealed class SceneStore : ISceneBackend
         _charHandler = new Action<CharEventArgs>?[capacity];
         _pointerDown = new Action<Point2>?[capacity];
         _drag = new Action<Point2>?[capacity];
+        _hoverMove = new Action<Point2>?[capacity];
+        _pointerExit = new Action?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -131,6 +141,8 @@ public sealed class SceneStore : ISceneBackend
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
         _drag[idx] = null;
+        _hoverMove[idx] = null;
+        _pointerExit[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -153,6 +165,8 @@ public sealed class SceneStore : ISceneBackend
         _charHandler[idx] = null;
         _pointerDown[idx] = null;
         _drag[idx] = null;
+        _hoverMove[idx] = null;
+        _pointerExit[idx] = null;
         ClearDynamicText(idx);
         _scroll.Remove(idx);
         _extents.Remove(idx);
@@ -163,6 +177,10 @@ public sealed class SceneStore : ISceneBackend
         _polylines.Remove(idx);
         _gradients.Remove(idx);
         _borderBrushes.Remove(idx);
+        _hoverGradients.Remove(idx);
+        _pressedGradients.Remove(idx);
+        _hoverBorderBrushes.Remove(idx);
+        _pressedBorderBrushes.Remove(idx);
         _acrylics.Remove(idx);
         _measureCache.Remove(idx);
         _gen[idx]++;
@@ -258,6 +276,10 @@ public sealed class SceneStore : ISceneBackend
     public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
     public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
     public Action<Point2>? GetDrag(NodeHandle h) => _drag[h.Raw.Index];
+    public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[h.Raw.Index] = handler;
+    public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[h.Raw.Index];
+    public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[h.Raw.Index] = handler;
+    public Action? GetPointerExit(NodeHandle h) => _pointerExit[h.Raw.Index];
 
     public bool HasDynamicText => _dynamicTextCount > 0;
 
@@ -368,6 +390,22 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGetValue((int)h.Raw.Index, out g);
     public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
 
+    public void SetHoverGradient(NodeHandle h, in GradientSpec g) => _hoverGradients[(int)h.Raw.Index] = g;
+    public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
+
+    public void SetPressedGradient(NodeHandle h, in GradientSpec g) => _pressedGradients[(int)h.Raw.Index] = g;
+    public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
+
+    public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g) => _hoverBorderBrushes[(int)h.Raw.Index] = g;
+    public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
+
+    public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g) => _pressedBorderBrushes[(int)h.Raw.Index] = g;
+    public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGetValue((int)h.Raw.Index, out g);
+    public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
+
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
@@ -405,7 +443,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
-        Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n);
+        Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

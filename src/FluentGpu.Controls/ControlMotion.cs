@@ -31,6 +31,24 @@ public readonly record struct StateBrush(ColorF Rest, ColorF Hover, ColorF Press
     public ColorF Resting(bool enabled) => enabled ? Rest : Disabled;
 }
 
+/// <summary>
+/// The typed computed-"TemplateSettings" convention — the antidote to WinUI's stringly <c>TemplateSettings</c> bound into
+/// storyboards. A control declares a local <c>readonly record struct &lt;Control&gt;TemplateSettings(...)</c> of typed values
+/// (rotations, heights, clip rects, open/close animation positions), computes it ONCE per state change (a pure factory
+/// called in render, or a <c>UseMemo</c>/<c>OnRealized</c> effect that reads the control's own signals), and feeds the
+/// fields into the engine's existing channels: static props, <c>TransformBind</c>/<c>OpacityBind</c>/<c>WidthBind</c>/
+/// <c>HeightBind</c>, <c>AnimEngine</c> keyframe seeds, or the clip-rect channel (<c>AnimChannel.ClipL/T/R/B</c>). Never
+/// rebuild the record inside a hot bind/effect body — compute it in the memo/factory. <see cref="ExpanderTemplateSettings"/>
+/// is the reference; the same shape serves CommandBarFlyout, NavigationView, Progress*, TeachingTip, TabView, TreeView, …
+/// These small helpers are the shared interpolation math those records use.
+/// </summary>
+public static class Tween
+{
+    public static float Clamp01(float v) => v < 0f ? 0f : v > 1f ? 1f : v;
+    public static float Lerp(float a, float b, float t) => a + (b - a) * t;
+    public static float SmoothStep(float t) { t = Clamp01(t); return t * t * (3f - 2f * t); }
+}
+
 public static class ControlMotion
 {
     /// <summary>Icon "pop": scale 0.5→1 + fade 0→1 on a snappy spring (~180ms, faint overshoot). For a checkmark or the
