@@ -50,8 +50,9 @@ public static class Icons
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
     public const string Movie = "\uE8B2";
-    public const string RevealPassword = "\uE7B3";   // PasswordBox "eye" reveal glyph
-    public const string ClearText = "\uE894";        // TextBox DeleteButton glyph (TextBox_themeresources.xaml GlyphElement)
-    public const string CaretUpSolid = "\uE70E";     // NumberBox inline spinner up
-    public const string CaretDownSolid = "\uE70D";   // NumberBox inline spinner down
+    public const string RevealPassword = "\uF78D";   // PasswordBox RevealButton GlyphElement (PasswordBox_themeresources.xaml:100)
+    public const string ClearText = "\uE894";        // TextBox DeleteButton glyph (TextBox_themeresources.xaml:246 GlyphElement)
+    public const string CaretUpSolid = "\uE70E";     // NumberBox UpSpinButton Content (NumberBox.xaml:174)
+    public const string CaretDownSolid = "\uE70D";   // NumberBox DownSpinButton Content (NumberBox.xaml:175)
+    public const string NumberBoxPopupIndicator = "\uEC8F"; // NumberBox Compact in-field PopupIndicator (NumberBox.xaml:365)
 }

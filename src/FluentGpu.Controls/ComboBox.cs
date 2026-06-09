@@ -64,15 +64,25 @@ public sealed class ComboBox : Component
     public bool IsEnabled = true;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
     public Action<int>? OnSelectionChanged;
+    /// <summary>WinUI <c>TextSubmitted</c> with the Handled contract (ComboBoxTextSubmittedEventArgs): raised on commit
+    /// (Enter / Tab / focus loss) when the typed text matched NO item during search (ComboBox_Partial.cpp:2487–2513).
+    /// Return true = handled (the app accepted the custom value; the default matching is skipped); false/null → the
+    /// default: exact-match the items case-insensitively and select on a hit (cpp:2516–2543), else the text stays as a
+    /// custom value with <see cref="SelectedIndex"/> = −1.</summary>
+    public Func<string, bool>? OnTextSubmitted;
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
-                                 bool isEnabled = true, Action<int>? onSelectionChanged = null)
+                                 bool isEnabled = true, Action<int>? onSelectionChanged = null,
+                                 Func<string, bool>? onTextSubmitted = null)
         => Embed.Comp(() => new ComboBox
         {
             Items = items, SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
+            OnTextSubmitted = onTextSubmitted,
         });
+
+    private EditableText? _edit;
 
     public override Element Render()
     {
@@ -81,6 +91,12 @@ public sealed class ComboBox : Component
         var fallbackText = UseSignal("");
         var text = Text ?? fallbackText;
         var svc = UseContext(Overlay.Service);
+
+        // ── Editable-mode search state (ComboBox_Partial.cpp m_searchResultIndex/m_searchResultIndexSet) ────────
+        var searchIdx = UseRef(-1);
+        var searchSet = UseRef(false);
+        var restoreIdx = UseRef(-1);     // m_indexToRestoreOnCancel — the selection when editing began (cpp:2448–2455)
+        var cancelling = UseRef(false);  // Escape path: skip the commit that the EditableText blur would otherwise run
 
         // 'open' is reactive so the field can re-render its corner-join + chevron flip when the popup opens/closes; the
         // highlighted row index lives in its own signal so the popup body (a Component) re-highlights without re-rendering us.
@@ -98,7 +114,13 @@ public sealed class ComboBox : Component
         {
             if (i < 0 || i >= Items.Count) return;
             SelectedIndex.Value = i;
-            if (Editable) text.Value = Items[i];
+            if (Editable)
+            {
+                // Commit updates the field SYNCHRONOUSLY with the item text selected-all (UpdateEditableTextBox
+                // selectAll:true, ComboBox_Partial.cpp:2585); a bare signal write defers the document fold.
+                if (_edit is { } e) e.ReplaceText(Items[i], 0, Items[i].Length);
+                else text.Value = Items[i];
+            }
             OnSelectionChanged?.Invoke(i);
         }
 
@@ -109,25 +131,118 @@ public sealed class ComboBox : Component
         void OpenPopup()
         {
             if (handle.Value is { IsOpen: true } || !IsEnabled) return;
-            highlight.Value = sel;     // open with the keyboard cursor on the current selection (WinUI)
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                () => Embed.Comp(() => new ComboBoxList
-                {
-                    Owner = this, Selected = SelectedIndex, Highlight = highlight, Width = w, OnChoose = Choose,
-                }),
-                FlyoutPlacement.BottomStretch,
-                new PopupOptions(FocusTrap: true));
+            highlight.Value = searchSet.Value ? searchIdx.Value : sel;   // keyboard cursor on the search result / selection
+            Func<NodeHandle> anchorOf = () => anchor.Value;
+            Func<Element> body = () => Embed.Comp(() => new ComboBoxList
+            {
+                Owner = this, Selected = SelectedIndex, Highlight = highlight, Width = w, OnChoose = Choose,
+            });
+            // Editable mode keeps focus IN the text field while the list is open (WinUI: arrows preview from the
+            // TextBox, ComboBox_Partial.cpp:2840–2886) — no focus trap; the non-editable list takes focus + owns keys.
+            handle.Value = Editable
+                ? svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch)
+                : svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch, new PopupOptions(FocusTrap: true));
             handle.Value.ClosedAction = () =>
             {
                 handle.Value = null;
                 highlight.Value = -1;
                 openVer.Value = openVer.Peek() + 1;
+                // WinUI commits the editable search whenever the popup closes non-cancelled (OnIsDropDownOpenChanged →
+                // CommitRevertEditableSearch(m_isClosingDueToCancel), ComboBox_Partial.cpp:1757) — covers light-dismiss.
+                if (Editable && !cancelling.Value) CommitSearch();
             };
             openVer.Value = openVer.Peek() + 1;
         }
 
         void Toggle() { if (handle.Value is { IsOpen: true }) Close(); else OpenPopup(); }
+
+        // ── Editable mode: search-as-you-type / arrow preview / commit-or-TextSubmitted / Escape revert ──────────
+        // (ComboBox_Partial.cpp — ProcessSearch :3934–4009, SearchItemSourceIndex :4011–4132,
+        //  CommitRevertEditableSearch :2441–2599, arrows :2838–2886 + :2925–2949, keys :3007–3063.)
+
+        int FindMatch(string t, bool exact)
+        {
+            for (int i = 0; i < Items.Count; i++)
+            {
+                // Items compare with leading spaces trimmed, case-insensitively (cpp:4096 + StartsWithIgnoreLinguisticSemantics :4134).
+                string item = Items[i].TrimStart();
+                if (exact ? string.Equals(item, t, StringComparison.OrdinalIgnoreCase)
+                          : item.StartsWith(t, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            return -1;
+        }
+
+        void ResetSearch() { searchSet.Value = false; searchIdx.Value = -1; }   // cpp:2601–2605
+
+        // Search on a user edit. A DELETION searches exact-match only so auto-complete cannot fight backspacing
+        // (cpp:4098–4106); an insertion that prefix-matches AUTO-COMPLETES the item into the field with the completed
+        // suffix selected for quick replacement (cpp:4112–4116 + UpdateEditableTextBox :1543–1551). The match is NOT
+        // committed while typing (SelectionChangedTrigger default = Committed); an open dropdown shows it as the
+        // cursor row (OverrideSelectedIndexForVisualStates, cpp:3976–3980).
+        void ProcessSearch(bool deletion)
+        {
+            string t = text.Peek();
+            int found = t.Length == 0 ? -1 : FindMatch(t, exact: deletion);
+            searchSet.Value = true;
+            searchIdx.Value = found;
+            if (found >= 0 && !deletion && _edit is { } e)
+            {
+                string item = Items[found];
+                if (!string.Equals(item, t, StringComparison.Ordinal))
+                {
+                    int selStart = e.Core.Selection.Start;   // caret before the write (cpp:1544–1546)
+                    e.ReplaceText(item, selStart, item.Length - selStart);
+                }
+            }
+            if (handle.Value is { IsOpen: true }) highlight.Value = found;
+        }
+
+        // Commit (Enter / Tab / focus departure / popup close): a search hit selects it (cpp:2482–2486); otherwise a
+        // non-blank custom text raises TextSubmitted (cpp:2507–2513) — unhandled falls back to a case-insensitive
+        // EXACT match (cpp:2516–2519: select on hit, cpp:2540–2543: else the text stays a custom value, selection −1).
+        void CommitSearch()
+        {
+            string t = text.Peek();
+            if (!searchSet.Value)
+            {
+                int cur = SelectedIndex.Peek();
+                if (t.Length == 0 || (cur >= 0 && cur < Items.Count && string.Equals(Items[cur], t, StringComparison.Ordinal)))
+                    return;                                   // text already reflects the selection — nothing to commit
+                searchSet.Value = true;
+                searchIdx.Value = FindMatch(t, exact: false); // ensure Text matches an index (cpp:2473–2479)
+            }
+            int found = searchIdx.Value;
+            ResetSearch();
+            if (found > -1) Commit(found);                    // select the search hit (cpp:2482–2486)
+            else if (t.Trim().Length > 0)                     // IsSearchStringValid (cpp:2494 + :4183–4194)
+            {
+                bool handled = OnTextSubmitted?.Invoke(t) ?? false;
+                if (!handled)                                 // handled: the app accepted the custom value (cpp:2515–2516)
+                {
+                    int exact = FindMatch(t, exact: true);
+                    if (exact >= 0) Commit(exact);
+                    else SelectedIndex.Value = -1;            // custom value active: text kept, no item selected
+                }
+            }
+            // A completed commit clears the Escape-restore state (cpp:2594–2596) — a later Escape in the same focus
+            // session keeps the just-committed selection instead of reverting past it.
+            restoreIdx.Value = SelectedIndex.Peek();
+        }
+
+        // Arrows while the FIELD has focus (popup open or closed, cpp:2838–2886): move the search index ±1 CLAMPED to
+        // [0, count) (cpp:2877–2882 + :2930), preview the item into the field SELECT-ALL (cpp:2939–2949) — no commit.
+        void HandleEditableKeys(KeyEventArgs e)
+        {
+            if (Items.Count == 0 || (e.KeyCode != Keys.Down && e.KeyCode != Keys.Up)) return;
+            int cur = searchSet.Value ? searchIdx.Value : SelectedIndex.Peek();   // cpp:2843–2851
+            int next = Math.Clamp(cur + (e.KeyCode == Keys.Down ? 1 : -1), 0, Items.Count - 1);
+            searchSet.Value = true;
+            searchIdx.Value = next;
+            _edit?.ReplaceText(Items[next], 0, Items[next].Length);
+            if (handle.Value is { IsOpen: true }) highlight.Value = next;
+            e.Handled = true;
+        }
 
         UseEffect(() =>
         {
@@ -206,10 +321,56 @@ public sealed class ComboBox : Component
                 IsEnabled = IsEnabled,
                 Role = AutomationRole.ComboBox,
                 OnRealized = h => anchor.Value = h,
+                OnKeyDown = IsEnabled ? HandleEditableKeys : null,   // Up/Down bubble out of the single-line field
                 Children =
                 [
                     // ComboBoxEditableTextPadding 11,5,38,6 → the 38 right gutter is the chevron column.
-                    Embed.Comp(() => new EditableText { Text = text, Width = w - ChevronColumn, Height = MinHeight, Placeholder = Placeholder, IsEnabled = IsEnabled }),
+                    Embed.Comp(() =>
+                    {
+                        var e = new EditableText
+                        {
+                            Text = text, Width = w - ChevronColumn, Height = MinHeight,
+                            Placeholder = Placeholder, IsEnabled = IsEnabled,
+                            // Enter commits the search (MainKeyDown Enter → CommitRevertEditableSearch(false),
+                            // ComboBox_Partial.cpp:3046–3050) and closes the dropdown.
+                            OnCommit = _ => { CommitSearch(); if (handle.Value is { IsOpen: true }) Close(); },
+                            // Escape reverts: EditableText already restored the focus-time text; restore the
+                            // edit-begin selection and close WITHOUT committing (cpp:3009–3016 + :2448–2468).
+                            OnCancel = () =>
+                            {
+                                cancelling.Value = true;   // cleared by the blur that follows the Escape
+                                if (restoreIdx.Value != SelectedIndex.Peek()) SelectedIndex.Value = restoreIdx.Value;
+                                ResetSearch();
+                                if (handle.Value is { IsOpen: true }) Close();
+                            },
+                            OnFocusChanged = f =>
+                            {
+                                if (f)
+                                {
+                                    restoreIdx.Value = SelectedIndex.Peek();   // m_indexToRestoreOnCancel (cpp:2448–2455)
+                                    ResetSearch();
+                                }
+                                else
+                                {
+                                    bool wasCancel = cancelling.Value;
+                                    cancelling.Value = false;
+                                    // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391). Focus moving
+                                    // INTO the open popup (a row click in flight) is not a departure — the click /
+                                    // popup-close path commits instead.
+                                    if (!wasCancel && handle.Value is not { IsOpen: true }) CommitSearch();
+                                }
+                            },
+                        };
+                        // Search-as-you-type on USER edits only (cpp OnCharacterReceived :3820–3841); a deletion
+                        // (Backspace/Delete/cut) restricts the search to exact matches so auto-complete never fights
+                        // backspace (cpp:4098–4106 keys off VK_BACK).
+                        e.OnTextChanged = _ =>
+                        {
+                            if (e.LastChangeReason == TextChangeReason.UserInput) ProcessSearch(e.LastEditWasDeletion);
+                        };
+                        _edit = e;
+                        return e;
+                    }),
                     new BoxEl
                     {
                         Width = ChevronColumn, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,

@@ -66,11 +66,18 @@ public sealed class EditableText : Component
     public float Height = 32f;
     public float FontSize = 14f;
     public ColorF Foreground = Tok.TextPrimary;
-    public ColorF DisabledForeground = Tok.TextDisabled;
+    // WinUI TextControlForegroundDisabled = TemporaryTextFillColorDisabled #5DFEFEFE dark / #5C010101 light
+    // (TextBox_themeresources.xaml:22/34 + :129/141) — distinct from the disabled PLACEHOLDER (TextFillColorDisabled).
+    public ColorF DisabledForeground = Tok.TextControlForegroundDisabled;
     public ColorF CaretColor = Tok.TextPrimary;   // kept for source-compat; the caret bar is host-themed (TextEditStyle)
     public string Placeholder = "";
     public bool IsEnabled = true;            // gates the WinUI Disabled state visuals + the engine input gate
-    public bool Mask = false;                // PasswordBox: display '●' per grapheme; copy/cut blocked, paste allowed
+    public bool Mask = false;                // PasswordBox: display MaskChar per grapheme; copy/cut blocked, paste allowed
+    /// <summary>Mask display character (WinUI <c>PasswordBox.PasswordChar</c>, default '●' U+25CF).</summary>
+    public char MaskChar = '●';
+    /// <summary>PasswordBox Peek/Visible: show the REAL text while keeping the <see cref="Mask"/> password semantics
+    /// (copy/cut stay blocked — WinUI never allows copying out of a PasswordBox, revealed or not).</summary>
+    public bool Revealed;
     /// <summary>Optional right-edge affix (PasswordBox reveal "eye", NumberBox spin column). Laid out at the right of the
     /// field, stretched to the inner height; the text area grows to fill the rest. When set, it REPLACES the WinUI
     /// DeleteButton lane (in WinUI the spin/reveal buttons take the affix slot instead of the delete button).</summary>
@@ -94,6 +101,10 @@ public sealed class EditableText : Component
     public Action<string>? OnTextChanged;
     /// <summary>The reason of the most recent text change (valid inside/after <see cref="OnTextChanged"/>).</summary>
     public TextChangeReason LastChangeReason { get; private set; } = TextChangeReason.ProgrammaticChange;
+    /// <summary>True when the most recent USER edit removed text (Backspace/Delete/word-delete/cut/clear) — the
+    /// editable ComboBox restricts its search to exact matches on deletions so auto-complete cannot fight backspacing
+    /// (ComboBox_Partial.cpp:4098–4106 keys this off VK_BACK).</summary>
+    public bool LastEditWasDeletion { get; private set; }
     /// <summary>Selection changed: (start, length) in UTF-16 document indices (WinUI <c>SelectionChanged</c>).</summary>
     public Action<int, int>? OnSelectionChanged;
 
@@ -106,6 +117,44 @@ public sealed class EditableText : Component
     public string SelectedText => _core.SelectedText;
     public void Select(int start, int length) { _core.Select(start, length); SyncVisual(); }
     public void SelectAll() { _core.SelectAll(); SyncVisual(); }
+
+    /// <summary>The realized field root (the focusable bordered box) — composers (PasswordBox reveal, ComboBox chevron)
+    /// hand it to <c>InputHooks.RestoreFocus</c> so an inner-button click gives focus back to the field (WinUI keeps
+    /// the field focused across DeleteButton/RevealButton clicks).</summary>
+    internal NodeHandle RootNode => _rootNode;
+
+    /// <summary>Flip the Peek reveal on the LIVE instance (component props freeze at mount — the composer mutates the
+    /// persistent instance and this re-evaluates the display): bump the display epoch so TextBind re-renders the text
+    /// node with/without the mask, and resync the caret/selection geometry (mask and plain text measure differently).</summary>
+    internal void SetRevealed(bool revealed)
+    {
+        if (Revealed == revealed) return;
+        Revealed = revealed;
+        BumpDisplay();
+        var tn = TextNode();
+        if (!tn.IsNull) _hooks?.CaretReset?.Invoke(tn);
+        SyncVisual();
+    }
+
+    /// <summary>Synchronous programmatic replace + select — the WinUI editable-ComboBox <c>UpdateEditableTextBox</c>
+    /// (ComboBox_Partial.cpp:1512–1556: put_Text + Select): document, signal and selection update in ONE step (a bare
+    /// signal write defers the doc fold to the next reactive flush, so a follow-up Select would clamp against the old
+    /// document). Reason = ProgrammaticChange; the pending TextBind re-evaluation finds doc == signal and no-ops.</summary>
+    internal void ReplaceText(string text, int selStart, int selLen)
+    {
+        if (!_core.Doc.AsSpan().SequenceEqual(text))
+        {
+            _core.ResetText(text);
+            LastChangeReason = TextChangeReason.ProgrammaticChange;
+            if (_text is { } t) t.Value = text;
+            OnTextChanged?.Invoke(text);
+            BumpDisplay();
+        }
+        _core.Select(Math.Clamp(selStart, 0, text.Length), Math.Clamp(selLen, 0, text.Length - Math.Clamp(selStart, 0, text.Length)));
+        var tn = TextNode();
+        if (!tn.IsNull) _hooks?.CaretReset?.Invoke(tn);
+        SyncVisual();
+    }
 
     // ── runtime state (the component instance persists across renders) ──────────────────────────────────────────────
     private readonly TextEditCore _core = new();
@@ -247,11 +296,16 @@ public sealed class EditableText : Component
         };
     }
 
-    // ── the WinUI TextBox DeleteButton (TextBox_themeresources.xaml ~206–251) ───────────────────────────────────────
-    // GlyphElement E894 @ TextBoxIconFontSize=12, TextBoxInnerButtonMargin=0,4,4,4; rest = transparent
-    // (TextControlButtonBackground), PointerOver = SubtleFillColorSecondary, Pressed = SubtleFillColorTertiary;
-    // foreground TextFillColorSecondary (rest + hover) → TextFillColorTertiary pressed; border transparent.
-    private BoxEl DeleteButton() => new()
+    // ── the WinUI TextControlButton inner-button family (TextBox DeleteButton / PasswordBox RevealButton) ──────────
+    /// <summary>The shared inner-button chrome: button Width=30 + VerticalAlignment=Stretch (TextBox_themeresources.xaml:339;
+    /// PasswordBox_themeresources.xaml:193), ButtonLayoutGrid Margin = TextBoxInnerButtonMargin 0,4,4,4
+    /// (TextBox_themeresources.xaml:176/209); rest fill TextControlButtonBackground = SystemControlTransparentBrush
+    /// (generic.xaml:889), PointerOver = SubtleFillColorSecondary #0FFFFFFF dark / #09000000 light, Pressed =
+    /// SubtleFillColorTertiary #0AFFFFFF / #06000000 (TextBox_themeresources.xaml:40–41/147–148); glyph foreground
+    /// TextControlButtonForeground = TextFillColorSecondary #C5FFFFFF / #9E000000 rest+hover → TextFillColorTertiary
+    /// #87FFFFFF / #72000000 pressed (TextBox_themeresources.xaml:45–47/152–154); border transparent.</summary>
+    internal static BoxEl InnerButton(string glyph, float glyphSize, Action? onClick,
+        Action<Point2>? onPointerDown = null, Action<NodeHandle>? onRealized = null) => new()
     {
         Width = 30f,
         Margin = new Edges4(0, 4, 4, 4),
@@ -261,22 +315,28 @@ public sealed class EditableText : Component
         PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button,
         Cursor = CursorId.Arrow,
-        OnClick = ClearAllKeepFocus,
+        OnClick = onClick,
+        OnPointerDown = onPointerDown,
+        OnRealized = onRealized,
         Children =
         [
-            new TextEl(Icons.ClearText)
+            new TextEl(glyph)
             {
-                Size = 12f, FontFamily = Theme.IconFont,
+                Size = glyphSize, FontFamily = Theme.IconFont,
                 Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
             },
         ],
     };
+
+    // The WinUI TextBox DeleteButton (TextBox_themeresources.xaml:205–251): GlyphElement E894 @ TextBoxIconFontSize=12.
+    private BoxEl DeleteButton() => InnerButton(Icons.ClearText, 12f, ClearAllKeepFocus);
 
     private void ClearAllKeepFocus()
     {
         if (IsReadOnly) return;
         if (!AcceptProposed(default, replaceAll: true)) return;
         _core.SelectAll();
+        LastEditWasDeletion = true;
         if (_core.InsertText(default)) AfterUserEdit();
         // The click moved dispatcher focus onto the button — give it back (WinUI keeps the field focused on delete).
         if (!_rootNode.IsNull) _hooks?.RestoreFocus?.Invoke(_rootNode);
@@ -349,6 +409,7 @@ public sealed class EditableText : Component
                 if (!IsReadOnly && AcceptProposed("\r"))
                 {
                     int v0 = _core.Doc.Version;
+                    LastEditWasDeletion = false;
                     if (_core.Apply(TextEditCommand.InsertNewline) && _core.Doc.Version != v0) AfterUserEdit();
                 }
                 break;
@@ -371,7 +432,8 @@ public sealed class EditableText : Component
             {
                 int v0 = _core.Doc.Version;
                 bool changed = _core.Apply(bind.Command, bind.Extend);
-                if (_core.Doc.Version != v0) AfterUserEdit();
+                // The only doc-changing default-case commands are the deletion family (Backspace/Delete/word-delete).
+                if (_core.Doc.Version != v0) { LastEditWasDeletion = true; AfterUserEdit(); }
                 else if (changed) SyncVisual();
                 break;
             }
@@ -386,6 +448,7 @@ public sealed class EditableText : Component
         if (!IsReadOnly && AcceptProposed(ch))
         {
             int v0 = _core.Doc.Version;
+            LastEditWasDeletion = false;
             if (_core.InsertText(ch) && _core.Doc.Version != v0) AfterUserEdit();
         }
         e.Handled = true;
@@ -444,6 +507,7 @@ public sealed class EditableText : Component
         if (_core.CutSelection() is { } t)
         {
             _hooks?.Clipboard?.SetText(t);
+            LastEditWasDeletion = true;
             AfterUserEdit();
         }
     }
@@ -453,6 +517,7 @@ public sealed class EditableText : Component
         if (IsReadOnly) return;
         if (_hooks?.Clipboard is { } cb && cb.TryGetText(out string t) && t.Length > 0 && AcceptProposed(t))
         {
+            LastEditWasDeletion = false;
             if (_core.Paste(t)) AfterUserEdit();
         }
     }
@@ -570,19 +635,29 @@ public sealed class EditableText : Component
     {
         _ = _text!.Value;
         _ = _epoch!.Value;
-        if (!IsEnabled) return DisabledForeground;   // placeholder + text share TextControl*ForegroundDisabled
-        // Placeholder = TextFillColorSecondary at rest/hover/focused (TextBox_themeresources.xaml ~35–37).
-        return _core.Doc.Length == 0 && Placeholder.Length > 0 ? Tok.TextSecondary : Foreground;
+        bool placeholder = _core.Doc.Length == 0 && Placeholder.Length > 0;
+        // Disabled: placeholder = TextControlPlaceholderForegroundDisabled = TextFillColorDisabled (#5DFFFFFF dark /
+        // #5C000000 light, TextBox_themeresources.xaml:38/145); text = TextControlForegroundDisabled =
+        // TemporaryTextFillColorDisabled (#5DFEFEFE / #5C010101, TextBox_themeresources.xaml:22+34 / :129+141).
+        if (!IsEnabled) return placeholder ? Tok.TextDisabled : DisabledForeground;
+        // Placeholder = TextControlPlaceholderForeground(/PointerOver/Focused) — ALL TextFillColorSecondary
+        // (TextBox_themeresources.xaml:35–37), so one static color covers rest/hover/focused exactly.
+        return placeholder ? Tok.TextSecondary : Foreground;
     }
 
     // ── display text + Mask index mapping (docIndex ↔ displayIndex; rebuilt per doc version — user-rate alloc) ──────
+    /// <summary>The mask is APPLIED to the display only while not <see cref="Revealed"/> (PasswordBox Peek hold /
+    /// PasswordRevealMode.Visible show the real text; the copy-block password semantics key off <see cref="Mask"/>).</summary>
+    private bool MaskApplied => Mask && !Revealed;
+
     private string DisplayText()
     {
         var doc = _core.Doc;
-        if (_dispVersion == doc.Version && _dispMask == Mask) return _disp;
+        bool mask = MaskApplied;
+        if (_dispVersion == doc.Version && _dispMask == mask) return _disp;
         _dispVersion = doc.Version;
-        _dispMask = Mask;
-        if (!Mask)
+        _dispMask = mask;
+        if (!mask)
         {
             _disp = doc.GetText();
             return _disp;
@@ -599,13 +674,13 @@ public sealed class EditableText : Component
             _dispToDoc[++count] = i;
         }
         _graphemes = count;
-        _disp = new string('●', count);   // WinUI default PasswordChar ●, one per grapheme
+        _disp = new string(MaskChar, count);   // WinUI default PasswordChar '●' (U+25CF), one per grapheme
         return _disp;
     }
 
     private int DocToDisplay(int docIdx)
     {
-        if (!Mask) return docIdx;
+        if (!MaskApplied) return docIdx;
         DisplayText();
         int lo = 0, hi = _graphemes;
         while (lo < hi)
@@ -618,7 +693,7 @@ public sealed class EditableText : Component
 
     private int DisplayToDoc(int dispIdx)
     {
-        if (!Mask) return dispIdx;
+        if (!MaskApplied) return dispIdx;
         DisplayText();
         return _dispToDoc[Math.Clamp(dispIdx, 0, _graphemes)];
     }
@@ -807,7 +882,10 @@ public sealed class EditableText : Component
             RemoveProvisional();
             string final = text.ToString();
             if (final.Length > 0 && !owner.IsReadOnly && owner.AcceptProposed(final) && owner._core.Paste(final))
+            {
+                owner.LastEditWasDeletion = false;
                 owner.AfterUserEdit();   // commit = ONE undo step (Paste seals both sides) + the one signal write
+            }
             else
             {
                 owner.BumpDisplay();

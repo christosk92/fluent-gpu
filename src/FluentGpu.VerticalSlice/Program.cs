@@ -690,6 +690,87 @@ sealed class W0eProbe : Component
     }
 }
 
+// W0f — the text-input consumer controls (PasswordBox/NumberBox/AutoSuggestBox/editable ComboBox) on W0e EditableText.
+sealed class W0fPasswordProbe : Component
+{
+    public Signal<string>? Pw;
+    public PasswordRevealMode Mode = PasswordRevealMode.Peek;
+    public char Char = '●';
+    public string Initial = "secret";
+    public override Element Render()
+    {
+        var pw = UseSignal(Initial);
+        Pw = pw;
+        return PasswordBox.Create("Password", 280f, revealMode: Mode, passwordChar: Char, password: pw);
+    }
+}
+
+sealed class W0fNumberProbe : Component
+{
+    public Signal<double>? Val;
+    public Signal<string>? Txt;
+    public double Initial = 5;
+    public NumberBoxSpinButtonPlacementMode Mode = NumberBoxSpinButtonPlacementMode.Hidden;
+    public readonly List<(double Old, double New)> Changes = new();
+    public override Element Render()
+    {
+        var v = UseSignal(Initial); Val = v;
+        var t = UseSignal(""); Txt = t;
+        return Embed.Comp(() => new OverlayHost
+        {
+            Child = NumberBox.Create(value: v, minimum: 0, maximum: 10, smallChange: 1, largeChange: 5,
+                spinButtonPlacementMode: Mode, text: t, onValueChanged: (o, n) => Changes.Add((o, n))),
+        });
+    }
+}
+
+sealed class W0fAsbProbe : Component
+{
+    public Signal<string>? Query;
+    public bool UpdateTextOnSelect = true;
+    public readonly List<(string Text, TextChangeReason Reason)> Changes = new();
+    public readonly List<string> Chosen = new();
+    public readonly List<string> Submitted = new();
+    public readonly List<string> Order = new();   // interleaved C:/Q: markers for the SelectionChanged→SuggestionChosen→QuerySubmitted ordering
+    public override Element Render()
+    {
+        var q = UseSignal(""); Query = q;
+        return Embed.Comp(() => new OverlayHost
+        {
+            Child = AutoSuggestBox.Create(
+                new[] { "Cascadia Code", "Calendar", "Calculator" }, "Search", 260f, q, debounceMs: 0f,
+                textChanged: (s, r) => Changes.Add((s, r)),
+                onSuggestionChosen: s => { Chosen.Add(s); Order.Add("C:" + s); },
+                onQuerySubmitted: s => { Submitted.Add(s); Order.Add("Q:" + s); },
+                updateTextOnSelect: UpdateTextOnSelect),
+        });
+    }
+}
+
+sealed class W0fComboProbe : Component
+{
+    public Signal<int>? Sel;
+    public Signal<string>? Txt;
+    public bool HandleSubmit;
+    public readonly List<string> Submitted = new();
+    public override Element Render()
+    {
+        var sel = UseSignal(-1); Sel = sel;
+        var txt = UseSignal(""); Txt = txt;
+        return Embed.Comp(() => new OverlayHost
+        {
+            Child = ComboBox.Create(new[] { "Red", "Green", "Blue" }, sel, editable: true, text: txt, width: 200f,
+                placeholder: "pick", onTextSubmitted: s => { Submitted.Add(s); return HandleSubmit; }),
+        });
+    }
+}
+
+sealed class W0fStaticProbe : Component
+{
+    public required Func<Element> Build;
+    public override Element Render() => Build();
+}
+
 // Hosts an overlay layer and exposes the ambient service + an anchored button so a test can open/close flyouts.
 sealed class OverlayProbe : Component
 {
@@ -4113,6 +4194,479 @@ static class Slice
         }
     }
 
+    // W0f — the text-input consumer controls on the rewritten EditableText: PasswordBox peek/reveal-mode matrix,
+    // NumberBox keyboard stepping + Text/format seam + spin visuals, AutoSuggestBox TextChanged-reason matrix +
+    // SuggestionChosen semantics + UpdateTextOnSelect, editable ComboBox prefix-match/TextSubmitted/Escape.
+    static void TextConsumerControlChecks(StringTable strings)
+    {
+        const float Adv = 14f * 0.55f;     // headless advance model @ FontSize 14 (see EditableTextCoreChecks)
+
+        static NodeHandle TextVisual(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (s.Paint(n).VisualKind == VisualKind.Text) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = TextVisual(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        // ── W0f.1 — PasswordBox Peek: press-and-hold reveals, release re-masks; reveal button = F78D @ width 30 ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-pw", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fPasswordProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            bool masked0 = strings.Resolve(scene.Paint(tn).Text) == "●●●●●●";
+            bool noBtn0 = Roles(scene, AutomationRole.Button).Count == 0;   // ButtonCollapsed while unfocused
+
+            ClickNode(host, window, field);
+            host.RunFrame();   // focus re-render mounts the reveal button (ButtonVisible: focused ∧ non-empty)
+            var btns = Roles(scene, AutomationRole.Button);
+            bool shown = btns.Count == 1;
+            bool w30 = shown && Near(scene.AbsoluteRect(btns[0]).W, 30f);
+            // RevealButton glyph F78D @ TextControlButtonForeground = TextFillColorSecondary #C5FFFFFF (dark)
+            // (PasswordBox_themeresources.xaml:100 + TextBox_themeresources.xaml:45).
+            bool glyph = shown && HasGlyph(device, strings, "")
+                && ColorClose(GlyphColor(device, strings, ""), Tok.TextSecondary, 0.004f);
+
+            // Press-and-HOLD (no release yet) → the password shows in clear text.
+            var bc = CenterOf(scene, btns[0]);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 2_000));
+            host.RunFrame();
+            host.RunFrame();
+            bool peeked = strings.Resolve(scene.Paint(tn).Text) == "secret";
+
+            // Release → re-masks and the FIELD keeps focus (WinUI keeps the field focused across reveal interactions).
+            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 2_100));
+            host.RunFrame();
+            host.RunFrame();
+            bool remasked = strings.Resolve(scene.Paint(tn).Text) == "●●●●●●";
+            bool focusKept = (scene.Flags(field) & NodeFlags.Focused) != 0;
+            Check("W0f.1 PasswordBox Peek: reveal (F78D, width 30, TextSecondary) shows on focus∧non-empty; press-and-hold reveals, release re-masks + keeps focus",
+                masked0 && noBtn0 && shown && w30 && glyph && peeked && remasked && focusKept,
+                $"masked0={masked0} noBtn0={noBtn0} shown={shown} w30={w30} glyph={glyph} peeked={peeked} remasked={remasked} focus={focusKept}");
+        }
+
+        // ── W0f.2 — PasswordRevealMode matrix: Hidden = no button + masked; Visible = no button + clear; copy blocked ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-pwh", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fPasswordProbe { Mode = PasswordRevealMode.Hidden };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            ClickNode(host, window, field);
+            host.RunFrame();
+            bool hiddenOk = strings.Resolve(scene.Paint(tn).Text) == "●●●●●●"
+                && Roles(scene, AutomationRole.Button).Count == 0;
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("w0f-pwv", new Size2(420, 240), 1f)); window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var fonts2 = new HeadlessFontSystem(strings);
+            var root2 = new W0fPasswordProbe { Mode = PasswordRevealMode.Visible };
+            using var host2 = new AppHost(app2, window2, device2, fonts2, strings, root2);
+            host2.RunFrame();
+            var scene2 = host2.Scene;
+            var field2 = FindRole(scene2, scene2.Root, AutomationRole.Text);
+            var tn2 = TextVisual(scene2, field2);
+            bool visibleOk = strings.Resolve(scene2.Paint(tn2).Text) == "secret";
+            ClickNode(host2, window2, field2);
+            host2.RunFrame();
+            bool noBtnVisible = Roles(scene2, AutomationRole.Button).Count == 0;
+            // Copy stays BLOCKED even while revealed (WinUI never allows copying out of a PasswordBox).
+            void Key2(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host2.RunFrame();
+            }
+            Key2(Keys.A, KeyModifiers.Ctrl);
+            Key2(Keys.C, KeyModifiers.Ctrl);
+            bool copyBlocked = !((HeadlessClipboard)app2.Clipboard).TryGetText(out _);
+            Check("W0f.2 PasswordRevealMode: Hidden = masked + no reveal button; Visible = clear text + no button, copy still blocked",
+                hiddenOk && visibleOk && noBtnVisible && copyBlocked,
+                $"hidden={hiddenOk} visible={visibleOk} noBtn={noBtnVisible} copyBlocked={copyBlocked}");
+        }
+
+        // ── W0f.3 — PasswordChar customization (WinUI PasswordBox.PasswordChar, default '●') ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-pwc", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fPasswordProbe { Char = '*' };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var tn = TextVisual(scene, FindRole(scene, scene.Root, AutomationRole.Text));
+            Check("W0f.3 PasswordBox PasswordChar: a custom mask char renders per grapheme",
+                strings.Resolve(scene.Paint(tn).Text) == "******", $"disp='{strings.Resolve(scene.Paint(tn).Text)}'");
+        }
+
+        // ── W0f.4 — NumberBox keyboard stepping: Up/Down=SmallChange, PageUp/PageDown=LargeChange, clamp + Text ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-nb", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fNumberProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            bool textSeed = root.Txt!.Peek() == "5";   // mount Value→Text sync (UpdateTextToValue)
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            void Key(int key)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key));
+                host.RunFrame();
+            }
+            Key(Keys.Up);
+            bool up = root.Val!.Peek() == 6;                       // +SmallChange (NumberBox.cpp:538–541)
+            Key(Keys.PageUp);
+            bool pgUp = root.Val!.Peek() == 10;                    // +LargeChange 6+5=11 → clamp 10 (cpp:548–551)
+            Key(Keys.Up);
+            bool clamped = root.Val!.Peek() == 10;                 // at Maximum: stays (Coerce clamps)
+            Key(Keys.PageDown);
+            bool pgDn = root.Val!.Peek() == 5;                     // −LargeChange (cpp:553–556)
+            Key(Keys.Down);
+            bool dn = root.Val!.Peek() == 4 && root.Txt!.Peek() == "4";   // −SmallChange + Text reformat
+            Check("W0f.4 NumberBox keys: Up/Down step SmallChange, PageUp/PageDown step LargeChange, clamped at bounds; Text carries the formatted value",
+                textSeed && up && pgUp && clamped && pgDn && dn,
+                $"seed={textSeed} up={up} pgUp={pgUp} clamp={clamped} pgDn={pgDn} dn={dn} txt='{root.Txt!.Peek()}'");
+        }
+
+        // ── W0f.5 — NumberBox: NaN does not step (cpp StepValue isnan guard); programmatic Text validates + clamps ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-nbn", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fNumberProbe { Initial = double.NaN };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Up));
+            host.RunFrame();
+            bool nanNoStep = double.IsNaN(root.Val!.Peek()) && root.Txt!.Peek() == "";   // cpp:604–629
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("w0f-nbt", new Size2(420, 240), 1f)); window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var fonts2 = new HeadlessFontSystem(strings);
+            var root2 = new W0fNumberProbe();
+            using var host2 = new AppHost(app2, window2, device2, fonts2, strings, root2);
+            host2.RunFrame();
+            root2.Txt!.Value = "7";    // external programmatic Text write — OnTextPropertyChanged → ValidateInput (cpp:325–340)
+            host2.RunFrame();
+            bool progSet = root2.Val!.Peek() == 7;
+            root2.Txt!.Value = "25";   // out-of-range → InvalidInputOverwritten clamps to Maximum, text reformats
+            host2.RunFrame();
+            bool progClamp = root2.Val!.Peek() == 10 && root2.Txt!.Peek() == "10";
+            Check("W0f.5 NumberBox: NaN value does not step; a programmatic Text write validates immediately (clamping out-of-range)",
+                nanNoStep && progSet && progClamp,
+                $"nanNoStep={nanNoStep} progSet={progSet} progClamp={progClamp} v={root2.Val!.Peek()} t='{root2.Txt!.Peek()}'");
+        }
+
+        // ── W0f.6 — NumberBox spin visuals: inline E70E/E70D @ TextSecondary in 32-wide cells; Compact EC8F indicator,
+        //            popup opens on focus with 36×36 spin buttons and closes on blur ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-nbi", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fNumberProbe { Mode = NumberBoxSpinButtonPlacementMode.Inline };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            // Glyphs E70E/E70D (NumberBox.xaml:174–175) at TextControlButtonForeground = TextFillColorSecondary
+            // #C5FFFFFF dark (TextBox_themeresources.xaml:45) — full-ARGB.
+            bool glyphs = HasGlyph(device, strings, "") && HasGlyph(device, strings, "")
+                && ColorClose(GlyphColor(device, strings, ""), Tok.TextSecondary, 0.004f)
+                && ColorClose(GlyphColor(device, strings, ""), Tok.TextSecondary, 0.004f);
+            var spins = Roles(scene, AutomationRole.Button);
+            bool cells = spins.Count == 2
+                && Near(scene.AbsoluteRect(spins[0]).W, 32f) && Near(scene.AbsoluteRect(spins[1]).W, 32f);   // MinWidth 32 (NumberBox.xaml:185)
+            ClickNode(host, window, spins[0]);   // up spin → +SmallChange
+            bool stepped = root.Val!.Peek() == 6;
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("w0f-nbc", new Size2(420, 320), 1f)); window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var fonts2 = new HeadlessFontSystem(strings);
+            var root2 = new W0fNumberProbe { Mode = NumberBoxSpinButtonPlacementMode.Compact };
+            using var host2 = new AppHost(app2, window2, device2, fonts2, strings, root2);
+            host2.RunFrame();
+            var scene2 = host2.Scene;
+            bool indicator = HasGlyph(device2, strings, "");          // PopupIndicator (NumberBox.xaml:365)
+            bool noPopup0 = Roles(scene2, AutomationRole.Button).Count == 0; // the indicator is NOT a button
+            ClickNode(host2, window2, FindRole(scene2, scene2.Root, AutomationRole.Text));   // focus → popup opens
+            host2.RunFrame();
+            var popupBtns = Roles(scene2, AutomationRole.Button);
+            bool popupOpen = popupBtns.Count == 2
+                && Near(scene2.AbsoluteRect(popupBtns[0]).W, 36f) && Near(scene2.AbsoluteRect(popupBtns[0]).H, 36f);   // 36×36 (NumberBox.xaml:197–198)
+            window2.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));      // Escape blurs → popup closes
+            for (int i = 0; i < 10; i++) host2.RunFrame();   // ride out the 83ms overlay close fade
+            bool popupClosed = Roles(scene2, AutomationRole.Button).Count == 0;
+            Check("W0f.6 NumberBox spin visuals: inline 32-wide E70E/E70D cells @ TextSecondary step on click; Compact = non-interactive EC8F indicator, popup (36×36 spins) opens on focus / closes on blur",
+                glyphs && cells && stepped && indicator && noPopup0 && popupOpen && popupClosed,
+                $"glyphs={glyphs} cells={cells} stepped={stepped} ind={indicator} no0={noPopup0} open={popupOpen} closed={popupClosed}");
+        }
+
+        // ── W0f.7 — AutoSuggestBox TextChanged-reason matrix + arrow preview + SuggestionChosen-per-selection ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-asb", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fAsbProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            void Key(int key)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key));
+                host.RunFrame();
+            }
+            foreach (char c in "ca") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            host.RunFrame();   // overlay content realizes
+            bool typed = root.Changes.Count > 0 && root.Changes[^1] == ("ca", TextChangeReason.UserInput)
+                && Roles(scene, AutomationRole.MenuItem).Count == 3;
+
+            Key(Keys.Down);    // selection → item 0: preview text + SuggestionChosen (reason SuggestionChosen)
+            host.RunFrame();   // the deferred TextChanged effect
+            bool preview = root.Query!.Peek() == "Cascadia Code"
+                && root.Chosen.Count == 1 && root.Chosen[0] == "Cascadia Code"
+                && root.Changes[^1] == ("Cascadia Code", TextChangeReason.SuggestionChosen);
+
+            Key(Keys.Down); Key(Keys.Down);   // → Calendar → Calculator
+            Key(Keys.Down);                   // past the end → restore the typed text (reason ProgrammaticChange)
+            host.RunFrame();
+            bool restored = root.Query!.Peek() == "ca" && root.Chosen.Count == 3
+                && root.Changes[^1] == ("ca", TextChangeReason.ProgrammaticChange);
+
+            Key(Keys.Down);                   // back onto item 0
+            int chosenBeforeEnter = root.Chosen.Count;
+            Key(Keys.Enter);                  // submit: QueryText = field text; NO extra SuggestionChosen (cpp:1149–1160)
+            bool submitted = root.Submitted.Count == 1 && root.Submitted[0] == "Cascadia Code"
+                && root.Chosen.Count == chosenBeforeEnter;
+            Check("W0f.7 AutoSuggestBox: TextChanged reasons (UserInput → SuggestionChosen preview → ProgrammaticChange restore); SuggestionChosen per selection move, NOT on Enter",
+                typed && preview && restored && submitted,
+                $"typed={typed} preview={preview} restored={restored} submit={submitted} chosen={root.Chosen.Count} changes={root.Changes.Count}");
+        }
+
+        // ── W0f.8 — AutoSuggestBox UpdateTextOnSelect=false: arrows cycle + SuggestionChosen, field text untouched ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-asbu", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fAsbProbe { UpdateTextOnSelect = false };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            foreach (char c in "cal") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down));
+            host.RunFrame();
+            bool ok = root.Query!.Peek() == "cal" && root.Chosen.Count == 1 && root.Chosen[0] == "Calendar";
+            Check("W0f.8 AutoSuggestBox UpdateTextOnSelect=false: arrow keeps the typed text but still raises SuggestionChosen (cpp:2367 gates only the text write)",
+                ok, $"query='{root.Query!.Peek()}' chosen={string.Join("|", root.Chosen)}");
+        }
+
+        // ── W0f.9 — AutoSuggestBox row click: SuggestionChosen BEFORE QuerySubmitted; item content inset 12 ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-asbc", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fAsbProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            foreach (char c in "cal") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            host.RunFrame();
+            var rows = Roles(scene, AutomationRole.MenuItem);
+            // Content inset: DefaultListViewItemStyle Padding 16,0,12,0 from the ITEM edge; plate inset 4 → 12 inside.
+            var rowText = TextVisual(scene, rows[1]);
+            float inset = scene.AbsoluteRect(rowText).X - scene.AbsoluteRect(rows[1]).X;
+            bool insetOk = Near(inset, 12f);
+            ClickNode(host, window, rows[1]);   // "Calculator"
+            int ci = root.Order.IndexOf("C:Calculator");
+            int qi = root.Order.IndexOf("Q:Calculator");
+            bool ordered = ci >= 0 && qi > ci && root.Query!.Peek() == "Calculator";
+            Check("W0f.9 AutoSuggestBox click: SelectionChanged → SuggestionChosen → QuerySubmitted sequential; row content inset 12 (ListViewItem 16,0,12,0 minus the 4px plate)",
+                insetOk && ordered, $"inset={inset:0.#} order=[{string.Join(",", root.Order)}]");
+        }
+
+        // ── W0f.10 — editable ComboBox: prefix auto-match autocompletes with the suffix selected, commit on Enter ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-cmb", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fComboProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            var tn = TextVisual(scene, field);
+            ClickNode(host, window, field);
+            foreach (char c in "gr") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            // ProcessSearch prefix hit → auto-complete "Green" with the completed suffix "een" selected
+            // (ComboBox_Partial.cpp:4108–4119 + UpdateEditableTextBox :1543–1551); SelectedIndex NOT committed while
+            // typing (SelectionChangedTrigger default = Committed).
+            var selRects = scene.GetTextEditSelectionRects(tn);
+            bool completed = root.Txt!.Peek() == "Green" && root.Sel!.Peek() == -1
+                && selRects.Length == 1 && Near(selRects[0].X, 2f * Adv) && Near(selRects[0].W, 3f * Adv);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Enter));
+            host.RunFrame();
+            bool committed = root.Sel!.Peek() == 1 && root.Submitted.Count == 0;   // a search hit commits WITHOUT TextSubmitted
+            Check("W0f.10 editable ComboBox: typing 'gr' auto-completes to 'Green' with 'een' selected (no commit); Enter commits the match, no TextSubmitted",
+                completed && committed,
+                $"txt='{root.Txt!.Peek()}' sel={root.Sel!.Peek()} rects={selRects.Length} committed={committed}");
+        }
+
+        // ── W0f.11 — editable ComboBox TextSubmitted: unhandled → custom value (sel −1); handled → selection kept ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-cmbt", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fComboProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            void Type(string s)
+            {
+                foreach (char c in s) window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+                host.RunFrame();
+            }
+            ClickNode(host, window, field);
+            Type("gr"); Key(Keys.Enter);                       // commit "Green" (sel 1)
+            Key(Keys.A, KeyModifiers.Ctrl); Type("xyz"); Key(Keys.Enter);
+            bool custom = root.Submitted.Count == 1 && root.Submitted[0] == "xyz"
+                && root.Sel!.Peek() == -1 && root.Txt!.Peek() == "xyz";   // unhandled: custom value, no selection (cpp:2540–2543)
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("w0f-cmbh", new Size2(420, 320), 1f)); window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var fonts2 = new HeadlessFontSystem(strings);
+            var root2 = new W0fComboProbe { HandleSubmit = true };
+            using var host2 = new AppHost(app2, window2, device2, fonts2, strings, root2);
+            host2.RunFrame();
+            var scene2 = host2.Scene;
+            var field2 = FindRole(scene2, scene2.Root, AutomationRole.Text);
+            void Key2(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window2.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host2.RunFrame();
+            }
+            ClickNode(host2, window2, field2);
+            foreach (char c in "gr") window2.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host2.RunFrame();
+            Key2(Keys.Enter);                                  // sel = 1
+            Key2(Keys.A, KeyModifiers.Ctrl);
+            foreach (char c in "xyz") window2.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host2.RunFrame();
+            Key2(Keys.Enter);
+            bool handled = root2.Submitted.Count == 1 && root2.Sel!.Peek() == 1 && root2.Txt!.Peek() == "xyz";
+            Check("W0f.11 editable ComboBox TextSubmitted: unhandled custom value → SelectedIndex −1 + text kept; handled (return true) → selection untouched",
+                custom && handled,
+                $"custom={custom} (sel={root.Sel!.Peek()} txt='{root.Txt!.Peek()}') handled={handled} (sel2={root2.Sel!.Peek()})");
+        }
+
+        // ── W0f.12 — editable ComboBox: arrows preview without committing; Escape restores the pre-edit text ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-cmbe", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fComboProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+            void Key(int key)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key));
+                host.RunFrame();
+            }
+            ClickNode(host, window, field);   // focus snapshot: "" / sel −1
+            Key(Keys.Down);
+            bool prev1 = root.Txt!.Peek() == "Red" && root.Sel!.Peek() == -1;     // preview select-all, NO commit (cpp:2939–2949)
+            Key(Keys.Down);
+            bool prev2 = root.Txt!.Peek() == "Green" && root.Sel!.Peek() == -1;
+            Key(Keys.Escape);
+            host.RunFrame();
+            bool reverted = root.Txt!.Peek() == "" && root.Sel!.Peek() == -1
+                && (scene.Flags(field) & NodeFlags.Focused) == 0;                  // Escape reverts + blurs, no commit
+            Check("W0f.12 editable ComboBox: Up/Down preview into the field without committing; Escape restores the pre-edit text + selection",
+                prev1 && prev2 && reverted,
+                $"prev1={prev1} prev2={prev2} reverted={reverted} txt='{root.Txt!.Peek()}' sel={root.Sel!.Peek()}");
+        }
+
+        // ── W0f.13 — header/description chrome: TextControlHeaderForeground (+disabled) and the Description row ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-hdr", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1, Gap = 12,
+                    Children =
+                    [
+                        TextBox.Create("ph", 280f, "Email", description: "Helper"),
+                        PasswordBox.Create("Password", 280f, "Pw", isEnabled: false,
+                                           password: new Signal<string>("secret")),
+                    ],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            // Header = TextControlHeaderForeground (BaseHigh #FFFFFFFF dark, generic.xaml:886+207); Description =
+            // SystemControlDescriptionTextForegroundBrush (BaseMedium #99FFFFFF dark, generic.xaml:327+209); disabled
+            // header = TextControlHeaderForegroundDisabled (BaseMediumLow #66FFFFFF dark, generic.xaml:887+211);
+            // disabled field TEXT = TemporaryTextFillColorDisabled #5DFEFEFE (TextBox_themeresources.xaml:22+34).
+            bool header = ColorClose(GlyphColor(device, strings, "Email"), Tok.TextControlHeaderForeground, 0.004f);
+            bool desc = ColorClose(GlyphColor(device, strings, "Helper"), Tok.TextControlDescriptionForeground, 0.004f);
+            bool disHeader = ColorClose(GlyphColor(device, strings, "Pw"), Tok.TextControlHeaderForegroundDisabled, 0.004f);
+            bool disText = ColorClose(GlyphColor(device, strings, "●●●●●●"), Tok.TextControlForegroundDisabled, 0.004f);
+            Check("W0f.13 header/description chrome: header BaseHigh, description BaseMedium, disabled header BaseMediumLow, disabled field text #5DFEFEFE (full ARGB)",
+                header && desc && disHeader && disText,
+                $"header={header} desc={desc} disHeader={disHeader} disText={disText}");
+        }
+    }
+
     // E3 — implicit BrushTransition: a logical flip cross-fades fill + foreground over 83ms (no snap), then settles
     // exactly at the target and the frame loop idles again (the row self-removes).
     static void BrushTransitionChecks(StringTable strings)
@@ -5305,6 +5859,7 @@ static class Slice
         BrushTransitionChecks(strings);
         TextServicesSeamChecks();
         EditableTextCoreChecks(strings);
+        TextConsumerControlChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
         ExpanderSettingsChecks(strings);

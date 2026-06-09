@@ -27,14 +27,20 @@ public enum NumberBoxValidationMode : byte
 /// model is a caller-owned <see cref="Value"/> signal (<c>double.NaN</c> = cleared); the visible text is derived from it
 /// through the <see cref="Formatter"/> and re-parsed on commit. Spin buttons step by <see cref="SmallChange"/> and are
 /// <see cref="NumberBoxSpinButtonPlacementMode.Hidden"/> by default. <see cref="NumberBoxSpinButtonPlacementMode.Inline"/>
-/// stacks an up/down column (▲E70E / ▼E70D) in the field; <see cref="NumberBoxSpinButtonPlacementMode.Compact"/> shows a
-/// chevron and opens the up/down buttons in an Overlay popup while focused. Validation (clamp / revert) runs on Enter and
-/// on blur per <see cref="ValidationMode"/>; with <see cref="AcceptsExpression"/> a typed arithmetic expression is
-/// evaluated on commit (shunting-yard over + - * / ^ and parentheses).
+/// puts the two side-by-side repeat buttons (▲E70E / ▼E70D, NumberBox.xaml:174–175) at the trailing edge of the field;
+/// <see cref="NumberBoxSpinButtonPlacementMode.Compact"/> shows the EC8F popup-indicator chevron (NumberBox.xaml:365)
+/// and opens the up/down buttons in an Overlay popup while focused (the popup auto-opens on focus and closes on blur —
+/// NumberBox.cpp:414–438; the indicator is a non-interactive TextBlock, not a toggle). Keyboard stepping follows
+/// OnNumberBoxKeyDown (NumberBox.cpp:533–558): Up/Down = ±SmallChange, PageUp/PageDown = ±LargeChange, handled on key
+/// DOWN so OS auto-repeat repeats the step. Validation (clamp / revert) runs on Enter and on blur per
+/// <see cref="ValidationMode"/>; with <see cref="AcceptsExpression"/> a typed arithmetic expression is evaluated on
+/// commit (shunting-yard over + - * / ^ and parentheses — NumberBoxParser port).
 /// </summary>
 /// <remarks>
-/// Deferred (no engine seam): mouse-wheel step and arrow / Page-key step — <see cref="EditableText"/> consumes Up/Down
-/// and there is no Element-level pointer-wheel handler, so stepping is via the spin buttons (press-and-hold repeat).
+/// Engine routing gap (reported, not hacked around): WinUI also steps SmallChange on mouse-wheel while the inner
+/// TextBox is focused (PointerWheelChanged → OnNumberBoxScroll, NumberBox.cpp:40 + :578–597). The engine routes wheel
+/// events to <c>NodeFlags.Scrollable</c> ancestors only (InputDispatcher.ScrollAt) — there is no element-level wheel
+/// hook yet, so wheel stepping lands with the popup-windowing/input wave.
 /// </remarks>
 public sealed class NumberBox : Component
 {
@@ -52,27 +58,50 @@ public sealed class NumberBox : Component
     public string? Header = null;
     public string? Description = null;
     public float Width = 120f;             // NumberBoxMinWidth = 120
+    public bool IsEnabled = true;
+    /// <summary>The WinUI <c>NumberBox.Text</c> property (microsoft.ui.xaml.controls idl): the FORMATTED string, two-way.
+    /// Caller-owned signal; external (programmatic) writes are validated immediately — OnTextPropertyChanged →
+    /// UpdateValueToText → ValidateInput (NumberBox.cpp:333–339). Null → an internal signal.</summary>
+    public Signal<string>? Text;
+    /// <summary>Value → display string (the <c>INumberFormatter2.FormatDouble</c> seam, NumberBox.cpp:644). Default =
+    /// invariant round-trip after rounding to 10 significant digits (<c>m_displayRounder.SignificantDigits(10)</c>,
+    /// NumberBox.cpp:216 + :643).</summary>
     public Func<double, string>? Formatter;
+    /// <summary>Display string → value (the <c>INumberParser.ParseDouble</c> seam, NumberBox.cpp:493–497). Default =
+    /// invariant <c>double.TryParse</c> (null = parse failure). With <see cref="AcceptsExpression"/> the expression
+    /// evaluator runs instead (operands parse invariantly), mirroring NumberBoxParser::Compute.</summary>
+    public Func<string, double?>? Parser;
     public Action<double, double>? OnValueChanged;   // (oldValue, newValue) — WinUI ValueChangedEventArgs
     public Style? StyleOverride;
 
-    /// <summary>Dims from NumberBox_themeresources.xaml / NumberBox.xaml.</summary>
+    /// <summary>Dims from NumberBox.xaml / NumberBox_themeresources.xaml.</summary>
     public sealed record Style
     {
-        public float MinWidth { get; init; } = 120f;          // NumberBoxMinWidth
-        public float FieldHeight { get; init; } = 32f;
-        public float SpinButtonWidth { get; init; } = 32f;    // NumberBoxSpinButtonStyle MinWidth
-        public float SpinGlyphSize { get; init; } = 12f;      // inline FontSize 12
-        public float SpinButtonMargin { get; init; } = 4f;    // Margin 4 / 0,4,4,4
-        public float PopupSpinButtonSize { get; init; } = 36f;// NumberBoxPopupSpinButtonStyle 36x36
-        public float PopupSpinGlyphSize { get; init; } = 16f; // popup FontSize 16
-        public float PopupPadding { get; init; } = 6f;        // popup root Padding 6
-        public string UpGlyph { get; init; } = Icons.CaretUpSolid;     // E70E
-        public string DownGlyph { get; init; } = Icons.CaretDownSolid; // E70D
-        public string PopupIndicatorGlyph { get; init; } = Icons.ChevronDown; // Compact in-field chevron
+        public float MinWidth { get; init; } = 120f;          // NumberBoxMinWidth (NumberBox_themeresources.xaml:35)
+        public float FieldHeight { get; init; } = 32f;        // TextControlThemeMinHeight (generic.xaml:96)
+        public float SpinButtonWidth { get; init; } = 32f;    // NumberBoxSpinButtonStyle MinWidth=32 (NumberBox.xaml:185)
+        public float SpinGlyphSize { get; init; } = 12f;      // NumberBoxSpinButtonStyle FontSize=12 (NumberBox.xaml:189)
+        public float SpinButtonMargin { get; init; } = 4f;    // UpSpinButton Margin=4 / DownSpinButton 0,4,4,4 (NumberBox.xaml:174–175)
+        public float PopupSpinButtonSize { get; init; } = 36f;// NumberBoxPopupSpinButtonStyle 36x36 (NumberBox.xaml:197–198)
+        public float PopupSpinGlyphSize { get; init; } = 16f; // popup FontSize 16 (NumberBox.xaml:201)
+        public float PopupPadding { get; init; } = 6f;        // PopupContentRoot Padding=6 (NumberBox.xaml:116)
+        public string UpGlyph { get; init; } = Icons.CaretUpSolid;     // E70E (NumberBox.xaml:174)
+        public string DownGlyph { get; init; } = Icons.CaretDownSolid; // E70D (NumberBox.xaml:175)
+        // Compact in-field PopupIndicator: EC8F @ FontSize 12, Margin = NumberBoxPopupIndicatorMargin 0,0,8,0,
+        // Foreground = NumberBoxPopupIndicatorForeground = TextFillColorSecondary (NumberBox.xaml:365 +
+        // NumberBox_themeresources.xaml:5/14 + :37).
+        public string PopupIndicatorGlyph { get; init; } = Icons.NumberBoxPopupIndicator;
+        public float PopupIndicatorGlyphSize { get; init; } = 12f;
+        // Spin buttons take the TextControlButton/RepeatButton ramp (NumberBox.xaml:65–98 remaps RepeatButton* →
+        // TextControlButton*): rest = TextControlButtonBackground = transparent (generic.xaml:889), PointerOver =
+        // SubtleFillColorSecondary #0FFFFFFF dark / #09000000 light, Pressed = SubtleFillColorTertiary #0AFFFFFF /
+        // #06000000 (TextBox_themeresources.xaml:40–41/147–148).
         public ColorF SpinHoverFill { get; init; } = Tok.FillSubtleSecondary;
         public ColorF SpinPressedFill { get; init; } = Tok.FillSubtleTertiary;
+        // Glyph = TextControlButtonForeground = TextFillColorSecondary #C5FFFFFF / #9E000000 → Pressed =
+        // TextFillColorTertiary #87FFFFFF / #72000000 (TextBox_themeresources.xaml:45–47/152–154).
         public ColorF SpinGlyphColor { get; init; } = Tok.TextSecondary;
+        public ColorF SpinGlyphPressedColor { get; init; } = Tok.TextTertiary;
         public ColorF SpinGlyphDisabledColor { get; init; } = Tok.TextDisabled;
     }
 
@@ -91,7 +120,8 @@ public sealed class NumberBox : Component
         NumberBoxValidationMode validationMode = NumberBoxValidationMode.InvalidInputOverwritten,
         bool isWrapEnabled = false, bool acceptsExpression = false,
         string placeholderText = "", string? header = null, string? description = null,
-        float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null)
+        float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null,
+        Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true)
         => Embed.Comp(() => new NumberBox
         {
             Value = value, Initial = initial, Minimum = minimum, Maximum = maximum,
@@ -100,6 +130,7 @@ public sealed class NumberBox : Component
             IsWrapEnabled = isWrapEnabled, AcceptsExpression = acceptsExpression,
             PlaceholderText = placeholderText, Header = header, Description = description,
             Width = width, Formatter = formatter, OnValueChanged = onValueChanged,
+            Text = text, Parser = parser, IsEnabled = isEnabled,
         });
 
     /// <summary>Legacy: an editable numeric field with NO spin buttons (WinUI default). <paramref name="step"/> maps to SmallChange.</summary>
@@ -118,8 +149,16 @@ public sealed class NumberBox : Component
     {
         if (double.IsNaN(v)) return "";
         if (Formatter is not null) return Formatter(v);
-        // WinUI rounds to ~10 significant digits before formatting; invariant 0.###### is the engine default.
-        return Math.Round(v, 10).ToString("0.######", CultureInfo.InvariantCulture);
+        // WinUI rounds to 10 SIGNIFICANT digits before formatting (m_displayRounder.SignificantDigits(10),
+        // NumberBox.cpp:216, applied in UpdateTextToValue NumberBox.cpp:643) — significant digits, not decimal places.
+        return RoundSignificant(v, 10).ToString("0.##########", CultureInfo.InvariantCulture);
+    }
+
+    static double RoundSignificant(double v, int digits)
+    {
+        if (v == 0 || !double.IsFinite(v)) return v;
+        double mag = Math.Pow(10, digits - 1 - (int)Math.Floor(Math.Log10(Math.Abs(v))));
+        return Math.Round(v * mag) / mag;
     }
 
     /// <summary>Coerce a numeric value into [Min,Max] when InvalidInputOverwritten; NaN passes through (cleared).</summary>
@@ -143,13 +182,24 @@ public sealed class NumberBox : Component
         var fallbackValue = UseSignal(Initial);
         var value = Value ?? fallbackValue;
         // In-progress edit text (EditableText writes here on every keystroke; we reformat from Value on commit/step).
-        var text = UseSignal(FormatToText(Coerce(Initial)));
+        var fallbackText = UseSignal(FormatToText(Coerce(Initial)));
+        var text = Text ?? fallbackText;
+        // Guards our OWN text writes so the OnTextChanged validation below only reacts to EXTERNAL programmatic
+        // writes of the Text signal (WinUI m_textUpdating, NumberBox.cpp:651–654).
+        var updatingText = UseRef(false);
 
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
 
         double current = value.Value;   // subscribe → re-render (and reformat text) when the numeric value changes
+
+        void SetText(string v)
+        {
+            updatingText.Value = true;
+            try { text.Value = v; }
+            finally { updatingText.Value = false; }
+        }
 
         // Write a new numeric value: coerce, set the signal, reformat the field text, fire ValueChanged on real change.
         void SetValue(double next)
@@ -161,51 +211,74 @@ public sealed class NumberBox : Component
                 value.Value = next;
                 OnValueChanged?.Invoke(old, next);
             }
-            text.Value = FormatToText(next);
+            SetText(FormatToText(next));
         }
 
+        // Value → Text one-way sync (WinUI OnValuePropertyChanged → UpdateTextToValue + the initial template sync):
+        // re-formats the field text whenever the VALUE changes outside the text-edit path (an external value.Value
+        // write), and at mount so a caller-provided empty Text signal picks up the seeded Value. Guarded writes —
+        // never triggers the programmatic-text validation below.
+        UseEffect(() => SetText(FormatToText(value.Peek())), current);
+
         // Parse the current field text into a number (expression-aware), returning NaN on empty and null on parse failure.
+        // The Parser seam = INumberParser.ParseDouble (NumberBox.cpp:493–497); expressions go through the
+        // NumberBoxParser::Compute port (operands parse invariantly).
         double? ParseText(string raw)
         {
             string t = raw.Trim();
             if (t.Length == 0) return double.NaN;
             if (AcceptsExpression)
                 return NumberBoxExpression.TryEvaluate(t);   // null on malformed, NaN on divide-by-zero
+            if (Parser is not null) return Parser(t);
             return double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : null;
         }
 
-        // WinUI ValidateInput: commit the typed text. Success → SetValue; failure → revert (InvalidInputOverwritten) or
-        // leave the text as-is (Disabled, where anything goes — unparsable becomes NaN/cleared).
+        // WinUI ValidateInput (NumberBox.cpp:478–521): empty → NaN (cleared); parse failure → revert the text to the
+        // current value under InvalidInputOverwritten, or leave BOTH text and value untouched under Disabled
+        // (NumberBox.cpp:499–506 has no else branch); success → SetValue (which re-formats, covering "1+2" → "3").
         void ValidateInput()
         {
             double? parsed = ParseText(text.Peek());
             if (parsed is double d)
             {
-                SetValue(d);
+                SetValue(d);   // also re-formats the text when the value is unchanged ("1+2" → "3", cpp:509–513)
             }
             else if (ValidationMode == NumberBoxValidationMode.InvalidInputOverwritten)
             {
-                text.Value = FormatToText(value.Peek());   // revert to the last good value
+                SetText(FormatToText(value.Peek()));   // revert to the last good value (cpp:501–505)
             }
-            else
-            {
-                SetValue(double.NaN);                       // Disabled: unparsable clears the value
-            }
+            // Disabled mode + unparsable: leave the text AND value as they are (cpp:499–506).
         }
 
-        // WinUI StepValue: validate the typed text first, then add the delta (wrap if enabled), then commit.
+        // WinUI StepValue (NumberBox.cpp:599–630): validate the typed text first; a NaN value does NOT step (the cpp
+        // guards with isnan); else add the delta, wrap if enabled, commit (the Value setter clamps via Coerce).
         void Step(double delta)
         {
             ValidateInput();
             double v = value.Peek();
+            if (double.IsNaN(v)) return;
             double min = Math.Min(Minimum, Maximum), max = Math.Max(Minimum, Maximum);
-            double next = double.IsNaN(v) ? (delta >= 0 ? min : max) : v + delta;
+            double next = v + delta;
             if (IsWrapEnabled)
             {
                 if (next > max) next = min;
                 else if (next < min) next = max;
             }
             SetValue(next);
+        }
+
+        // Keyboard stepping (OnNumberBoxKeyDown, NumberBox.cpp:533–558): Up/Down = ±SmallChange, PageUp/PageDown =
+        // ±LargeChange, handled on key DOWN so OS auto-repeat repeats the step. The single-line EditableText leaves
+        // these keys unmapped (TextEditKeymap returns None) so they bubble up to the wrapper's OnKeyDown here.
+        void HandleStepKeys(KeyEventArgs e)
+        {
+            switch (e.KeyCode)
+            {
+                case Keys.Up: Step(SmallChange); e.Handled = true; break;
+                case Keys.Down: Step(-SmallChange); e.Handled = true; break;
+                case Keys.PageUp: Step(LargeChange); e.Handled = true; break;
+                case Keys.PageDown: Step(-LargeChange); e.Handled = true; break;
+            }
         }
 
         // WinUI UpdateSpinButtonEnabled: NaN → both off; wrap or non-clamping mode → both on; else gate at the bounds.
@@ -231,10 +304,13 @@ public sealed class NumberBox : Component
                 Corners = Radii.ControlAll, Repeats = true, Role = AutomationRole.Button,
                 HoverFill = s.SpinHoverFill, PressedFill = s.SpinPressedFill,
                 OnClick = () => Step(delta),
-                Children = [new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor }],
+                // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
+                // (NumberBox.xaml:125–146 RepeatButton* remap).
+                Children = [new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor }],
             };
             return new BoxEl
             {
+                // PopupUpSpinButton Margin 0,0,0,4 + PopupContentRoot Padding 6 (NumberBox.xaml:163 + :116).
                 Direction = 1, Gap = s.SpinButtonMargin, Padding = Edges4.All(s.PopupPadding),
                 Children = [PopupSpinButton(s.UpGlyph, SmallChange), PopupSpinButton(s.DownGlyph, -SmallChange)],
             };
@@ -247,13 +323,17 @@ public sealed class NumberBox : Component
         }
         void ClosePopup() => handle.Value?.Close();
 
-        // ── Field affix (Inline column / Compact chevron / Hidden none) ─────────────────────────────────────────
+        // ── Field affix (Inline spin pair / Compact popup indicator / Hidden none) ──────────────────────────────
         Element? affix = null;
         if (SpinButtonPlacementMode == NumberBoxSpinButtonPlacementMode.Inline)
         {
+            // WinUI inline spin buttons are two SIDE-BY-SIDE RepeatButtons overlaying the field's trailing edge
+            // (NumberBox.xaml:174–175): NumberBoxSpinButtonStyle MinWidth=32, FontSize=12, VerticalAlignment=Stretch
+            // (NumberBox.xaml:185–189), UpSpinButton Margin="4", DownSpinButton Margin="0,4,4,4", CornerRadius =
+            // ControlCornerRadius (4). State ramp = the RepeatButton*→TextControlButton* remap (NumberBox.xaml:65–98).
             BoxEl SpinCell(string glyph, double delta, bool enabled, Edges4 margin) => new()
             {
-                Grow = 1f, Margin = margin,
+                Width = s.SpinButtonWidth, Margin = margin,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 HoverFill = enabled ? s.SpinHoverFill : ColorF.Transparent,
                 PressedFill = enabled ? s.SpinPressedFill : ColorF.Transparent,
@@ -263,37 +343,45 @@ public sealed class NumberBox : Component
                 OnClick = enabled ? (Action)(() => Step(delta)) : null,
                 Children = [new TextEl(glyph)
                 {
-                    Size = 8f, FontFamily = Theme.IconFont,   // small inline carets (WinUI inline spin buttons), both stacked ▲/▼
+                    Size = s.SpinGlyphSize, FontFamily = Theme.IconFont,   // FontSize 12 (NumberBox.xaml:189)
                     Color = enabled ? s.SpinGlyphColor : s.SpinGlyphDisabledColor,
+                    PressedColor = enabled ? s.SpinGlyphPressedColor : s.SpinGlyphDisabledColor,
                 }],
             };
-            // Two stacked half-height cells (▲ top, ▼ bottom) filling the full field height; tight 2px margins.
             affix = new BoxEl
             {
-                Direction = 1, AlignSelf = FlexAlign.Stretch, Width = 28f,
+                Direction = 0, AlignSelf = FlexAlign.Stretch, AlignItems = FlexAlign.Stretch,
                 Children =
                 [
-                    SpinCell(s.UpGlyph, SmallChange, upEnabled, new Edges4(2, 2, 3, 1)),
-                    SpinCell(s.DownGlyph, -SmallChange, downEnabled, new Edges4(2, 1, 3, 2)),
+                    SpinCell(s.UpGlyph, SmallChange, upEnabled, Edges4.All(s.SpinButtonMargin)),                       // Margin 4 (NumberBox.xaml:174)
+                    SpinCell(s.DownGlyph, -SmallChange, downEnabled, new Edges4(0, s.SpinButtonMargin, s.SpinButtonMargin, s.SpinButtonMargin)), // Margin 0,4,4,4 (:175)
                 ],
             };
         }
         else if (SpinButtonPlacementMode == NumberBoxSpinButtonPlacementMode.Compact)
         {
-            // The in-field PopupIndicator chevron (EC8F in WinUI; ChevronDown here). The popup is opened on focus
-            // (OnFocusChanged) and clicking the chevron toggles it as a fallback affordance.
+            // The in-field PopupIndicator (NumberBox.xaml:365): a NON-interactive TextBlock — EC8F @ FontSize 12,
+            // Margin = NumberBoxPopupIndicatorMargin 0,0,8,0 (NumberBox_themeresources.xaml:37), Foreground =
+            // NumberBoxPopupIndicatorForeground = TextFillColorSecondary (NumberBox_themeresources.xaml:5/14).
+            // The popup itself opens on focus and closes on blur (OnNumberBoxGotFocus/LostFocus, NumberBox.cpp:414–438)
+            // — WinUI does NOT toggle it from the indicator.
             affix = new BoxEl
             {
-                Width = 30f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Role = AutomationRole.Button, HoverFill = s.SpinHoverFill,
-                OnClick = () => { if (handle.Value is { IsOpen: true }) ClosePopup(); else OpenPopup(); },
-                Children = [new TextEl(s.PopupIndicatorGlyph) { Size = s.SpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor }],
+                AlignSelf = FlexAlign.Stretch, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                HitTestVisible = false,
+                Children = [new TextEl(s.PopupIndicatorGlyph)
+                {
+                    Size = s.PopupIndicatorGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor,
+                    Margin = new Edges4(0, 0, 8f, 0),
+                }],
             };
         }
 
-        // ── Focus: validate-on-blur + open/close the Compact popup ──────────────────────────────────────────────
+        // ── Focus: validate-on-blur + the Compact popup opens on focus / closes on blur (NumberBox.cpp:414–438) ──
+        var fieldFocused = UseRef(false);
         void OnFocusChanged(bool focused)
         {
+            fieldFocused.Value = focused;
             if (focused)
             {
                 if (SpinButtonPlacementMode == NumberBoxSpinButtonPlacementMode.Compact) OpenPopup();
@@ -305,35 +393,64 @@ public sealed class NumberBox : Component
             }
         }
 
-        var field = Embed.Comp(() => new EditableText
+        var field = Embed.Comp(() =>
         {
-            Text = text,
-            Width = Width,
-            Height = s.FieldHeight,
-            Placeholder = PlaceholderText,
-            Sanitize = sanitize,
-            RightAffix = affix,
-            OnCommit = _ => ValidateInput(),                       // Enter
-            OnCancel = () => text.Value = FormatToText(value.Peek()), // Escape reverts to the committed value
-            OnFocusChanged = OnFocusChanged,
+            var e = new EditableText
+            {
+                Text = text,
+                Width = Width,
+                Height = s.FieldHeight,
+                Placeholder = PlaceholderText,
+                Sanitize = sanitize,
+                RightAffix = affix,
+                IsEnabled = IsEnabled,
+                OnCommit = _ => ValidateInput(),                       // Enter (KeyUp ValidateInput, NumberBox.cpp:564–568)
+                OnCancel = () => SetText(FormatToText(value.Peek())),  // Escape → UpdateTextToValue (NumberBox.cpp:570–574)
+                OnFocusChanged = OnFocusChanged,
+            };
+            // External programmatic Text writes validate immediately: OnTextPropertyChanged → UpdateValueToText →
+            // ValidateInput (NumberBox.cpp:325–340). Our own SetText writes are guarded out (m_textUpdating-style),
+            // and FOCUSED programmatic changes (EditableText's Escape revert) defer to the validate-on-blur that
+            // immediately follows — WinUI's Escape path is UpdateTextToValue, never a commit (NumberBox.cpp:570–574).
+            e.OnTextChanged = _ =>
+            {
+                if (!updatingText.Value && !fieldFocused.Value
+                    && e.LastChangeReason == TextChangeReason.ProgrammaticChange) ValidateInput();
+            };
+            return e;
         });
 
-        // The Compact popup needs an anchor node; wrap the field so OnRealized can capture it (no EditableText change).
-        Element fieldRow = SpinButtonPlacementMode == NumberBoxSpinButtonPlacementMode.Compact
-            ? new BoxEl { Direction = 0, Width = Width, OnRealized = h => anchor.Value = h, Children = [field] }
-            : field;
+        // The field wrapper: the Compact popup's anchor node + the keyboard stepping handler (Up/Down/PageUp/PageDown
+        // bubble out of the single-line EditableText to here).
+        Element fieldRow = new BoxEl
+        {
+            Direction = 0, Width = Width,
+            OnRealized = h => anchor.Value = h,
+            OnKeyDown = IsEnabled ? HandleStepKeys : null,
+            Children = [field],
+        };
 
-        // ── Header / Description wrapper (TextBox.Create header path) ────────────────────────────────────────────
+        // ── Header / Description wrapper (NumberBox.xaml:113 + :176) ─────────────────────────────────────────────
         if (Header is null && Description is null) return fieldRow;
 
         var stack = new List<Element>(3);
         if (Header is not null)
-            stack.Add(new TextEl(Header) { Size = 14f, Color = Tok.TextSecondary });
+            // HeaderContentPresenter: TextControlHeaderForeground (generic.xaml:886) → Disabled =
+            // TextControlHeaderForegroundDisabled (NumberBox.xaml:20–24); Margin = TextBoxTopHeaderMargin 0,0,0,8
+            // (NumberBox.xaml:113); FontSize inherits ControlContentThemeFontSize 14.
+            stack.Add(new TextEl(Header)
+            {
+                Size = 14f,
+                Color = IsEnabled ? Tok.TextControlHeaderForeground : Tok.TextControlHeaderForegroundDisabled,
+                Margin = new Edges4(0, 0, 0, 8f),
+            });
         stack.Add(fieldRow);
         if (Description is not null)
-            stack.Add(new TextEl(Description) { Size = 12f, Color = Tok.TextSecondary });
+            // DescriptionPresenter (NumberBox.xaml:176): SystemControlDescriptionTextForegroundBrush (BaseMedium,
+            // generic.xaml:327+209/4134); FontSize inherits 14; no extra margin in the template.
+            stack.Add(new TextEl(Description) { Size = 14f, Color = Tok.TextControlDescriptionForeground });
 
-        return new BoxEl { Direction = 1, Gap = 4f, Children = stack.ToArray() };
+        return new BoxEl { Direction = 1, Children = stack.ToArray() };
     }
 
     // ── Sanitizers (static so the closures don't capture this) ───────────────────────────────────────────────────

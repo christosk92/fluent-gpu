@@ -100,6 +100,20 @@ public sealed record TokenSet
     // Input-active fill (WinUI ControlFillColorInputActive — focused text-control body: TextBox/AutoSuggest/NumberBox)
     public required ColorF FillControlInputActive { get; init; }
 
+    // Text-control chrome (TextBox/PasswordBox/NumberBox/AutoSuggestBox header + description + disabled text).
+    // WinUI TextControlHeaderForeground = SystemControlForegroundBaseHighBrush = SystemBaseHighColor
+    // (generic.xaml:886; color generic.xaml:207 dark / :4132 light).
+    public required ColorF TextControlHeaderForeground { get; init; }
+    // WinUI TextControlHeaderForegroundDisabled = SystemControlDisabledBaseMediumLowBrush = SystemBaseMediumLowColor
+    // (generic.xaml:887; color generic.xaml:211 dark / :4136 light).
+    public required ColorF TextControlHeaderForegroundDisabled { get; init; }
+    // WinUI SystemControlDescriptionTextForegroundBrush = SystemControlPageTextBaseMediumBrush = SystemBaseMediumColor
+    // (generic.xaml:327; color generic.xaml:209 dark / :4134 light) — the DescriptionPresenter row of every text control.
+    public required ColorF TextControlDescriptionForeground { get; init; }
+    // WinUI TextControlForegroundDisabled = TemporaryTextFillColorDisabled (TextBox_themeresources.xaml:22 dark /
+    // :129 light) — the disabled field TEXT; note it is NOT TextFillColorDisabled (the disabled PLACEHOLDER token).
+    public required ColorF TextControlForegroundDisabled { get; init; }
+
     // Severity palette (WinUI SystemFillColor* — InfoBar/InfoBadge/TeachingTip). Saturated icon color + tinted
     // background per severity. Attention (informational) follows the system accent, exposed as Tok.SystemFillAttention.
     public required ColorF SystemFillCritical { get; init; }
@@ -241,6 +255,12 @@ public static class Tok
     public static ColorF StrokeControlStrongDisabled => T.StrokeControlStrongDisabled;
     public static ColorF FillControlInputActive => T.FillControlInputActive;
 
+    // Text-control chrome (header / description / disabled field text) — see the TokenSet field docs for sources.
+    public static ColorF TextControlHeaderForeground => T.TextControlHeaderForeground;
+    public static ColorF TextControlHeaderForegroundDisabled => T.TextControlHeaderForegroundDisabled;
+    public static ColorF TextControlDescriptionForeground => T.TextControlDescriptionForeground;
+    public static ColorF TextControlForegroundDisabled => T.TextControlForegroundDisabled;
+
     // Severity palette (Attention follows the live OS accent, like WinUI SystemFillColorAttention = SystemAccentColor*)
     public static ColorF SystemFillCritical => T.SystemFillCritical;
     public static ColorF SystemFillCaution => T.SystemFillCaution;
@@ -320,6 +340,13 @@ public static class Tok
         StrokeControlStrongDefault  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
         StrokeControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),
         FillControlInputActive   = ColorF.FromRgba(0x1E, 0x1E, 0x1E, 0xB3),
+        // SystemBaseHighColor #FFFFFFFF / SystemBaseMediumLowColor #66FFFFFF / SystemBaseMediumColor #99FFFFFF
+        // (generic.xaml:207/211/209, Default theme dictionary).
+        TextControlHeaderForeground         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x66),
+        TextControlDescriptionForeground    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x99),
+        // TemporaryTextFillColorDisabled #5DFEFEFE (TextBox_themeresources.xaml:22, Default).
+        TextControlForegroundDisabled       = ColorF.FromRgba(0xFE, 0xFE, 0xFE, 0x5D),
         SystemFillCritical = ColorF.FromRgba(0xFF, 0x99, 0xA4),
         SystemFillCaution  = ColorF.FromRgba(0xFC, 0xE1, 0x00),
         SystemFillSuccess  = ColorF.FromRgba(0x6C, 0xCB, 0x5F),
@@ -397,6 +424,13 @@ public static class Tok
         StrokeControlStrongDefault  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         StrokeControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         FillControlInputActive   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        // SystemBaseHighColor #FF000000 / SystemBaseMediumLowColor #66000000 / SystemBaseMediumColor #99000000
+        // (generic.xaml:4132/4136/4134, Light theme dictionary).
+        TextControlHeaderForeground         = ColorF.FromRgba(0x00, 0x00, 0x00),
+        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+        TextControlDescriptionForeground    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x99),
+        // TemporaryTextFillColorDisabled #5C010101 (TextBox_themeresources.xaml:129, Light).
+        TextControlForegroundDisabled       = ColorF.FromRgba(0x01, 0x01, 0x01, 0x5C),
         SystemFillCritical = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
         SystemFillCaution  = ColorF.FromRgba(0x9D, 0x5D, 0x00),
         SystemFillSuccess  = ColorF.FromRgba(0x0F, 0x7B, 0x0F),

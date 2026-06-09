@@ -19,21 +19,21 @@ namespace FluentGpu.Controls;
 /// OverlayHost version bumps on open/close).
 /// </para>
 /// <para>
-/// <b>Debounce.</b> WinUI raises the public <c>TextChanged</c> through a 150ms <c>DispatcherTimer</c> that is Stop()+Start()'d
-/// on every keystroke (<c>AutoSuggestBox::s_textChangedEventTimerDuration = 1500000</c> ticks = 150ms), so the app's handler
-/// fires only after typing pauses; <c>UpdateSuggestionListVisibility</c> runs immediately (NOT debounced). We mirror that
-/// exactly: the live filter + open/close decision are synchronous per keystroke, while the caller's <see cref="OnTextChanged"/>
-/// is fired by a <see cref="DebounceTicker"/> (a frame-clock wall-time poller, mounted only while a debounce is pending —
-/// same idiom as the overlay close driver) 150ms after the last edit. Set <see cref="DebounceMs"/>=0 to fire synchronously.
+/// <b>TextChanged + reason (AutoSuggestBox_Partial.cpp OnTextBoxTextChanged :451–503).</b> EVERY text change — user
+/// edit, programmatic restore, suggestion preview — Stop()+Start()s the 150ms timer (<c>s_textChangedEventTimerDuration</c>
+/// = 1500000 ticks) carrying the change's <see cref="TextChangeReason"/> (cpp:464), so the public <see cref="TextChanged"/>
+/// fires once typing pauses, with the LAST reason. Only <c>UserInput</c> changes cache <c>m_userTypedText</c>, reset the
+/// keyboard cursor and update the list visibility (cpp:477–496). Set <see cref="DebounceMs"/>=0 to fire synchronously.
 /// </para>
 /// <para>
-/// Keyboard nav arrives by BUBBLING: Up/Down have no case in <see cref="EditableText"/>'s key handler, so they bubble past
-/// it to this root <see cref="BoxEl"/>'s <see cref="BoxEl.OnKeyDown"/> (which moves a highlighted index, with wrap +
-/// restore-typed-text at the ends, and marks the event handled — WinUI <c>AutoSuggestBox::OnKeyDown</c>). Down on a closed
-/// list that has matches re-opens it (WinUI shows the list on arrow when matches exist). Enter routes through
-/// <see cref="EditableText.OnCommit"/> (choose the highlighted item, then submit the query); Escape via
-/// <see cref="EditableText.OnCancel"/> restores the user-typed text and closes the popup. Light-dismiss (click outside) and
-/// Escape-to-close are supplied by the overlay host; focus is captured on open and restored on close (host-wired).
+/// <b>SuggestionChosen + arrow preview (cpp OnSuggestionSelectionChanged :2298–2411).</b> Moving the suggestion-list
+/// selection (arrow keys, row click) raises <c>SuggestionChosen</c> for the newly selected item; when
+/// <see cref="UpdateTextOnSelect"/> (default true, cpp:2366–2381) the item text is also previewed into the field with
+/// reason <see cref="TextChangeReason.SuggestionChosen"/> (cpp:2380). Stepping PAST either end restores the user-typed
+/// text with reason <c>ProgrammaticChange</c> and clears the selection (cpp:1101/1109). Enter submits the query
+/// (QueryText = the field text, ChosenSuggestion = the highlighted item) WITHOUT re-raising SuggestionChosen
+/// (cpp:1149–1160 + SubmitQuery :857–878). A row click runs SelectionChanged → SuggestionChosen → QuerySubmitted
+/// sequentially (cpp OnListViewItemClick :2413–2437). Escape restores the typed text and closes (cpp:634–643).
 /// </para>
 /// <para>
 /// <b>Corner-joining (WinUI <c>AutoSuggestBoxHelper::UpdateCornerRadius</c> / <c>KeepInteriorCornersSquare=true</c>).</b> While
@@ -49,9 +49,13 @@ public sealed class AutoSuggestBox : Component
     // ── WinUI dims ──
     // generic.xaml:  AutoSuggestListMaxHeight=374; AutoSuggestListBorderThemeThickness=1; AutoSuggestListMargin=0,2,0,2
     //                (popup Border padding, supplied by FlyoutSurface); AutoSuggestListPadding=-1,0,-1,0 (inner ListView
-    //                margin); AutoSuggestListViewItemMargin=12,11,0,13 (10,11,0,13 in perf2026 — used here).
-    // themeresources: AutoSuggestBoxIconFontSize=12; AutoSuggestBoxRightButtonMargin=4; QueryButton Width=32 Height=28
-    //                Margin=2,0,0,0; ListViewItem MinHeight=40; AutoSuggestBox CornerRadius=ControlCornerRadius (4).
+    //                margin). Suggestion rows are DEFAULT ListViewItems: ContentMargin/Padding 16,0,12,0
+    //                (ListViewItem_themeresources.xaml:241), MinHeight=40 (:14), rounded backplate CornerRadius 4 (:58)
+    //                inset 4,2 (the WinUI 3 ListViewItemPresenter plate).
+    // themeresources: AutoSuggestBoxIconFontSize=12 (:25); AutoSuggestBoxRightButtonMargin=4 (reserved grid column 3,
+    //                AutoSuggestBox_themeresources.xaml:230); QueryButton Width=32 Height=28 Margin=2,0,0,0 (:242);
+    //                AutoSuggestBoxInnerButtonMargin=1,3 (:24, the ContentPresenter plate inset :101);
+    //                AutoSuggestBox CornerRadius=ControlCornerRadius (4).
     // AutoSuggestBox_Partial.cpp: s_textChangedEventTimerDuration = 1500000 ticks = 150ms (TextChanged debounce).
     public const float ItemMinHeight = 40f;
     public const float IconFontSize = 12f;
@@ -66,12 +70,19 @@ public sealed class AutoSuggestBox : Component
     public string Placeholder = "Search";
     public float Width = 280f;
     public Signal<string>? Text;                       // caller-owned query (two-way), like ComboBox.Text
-    public Action<string>? OnTextChanged;              // WinUI TextChanged (raised, DEBOUNCED, on user edits)
-    public Action<string>? OnSuggestionChosen;         // WinUI SuggestionChosen (item highlighted / chosen)
+    public Action<string>? OnTextChanged;              // legacy alias of TextChanged (no reason argument)
+    /// <summary>WinUI <c>TextChanged</c> with <c>AutoSuggestBoxTextChangedEventArgs.Reason</c> (debounced 150ms;
+    /// raised for EVERY change — UserInput / ProgrammaticChange / SuggestionChosen, cpp:451–469).</summary>
+    public Action<string, TextChangeReason>? TextChanged;
+    public Action<string>? OnSuggestionChosen;         // WinUI SuggestionChosen (selection moved onto an item)
     public Action<string>? OnQuerySubmitted;           // WinUI QuerySubmitted (Enter / query-icon / row click)
     public string? QueryIcon = Icons.Search;           // null = no query button; default = the search glyph
     public float MaxHeight = MaxPopupHeight;           // AutoSuggestListMaxHeight
-    public float DebounceMs = TextChangedDebounceMs;   // 0 = fire OnTextChanged synchronously (no debounce)
+    public float DebounceMs = TextChangedDebounceMs;   // 0 = fire TextChanged synchronously (no debounce)
+    /// <summary>WinUI <c>UpdateTextOnSelect</c> (default true): arrow-cycling previews the highlighted item's text into
+    /// the field (reason SuggestionChosen); false leaves the field text untouched while cycling — SuggestionChosen
+    /// still fires per selection change (cpp:2361–2398 gates only the text write, :2367).</summary>
+    public bool UpdateTextOnSelect = true;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -83,12 +94,15 @@ public sealed class AutoSuggestBox : Component
         Action<string>? onQuerySubmitted = null,
         string? queryIcon = Icons.Search,
         float maxPopupHeight = MaxPopupHeight,
-        float debounceMs = TextChangedDebounceMs)
+        float debounceMs = TextChangedDebounceMs,
+        Action<string, TextChangeReason>? textChanged = null,
+        bool updateTextOnSelect = true)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, Placeholder = placeholder, Width = width, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
+            TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect,
         });
 
     // Re-filter helper shared by the root (open-decision) and the popup body (render). Case-insensitive substring;
@@ -103,32 +117,39 @@ public sealed class AutoSuggestBox : Component
         return matches;
     }
 
+    private EditableText? _edit;
+
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var fallbackText = UseSignal("");
         var query = Text ?? fallbackText;
-        var userTyped = UseSignal("");                 // last user-typed text, restored on arrow-out / Escape
+        var userTyped = UseSignal("");                 // m_userTypedText, restored on arrow-out / Escape
         var highlight = UseSignal(-1);                 // keyboard-cursor index into the live match set
         var open = UseSignal(false);                   // IsSuggestionListOpen — drives the field corner-squaring
         var svc = UseContext(Overlay.Service);
 
-        // 'programmatic' flags writes that came from arrow-preview / restore (so they don't re-fire TextChanged or
-        // re-cache userTyped), mirroring AutoSuggestionBoxTextChangeReason_ProgrammaticChange vs _UserInput.
-        var programmatic = UseRef(false);
+        // The reason of an ASB-initiated write (arrow preview = SuggestionChosen, restore = ProgrammaticChange) —
+        // consumed by the post-commit effect. Null → the change came through EditableText (read ITS LastChangeReason:
+        // UserInput for typing, ProgrammaticChange for an external caller write of the query signal).
+        var pendingReason = UseRef<TextChangeReason?>(null);
 
-        // Debounce plumbing: a deadline (TickCount64 ms) + the text snapshot to emit; the DebounceTicker fires when due.
-        // 'pending' is a SIGNAL (not a ref) so arming it inside the post-commit effect re-renders to MOUNT the ticker
-        // (a ref write wouldn't re-render); the deadline/text are refs (read inside the ticker, no reactivity needed).
+        // Debounce plumbing: a deadline (TickCount64 ms) + the text/reason snapshot to emit; the DebounceTicker fires
+        // when due. 'pending' is a SIGNAL (not a ref) so arming it inside the post-commit effect re-renders to MOUNT
+        // the ticker (a ref write wouldn't re-render); the deadline/text/reason are refs (read inside the ticker).
         var debounceDeadline = UseRef(0L);
         var debouncePending = UseSignal(false);
         var debounceText = UseRef("");
+        var debounceReason = UseRef(TextChangeReason.UserInput);
 
         // Subscribe to the query so each keystroke re-renders → re-runs the open/close effect below.
         var q = query.Value;
 
-        List<string> Live() => Filter(Suggestions, query.Peek());
+        // The MATCH SET keys off the USER-TYPED text, not the live query: an arrow-preview write must not re-filter
+        // the open list out from under the keyboard cursor (WinUI sets m_ignoreTextChanges around the preview writes
+        // so the app's ItemsSource filter never re-runs for them — AutoSuggestBox_Partial.cpp:2347–2359 + :475).
+        List<string> Live() => Filter(Suggestions, userTyped.Peek());
 
         void Close()
         {
@@ -144,9 +165,10 @@ public sealed class AutoSuggestBox : Component
             if (handle.Value is { IsOpen: true }) return;
             handle.Value = svc.Open(
                 () => anchor.Value,
+                // The list renders against the USER-TYPED query signal: arrow previews must not re-filter the rows.
                 () => Embed.Comp(() => new SuggestionsList
                 {
-                    Owner = this, Query = query, Highlight = highlight, OnChoose = ChooseAndSubmit,
+                    Owner = this, Query = userTyped, Highlight = highlight, OnChoose = ChooseAndSubmit,
                 }),
                 FlyoutPlacement.BottomStretch);
             handle.Value.ClosedAction = () =>
@@ -157,73 +179,94 @@ public sealed class AutoSuggestBox : Component
             };
         }
 
-        // Side effects (TextChanged debounce arming, userTyped cache, open/close) happen AFTER render commits — keyed on the
-        // query. Mirrors OnTextBoxTextChanged: UpdateSuggestionListVisibility runs immediately; TextChanged is deferred.
+        // Side effects run AFTER render commits, keyed on the query — mirrors OnTextBoxTextChanged (cpp:451–503):
+        // EVERY change Stop()+Start()s the public-TextChanged timer with its reason (cpp:457–469); only UserInput
+        // caches m_userTypedText, resets the keyboard cursor and updates the list visibility (cpp:477–496).
+        var firstRun = UseRef(true);
         UseEffect(() =>
         {
-            if (programmatic.Value) { programmatic.Value = false; return; }   // arrow-preview / restore: not a user edit
-            if (userTyped.Peek() != q)
-            {
-                userTyped.Value = q;                    // m_userTypedText = strQueryText (only on _UserInput)
-                if (DebounceMs <= 0f) OnTextChanged?.Invoke(q);
-                else
-                {
-                    // Stop()+Start() the 150ms timer: push the deadline forward and (re)arm the ticker.
-                    debounceText.Value = q;
-                    debounceDeadline.Value = Environment.TickCount64 + (long)DebounceMs;
-                    debouncePending.Value = true;
-                }
-            }
-            highlight.Value = -1;                       // a fresh user edit resets the keyboard cursor (SelectedIndex = -1)
+            bool first = firstRun.Value;
+            firstRun.Value = false;
+            if (first && q == userTyped.Peek()) return;   // mount with no seeded query → no TextChanged, nothing to do
 
-            if (q.Length > 0) OpenPopup();              // keep the attached popup open for no-results
-            else Close();
+            TextChangeReason reason = first
+                // A mount-SEEDED query behaves like a fresh user edit (cache + open the list) — the established
+                // engine contract; EditableText's first signal→doc sync is reason-silent.
+                ? TextChangeReason.UserInput
+                : pendingReason.Value
+                  ?? _edit?.LastChangeReason
+                  ?? TextChangeReason.UserInput;
+            pendingReason.Value = null;   // m_textChangeReason resets after each change (cpp:500)
+
+            if (DebounceMs <= 0f) RaiseTextChanged(q, reason);
+            else
+            {
+                debounceText.Value = q;
+                debounceReason.Value = reason;
+                debounceDeadline.Value = Environment.TickCount64 + (long)DebounceMs;
+                debouncePending.Value = true;
+            }
+
+            if (reason == TextChangeReason.UserInput)
+            {
+                userTyped.Value = q;                    // m_userTypedText = strQueryText (only on _UserInput, cpp:479)
+                highlight.Value = -1;                   // a fresh user edit resets the keyboard cursor (cpp:484–496)
+                if (q.Length > 0) OpenPopup();          // keep the attached popup open for no-results
+                else Close();
+            }
         }, q);
 
-        // Programmatically write the field (arrow preview / restore) WITHOUT re-firing TextChanged or resetting highlight.
-        void SetTextProgrammatic(string s) { programmatic.Value = true; query.Value = s; }
-
-        // Enter / row click / query-icon: pick the highlighted item (if any), then submit the query string (WinUI SubmitQuery).
-        void SubmitQuery(string text)
+        // ASB-initiated field write (arrow preview / restore) with its WinUI reason (UpdateTextBoxText, cpp:2669–2688).
+        void SetTextWithReason(string s, TextChangeReason reason)
         {
-            OnQuerySubmitted?.Invoke(text);
+            if (query.Peek() == s) return;
+            pendingReason.Value = reason;
+            query.Value = s;
+        }
+
+        // WinUI SubmitQuery (cpp:857–878): QueryText = the CURRENT field text; closes the list.
+        void SubmitQuery()
+        {
+            OnQuerySubmitted?.Invoke(query.Peek());
             Close();
         }
 
-        void ChooseAndSubmit(int i)
-        {
-            var matches = Live();
-            if (i < 0 || i >= matches.Count) { SubmitQuery(query.Peek()); return; }
-            SetTextProgrammatic(matches[i]);
-            OnSuggestionChosen?.Invoke(matches[i]);
-            SubmitQuery(matches[i]);
-        }
-
-        void OnEnter(string _)
-        {
-            int h = highlight.Peek();
-            if (h >= 0) { ChooseAndSubmit(h); return; }
-            SubmitQuery(query.Peek());
-        }
-
-        void OnEscape()
-        {
-            SetTextProgrammatic(userTyped.Peek());      // restore m_userTypedText
-            Close();
-        }
-
-        // Preview the highlighted item into the field (UpdateTextOnSelect = true) without re-firing TextChanged.
-        void Preview(int i)
+        // Selection moved onto a row (arrow / click): preview the text iff UpdateTextOnSelect (reason SuggestionChosen,
+        // cpp:2366–2381), then raise SuggestionChosen (cpp:2392–2397) — the WinUI OnSuggestionSelectionChanged order.
+        void SelectionChangedTo(int i)
         {
             var matches = Live();
             if (i < 0 || i >= matches.Count) return;
-            SetTextProgrammatic(matches[i]);
+            if (UpdateTextOnSelect)
+                SetTextWithReason(matches[i], TextChangeReason.SuggestionChosen);
             OnSuggestionChosen?.Invoke(matches[i]);
         }
 
+        // Row click (cpp OnListViewItemClick :2413–2437): SelectionChanged (highlight + preview + SuggestionChosen)
+        // first, THEN QuerySubmitted — sequential.
+        void ChooseAndSubmit(int i)
+        {
+            var matches = Live();
+            if (i < 0 || i >= matches.Count) { SubmitQuery(); return; }
+            highlight.Value = i;
+            SelectionChangedTo(i);
+            SubmitQuery();
+        }
+
+        // Enter (cpp:1149–1160): submit with the highlighted item as ChosenSuggestion — the field text was already
+        // previewed by the selection change; SuggestionChosen is NOT re-raised here.
+        void OnEnter(string _) => SubmitQuery();
+
+        void OnEscape()
+        {
+            // Reset the text to what the user had typed + close (cpp:634–643); reason = ProgrammaticChange (cpp:636).
+            SetTextWithReason(userTyped.Peek(), TextChangeReason.ProgrammaticChange);
+            Close();
+        }
+
         // Up/Down bubble here from the focused EditableText (no case in EditableText.HandleKey for arrows). Move the
-        // highlight with wrap; stepping PAST an end restores the user-typed text and clears the highlight (WinUI OnKeyDown).
-        // Down on a CLOSED list that has matches re-opens it first (WinUI shows the list on arrow when matches exist).
+        // highlight with wrap; stepping PAST an end restores the user-typed text (reason ProgrammaticChange) and clears
+        // the highlight (cpp:1028–1125). Down on a CLOSED list that has matches re-opens it first.
         void HandleNavKeys(KeyEventArgs e)
         {
             if (e.KeyCode != Keys.Down && e.KeyCode != Keys.Up) return;
@@ -238,57 +281,91 @@ public sealed class AutoSuggestBox : Component
             if (matches.Count == 0) return;
             int cur = highlight.Peek();
 
+            void RestoreTyped()
+            {
+                highlight.Value = -1;
+                SetTextWithReason(userTyped.Peek(), TextChangeReason.ProgrammaticChange);   // cpp:1101/1109
+            }
+            void MoveTo(int i)
+            {
+                highlight.Value = i;
+                SelectionChangedTo(i);
+            }
+
             if (e.KeyCode == Keys.Down)
             {
                 int next = cur + 1;
-                if (next >= matches.Count) { highlight.Value = -1; SetTextProgrammatic(userTyped.Peek()); }
-                else { highlight.Value = next; Preview(next); }
+                if (next >= matches.Count) RestoreTyped();
+                else MoveTo(next);
                 e.Handled = true;
             }
             else // Up
             {
-                if (cur < 0) { highlight.Value = matches.Count - 1; Preview(matches.Count - 1); }
-                else if (cur - 1 < 0) { highlight.Value = -1; SetTextProgrammatic(userTyped.Peek()); }
-                else { highlight.Value = cur - 1; Preview(cur - 1); }
+                if (cur < 0) MoveTo(matches.Count - 1);
+                else if (cur - 1 < 0) RestoreTyped();
+                else MoveTo(cur - 1);
                 e.Handled = true;
             }
         }
 
         bool hasIcon = QueryIcon is not null;
-        // QueryButton (Width 32 + left margin 2) + AutoSuggestBoxRightButtonMargin (4) reserved at the right edge.
+        // QueryButton (Width 32 + Margin 2,0,0,0) + the reserved AutoSuggestBoxRightButtonMargin column (4) at the
+        // right edge (AutoSuggestBox_themeresources.xaml:242 + :226–230).
         float iconCol = hasIcon ? QueryButtonWidth + QueryButtonLeftMargin + RightButtonMargin : 0f;
 
         var children = new List<Element>
         {
-            Embed.Comp(() => new EditableText
+            Embed.Comp(() =>
             {
-                Text = query, Width = Width - iconCol, Height = 32f, Placeholder = Placeholder,
-                OnCommit = OnEnter, OnCancel = OnEscape,
+                var e = new EditableText
+                {
+                    Text = query, Width = Width - iconCol, Height = 32f, Placeholder = Placeholder,
+                    OnCommit = OnEnter, OnCancel = OnEscape,
+                };
+                _edit = e;
+                return e;
             }),
         };
 
         if (hasIcon)
         {
+            // QueryButton (AutoSuggestBox_themeresources.xaml:242): the outer 32×28 slot at Margin 2,0,0,0 (+4 reserved
+            // column); the INNER ContentPresenter carries the chrome at Margin = AutoSuggestBoxInnerButtonMargin 1,3
+            // (:24 + :101) with the TextControlButton ramp: rest = TextControlButtonBackground transparent
+            // (generic.xaml:889), hover = SubtleFillColorSecondary #0FFFFFFF/#09000000, press = SubtleFillColorTertiary
+            // #0AFFFFFF/#06000000 (TextBox_themeresources.xaml:40–41/147–148); glyph E721 @ AutoSuggestBoxIconFontSize
+            // 12, TextFillColorSecondary → pressed TextFillColorTertiary (:45–47/152–154).
             children.Add(new BoxEl
             {
-                // WinUI QueryButton: Width 32, Height 28, Margin 2,0,0,0, FontSize=AutoSuggestBoxIconFontSize (12),
-                // CornerRadius=ControlCornerRadius. PointerOver/Pressed use the TextControlButton ramp.
-                Width = QueryButtonWidth, Height = QueryButtonHeight, Margin = new Edges4(QueryButtonLeftMargin, 0, RightButtonMargin, 0),
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = Radii.ControlAll, Role = AutomationRole.Button,
-                HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-                OnClick = () => SubmitQuery(query.Peek()),
-                Children = [new TextEl(QueryIcon!) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = Tok.TextSecondary }],
+                Width = QueryButtonWidth, Height = QueryButtonHeight,
+                Margin = new Edges4(QueryButtonLeftMargin, 0, RightButtonMargin, 0),
+                AlignItems = FlexAlign.Stretch,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
+                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = Radii.ControlAll, Role = AutomationRole.Button,
+                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                        OnClick = SubmitQuery,
+                        Children = [new TextEl(QueryIcon!)
+                        {
+                            Size = IconFontSize, FontFamily = Theme.IconFont,
+                            Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
+                        }],
+                    },
+                ],
             });
         }
 
-        // The debounce ticker is mounted only while a debounce is pending; it polls the frame clock and fires OnTextChanged
-        // (the deferred TextChanged) once the deadline passes, then unmounts (so the frame loop can idle).
+        // The debounce ticker is mounted only while a debounce is pending; it polls the frame clock and fires the
+        // (deferred) TextChanged with the captured reason once the deadline passes, then unmounts.
         if (debouncePending.Value)
             children.Add(Embed.Comp(() => new DebounceTicker
             {
                 DeadlineMs = debounceDeadline, Pending = debouncePending,
-                Fire = () => OnTextChanged?.Invoke(debounceText.Value),
+                Fire = () => RaiseTextChanged(debounceText.Value, debounceReason.Value),
             }));
 
         // KeepInteriorCornersSquare: while the list is open (open-down), square the field's BOTTOM corners so it joins the
@@ -307,6 +384,12 @@ public sealed class AutoSuggestBox : Component
             OnKeyDown = HandleNavKeys,                 // Up/Down bubble up to here from the focused field
             Children = children.ToArray(),
         };
+    }
+
+    private void RaiseTextChanged(string text, TextChangeReason reason)
+    {
+        TextChanged?.Invoke(text, reason);
+        OnTextChanged?.Invoke(text);
     }
 }
 
@@ -358,10 +441,12 @@ internal sealed class SuggestionsList : Component
             bool selected = idx == hi;
             rows[i] = new BoxEl
             {
-                MinHeight = AutoSuggestBox.ItemMinHeight,   // WinUI ListViewItem MinHeight = 40
+                MinHeight = AutoSuggestBox.ItemMinHeight,   // ListViewItemMinHeight = 40 (ListViewItem_themeresources.xaml:14)
                 AlignItems = FlexAlign.Center,
-                // AutoSuggestListViewItemMargin (perf2026) = 10,11,0,13 → content padding; row gets a small h-inset margin.
-                Padding = new Edges4(10, 0, 11, 0),
+                // DefaultListViewItemStyle content padding = 16,0,12,0 (ListViewItem_themeresources.xaml:241) measured
+                // from the ITEM edge; the rounded backplate is inset 4,2 (the WinUI 3 ListViewItemPresenter plate,
+                // CornerRadius = ListViewItemCornerRadius 4, :58) → inside the plate the content sits at 12,0,8,0.
+                Padding = new Edges4(12, 0, 8, 0),
                 Margin = new Edges4(4, 2, 4, 2),
                 Corners = Radii.ControlAll,
                 Role = AutomationRole.MenuItem,
