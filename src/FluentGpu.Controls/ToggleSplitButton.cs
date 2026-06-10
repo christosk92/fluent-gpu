@@ -198,6 +198,9 @@ public sealed class ToggleSplitButton : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
+            // ToggleSplitButton shares SplitButtonStyle (SplitButton.xaml:246 BasedOn), which sets
+            // HorizontalAlignment="Left" (:8): hug content, never stretch to the cross-axis width.
+            AlignSelf = FlexAlign.Start,
             MinHeight = ControlHeight,
             Fill = restFill,
             BorderWidth = 1f, BorderBrush = restBorder, PressedBorderBrush = pressBorder, Corners = Radii.ControlAll,

@@ -1371,6 +1371,13 @@ static class Slice
         return NodeHandle.Null;
     }
 
+    // D67 menu chrome: the acrylic lives on the stretch PLATE (first child of the channel-carrying surface).
+    static bool ChildHasAcrylic(SceneStore s, NodeHandle n)
+    {
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) if (s.TryGetAcrylic(c, out _)) return true;
+        return false;
+    }
+
     static NodeHandle FindPolylineStrokeNode(SceneStore s, NodeHandle n)
     {
         if (n.IsNull) return NodeHandle.Null;
@@ -5884,7 +5891,17 @@ static class Slice
             new MenuFlyoutItem("Four"), new MenuFlyoutItem("Five"),
         }, () => svc.CloseTop());
 
-        NodeHandle SurfaceOf(NodeHandle n) { for (; !n.IsNull; n = host.Scene.Parent(n)) if (host.Scene.TryGetAcrylic(n, out _)) return n; return NodeHandle.Null; }
+        NodeHandle SurfaceOf(NodeHandle n)
+        {
+            for (; !n.IsNull; n = host.Scene.Parent(n))
+            {
+                if (host.Scene.TryGetAcrylic(n, out _)) return n;
+                // D67 menu chrome: the acrylic lives on the stretch PLATE (first child); the channels live on its parent.
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+                    if (host.Scene.TryGetAcrylic(c, out _)) return n;
+            }
+            return NodeHandle.Null;
+        }
         NodeHandle SmokeScrim()
         {
             NodeHandle best = NodeHandle.Null;
@@ -6866,7 +6883,7 @@ static class Slice
         bool rowMetrics = rows.Count == 4 && Near(host.Scene.Bounds(rows[0]).H, 36f);
         // Walk up from a row to the acrylic FlyoutSurface (the presenter card; structure: surface > clip > content > rows).
         NodeHandle surface = rows.Count > 0 ? rows[0] : NodeHandle.Null;
-        while (!surface.IsNull && !host.Scene.TryGetAcrylic(surface, out _)) surface = host.Scene.Parent(surface);
+        while (!surface.IsNull && !host.Scene.TryGetAcrylic(surface, out _) && !ChildHasAcrylic(host.Scene, surface)) surface = host.Scene.Parent(surface);
         bool acrylic = !surface.IsNull;
         float surfaceW = surface.IsNull ? 0f : host.Scene.AbsoluteRect(surface).W;
         bool minWidth = surfaceW >= 96f;   // FlyoutThemeMinWidth (generic.xaml)
@@ -6918,7 +6935,7 @@ static class Slice
         host2.RunFrame();
         var specialText = FindTextNode(host2.Scene, strings, host2.Scene.Root, "Paste special");
         NodeHandle surface = specialText;
-        while (!surface.IsNull && !host2.Scene.TryGetAcrylic(surface, out _)) surface = host2.Scene.Parent(surface);
+        while (!surface.IsNull && !host2.Scene.TryGetAcrylic(surface, out _) && !ChildHasAcrylic(host2.Scene, surface)) surface = host2.Scene.Parent(surface);
         var sr = surface.IsNull ? default : host2.Scene.AbsoluteRect(surface);
         var tr = specialText.IsNull ? default : host2.Scene.AbsoluteRect(specialText);
         bool longLabelFits = !surface.IsNull && !specialText.IsNull && tr.Right <= sr.Right - 10f && sr.W > 150f;
@@ -8904,6 +8921,400 @@ static class Slice
         }
     }
 
+    // D5 — editable ComboBox parity: ONE chrome-owning box (ComboBox_themeresources.xaml:571 Background spans both
+    // columns; :580 TextBox part BorderBrush=Transparent), DropDownOverlay 30w/margin-4/corner-4 (:581) with the
+    // 12×12 E70D glyph inset 14 painted above it (:582–587), the focused 2px accent bottom bar on the OUTER box
+    // (TextControlBorderThemeThicknessFocused 1,1,1,2), and the corner-joined dropdown (rows margin 5,2,5,2 corner 3
+    // padding 11,_,11,_ + the flush selection pill; surface OverlayCornerRadius 8).
+    static void D5EditableComboBoxChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("d5-cmb", new Size2(420, 320), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new ComboProbe(true);
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        var scene = host.Scene;
+        void Settle() { for (int i = 0; i < 16; i++) host.RunFrame(); }
+
+        // cp5.a — exactly ONE bordered node in the field subtree; the EditableText part is chromeless at rest.
+        var combo = FindRole(scene, scene.Root, AutomationRole.ComboBox);
+        var field = FindRole(scene, scene.Root, AutomationRole.Text);
+        int bordered = 0;
+        void CountBorders(NodeHandle n)
+        {
+            if (n.IsNull) return;
+            if (scene.Paint(n).BorderWidth > 0f) bordered++;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) CountBorders(c);
+        }
+        CountBorders(combo);
+        bool partChromeless = Near(scene.Paint(field).BorderWidth, 0f, 0.01f) && scene.Paint(field).Fill.A == 0f
+            && Near(scene.Paint(field).Corners.TopLeft, 0f, 0.01f);
+        Check("cp5.a — editable combo: ONE bordered box owns the chrome; the EditableText part paints no border/fill/corners at rest",
+            bordered == 1 && Near(scene.Paint(combo).BorderWidth, 1f, 0.01f) && partChromeless,
+            $"bordered={bordered} outerBw={scene.Paint(combo).BorderWidth:0.##} partBw={scene.Paint(field).BorderWidth:0.##} partFillA={scene.Paint(field).Fill.A:0.##}");
+
+        // cp5.b — DropDownGlyph 12×12 right-inset 14 (hit-test-invisible); DropDownOverlay 30 wide, margin 4; the
+        // part spans the FULL field width (ComboBoxEditableTextPadding right 38 keeps text clear of the column).
+        var comboR = scene.AbsoluteRect(combo);
+        var fieldR = scene.AbsoluteRect(field);
+        var glyphText = FindTextNode(scene, strings, combo, Icons.ChevronDown);
+        var glyphBox = glyphText.IsNull ? NodeHandle.Null : scene.Parent(glyphText);
+        var glyphR = glyphBox.IsNull ? default(RectF) : scene.AbsoluteRect(glyphBox);
+        var overlayBtn = FindRole(scene, combo, AutomationRole.Button);
+        var ovR = overlayBtn.IsNull ? default(RectF) : scene.AbsoluteRect(overlayBtn);
+        Check("cp5.b — glyph 12×12 right-inset 14; overlay button width 30 margin 4; the part spans the full field width",
+            !glyphBox.IsNull && Near(glyphR.W, 12f) && Near(glyphR.H, 12f) && Near(comboR.Right - glyphR.Right, 14f)
+            && !overlayBtn.IsNull && Near(ovR.W, 30f) && Near(ovR.H, comboR.H - 8f)
+            && Near(comboR.Right - ovR.Right, 4f) && Near(ovR.Y - comboR.Y, 4f)
+            && Near(fieldR.W, comboR.W),
+            $"glyph={glyphR.W:0.#}x{glyphR.H:0.#}@right-{comboR.Right - glyphR.Right:0.#} overlay={ovR.W:0.#}x{ovR.H:0.#}@right-{comboR.Right - ovR.Right:0.#}/top+{ovR.Y - comboR.Y:0.#} fieldW={fieldR.W:0.#}/{comboR.W:0.#}");
+
+        // cp5.c — focus the part: the 2px accent bottom bar sits on the OUTER box; the part paints input-active fill.
+        ClickNode(host, window, field);
+        host.RunFrame();
+        combo = FindRole(scene, scene.Root, AutomationRole.ComboBox);
+        field = FindRole(scene, scene.Root, AutomationRole.Text);
+        comboR = scene.AbsoluteRect(combo);
+        var bar = NodeHandle.Null;
+        for (var c = scene.FirstChild(combo); !c.IsNull; c = scene.NextSibling(c))
+            if (Near(scene.AbsoluteRect(c).H, 2f) && ColorClose(scene.Paint(c).Fill, Tok.AccentDefault, 0.004f)) bar = c;
+        var barR = bar.IsNull ? default(RectF) : scene.AbsoluteRect(bar);
+        bool inputActive = ColorClose(scene.Paint(field).Fill, Tok.FillControlInputActive, 0.004f);
+        Check("cp5.c — focused editable combo: 2px accent bottom bar on the OUTER box (TextControlBorderThemeThicknessFocused 1,1,1,2) + input-active part fill",
+            (scene.Flags(field) & NodeFlags.Focused) != 0 && !bar.IsNull
+            && Near(barR.W, comboR.W) && Near(barR.Bottom, comboR.Bottom) && inputActive,
+            $"focused={(scene.Flags(field) & NodeFlags.Focused) != 0} bar={!bar.IsNull} barW={barR.W:0.#}/{comboR.W:0.#} bottomGap={comboR.Bottom - barR.Bottom:0.#} inputActive={inputActive}");
+
+        // cp5.d — clicking the overlay opens the dropdown and the FIELD keeps focus (the overlay is no focus target).
+        root.Sel!.Value = 1;   // give the open list a selected row (pill)
+        host.RunFrame();
+        var overlay2 = FindRole(scene, FindRole(scene, scene.Root, AutomationRole.ComboBox), AutomationRole.Button);
+        ClickNode(host, window, overlay2);
+        host.RunFrame();
+        var rows = Roles(scene, AutomationRole.MenuItem);
+        field = FindRole(scene, scene.Root, AutomationRole.Text);
+        Check("cp5.d — overlay click opens the dropdown; the text field stays focused",
+            rows.Count == 3 && (scene.Flags(field) & NodeFlags.Focused) != 0,
+            $"rows={rows.Count} fieldFocused={(scene.Flags(field) & NodeFlags.Focused) != 0}");
+
+        // cp5.e — dropdown anatomy: rows margin 5,2,5,2 + corner 3 + content inset 11; selection pill 3×16 r1.5
+        // accent FLUSH left; surface corner 8 corner-joined (popup tops squared, field bottoms squared).
+        bool rowsOk = false, pillOk = false, joinOk = false;
+        if (rows.Count == 3)
+        {
+            var r0 = scene.AbsoluteRect(rows[0]);
+            var r1 = scene.AbsoluteRect(rows[1]);
+            var surf = rows[0];
+            while (!surf.IsNull && scene.Paint(surf).BorderWidth < 0.5f) surf = scene.Parent(surf);
+            var surfR = surf.IsNull ? default(RectF) : scene.AbsoluteRect(surf);
+            var label = FindTextNode(scene, strings, rows[0], "Red");
+            float labelInset = label.IsNull ? -1f : scene.AbsoluteRect(label).X - r0.X;
+            rowsOk = !surf.IsNull
+                && Near(r0.X - surfR.X, 5f, 1f) && Near(surfR.Right - r0.Right, 5f, 1f)   // LayoutRoot Margin 5,_,5,_
+                && Near(r1.Y - r0.Bottom, 4f, 0.6f)                                        // 2 + 2 vertical margins
+                && Near(scene.Paint(rows[0]).Corners.TopLeft, 3f, 0.01f)                   // ComboBoxItemCornerRadius
+                && Near(labelInset, 11f, 1f);                                              // ComboBoxItemThemePadding 11
+            NodeHandle pill = NodeHandle.Null;
+            void FindPill(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                var rr = scene.AbsoluteRect(n);
+                if (Near(rr.W, 3f) && Near(rr.H, 16f)) pill = n;
+                for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) FindPill(c);
+            }
+            FindPill(rows[1]);
+            pillOk = !pill.IsNull && ColorClose(scene.Paint(pill).Fill, Tok.AccentDefault, 0.004f)
+                && Near(scene.Paint(pill).Corners.TopLeft, 1.5f, 0.01f)
+                && Near(scene.AbsoluteRect(pill).X - r1.X, 0f, 0.6f);                      // ITEM pill is FLUSH (:759)
+            combo = FindRole(scene, scene.Root, AutomationRole.ComboBox);
+            joinOk = !surf.IsNull
+                && Near(scene.Paint(surf).Corners.TopLeft, 0f, 0.01f) && Near(scene.Paint(surf).Corners.BottomLeft, Radii.Overlay, 0.01f)
+                && Near(scene.Paint(combo).Corners.TopLeft, Radii.Control, 0.01f) && Near(scene.Paint(combo).Corners.BottomLeft, 0f, 0.01f);
+        }
+        Check("cp5.e — dropdown rows margin 5,2,5,2 corner 3 inset 11 + flush selection pill 3×16 r1.5; surface corner 8 corner-joined to the field",
+            rowsOk && pillOk && joinOk, $"rows={rowsOk} pill={pillOk} join={joinOk}");
+
+        // cp5.f — a second overlay-position click closes (toggle); the field keeps focus through the close.
+        var overlay3 = FindRole(scene, FindRole(scene, scene.Root, AutomationRole.ComboBox), AutomationRole.Button);
+        ClickNode(host, window, overlay3);
+        Settle();
+        field = FindRole(scene, scene.Root, AutomationRole.Text);
+        Check("cp5.f — overlay click while open closes the dropdown; the field stays focused",
+            Roles(scene, AutomationRole.MenuItem).Count == 0 && (scene.Flags(field) & NodeFlags.Focused) != 0,
+            $"rows={Roles(scene, AutomationRole.MenuItem).Count} fieldFocused={(scene.Flags(field) & NodeFlags.Focused) != 0}");
+    }
+
+    // ── D67 — SplitButton/DropDownButton menu placement + per-kind flyout/menu motion (cp6.* / cp7.*) ─────────
+    // WinUI grounding: SplitButton.xaml:220-222 (35 / 1px / 35 columns) + SplitButton_themeresources.xaml:101-103
+    // (sizes; SplitButtonPadding 11,6,11,7); SplitButtonStyle HorizontalAlignment=Left (SplitButton.xaml:8);
+    // FlyoutBase::FlyoutMargin = 4 below the anchor (FlyoutBase_partial.cpp:65 + :2630-2631). Menu open =
+    // MenuPopupThemeTransition load: clip + content translate ±H·ClosedRatio(0.5) → 0 over 250ms cubic-bezier(0,0,0,1)
+    // PLUS the presenter-plate ("MenuFlyoutPresenterBorder", generic.xaml:23810) ScaleY (1−ClosedRatio) → 1 pivoted at
+    // the anchor-FAR edge (CenterY=openedLength when direction==AnimationDirection_Top = the DOWNWARD menu,
+    // LayoutTransition_partial.cpp:441-506 + MenuFlyout_Partial.cpp:259); unload = 83ms linear fade with the clip and
+    // plate FROZEN (cpp:525-544). Dropdown seam = SplitOpen/SplitClose (ThemeAnimations.cpp:596-721 / 733-857): a
+    // band centred on the seam (ClipTranslateY = OffsetFromCenter immediately) growing to (0.5+|off/H|)·2 over 250ms
+    // (opacity pinned 1, content translate 0) and collapsing to closedRatio 0.15 over 167ms with the fade only in the
+    // last 83ms (s_OpacityChangeBeginTime = 84, SplitCloseThemeAnimation_Partial.h:16-18).
+    static void D67SplitButtonFlyoutChecks(StringTable strings)
+    {
+        // Menu chrome (D67) splits the FlyoutSurface: acrylic+stroke+shadow live on the stretch PLATE (first child of
+        // the surface); the open/close channels live on the plate's PARENT (the transparent ZStack surface).
+        static NodeHandle SurfaceOf(SceneStore sc, NodeHandle n)
+        {
+            for (; !n.IsNull; n = sc.Parent(n))
+            {
+                if (sc.TryGetAcrylic(n, out _)) return n;
+                for (var c = sc.FirstChild(n); !c.IsNull; c = sc.NextSibling(c))
+                    if (sc.TryGetAcrylic(c, out _)) return n;
+            }
+            return NodeHandle.Null;
+        }
+
+        // cp6.b — SplitButton extents: primary h32 (and ≥35 wide), secondary 35×32, divider 1px, root MinHeight 32 +
+        // hug-left (HorizontalAlignment=Left → AlignSelf.Start).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp6ext", new Size2(360, 160), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new SplitButtonProbe());
+            host.RunFrame();
+            var btns = Roles(host.Scene, AutomationRole.Button);
+            var primary = btns.Count > 0 ? btns[0] : NodeHandle.Null;
+            var drop = btns.Count > 1 ? btns[1] : NodeHandle.Null;
+            var outer = primary.IsNull ? NodeHandle.Null : host.Scene.Parent(primary);
+            var divider = outer.IsNull ? NodeHandle.Null : Child(host.Scene, outer, 1);
+            bool primH = !primary.IsNull && Near(host.Scene.Bounds(primary).H, 32f);
+            bool dropExt = !drop.IsNull && Near(host.Scene.Bounds(drop).W, 35f) && Near(host.Scene.Bounds(drop).H, 32f);
+            bool divExt = !divider.IsNull && Near(host.Scene.Bounds(divider).W, 1f);
+            bool primMin = !primary.IsNull && host.Scene.Bounds(primary).W >= 34.5f;
+            bool rootSpec = !outer.IsNull && Near(host.Scene.Layout(outer).MinH, 32f)
+                            && host.Scene.Layout(outer).AlignSelf == FlexAlign.Start;   // SplitButton.xaml:8 HorizontalAlignment=Left
+            Check("cp6.b — SplitButton extents: primary h32 ≥35w, secondary 35×32, divider 1px, root MinHeight 32 + hug-left",
+                primH && dropExt && divExt && primMin && rootSpec,
+                $"primary={(primary.IsNull ? 0 : host.Scene.Bounds(primary).W):0}×{(primary.IsNull ? 0 : host.Scene.Bounds(primary).H):0} " +
+                $"drop={(drop.IsNull ? 0 : host.Scene.Bounds(drop).W):0}×{(drop.IsNull ? 0 : host.Scene.Bounds(drop).H):0} " +
+                $"div={(divider.IsNull ? 0 : host.Scene.Bounds(divider).W):0} rootSpec={rootSpec}");
+        }
+
+        // cp6.a — live SplitButton: the menu wrapper lands at (anchor.X, anchor.Bottom+4) and the VISIBLE (post-clip)
+        // top edge never rises above that line mid-unfold; menus do not fade at open.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp6live", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, new SplitButtonLongMenuProbe(), frameTime: clock);
+            host.RunFrame();
+
+            var halves = Roles(host.Scene, AutomationRole.Button);
+            var primary = halves.Count > 0 ? halves[0] : NodeHandle.Null;
+            var secondary = halves.Count > 1 ? halves[1] : NodeHandle.Null;
+            var anchorRect = primary.IsNull ? default : host.Scene.AbsoluteRect(host.Scene.Parent(primary));
+            if (!secondary.IsNull) ClickNode(host, window, secondary);   // open (mount + place + seed in the layout effect)
+            host.RunFrame();                                             // compose the t=0 keyframes
+            var surface = SurfaceOf(host.Scene, FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+            var wrapper = surface.IsNull ? NodeHandle.Null : host.Scene.Parent(surface);
+            float expX = anchorRect.X, expY = anchorRect.Bottom + 4f;    // FlyoutBase::FlyoutMargin = 4
+            float minVisTop = float.MaxValue;
+            bool opaqueAllTheWay = !surface.IsNull;
+            for (int i = 0; i < 6 && !surface.IsNull; i++)
+            {
+                var sp = host.Scene.Paint(surface);
+                float visTop = host.Scene.AbsoluteRect(surface).Y + (sp.ClipRect.IsInfinite ? 0f : sp.ClipRect.Y);
+                minVisTop = MathF.Min(minVisTop, visTop);
+                if (sp.Opacity < 0.99f) opaqueAllTheWay = false;
+                clock.Advance(16f); host.RunFrame();
+            }
+            for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }   // > 250ms → settled
+            var wr = wrapper.IsNull ? default : host.Scene.AbsoluteRect(wrapper);
+            bool placed = !wrapper.IsNull && Near(wr.X, expX, 0.75f) && Near(wr.Y, expY, 0.75f);
+            bool neverAbove = !surface.IsNull && minVisTop >= expY - 0.75f;
+            var pEnd = surface.IsNull ? default : host.Scene.Paint(surface);
+            bool settled = !surface.IsNull && pEnd.ClipRect.IsInfinite && Near(pEnd.LocalTransform.Dy, 0f, 0.1f);
+            Check("cp6.a — SplitButton menu: wrapper at (anchor.X, anchor.Bottom+4); visible top never above it mid-open; no open fade",
+                placed && neverAbove && opaqueAllTheWay && settled,
+                $"wrapper=({wr.X:0.0},{wr.Y:0.0}) exp=({expX:0.0},{expY:0.0}) minVisTop={minVisTop:0.0} opaque={opaqueAllTheWay} settled={settled}");
+        }
+
+        // cp6.c + cp7.d/e/f/g — the OverlayHost motion paths against the OverlayProbe's 120×32 anchor at (20,20).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("d67motion", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+            var svc = root.Service!;
+            void Settle() { for (int i = 0; i < 40; i++) { clock.Advance(16f); host.RunFrame(); } }
+            var anchorRect = host.Scene.AbsoluteRect(root.Anchor);
+
+            // cp6.c — the EXACT open call DropDownButton/SplitButton make (BottomLeft + FocusTrap + windowed): placed
+            // at (anchor.X, anchor.Bottom+4); menu-kind open channels = TranslateY<0 + ClipT>0 with ClipB resting at
+            // the box bottom (edge reveal, NOT seam) and opacity pinned 1.
+            {
+                var hd = svc.Open(() => root.Anchor,
+                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    FlyoutPlacement.BottomLeft,
+                    new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                host.RunFrame();   // mount + place + seed
+                host.RunFrame();   // compose t=0
+                var s = SurfaceOf(host.Scene, FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+                var wrapper = s.IsNull ? NodeHandle.Null : host.Scene.Parent(s);
+                var wr = wrapper.IsNull ? default : host.Scene.AbsoluteRect(wrapper);
+                var p0 = s.IsNull ? default : host.Scene.Paint(s);
+                float sh = s.IsNull ? 0f : host.Scene.Bounds(s).H;
+                bool placed = !wrapper.IsNull && Near(wr.X, anchorRect.X, 0.75f) && Near(wr.Y, anchorRect.Bottom + 4f, 0.75f);
+                bool channels = !s.IsNull && p0.LocalTransform.Dy < -1f && !p0.ClipRect.IsInfinite
+                    && p0.ClipRect.Y > 1f && Near(p0.ClipRect.Bottom, sh, 1f) && p0.Opacity > 0.99f;
+                hd.Close();
+                Settle();
+                Check("cp6.c — DropDownButton-path menu: placed at (anchor.X, anchor.Bottom+4); open channels TranslateY+ClipT, opacity 1",
+                    placed && channels,
+                    $"wrapper=({wr.X:0.0},{wr.Y:0.0}) exp=({anchorRect.X:0.0},{anchorRect.Bottom + 4f:0.0}) dy={p0.LocalTransform.Dy:0.0} " +
+                    $"clipT={p0.ClipRect.Y:0.0} clipB={p0.ClipRect.Bottom:0.0}/{sh:0.0} op={p0.Opacity:0.00}");
+            }
+
+            // cp7.d — menu plate (WinUI MenuFlyoutPresenterBorder ScaleY): mid-flight STRICTLY between (1−ratio) and 1
+            // about the bottom pivot (downward menu), settled at 1 by 250ms; the surface stays opaque, TranslateY<0.
+            {
+                svc.Open(() => root.Anchor,
+                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
+                    FlyoutPlacement.BottomLeft);
+                host.RunFrame();
+                host.RunFrame();   // t=0
+                var s = SurfaceOf(host.Scene, FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+                var plate = s.IsNull ? NodeHandle.Null : host.Scene.FirstChild(s);
+                bool plateChrome = !plate.IsNull && host.Scene.TryGetAcrylic(plate, out _) && Near(host.Scene.Paint(plate).BorderWidth, 1f);
+                clock.Advance(16f); host.RunFrame();   // mid-flight (E(16/250)=0.3517 → scale ≈ 0.676)
+                var sp = s.IsNull ? default : host.Scene.Paint(s);
+                float midScale = plate.IsNull ? 0f : host.Scene.Paint(plate).LocalTransform.M22;
+                bool mid = !plate.IsNull && midScale > 0.51f && midScale < 0.99f && sp.Opacity > 0.99f && sp.LocalTransform.Dy < -1f;
+                bool pivot = !plate.IsNull && Near(host.Scene.Paint(plate).OriginY, 1f, 0.01f);   // opens DOWN → CenterY=openedLength (bottom)
+                for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }            // > 250ms
+                bool settledScale = !plate.IsNull && Near(host.Scene.Paint(plate).LocalTransform.M22, 1f, 0.01f);
+                svc.CloseTop();
+                Settle();
+                Check("cp7.d — menu plate ScaleY (1−ratio)→1 over 250ms about the bottom pivot; opacity 1 + TranslateY<0 mid-flight",
+                    plateChrome && mid && pivot && settledScale,
+                    $"plate={plateChrome} mid={midScale:0.000} pivot={pivot} settled={settledScale} op={sp.Opacity:0.00} dy={sp.LocalTransform.Dy:0.0}");
+            }
+
+            // cp7.e — Dropdown SEAM (SplitOpen/SplitClose around the selected-row centre): both clip edges animate, the
+            // band stays centred on the seam, content TranslateY stays 0, no open fade; close collapses toward the
+            // seam with the fade only in the last 83ms (begin 84ms).
+            {
+                NodeHandle body = NodeHandle.Null;
+                svc.Open(() => root.Anchor,
+                    () => new BoxEl { Width = 240f, Height = 120f, Fill = Tok.FillCardDefault, OnRealized = h => body = h },
+                    FlyoutPlacement.BottomLeft,
+                    new PopupOptions(Chrome: PopupChrome.Dropdown) { SeamOffsetY = 20f });
+                host.RunFrame();
+                host.RunFrame();   // t=0
+                var s = SurfaceOf(host.Scene, body);
+                float H = s.IsNull ? 0f : host.Scene.Bounds(s).H;            // body 120 + presenter padding (0,2,0,2)
+                float c = H * 0.5f + 20f;
+                float half0 = MathF.Max(0.25f * H, 20f);                     // ThemeAnimations.cpp:655-668
+                float halfF = H * 0.5f + 20f;                                // cpp:674
+                var p0 = s.IsNull ? default : host.Scene.Paint(s);
+                bool t0 = !s.IsNull && !p0.ClipRect.IsInfinite
+                    && Near(p0.ClipRect.Y, c - half0, 1.5f) && Near(p0.ClipRect.Bottom, c + half0, 1.5f)
+                    && p0.ClipRect.Y > 0.5f && p0.ClipRect.Bottom < H - 0.5f          // seam-centred: ClipT>0 AND ClipB<H
+                    && Near(p0.LocalTransform.Dy, 0f, 0.1f) && p0.Opacity > 0.99f;    // content translate 0, no fade
+                clock.Advance(16f); host.RunFrame();
+                var p1 = s.IsNull ? default : host.Scene.Paint(s);
+                bool bothMove = !s.IsNull && !p1.ClipRect.IsInfinite
+                    && p1.ClipRect.Y < p0.ClipRect.Y - 1f && p1.ClipRect.Y > 0.5f
+                    && p1.ClipRect.Bottom > p0.ClipRect.Bottom + 1f
+                    && Near(p1.LocalTransform.Dy, 0f, 0.1f) && p1.Opacity > 0.99f;
+                for (int i = 0; i < 24; i++) { clock.Advance(16f); host.RunFrame(); }
+                bool opened = !s.IsNull && host.Scene.Paint(s).ClipRect.IsInfinite;
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(48f); host.RunFrame();                          // t=48 < 84ms begin → still opaque
+                float halfClose = MathF.Max(0.075f * H, 20f - 0.35f * H);     // cpp:798-811 (compensation inactive here)
+                var c48 = s.IsNull ? default : host.Scene.Paint(s);
+                float e48 = 0.7320f;                                          // E(48/167) for cubic(0,0,0,1)
+                bool close48 = !s.IsNull && c48.Opacity > 0.99f
+                    && Near(c48.ClipRect.Y, (c - halfClose) * e48, 2f)
+                    && Near(c48.ClipRect.Bottom, H + (c + halfClose - H) * e48, 2f)
+                    && (c48.ClipRect.Y + c48.ClipRect.Bottom) * 0.5f > (H * 0.5f + 5f);   // midpoint moving toward the seam
+                clock.Advance(64f); host.RunFrame();                          // t=112 → fade (112−84)/83 = 0.3373
+                float op112 = !s.IsNull && host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
+                bool close112 = Near(op112, 1f - (112f - 84f) / 83f, 0.05f);
+                Settle();
+                Check("cp7.e — Dropdown seam: SplitOpen band centred on the seam (ClipT>0 ∧ ClipB<H, translate 0, no fade); SplitClose collapses toward it, fade after 84ms",
+                    t0 && bothMove && opened && close48 && close112,
+                    $"t0={t0} (clipT={p0.ClipRect.Y:0.0}≈{c - half0:0.0} clipB={p0.ClipRect.Bottom:0.0}≈{c + half0:0.0}/{H:0.0}) both={bothMove} " +
+                    $"opened={opened} close48={close48} (op={c48.Opacity:0.00} T={c48.ClipRect.Y:0.0} B={c48.ClipRect.Bottom:0.0}) close112={close112} (op={op112:0.000})");
+            }
+
+            // cp7.f — plain Flyout (PopupChrome.Popup, TAS_SHOWPOPUP): opacity HELD at 0 through t=40ms, mid fade at
+            // t=120ms ((120−83)/83 = 0.446), TranslateY decaying from −50 toward 0 the whole time.
+            {
+                NodeHandle body = NodeHandle.Null;
+                svc.Open(() => root.Anchor,
+                    () => new BoxEl { Width = 240f, Height = 88f, Fill = Tok.FillCardDefault, OnRealized = h => body = h },
+                    FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Popup));
+                host.RunFrame();
+                host.RunFrame();   // t=0
+                var s = SurfaceOf(host.Scene, body);
+                var p0 = s.IsNull ? default : host.Scene.Paint(s);
+                bool t0 = !s.IsNull && Near(p0.LocalTransform.Dy, -50f, 1f) && p0.Opacity < 0.01f;
+                clock.Advance(40f); host.RunFrame();
+                var p40 = s.IsNull ? default : host.Scene.Paint(s);
+                bool t40 = !s.IsNull && p40.Opacity < 0.01f && p40.LocalTransform.Dy > -49f && p40.LocalTransform.Dy < -1f;
+                clock.Advance(80f); host.RunFrame();   // t=120
+                var p120 = s.IsNull ? default : host.Scene.Paint(s);
+                bool t120 = !s.IsNull && Near(p120.Opacity, (120f - 83f) / 83f, 0.05f)
+                    && p120.LocalTransform.Dy > p40.LocalTransform.Dy + 0.5f && p120.LocalTransform.Dy < 0f;
+                svc.CloseTop();
+                Settle();
+                Check("cp7.f — plain Flyout: opacity held 0 at t=40, 0<opacity<1 at t=120, TranslateY decaying from −50",
+                    t0 && t40 && t120,
+                    $"t0={t0} (dy={p0.LocalTransform.Dy:0.0} op={p0.Opacity:0.00}) t40={t40} (dy={p40.LocalTransform.Dy:0.0} op={p40.Opacity:0.00}) " +
+                    $"t120={t120} (dy={p120.LocalTransform.Dy:0.0} op={p120.Opacity:0.000})");
+            }
+
+            // cp7.g — menu close mid-open: 83ms linear fade with the clip AND plate frozen at the interrupt offset;
+            // the entry finalizes once the fade settles.
+            {
+                svc.Open(() => root.Anchor,
+                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    FlyoutPlacement.BottomLeft);
+                host.RunFrame();
+                host.RunFrame();                       // t=0
+                clock.Advance(64f); host.RunFrame();   // mid-open
+                var s = SurfaceOf(host.Scene, FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem));
+                var plate = s.IsNull ? NodeHandle.Null : host.Scene.FirstChild(s);
+                svc.CloseTop(); host.RunFrame();       // freeze (cancel) the load tracks + seed the 83ms fade
+                var f0 = s.IsNull ? default : host.Scene.Paint(s);
+                float frozenT = f0.ClipRect.IsInfinite ? -1f : f0.ClipRect.Y;
+                float frozenScale = plate.IsNull ? -1f : host.Scene.Paint(plate).LocalTransform.M22;
+                clock.Advance(32f); host.RunFrame();   // 32ms into the fade → opacity ≈ 1−32/83 = 0.614
+                var f1 = s.IsNull ? default : host.Scene.Paint(s);
+                bool frozen = !s.IsNull && frozenT > 1f && !f1.ClipRect.IsInfinite && Near(f1.ClipRect.Y, frozenT, 0.01f)
+                    && !plate.IsNull && frozenScale > 0.5f && frozenScale < 1f
+                    && Near(host.Scene.Paint(plate).LocalTransform.M22, frozenScale, 0.001f);
+                bool fading = !s.IsNull && Near(f1.Opacity, 1f - 32f / 83f, 0.03f);
+                clock.Advance(64f); host.RunFrame();   // 96ms > 83 → fade settled
+                for (int i = 0; i < 6; i++) { clock.Advance(16f); host.RunFrame(); }
+                bool finalized = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+                Check("cp7.g — menu close: 83ms linear fade with clip + plate frozen; entry finalized after settle",
+                    frozen && fading && finalized,
+                    $"frozenT={frozenT:0.0} clipNow={(f1.ClipRect.IsInfinite ? -1f : f1.ClipRect.Y):0.0} plate={frozenScale:0.000} op32={f1.Opacity:0.000}≈{1f - 32f / 83f:0.000} finalized={finalized}");
+            }
+        }
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -9051,6 +9462,11 @@ static class Slice
         D2PasswordRevealFocusChecks(strings);
         D3ExpanderChecks(strings);
         D4ScrollBarChecks(strings);
+
+        // Parity wave-2 defect fixes (D5 editable-ComboBox unified chrome + dropdown styling, D6/D7 SplitButton
+        // flyout placement + per-kind menu/dropdown motion).
+        D5EditableComboBoxChecks(strings);
+        D67SplitButtonFlyoutChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

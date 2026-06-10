@@ -8,8 +8,12 @@ namespace FluentGpu.Controls;
 
 /// <summary>
 /// A WinUI ComboBox: a closed field showing the selected item + a chevron that opens a dropdown list (an anchored,
-/// light-dismiss overlay whose width matches the field). In <see cref="Editable"/> mode the closed field is an
-/// <see cref="EditableText"/> plus the chevron column. Selection is a caller <see cref="Signal{T}"/> so a page can read it.
+/// light-dismiss overlay whose width matches the field). In <see cref="Editable"/> mode ONE chrome-owning box (the
+/// template's single Background border spanning BOTH grid columns, ComboBox_themeresources.xaml:571
+/// <c>Grid.ColumnSpan="2"</c>) hosts a chromeless <see cref="EditableText"/> spanning the full width (:580
+/// <c>ColumnSpan="2"</c>, <c>BorderBrush="Transparent"</c>, padding ComboBoxEditableTextPadding 11,5,38,6 :342) with
+/// the 30-wide DropDownOverlay button (:581) and the 12×12 chevron glyph (:582–587) overlaid at the right — never a
+/// second bordered box. Selection is a caller <see cref="Signal{T}"/> so a page can read it.
 /// <para>
 /// 1:1 with <c>ComboBox_themeresources(_perf2026).xaml</c> + <c>ComboBoxHelper.cpp</c>. Exact tokens/sizes:
 /// field MinHeight=32 (<c>ComboBoxMinHeight</c>), padding 12,5,0,7 (<c>ComboBoxPadding</c>), CornerRadius=4
@@ -23,7 +27,8 @@ namespace FluentGpu.Controls;
 /// <para>
 /// Items (<c>ComboBoxItem</c>): padding 11,5,11,7 (<c>ComboBoxItemThemePadding</c>), margin 5,2,5,2, CornerRadius=3
 /// (<c>ComboBoxItemCornerRadius</c>); the 3×16 left accent pill (<c>ComboBoxItemPill</c>, corner 1.5, fill
-/// <c>AccentFillColorDefault</c>, margin 1,0,0,0) shows only on the selected row. Item state matrix mirrors the XAML:
+/// <c>AccentFillColorDefault</c>, flush left — no margin in the ITEM template) shows only on the selected row. Item
+/// state matrix mirrors the XAML:
 /// rest=SubtleTransparent, PointerOver=SubtleSecondary, Pressed=SubtleTertiary; Selected=SubtleSecondary,
 /// SelectedPointerOver=SubtleTertiary, SelectedPressed=SubtleSecondary; foreground Primary, pressed→Secondary.
 /// Popup: AcrylicInApp background + <c>SurfaceStrokeColorFlyout</c> 1px + <c>OverlayCornerRadius</c>(8) +
@@ -48,9 +53,11 @@ public sealed class ComboBox : Component
     // ── WinUI dims (ComboBox_themeresources.xaml) ──
     public const float MinHeight = 32f;          // ComboBoxMinHeight
     public const float ThemeMinWidth = 64f;      // ComboBoxThemeMinWidth
-    public const float ChevronColumn = 38f;      // template column 2 width (the glyph cell)
+    public const float ChevronColumn = 38f;      // template column 2 width (the glyph cell) = the editable text right padding (ComboBoxEditableTextPadding 11,5,38,6)
     public const float ChevronGlyphSize = 12f;   // AnimatedIcon 12×12
     public const float ChevronRightInset = 14f;  // DropDownGlyph Margin 0,0,14,0
+    public const float OverlayButtonWidth = 30f; // DropDownOverlay Width=30 (ComboBox_themeresources.xaml:581)
+    public const float OverlayButtonInset = 4f;  // DropDownOverlay Margin=4,4,4,4 (:581)
     public const float ItemPillScaleMin = 0.625f;// ComboBoxItemPillMinScale (pressed)
     public const float PillScaleMs = 167f;        // ComboBoxItemScaleAnimationDuration / ControlFastAnimationDuration
     public const float MaxDropDownHeight = 504f;  // MaxDropDownHeight (generic.xaml:8887 style setter)
@@ -114,6 +121,7 @@ public sealed class ComboBox : Component
         var fallbackText = UseSignal("");
         var text = Text ?? fallbackText;
         var svc = UseContext(Overlay.Service);
+        var hooks = UseContext(InputHooks.Current);
 
         // ── Editable-mode search state (ComboBox_Partial.cpp m_searchResultIndex/m_searchResultIndexSet) ────────
         var searchIdx = UseRef(-1);
@@ -128,6 +136,9 @@ public sealed class ComboBox : Component
         // is the keyboard-cursor row in the open list, in its own signal so the popup body re-highlights without re-rendering us.
         var openVer = UseSignal(0);
         var highlight = UseSignal(-1);
+        // Editable: the TextBox part's focus drives the OUTER box's focused chrome (the 2px accent bottom bar) —
+        // WinUI's EditableModeStates TextBoxFocused family keys off the inner TextBox focus, not the combo root.
+        var editFocusedSig = UseSignal(false);
         var autoOpened = UseRef(false);
         int sel = SelectedIndex.Value;
         _ = openVer.Value;         // subscribe → re-render the field (corner-join / chevron) when we open/close
@@ -183,6 +194,19 @@ public sealed class ComboBox : Component
                 // (content inset 4 + row pitch × index + row top margin 2). Long lists clamp into the work area, so
                 // the alignment degrades gracefully at the edges (WinUI clamps identically).
                 float pitch = ItemRowPitch(TouchInputMode);
+                // SplitOpen/SplitClose seam (the WinUI DropDownStates Opened/Closed storyboards animate the clip from
+                // TemplateSettings.DropDownOffset — the selected item's offset from the popup centre): SeamOffsetY =
+                // the selected row's centre Y minus the popup's centre Y, popup-local. Popup height = the scroll
+                // viewport (rows + the inner column's 0,2,0,2 margins, capped at MaxDropDownHeight) + the
+                // FlyoutSurface's 0,2,0,2 presenter padding. No selection → null (host keeps the edge-reveal default).
+                float? seamY = null;
+                int selNow = SelectedIndex.Peek();
+                if (selNow >= 0 && selNow < Items.Count)
+                {
+                    float popupH = MathF.Min(Items.Count * pitch + 4f, MaxDropDownHeight) + 4f;
+                    float rowCenter = DropdownContentInset + selNow * pitch + 2f + (pitch - 4f) * 0.5f;
+                    seamY = Math.Clamp(rowCenter, 0f, popupH) - popupH * 0.5f;
+                }
                 handle.Value = svc.OpenAt(
                     () =>
                     {
@@ -194,7 +218,7 @@ public sealed class ComboBox : Component
                         return new RectF(f.X, f.Y - off, f.W, f.H);
                     },
                     body, FlyoutPlacement.OverlapStretch,
-                    new PopupOptions(FocusTrap: true, Chrome: PopupChrome.Dropdown) { ConstrainToRootBounds = false },
+                    new PopupOptions(FocusTrap: true, Chrome: PopupChrome.Dropdown) { ConstrainToRootBounds = false, SeamOffsetY = seamY },
                     owner: anchorOf);
             }
             handle.Value.ClosedAction = () =>
@@ -210,6 +234,16 @@ public sealed class ComboBox : Component
         }
 
         void Toggle() { if (handle.Value is { IsOpen: true }) Close(); else OpenPopup(); }
+
+        // The editable DropDownOverlay click. The overlay border is never a focus target (the dispatcher's pointer
+        // activation finds no focusable in its chain, so focus stays unchanged — the WinUI IsTabStop=False shape);
+        // opening from an unfocused combo puts focus in the TextBox part first (WinUI's editable open paths focus
+        // EditableText), a no-op when the field already holds it.
+        void OverlayToggle()
+        {
+            if (_edit is { } ed && !ed.RootNode.IsNull) hooks?.RestoreFocus?.Invoke(ed.RootNode);
+            Toggle();
+        }
 
         // Row pitch (margins included) of one dropdown item — drives the over-field placement math.
         static float ItemRowPitch(bool touch)
@@ -441,78 +475,126 @@ public sealed class ComboBox : Component
 
         if (Editable)
         {
+            // ── ONE box owns ALL the chrome (the WinUI template: a single Background border spans BOTH grid columns,
+            // ComboBox_themeresources.xaml:571 Grid.ColumnSpan="2"; the TextBox part sits INSIDE it with
+            // BorderBrush="Transparent" + Style=ComboBoxTextBoxStyle, :580). The chromeless part paints only the
+            // TextControl hover/focused fills over this box's rest fill (ComboBoxTextBoxStyle :786–803 — the WinUI
+            // BorderElement-over-Background layering); the focused affordance = that input-active fill + the 2px
+            // accent bottom bar on THIS box (TextControlBorderThemeThicknessFocused 1,1,1,2,
+            // Common_themeresources.xaml:11, with TextControlElevationBorderFocusedBrush's accent bottom stop,
+            // TextBox_themeresources.xaml:57–65 — the established 2px-bottom-bar equivalence).
+            bool editFocused = editFocusedSig.Value;
+            var editChildren = new List<Element>(4)
+            {
+                // The TextBox part: FULL width (:580 ColumnSpan=2); ComboBoxEditableTextPadding 11,5,38,6 (:342)
+                // keeps the text clear of the chevron column.
+                Embed.Comp(() =>
+                {
+                    var e = new EditableText
+                    {
+                        Text = text, Width = w, Height = MinHeight,
+                        Chromeless = true,
+                        LanePadding = new Edges4(11, 5, ChevronColumn, 6),
+                        Placeholder = Placeholder, IsEnabled = IsEnabled,
+                        // Enter commits the search (MainKeyDown Enter → CommitRevertEditableSearch(false),
+                        // ComboBox_Partial.cpp:3046–3050) and closes the dropdown.
+                        OnCommit = _ => { CommitSearch(); if (handle.Value is { IsOpen: true }) Close(); },
+                        // Escape reverts: EditableText already restored the focus-time text; restore the
+                        // edit-begin selection and close WITHOUT committing (cpp:3009–3016 + :2448–2468).
+                        OnCancel = () =>
+                        {
+                            cancelling.Value = true;   // cleared by the blur that follows the Escape
+                            if (restoreIdx.Value != SelectedIndex.Peek()) SelectedIndex.Value = restoreIdx.Value;
+                            ResetSearch();
+                            if (handle.Value is { IsOpen: true }) Close();
+                        },
+                        OnFocusChanged = f =>
+                        {
+                            editFocusedSig.Value = f;   // the OUTER box re-renders its focused chrome (accent bar)
+                            if (f)
+                            {
+                                restoreIdx.Value = SelectedIndex.Peek();   // m_indexToRestoreOnCancel (cpp:2448–2455)
+                                ResetSearch();
+                            }
+                            else
+                            {
+                                bool wasCancel = cancelling.Value;
+                                cancelling.Value = false;
+                                // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391). Focus moving
+                                // INTO the open popup (a row click in flight) is not a departure — the click /
+                                // popup-close path commits instead.
+                                if (!wasCancel && handle.Value is not { IsOpen: true }) CommitSearch();
+                            }
+                        },
+                    };
+                    // Search-as-you-type on USER edits only (cpp OnCharacterReceived :3820–3841); a deletion
+                    // (Backspace/Delete/cut) restricts the search to exact matches so auto-complete never fights
+                    // backspace (cpp:4098–4106 keys off VK_BACK).
+                    e.OnTextChanged = _ =>
+                    {
+                        if (e.LastChangeReason == TextChangeReason.UserInput) ProcessSearch(e.LastEditWasDeletion);
+                    };
+                    _edit = e;
+                    return e;
+                }),
+                // DropDownOverlay (:581): Width=30, Margin=4, CornerRadius=4
+                // (ComboBoxDropDownButtonBackgroundCornerRadius :344), transparent until hover/press
+                // (ComboBoxDropDownBackgroundPointerOver=SubtleFillColorSecondary :311,
+                // ComboBoxDropDownBackgroundPointerPressed=SubtleFillColorTertiary :312), never a focus target.
+                new BoxEl
+                {
+                    Width = OverlayButtonWidth, Height = MinHeight - 2f * OverlayButtonInset,
+                    OffsetX = w - OverlayButtonWidth - OverlayButtonInset, OffsetY = OverlayButtonInset,
+                    Corners = CornerRadius4.All(4f),
+                    Fill = ColorF.Transparent,
+                    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                    Role = AutomationRole.Button, IsEnabled = IsEnabled,
+                    TabStop = false,
+                    OnClick = OverlayToggle,
+                },
+                // DropDownGlyph (:582–587): 12×12 E70D, Margin 0,0,14,0, IsHitTestVisible=False, painted ABOVE the
+                // overlay (tree order = paint order). Foreground stays TextFillColorSecondary in every editable state
+                // (ComboBoxDropDownGlyphForeground :58 = ComboBoxEditableDropDownGlyphForeground :105/:315); disabled
+                // = TextFillColorDisabled (:59). No press nudge: the EditableModeStates only recolor the overlay/glyph.
+                new BoxEl
+                {
+                    Width = ChevronGlyphSize, Height = ChevronGlyphSize,
+                    OffsetX = w - ChevronGlyphSize - ChevronRightInset,
+                    OffsetY = (MinHeight - ChevronGlyphSize) * 0.5f,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    HitTestVisible = false,
+                    Children =
+                    [
+                        new TextEl(Icons.ChevronDown)
+                        {
+                            Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                            Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
+                            DisabledColor = Tok.TextDisabled,
+                        },
+                    ],
+                },
+            };
+            // Focused: the 2px accent bottom bar on the OUTER box (TextControlBorderThemeThicknessFocused 1,1,1,2 +
+            // the TextControlElevationBorderFocusedBrush accent bottom stop — the 2px-bottom-bar equivalence; the
+            // input-active fill is painted by the chromeless part). Appended LAST so it paints over the bottom edge.
+            if (editFocused && IsEnabled)
+                editChildren.Add(new BoxEl { Width = w, Height = 2f, OffsetY = MinHeight - 2f, Fill = Tok.AccentDefault });
+
             return WithChrome(new BoxEl
             {
-                Direction = 0, Width = w, MinHeight = MinHeight, AlignItems = FlexAlign.Center,
+                ZStack = true, Width = w, Height = MinHeight,
                 Corners = editableCorners, BorderWidth = 1f,
-                // WinUI ComboBoxBorderBrush = ControlElevationBorderBrush (gradient); pressed flattens to ControlStrokeColorDefault.
-                BorderBrush = IsEnabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
+                // WinUI ComboBoxBorderBrush = ControlElevationBorderBrush (gradient); the InlineErrors state swaps it
+                // to the error stroke; disabled flattens to ControlStrokeColorDefault.
+                BorderBrush = hasError ? GradientSpec.Solid(errorColor)
+                    : IsEnabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
                 Fill = IsEnabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
                 ClipToBounds = true,
                 IsEnabled = IsEnabled,
                 Role = AutomationRole.ComboBox,
                 OnRealized = h => anchor.Value = h,
                 OnKeyDown = IsEnabled ? HandleEditableKeys : null,   // Up/Down bubble out of the single-line field
-                Children =
-                [
-                    // ComboBoxEditableTextPadding 11,5,38,6 → the 38 right gutter is the chevron column.
-                    Embed.Comp(() =>
-                    {
-                        var e = new EditableText
-                        {
-                            Text = text, Width = w - ChevronColumn, Height = MinHeight,
-                            Placeholder = Placeholder, IsEnabled = IsEnabled,
-                            // Enter commits the search (MainKeyDown Enter → CommitRevertEditableSearch(false),
-                            // ComboBox_Partial.cpp:3046–3050) and closes the dropdown.
-                            OnCommit = _ => { CommitSearch(); if (handle.Value is { IsOpen: true }) Close(); },
-                            // Escape reverts: EditableText already restored the focus-time text; restore the
-                            // edit-begin selection and close WITHOUT committing (cpp:3009–3016 + :2448–2468).
-                            OnCancel = () =>
-                            {
-                                cancelling.Value = true;   // cleared by the blur that follows the Escape
-                                if (restoreIdx.Value != SelectedIndex.Peek()) SelectedIndex.Value = restoreIdx.Value;
-                                ResetSearch();
-                                if (handle.Value is { IsOpen: true }) Close();
-                            },
-                            OnFocusChanged = f =>
-                            {
-                                if (f)
-                                {
-                                    restoreIdx.Value = SelectedIndex.Peek();   // m_indexToRestoreOnCancel (cpp:2448–2455)
-                                    ResetSearch();
-                                }
-                                else
-                                {
-                                    bool wasCancel = cancelling.Value;
-                                    cancelling.Value = false;
-                                    // Commit when focus leaves the control (OnLostFocus, cpp:2386–2391). Focus moving
-                                    // INTO the open popup (a row click in flight) is not a departure — the click /
-                                    // popup-close path commits instead.
-                                    if (!wasCancel && handle.Value is not { IsOpen: true }) CommitSearch();
-                                }
-                            },
-                        };
-                        // Search-as-you-type on USER edits only (cpp OnCharacterReceived :3820–3841); a deletion
-                        // (Backspace/Delete/cut) restricts the search to exact matches so auto-complete never fights
-                        // backspace (cpp:4098–4106 keys off VK_BACK).
-                        e.OnTextChanged = _ =>
-                        {
-                            if (e.LastChangeReason == TextChangeReason.UserInput) ProcessSearch(e.LastEditWasDeletion);
-                        };
-                        _edit = e;
-                        return e;
-                    }),
-                    new BoxEl
-                    {
-                        Width = ChevronColumn, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Role = AutomationRole.Button, IsEnabled = IsEnabled,
-                        // DropDownOverlay button hover/press (ComboBoxDropDownBackgroundPointerOver/PointerPressed).
-                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-                        Corners = CornerRadius4.All(Radii.Control),
-                        OnClick = Toggle,
-                        Children = [chevron],
-                    },
-                ],
+                Children = editChildren.ToArray(),
             });
         }
 
@@ -608,10 +690,12 @@ internal sealed class ComboBoxList : Component
             bool cursor = idx == hi;
 
             var label = new TextEl(items[idx]) { Size = 14f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, Grow = 1f };
-            // ComboBoxItem template: Pill is a LayoutRoot sibling BEFORE the ContentPresenter
-            // (ComboBox_themeresources.xaml:324-335 — the Rectangle precedes the presenter, painting UNDER the
-            // content), placed at the ROW edge (Margin 1,0,0,0) while text starts at ContentPresenter.Margin=11,5,11,7.
-            // Tree order matters for paint order in a ZStack: pill FIRST, content on top — the WinUI structure.
+            // ComboBoxItem template: Pill is a LayoutRoot child BEFORE the ContentPresenter
+            // (ComboBox_themeresources.xaml:759-764 — the Rectangle precedes the presenter :764, painting UNDER the
+            // content), FLUSH at the row edge (Style ComboBoxItemPill HorizontalAlignment=Left :350, NO margin in the
+            // ITEM template — the 1,0,0,0 margin belongs to the FIELD's pill :572) while text starts at
+            // ContentPresenter Margin=Padding 11,5,11,7. Tree order matters for paint order in a ZStack: pill FIRST,
+            // content on top — the WinUI structure.
             var content = new BoxEl
             {
                 Direction = 0,
@@ -621,7 +705,7 @@ internal sealed class ComboBoxList : Component
                 Children = [label],
             };
             Element[] rowChildren = selected
-                ? [new BoxEl { Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center, Margin = new Edges4(1, 0, 0, 0) }, content]
+                ? [new BoxEl { Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center }, content]
                 : [content];
 
             // Item state matrix (ComboBox_themeresources): unselected rest=Transparent, hover=SubtleSecondary,

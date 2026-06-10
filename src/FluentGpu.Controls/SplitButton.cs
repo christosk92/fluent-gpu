@@ -184,6 +184,9 @@ public sealed class SplitButton : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
+            // SplitButtonStyle sets HorizontalAlignment="Left" (SplitButton.xaml:8): the control HUGS its content in
+            // a stretch container instead of growing to the cross-axis width.
+            AlignSelf = FlexAlign.Start,
             MinHeight = ControlHeight,
             Fill = enabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
             BorderWidth = 1f,

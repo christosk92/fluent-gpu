@@ -105,6 +105,21 @@ public sealed class EditableText : Component
     /// <summary>Show the WinUI TextBox DeleteButton (✕, glyph E894) while focused ∧ non-empty (single-line, no Mask,
     /// not read-only, and only when no <see cref="RightAffix"/> occupies the lane). TextBox passes true.</summary>
     public bool ShowDeleteButton;
+    /// <summary>Chromeless composition mode — the WinUI editable-ComboBox TextBox part. In that template ONE Background
+    /// border spans both grid columns (ComboBox_themeresources.xaml:571, <c>Grid.ColumnSpan="2"</c>) and the TextBox part
+    /// mounts INSIDE it with <c>BorderBrush="Transparent"</c> + <c>Style=ComboBoxTextBoxStyle</c> (:580, :770–813).
+    /// True ⇒ this control paints NO chrome of its own: no resting fill, no 1px elevation border, no corner rounding,
+    /// and no focused 2px accent bottom bar (the COMPOSER's outer box owns all of those). Caret/selection/IME/padding
+    /// and focus behavior stay intact, and the part keeps ONLY the WinUI TextControl interaction fills it paints inside
+    /// the shared border (ComboBoxTextBoxStyle PointerOver/Focused, ComboBox_themeresources.xaml:786–803): hover =
+    /// TextControlBackgroundPointerOver = ControlFillColorSecondary (TextBox_themeresources.xaml:24/:131), focused =
+    /// TextControlBackgroundFocused = ControlFillColorInputActive (:25/:132). Default false — TextBox/PasswordBox/
+    /// NumberBox/AutoSuggestBox keep their full chrome.</summary>
+    public bool Chromeless;
+    /// <summary>Content-lane padding override (WinUI TextBox <c>Padding</c>). Null = the TextBox default 10,5,6,6. The
+    /// editable ComboBox passes ComboBoxEditableTextPadding 11,5,38,6 (ComboBox_themeresources.xaml:342) so the text
+    /// clears the 38px chevron column while the part spans the field's FULL width (:580 <c>Grid.ColumnSpan="2"</c>).</summary>
+    public Edges4? LanePadding;
     /// <summary>Cancelable insert gate (WinUI <c>BeforeTextChanging</c>): receives the PROPOSED full text; return false
     /// to reject. Gates typing/paste/IME-commit/newline (deletions and undo are not cancelable here).</summary>
     public Func<string, bool>? BeforeTextChanging;
@@ -236,8 +251,9 @@ public sealed class EditableText : Component
         var lane = new BoxEl
         {
             Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
-            // WinUI TextBox content padding (10,5,6,6); the affix is a FULL-HEIGHT sibling outside this padding.
-            Padding = new Edges4(10, 5, 6, 6),
+            // WinUI TextBox content padding (10,5,6,6) unless the composer overrides it (the editable ComboBox passes
+            // ComboBoxEditableTextPadding 11,5,38,6); the affix is a FULL-HEIGHT sibling outside this padding.
+            Padding = LanePadding ?? new Edges4(10, 5, 6, 6),
             ClipToBounds = true,
             OnRealized = h => _laneNode = h,
             Children =
@@ -275,7 +291,8 @@ public sealed class EditableText : Component
         // WinUI focus affordance is BorderThickness 1,1,1,2 — the 1px stroke stays all around (below) and a 2px accent
         // bar is pinned to the BOTTOM edge only (not a full 2px ring). See the class doc for the
         // TextControlElevationBorderFocusedBrush equivalence (TextBox_themeresources.xaml ~48–66 / ~295–304).
-        if (focused && IsEnabled)
+        // Chromeless suppresses it — the composer's outer box owns the focused underline (editable ComboBox).
+        if (focused && IsEnabled && !Chromeless)
             children.Add(new BoxEl
             {
                 Width = Width, Height = 2f, OffsetY = Height - 2f,
@@ -287,16 +304,28 @@ public sealed class EditableText : Component
             ZStack = true,
             Width = Width,
             Height = Height,
-            Corners = Radii.ControlAll,   // WinUI ControlCornerRadius = 4px
+            // Chromeless (editable-ComboBox part): square — the composer's outer box rounds + clips (ClipToBounds
+            // follows the rounded corners, so the interaction fills below stay inside the shared shape).
+            Corners = Chromeless ? default : Radii.ControlAll,   // WinUI ControlCornerRadius = 4px
             // WinUI TextBox state fills: rest=ControlFillColorDefault, PointerOver=ControlFillColorSecondary,
-            // focused=ControlFillColorInputActive, disabled=ControlFillColorDisabled.
-            Fill = !IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlDefault),
+            // focused=ControlFillColorInputActive, disabled=ControlFillColorDisabled. Chromeless keeps ONLY the
+            // hover/focused fills, painted OVER the composer's shared background — the exact WinUI layering: the
+            // TextBox part's BorderElement covers the editable ComboBox's Background border and paints
+            // TextControlBackgroundPointerOver/Focused on top of it (ComboBox_themeresources.xaml:786–803); rest and
+            // disabled are transparent there (the outer box paints those once).
+            Fill = Chromeless
+                ? (IsEnabled && focused ? Tok.FillControlInputActive : ColorF.Transparent)
+                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlDefault)),
             // A FOCUSED field must NOT lighten on hover (that dark→light flip read as a flicker).
-            HoverFill = !IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary),
+            HoverFill = Chromeless
+                ? (!IsEnabled ? ColorF.Transparent : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary))
+                : (!IsEnabled ? Tok.FillControlDisabled : (focused ? Tok.FillControlInputActive : Tok.FillControlSecondary)),
             // WinUI keeps the field border NEUTRAL (the subtle elevation gradient) in every state — focus emphasis is
-            // the 2px accent bar on the BOTTOM edge (above), per the focused-border note in the class doc.
-            BorderBrush = !IsEnabled ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder,
-            BorderWidth = 1f,
+            // the 2px accent bar on the BOTTOM edge (above), per the focused-border note in the class doc. Chromeless:
+            // NO border at all — the editable-ComboBox part mounts with BorderBrush="Transparent"
+            // (ComboBox_themeresources.xaml:580); the one border is the composer's.
+            BorderBrush = Chromeless ? null : (!IsEnabled ? GradientSpec.Solid(Tok.StrokeControlDefault) : Tok.ControlElevationBorder),
+            BorderWidth = Chromeless ? 0f : 1f,
             ClipToBounds = true,
             IsEnabled = IsEnabled,
             Focusable = IsEnabled,

@@ -41,7 +41,9 @@ public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 /// <item><see cref="Popup"/> — the WinUI <c>Flyout</c>/FlyoutPresenter (FlyoutBase attaches PopupThemeTransition,
 /// FlyoutBase_Partial.cpp:1968–1975): OS-PVL TAS_SHOWPOPUP/TAS_HIDEPOPUP (slide ±50 + delayed fade; close 83ms fade).</item>
 /// <item><see cref="Dropdown"/> — the ComboBox dropdown: SplitOpen/SplitCloseThemeAnimation (generic.xaml:9047/9056) —
-/// clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade.</item>
+/// clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade. With
+/// <see cref="PopupOptions.SeamOffsetY"/> set, the band is centred on the SEAM (selected row) and grows/shrinks both
+/// ways (WinUI OffsetFromCenter); otherwise it reveals from the anchor edge.</item>
 /// <item><see cref="Raw"/> — ToolTip/Slider value tip: FadeIn/FadeOutThemeAnimation (TAS_FADEIN/TAS_FADEOUT, 167ms linear).</item>
 /// <item><see cref="Modal"/> — ContentDialog scale/fade; <see cref="TeachingTip"/> — muxc expand/contract scale.</item>
 /// <item><see cref="Static"/> — a bare WinUI <c>Popup</c> with no transitions (the AutoSuggestBox SuggestionsPopup,
@@ -71,6 +73,12 @@ public readonly record struct PopupOptions(
         get => !_unconstrained;
         init => _unconstrained = !value;
     }
+
+    /// <summary>Dropdown (SplitOpen/SplitClose) seam: (selected-row centre Y) − (popup centre Y) in POPUP-LOCAL px —
+    /// WinUI <c>SplitOpenThemeAnimation.OffsetFromCenter</c> (the ComboBox carousel centres the reveal on the selected
+    /// row; ThemeAnimations.cpp:682 registers ClipTranslateY = OffsetFromCenter immediately). Null (the default) keeps
+    /// the anchor-edge reveal. Only meaningful with <see cref="PopupChrome.Dropdown"/>.</summary>
+    public float? SeamOffsetY { get; init; }
 }
 
 public interface IOverlayService
@@ -123,6 +131,8 @@ internal sealed class OverlayEntry
     public required OverlayHandle Handle;
     public NodeHandle WrapperNode;    // measured + translated for placement
     public NodeHandle SurfaceNode;    // presenter surface: the clip-reveal + translate + opacity animate this node
+    public NodeHandle PlateNode;      // menu chrome plate (acrylic+stroke+shadow): the WinUI MenuFlyoutPresenterBorder ScaleY stretch animates this node
+    public float? SeamOffsetY;        // Dropdown SplitOpen/SplitClose seam (PopupOptions.SeamOffsetY)
     public float MeasuredW;
     public float MeasuredH;
     public bool OpensUp;
@@ -200,6 +210,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
+            SeamOffsetY = options.SeamOffsetY,
             Phase = OverlayPhase.Opening,
             SavedFocus = GetFocus?.Invoke() ?? NodeHandle.Null,   // capture pre-open focus → restore on close
             ParentId = ResolveParentId(anchor),
@@ -344,7 +355,19 @@ internal sealed class OverlayServiceImpl : IOverlayService
             float closedH = fullH * 0.15f;
             float curT = surfacePaint.ClipRect.IsInfinite ? 0f : surfacePaint.ClipRect.Y;
             float curB = surfacePaint.ClipRect.IsInfinite ? fullH : surfacePaint.ClipRect.Bottom;
-            if (e.OpensUp)
+            if (e.SeamOffsetY is float seam)
+            {
+                // Seam form (the non-editable ComboBox carousel): the clip band collapses BOTH ways toward the seam
+                // (selected-row centre = H/2 + OffsetFromCenter; ClipTranslateY = offset immediately, cpp:823; clip
+                // origin {0,0.5}, cpp:740). Final ClipScaleY = closedRatio 0.15 — or the off-edge compensation
+                // pixelsOff/H·2 + 0.15 when |offset| > H·(1−0.15)/2 (cpp:798-811) ⇒ half-height
+                // max(0.075·H, |offset| − 0.35·H). Content TranslateY stays 0 (no ContentTranslationOffset).
+                float c = fullH * 0.5f + seam;
+                float halfF = MathF.Max(0.075f * fullH, MathF.Abs(seam) - 0.35f * fullH);
+                anim.Animate(e.SurfaceNode, AnimChannel.ClipT, curT, c - halfF, 167f, Easing.FluentPopOpen);
+                anim.Animate(e.SurfaceNode, AnimChannel.ClipB, curB, c + halfF, 167f, Easing.FluentPopOpen);
+            }
+            else if (e.OpensUp)
                 anim.Animate(e.SurfaceNode, AnimChannel.ClipT, curT, fullH - closedH, 167f, Easing.FluentPopOpen);
             else
                 anim.Animate(e.SurfaceNode, AnimChannel.ClipB, curB, closedH, 167f, Easing.FluentPopOpen);
@@ -372,6 +395,10 @@ internal sealed class OverlayServiceImpl : IOverlayService
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipT);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipR);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipB);
+            // The presenter-plate stretch freezes WITH the clip (an interrupted load keeps the LTE's interrupt state):
+            // cancel (don't settle) the plate ScaleY so the chrome stays framing the frozen band through the fade.
+            if (!e.PlateNode.IsNull && scene.IsLive(e.PlateNode))
+                anim.Cancel(e.PlateNode, AnimChannel.ScaleY);
             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
             float fadeMs = e.Chrome == PopupChrome.Raw ? RawFadeMs : OpacityMs;
             anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, fadeMs, Easing.Linear);
@@ -656,7 +683,23 @@ public sealed class OverlayHost : Component
                     // animate TranslateY ±0 → 0). The visible window expands from the anchor-joined edge.
                     float fullH = e.MeasuredH;
                     float closedH = fullH * 0.50f;
-                    if (e.OpensUp)
+                    if (e.SeamOffsetY is float seam)
+                    {
+                        // Seam form (the non-editable ComboBox carousel): the band is CENTRED ON THE SEAM (clip origin
+                        // {0,0.5}, cpp:601; ClipTranslateY = OffsetFromCenter immediately, cpp:682) and grows BOTH
+                        // ways. Initial ClipScaleY = closedRatio 0.50 — or the off-edge compensation
+                        // pixelsOff/H·2 + 0.5 when |offset| > H·(1−0.5)/2 (cpp:655-668) ⇒ initial half-height
+                        // max(0.25·H, |offset|); final ClipScaleY = (0.5 + |offset/H|)·2 (cpp:674) ⇒ final
+                        // half-height H/2 + |offset| (the unclamped band always covers [0,H] at rest — the engine's
+                        // node-local clip intersects the box, so over-shoot edges are free). Content TranslateY
+                        // stays 0 and there is still no fade.
+                        float c = fullH * 0.5f + seam;
+                        float half0 = MathF.Max(0.25f * fullH, MathF.Abs(seam));
+                        float halfF = fullH * 0.5f + MathF.Abs(seam);
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipT, c - half0, c - halfF, OpenMs, Easing.FluentPopOpen);
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipB, c + half0, c + halfF, OpenMs, Easing.FluentPopOpen);
+                    }
+                    else if (e.OpensUp)
                         anim.Animate(e.SurfaceNode, AnimChannel.ClipT, fullH - closedH, 0f, OpenMs, Easing.FluentPopOpen);
                     else
                         anim.Animate(e.SurfaceNode, AnimChannel.ClipB, closedH, fullH, OpenMs, Easing.FluentPopOpen);
@@ -693,6 +736,22 @@ public sealed class OverlayHost : Component
                         // window's TOP edge stays glued to the anchor while the bottom edge reveals downward.
                         anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, -slide, 0f, OpenMs, Easing.FluentPopOpen);
                         anim.Animate(e.SurfaceNode, AnimChannel.ClipT, slide, 0f, OpenMs, Easing.FluentPopOpen);
+                    }
+
+                    // Presenter-plate stretch — the second half of MenuPopupThemeTransition's load storyboard
+                    // (LayoutTransition_partial.cpp:497-503): "MenuFlyoutPresenterBorder" (the childless chrome ring
+                    // OVER the items, generic.xaml:23810) animates ScaleY (1 − ClosedRatio) → 1 over the SAME
+                    // s_OpenDuration=250ms cubic-bezier(0,0,0,1), pivoted at CenterY = openedLength when
+                    // direction == AnimationDirection_Top — i.e. the BOTTOM edge for a DOWNWARD-opening menu
+                    // (MenuFlyout_Partial.cpp:259 maps placement Bottom → AnimationDirection_Top), the default top
+                    // (CenterY 0) for an upward one. The plate (acrylic + 1px stroke + shadow) thereby frames exactly
+                    // the revealed band every frame: H·(1 − scale(t)) == the animated near clip edge.
+                    if (!e.PlateNode.IsNull && scene.IsLive(e.PlateNode))
+                    {
+                        ref NodePaint platePaint = ref scene.Paint(e.PlateNode);
+                        platePaint.OriginY = e.OpensUp ? 0f : 1f;
+                        scene.Mark(e.PlateNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                        anim.Animate(e.PlateNode, AnimChannel.ScaleY, 1f - closedRatio, 1f, OpenMs, Easing.FluentPopOpen);
                     }
                 }
             }
@@ -777,6 +836,7 @@ public sealed class OverlayHost : Component
                         Body = Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
                         OnSurface = h => e.SurfaceNode = h,
+                        OnPlate = h => e.PlateNode = h,
                     }),
                 ],
             },
@@ -784,15 +844,19 @@ public sealed class OverlayHost : Component
     };
 }
 
-/// <summary>WinUI MenuFlyoutPresenter surface: a transparent presenter over a frosted acrylic backdrop, a 1px flyout
-/// stroke, a soft elevation shadow, and rounded corners. The OverlayHost drives the open clip-reveal + content slide
-/// and the close fade on this single node; ClipToBounds clips the content to both the rounded corners and the
-/// revealing window.</summary>
+/// <summary>WinUI MenuFlyoutPresenter surface. MENU chrome (<see cref="PopupChrome.Flyout"/>) is a two-layer split —
+/// a transparent ZStack SURFACE that owns the open/close channels (translate + the authored rounded clip + the close
+/// fade) over a stretch PLATE (acrylic + 1px flyout stroke + elevation shadow = the WinUI MenuFlyoutPresenterBorder
+/// the open ScaleY-stretches) and an items layer. Non-menu chromes stay a single frosted card whose ClipToBounds
+/// clips the content to both the rounded corners and the revealing window.</summary>
 internal sealed class FlyoutSurface : Component
 {
     public Element Body = new BoxEl();
     public PopupChrome Chrome = PopupChrome.Flyout;
     public Action<NodeHandle>? OnSurface;
+    /// <summary>Menu chrome only: the stretch PLATE (acrylic + 1px flyout stroke + elevation shadow) — the engine's
+    /// WinUI <c>MenuFlyoutPresenterBorder</c>, whose ScaleY the host animates during the open unfold.</summary>
+    public Action<NodeHandle>? OnPlate;
 
     public static CornerRadius4 CornersFor(CornerJoin join) => join switch
     {
@@ -836,6 +900,50 @@ internal sealed class FlyoutSurface : Component
         //   FlyoutPresenter — Background = FlyoutPresenterBackground = AcrylicInAppFillColorDefaultBrush
         //     (FlyoutPresenter_themeresources.xaml:5 dark / :15 light); NO presenter padding here — the
         //     FlyoutContentPadding 16,15,16,17 card is supplied by the flyout content (GenericFlyout.cs).
+
+        if (Chrome == PopupChrome.Flyout)
+        {
+            // MENU presenter (WinUI MenuFlyoutPresenter, generic.xaml:23796-23812): the root Grid carries the
+            // background and translates+clips WITH the items, while a CHILDLESS sibling ring
+            // ("MenuFlyoutPresenterBorder", generic.xaml:23810) is the part MenuPopupThemeTransition stretches
+            // (ScaleY (1−ClosedRatio)→1, LayoutTransition_partial.cpp:497-503). Engine mapping: the SURFACE is a
+            // transparent ZStack that owns the open/close channels (TranslateY + the authored rounded ClipRect +
+            // the close fade; Corners = the rounded-clip radius — no ClipToBounds at rest, so the shadow halo
+            // survives), and the PLATE under the items carries the visible chrome (acrylic + 1px flyout stroke +
+            // elevation shadow) and receives the plate ScaleY — the frosted card, ring AND shadow always frame
+            // exactly the revealed band. This also keeps the un-scissored acrylic composite and the pre-clip shadow
+            // (SceneRecorder draws shadows BEFORE the node's own clip) INSIDE the reveal: the old single-card
+            // surface painted both over the anchor for the first 250ms of the unfold (the SplitButton/DropDownButton
+            // "menu overlaps the button" mid-open artifact).
+            return new BoxEl
+            {
+                ZStack = true,
+                AlignSelf = FlexAlign.Start,
+                Fill = ColorF.Transparent,
+                Corners = Radii.OverlayAll,
+                OnRealized = h => OnSurface?.Invoke(h),
+                Children =
+                [
+                    new BoxEl   // the plate — fills the stack (ZStack child without explicit size)
+                    {
+                        Fill = ColorF.Transparent,
+                        Acrylic = Tok.AcrylicFlyout,
+                        BorderColor = Tok.StrokeFlyoutDefault,
+                        BorderWidth = 1f,
+                        Corners = Radii.OverlayAll,
+                        Shadow = Elevation.Flyout,
+                        OnRealized = h => OnPlate?.Invoke(h),
+                    },
+                    new BoxEl   // the items layer — sizes the stack; rides the surface translate
+                    {
+                        Direction = 1,
+                        Padding = new Edges4(0, 2, 0, 2),   // MenuFlyoutPresenterThemePadding
+                        Children = [Body],
+                    },
+                ],
+            };
+        }
+
         bool menuPad = Chrome != PopupChrome.Popup;
         return new BoxEl
     {

@@ -26,6 +26,7 @@ sealed class ShotScene : Component
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),
+        "combobox-editable-open" => OverlayShot(Embed.Comp(() => new ComboBoxEditableOpenShot())),
         "autosuggest-open" => OverlayShot(Embed.Comp(() => new AutoSuggestOpenShot())),
         "dropdown-open" => OverlayShot(Embed.Comp(() => new DropDownOpenShot())),
         "split-open" => OverlayShot(Embed.Comp(() => new SplitOpenShot())),
@@ -283,6 +284,41 @@ sealed class ComboBoxOpenShot : Component
                 {
                     Items = Colors,
                     SelectedIndex = selected,
+                    Width = 298f,
+                    OpenOnMount = true,
+                }),
+            ],
+        };
+    }
+}
+
+sealed class ComboBoxEditableOpenShot : Component
+{
+    static readonly string[] Colors =
+    [
+        "Blue",
+        "Green",
+        "Red",
+        "Yellow",
+    ];
+
+    public override Element Render()
+    {
+        var selected = UseSignal(1);
+        var text = UseSignal("Green");
+        return new BoxEl
+        {
+            Direction = 1,
+            Gap = 16f,
+            Children =
+            [
+                new TextEl("An editable ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
+                Embed.Comp(() => new ComboBox
+                {
+                    Items = Colors,
+                    SelectedIndex = selected,
+                    Editable = true,
+                    Text = text,
                     Width = 298f,
                     OpenOnMount = true,
                 }),
