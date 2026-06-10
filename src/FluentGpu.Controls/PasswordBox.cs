@@ -108,8 +108,10 @@ public sealed class PasswordBox : Component
         {
             revealed.Value = false;
             _edit?.SetRevealed(RevealMode == PasswordRevealMode.Visible);
-            // The click moved dispatcher focus onto the button — give it back (WinUI keeps the field focused across
-            // RevealButton interactions; same idiom as the EditableText DeleteButton).
+            // The eye is IsTabStop=False (PasswordBox_themeresources.xaml:193) and the dispatcher resolves pointer
+            // focus to the nearest focusable ancestor — the FIELD — so the click never moves focus off it (WinUI keeps
+            // the field focused across RevealButton interactions). Belt-and-braces: re-assert the field anyway (a
+            // no-op when it is already focused; same idiom as the EditableText DeleteButton).
             if (_edit is { } e && !e.RootNode.IsNull) _hooks?.RestoreFocus?.Invoke(e.RootNode);
         }
 

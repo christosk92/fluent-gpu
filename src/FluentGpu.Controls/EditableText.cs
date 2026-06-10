@@ -331,6 +331,12 @@ public sealed class EditableText : Component
         PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button,
         Cursor = CursorId.Arrow,
+        // WinUI: both inner buttons are IsTabStop=False (DeleteButton TextBox_themeresources.xaml:339 + perf2026:293;
+        // RevealButton PasswordBox_themeresources.xaml:193 + perf2026:135) — they can NEVER take focus, by Tab or by
+        // click. The dispatcher resolves a pointer activation to the nearest focusable ancestor, so clicking the
+        // affix keeps the FIELD focused (no LostFocus→GotFocus storm; the PasswordBox eye survives its own click —
+        // CPasswordBox::OnGotFocus only clears m_fCanShowRevealButton when focus actually moves, PasswordBox.cpp:572–581).
+        TabStop = false,
         OnClick = onClick,
         OnPointerDown = onPointerDown,
         OnRealized = onRealized,
@@ -354,7 +360,8 @@ public sealed class EditableText : Component
         _core.SelectAll();
         LastEditWasDeletion = true;
         if (_core.InsertText(default)) AfterUserEdit();
-        // The click moved dispatcher focus onto the button — give it back (WinUI keeps the field focused on delete).
+        // The DeleteButton is IsTabStop=False (TextBox_themeresources.xaml:339): the click's pointer focus resolves to
+        // the field root, so focus never left it. Belt-and-braces: re-assert the field (no-op when already focused).
         if (!_rootNode.IsNull) _hooks?.RestoreFocus?.Invoke(_rootNode);
     }
 

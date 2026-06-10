@@ -9,7 +9,8 @@ public enum FocusDirection : byte { Left, Right, Up, Down }
 
 /// <summary>
 /// Phase 2 (input dispatch): hit-tests the committed scene and routes pointer + keyboard. Pointer down→up over the
-/// same node fires the click handler and focuses it; keyboard routes to the focused node and bubbles up ancestors
+/// same node fires the click handler and focuses the nearest focusable self-or-ancestor (a WinUI IsTabStop=False part
+/// never takes pointer focus; nothing focusable in the chain → focus unchanged); keyboard routes to the focused node and bubbles up ancestors
 /// (Handled stops it); Tab moves focus through focusable nodes; Enter/Space activates a focused clickable (the
 /// "one declaration, three modalities" contract). The full engine adds tunnel(Preview), gesture arena, XY-focus.
 /// </summary>
@@ -272,7 +273,14 @@ public sealed class InputDispatcher
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     if (!up.IsNull && up == _down)
                     {
-                        SetFocus(up, visual: false);        // pointer activation focuses but does NOT show the focus ring
+                        // Pointer activation focuses the nearest FOCUSABLE self-or-ancestor (not the raw hit node) and
+                        // does NOT show the focus ring. A non-focusable template part (the PasswordBox RevealButton /
+                        // TextBox DeleteButton — IsTabStop=False, PasswordBox_themeresources.xaml:193 /
+                        // TextBox_themeresources.xaml:339 — or the light-dismiss layer) therefore never steals focus
+                        // from the control root above it; no focusable in the chain → focus stays UNCHANGED (WinUI:
+                        // clicking non-focusable space does not move focus).
+                        var focusTarget = NearestFocusable(up);
+                        if (!focusTarget.IsNull) SetFocus(focusTarget, visual: false);
                         if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
                         handled++;
                     }
@@ -285,7 +293,9 @@ public sealed class InputDispatcher
                         // its release/commit edge (RatingControl.cpp:875-906 capture → commit-on-release incl. the
                         // drag-off-left clear; Slider_Partial.cpp:478-543/580-623 CapturePointer → PerformPointerUpAction).
                         // PointerCancel still skips this (capture loss is not a commit), matching WinUI's cancel path.
-                        SetFocus(_dragTarget, visual: false);
+                        // Same pointer-focus resolution as the click path above: the nearest focusable self-or-ancestor.
+                        var dragFocus = NearestFocusable(_dragTarget);
+                        if (!dragFocus.IsNull) SetFocus(dragFocus, visual: false);
                         _scene.GetClickHandler(_dragTarget)?.Invoke();
                         handled++;
                     }
@@ -953,6 +963,21 @@ public sealed class InputDispatcher
             }
         }
         if (repaint) RequestRerender();
+    }
+
+    /// <summary>Resolve a pointer-activation focus target: the nearest self-or-ancestor carrying
+    /// <see cref="NodeFlags.Focusable"/> (the Reconciler keeps that flag mirrored from <c>InteractionInfo.Focusable</c> =
+    /// <c>TabStop ?? (Focusable || OnClick != null)</c>). WinUI <c>Control.IsTabStop=False</c> parts cannot receive
+    /// focus at all — pointer included — so a click on them lands focus on the focusable control root above (the
+    /// PasswordBox RevealButton / TextBox DeleteButton keep the FIELD focused; PasswordBox_themeresources.xaml:193 +
+    /// TextBox_themeresources.xaml:339, both IsTabStop=False). Null = nothing focusable in the chain — the caller must
+    /// leave focus unchanged. Disabled nodes are skipped (they cannot take focus); the chain is already visible
+    /// (hit-testing requires Visible on every ancestor).</summary>
+    private NodeHandle NearestFocusable(NodeHandle node)
+    {
+        for (var n = node; !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+            if ((_scene.Flags(n) & (NodeFlags.Focusable | NodeFlags.Disabled)) == NodeFlags.Focusable) return n;
+        return NodeHandle.Null;
     }
 
     /// <summary>True if <paramref name="root"/> is <paramref name="node"/> or one of its ancestors — i.e. focus stayed

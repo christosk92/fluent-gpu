@@ -48,6 +48,8 @@ sealed class ShotScene : Component
         "tabview" => CenterShot(Embed.Comp(() => new TabViewShot())),
         "navigationview" => CenterShot(Embed.Comp(() => new NavigationViewShot())),
         "treeview" => CenterShot(Embed.Comp(() => new TreeViewShot())),
+        "listview" => CenterShot(Embed.Comp(() => new ListViewShot())),
+        "itemsview" => CenterShot(Embed.Comp(() => new ItemsViewShot())),
         // Acrylic material proof (needs-pixels loop for Rhi.D3D12 AcrylicCompositor): the flyout acrylic surface over
         // HIGH-CONTRAST saturated bars — the σ=30 DIP backdrop blur (AcrylicBrush.h:64 sc_blurRadius) must read as
         // soft color washes through the surface; over a flat page the blur would be invisible.
@@ -740,5 +742,38 @@ sealed class TreeViewShot : Component
         BorderWidth = 1f,
         Padding = new Edges4(0, 6, 0, 6),
         Children = [TreeView.Create(Roots)],
+    };
+}
+
+// D1 — the exact gallery ListView card (CollectionsMenusPages.cs): Width=280 with NO height anywhere above the
+// list. Must render 8 natural-sized rows (8 × 44) with the accent selection pill on row 0 — this card rendered as
+// an empty panel before the D1 fix.
+sealed class ListViewShot : Component
+{
+    static readonly string[] Items = ["Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado"];
+    public override Element Render()
+    {
+        var selected = UseSignal(0);
+        return new BoxEl
+        {
+            Width = 280f,
+            Corners = Radii.OverlayAll,
+            BorderColor = Tok.StrokeCardDefault,
+            BorderWidth = 1f,
+            Padding = new Edges4(0, 4, 0, 4),
+            Children = [ListView.Create(Items, selected)],
+        };
+    }
+}
+
+// D1 — the gallery ItemsView shape (MiscPages.cs): the legacy 4-column tile grid in an auto-height host; the view
+// must size to its grid's ContentExtent (2 rows × 80 + 8 gap = 168) — was an empty panel before the D1 fix.
+sealed class ItemsViewShot : Component
+{
+    static readonly string[] Items = ["Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8"];
+    public override Element Render() => new BoxEl
+    {
+        Width = 420f,
+        Children = [ItemsView.Create(Items, columns: 4)],
     };
 }

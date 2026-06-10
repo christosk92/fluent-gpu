@@ -124,6 +124,10 @@ public sealed class TreeReconciler
         else
         {
             Update(_scene.Root, newRoot, _oldRoot);
+            // Scoped relayout (the RunComponent idiom, :344): the root render-effect may have changed the root's own
+            // layout inputs or subtree structure — a column write alone never marks LayoutDirty, which left a
+            // root-level Width/Height change reconciled but never re-laid-out (RunDirty had nothing to solve).
+            if (!_scene.Root.IsNull) _scene.Mark(_scene.Root, NodeFlags.LayoutDirty);
         }
         _oldRoot = newRoot;
         if (_root is not null) _root.Context.HostNode = _scene.Root;
@@ -346,7 +350,6 @@ public sealed class TreeReconciler
 
     private void MountProvider(NodeHandle node, ContextProviderEl cp)
     {
-        Console.Error.WriteLine($"[provider] mount node={node.Raw.Index} channel={cp.Channel}");
         _providerSig[(int)node.Raw.Index] = (cp.Channel, new Signal<object?>(cp.Value));
         var child = _scene.CreateNode(cp.Child.ElementTypeId);
         _scene.AppendChild(node, child);
@@ -963,8 +966,10 @@ public sealed class TreeReconciler
                 li.Gap = b.Gap;
                 li.Padding = b.Padding;
                 li.Margin = b.Margin;
-                li.Width = b.Width;
-                li.Height = b.Height;
+                // Like the TransformBind/OpacityBind guards above: a bound dimension is owned by its bind effect — a
+                // re-render must not clobber it back to the static prop (the bind re-fires only when its signal changes).
+                if (b.WidthBind is null) li.Width = b.Width;
+                if (b.HeightBind is null) li.Height = b.Height;
                 li.MinW = b.MinWidth; li.MinH = b.MinHeight; li.MaxW = b.MaxWidth; li.MaxH = b.MaxHeight;
                 li.FlexGrow = b.Grow;
                 li.FlexShrink = b.Shrink;

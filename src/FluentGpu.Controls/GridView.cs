@@ -206,6 +206,7 @@ public sealed class GridView : Component
             Width = width,
             Height = height,
             Grow = Grow,
+            Direction = 1,   // the grid scrolls vertically (D1 hygiene): the inner ItemsView grows the HEIGHT axis
             Children =
             [
                 ItemsView.Create(count,

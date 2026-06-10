@@ -310,6 +310,30 @@ public sealed class FlexLayout
 
         if (!sc.ContentSized)
         {
+            // D1 — natural-size fallback for NON-FLEXING virtual viewports the parent does not size. WinUI's
+            // ItemsView template is a ScrollView over an ItemsRepeater (ItemsView.xaml:19-37, VerticalAlignment=Top):
+            // measured unconstrained it reports the repeater's natural extent — it does not collapse to 0 (the
+            // gallery ListView/ItemsView empty-panel regression). Cross axis: an auto-width vertical list fills the
+            // available width (block-level, the MeasureGrid rule); main axis: the layout's ContentExtent. Gated on
+            // FlexGrow == 0 so a Grow viewport (every Virtual.* factory, app fill-lists) keeps its 0 base — a
+            // 10k-row list must never inject a ~440000px flex basis; grow/stretch size it at arrange and
+            // realize-after-layout (ArrangeViewport tail) re-windows against the published viewport.
+            if (sc.ItemCount > 0 && li.FlexGrow == 0f)
+            {
+                if (!horizontal && float.IsNaN(w) && !float.IsInfinity(availW))
+                    w = MathF.Max(0f, availW);
+                if (horizontal ? float.IsNaN(w) : float.IsNaN(h))
+                {
+                    float cross = horizontal
+                        ? (float.IsNaN(h) ? 0f : MathF.Max(0f, h - li.Padding.Vertical))
+                        : (float.IsNaN(w) ? 0f : MathF.Max(0f, w - li.Padding.Horizontal));
+                    float main = sc.Layout is not null ? sc.Layout.ContentExtent(sc.ItemCount, cross)
+                               : _scene.TryGetExtents(node, out var extents) && extents is not null ? (float)extents.Total
+                               : 0f;
+                    if (horizontal) w = main + li.Padding.Horizontal;
+                    else h = main + li.Padding.Vertical;
+                }
+            }
             if (float.IsNaN(w)) w = 0f;
             if (float.IsNaN(h)) h = 0f;
             w = Clamp(w, li.MinW, li.MaxW);
@@ -373,6 +397,31 @@ public sealed class FlexLayout
         {
             ref NodePaint cp = ref _scene.Paint(content);
             cp.LocalTransform = Affine2D.Translation(horizontal ? -sc.OffsetX : 0f, horizontal ? 0f : -sc.OffsetY);
+        }
+
+        // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport
+        // size (a mount realizes against the Height hint; a relayout can also grow the host). If the realized window
+        // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
+        // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
+        // windowing idiom as the scroll paths (ScrollAnimator.Tick / InputDispatcher).
+        if (sc.ItemCount > 0)
+        {
+            float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
+            float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            int visibleFirst, visibleLast;
+            if (sc.Layout is not null)
+            {
+                float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                sc.Layout.Window(sc.ItemCount, cross, vpExtent, off, 0, out visibleFirst, out visibleLast);
+            }
+            else if (_scene.TryGetExtents(node, out var extents) && extents is not null)
+            {
+                visibleFirst = extents.IndexAt(off);
+                visibleLast = Math.Min(sc.ItemCount, extents.IndexAt(off + vpExtent) + 1);
+            }
+            else visibleFirst = visibleLast = 0;
+            if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast))
+                _scene.Mark(node, NodeFlags.VirtualRangeDirty);
         }
     }
 

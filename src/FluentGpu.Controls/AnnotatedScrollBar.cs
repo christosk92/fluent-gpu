@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -11,45 +12,73 @@ public enum AnnotatedScrollBarScrollKind : byte { Click = 0, Drag = 1, Increment
 /// <summary>
 /// WinUI <c>AnnotatedScrollBar</c> (controls\dev\AnnotatedScrollBar) — the jump-list rail: a column of right-aligned
 /// labels beside a thin accent thumb, with CLICK-TO-JUMP on the rail, thumb drag, and repeat-hold increment/decrement
-/// buttons. Template facts (AnnotatedScrollBar.xaml + _themeresources.xaml):
-/// • Thumb = 30×3 @ r1.5 (ThumbWidth :36 / ThumbHeight :35 / ThumbCornerRadius :41), AccentFillColorDefault
-///   (VerticalThumbBrush :11/:21), right-aligned, top-anchored at the scroll position (xaml:84-92).
+/// buttons. Template facts (AnnotatedScrollBar.xaml + _themeresources.xaml; the _perf2026 variant differs only in
+/// storyboard→setter form, identical values):
+/// • Control MinWidth = LabelsGridMinWidth 44 (xaml:4, :37) — the control hugs ~44 unless its host stretches it.
+/// • Root grid rows: increment RepeatButton on TOP (glyph EDDB, HorizontalAlignment=Right — xaml:31-39), the
+///   vertical grid (star), decrement RepeatButton on the BOTTOM (glyph EDDC — xaml:94-102).
+/// • Thumb = 30×3 @ r1.5 (ThumbWidth :36 / ThumbHeight :35 / ThumbCornerRadius :41), VerticalThumbBrush =
+///   AccentFillColorDefault (:11/:21), HorizontalAlignment=Right + VerticalAlignment=Top at the scroll position
+///   (xaml:84-92).
 /// • Ghost thumb = same geometry in AccentFillColorDisabled (PART_VerticalThumbGhost xaml:74-83) — the hover preview
 ///   of where a rail click would land.
-/// • Labels grid min width 44 (LabelsGridMinWidth :37), label text right-aligned (LabelTemplate xaml:8-19).
-/// • Increment RepeatButton on TOP with glyph EDDB, decrement on the BOTTOM with EDDC, FontSize 8
-///   (ScrollButtonFontSize :40; xaml:31-39/:94-102) — each steps by <c>SmallChange</c>
-///   (default ViewportSize / ratio — AnnotatedScrollBar.cpp:484-489 EnsureSmallChangeValue).
+/// • PART_LabelsGrid: HorizontalAlignment=Center, MinWidth 44, transparent background (xaml:41-45); the
+///   LabelTemplate is a right-aligned BodyTextBlockStyle TextBlock (14px Normal — TextBlock_themeresources.xaml:4/:23)
+///   with Margin 0,-5,0,-2 (xaml:8-19).
+/// • PART_ToolTipRail: a 1px right-aligned tooltip anchor rail (xaml:46) whose ToolTip is Placement=Top,
+///   MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold) — modeled by
+///   <c>detailLabel</c>: the resolved text floats in a chip above the pointer (the DetailLabelRequested seam).
+/// • ScrollButtonStyle: MinWidth/MinHeight 16 (:43-44), FontSize 8 (:40/:51), CornerRadius = ControlCornerRadius 4
+///   (:49), background SubtleFillColorTransparent in EVERY state (:5; the :56-87 visual states recolor ONLY the
+///   foreground: TextFillColorPrimary → Secondary hover → Tertiary pressed → Disabled, :6-9), IsTabStop=False
+///   (xaml:37/:100) — each steps by <c>SmallChange</c> (default ViewportSize / ratio —
+///   AnnotatedScrollBar.cpp:484-489 EnsureSmallChangeValue).
 /// • Rail click / drag / buttons raise <c>Scrolling</c> with the offset + kind, CANCELABLE
 ///   (AnnotatedScrollBarScrollingEventArgs.Cancel; cpp:960+ RaiseScrolling) — modeled by the
 ///   <c>onScrolling</c> filter returning false to cancel.
-/// • Detail label on rail hover (PART_DetailLabelToolTip xaml:46-73) — modeled by <c>detailLabel</c>: the engine
-///   shows the resolved text in a floating chip at the pointer (the DetailLabelRequested seam).
+/// ENGINE SEMANTIC (the bug this file once had): inside a ZStack, children land at the LEFT edge and
+/// <c>AlignSelf</c> is the VERTICAL overlay placement — RIGHT alignment therefore uses a full-width row wrapper
+/// (<c>Direction=0, Justify=FlexJustify.End</c>) per overlay part, never <c>AlignSelf</c>.
+/// Thumb position rides a <c>TransformBind</c> on the position signal (compositor-instant, no re-render).
 /// </summary>
 public static class AnnotatedScrollBar
 {
-    private const float RailWidth = 12f;
-    private const float ThumbWidth = 30f;     // ThumbWidth (:36)
-    private const float ThumbHeight = 3f;     // ThumbHeight (:35)
-    private const float ThumbRadius = 1.5f;   // ThumbCornerRadius (:41)
-    private const float LabelsMinWidth = 44f; // LabelsGridMinWidth (:37)
-    private const float LabelSize = 14f;      // BodyTextBlockStyle (LabelTemplate)
-    private const float ButtonGlyph = 8f;     // ScrollButtonFontSize (:40)
+    private const float ThumbWidth = 30f;      // ThumbWidth (:36)
+    private const float ThumbHeight = 3f;      // ThumbHeight (:35)
+    private const float ThumbRadius = 1.5f;    // ThumbCornerRadius (:41)
+    private const float LabelsMinWidth = 44f;  // LabelsGridMinWidth (:37)
+    private const float LabelSize = 14f;       // BodyTextBlockStyle (TextBlock_themeresources.xaml:4/:23)
+    private const float ButtonGlyph = 8f;      // ScrollButtonFontSize (:40)
+    private const float ButtonCell = 16f;      // ScrollButtonStyle MinWidth/MinHeight (:43-44)
+    private const float TooltipMaxWidth = 360f;   // AnnotatedScrollBarTooltipMaxWidth (:38)
+    private const float TooltipMinHeight = 40f;   // AnnotatedScrollBarTooltipMinHeight (:39)
 
     /// <summary>Static/legacy surface (kept source-compatible): annotations as (label, 0..1 position) with no
     /// callbacks — renders the full anatomy inert at position 0.2 (the original demo shape).</summary>
     public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, float height = 280f)
         => Create(annotations, 0.2f, onScroll: null, height: height);
 
-    /// <summary>
-    /// The interactive control. <paramref name="position01"/> is the normalized scroll position (0..1);
-    /// <paramref name="onScroll"/> receives every user scroll (new position, kind); <paramref name="onScrolling"/>
-    /// (optional) may return false to CANCEL a scroll (the WinUI Scrolling.Cancel seam);
-    /// <paramref name="smallChange01"/> is the button step (default 0.05 — the SmallChange auto-value stands in for
-    /// viewport/ratio, cpp:484-489); <paramref name="detailLabel"/> resolves the hover chip text from a position.
-    /// </summary>
+    /// <summary>The interactive control with a FROZEN position (component props freeze at mount — use the
+    /// <c>Signal&lt;float&gt;</c> overload below for a live, app-controlled position).</summary>
     public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations,
                                  float position01,
+                                 Action<float, AnnotatedScrollBarScrollKind>? onScroll,
+                                 float height = 280f,
+                                 float smallChange01 = 0.05f,
+                                 Func<float, bool>? onScrolling = null,
+                                 Func<float, string>? detailLabel = null)
+        => Create(annotations, new Signal<float>(Math.Clamp(position01, 0f, 1f)), onScroll, height, smallChange01, onScrolling, detailLabel);
+
+    /// <summary>
+    /// The interactive control. <paramref name="position01"/> is the normalized scroll position signal (0..1) —
+    /// writes move the thumb compositor-instantly; <paramref name="onScroll"/> receives every user scroll
+    /// (new position, kind); <paramref name="onScrolling"/> (optional) may return false to CANCEL a scroll (the WinUI
+    /// Scrolling.Cancel seam); <paramref name="smallChange01"/> is the button step (default 0.05 — the SmallChange
+    /// auto-value stands in for viewport/ratio, cpp:484-489); <paramref name="detailLabel"/> resolves the hover chip
+    /// text from a position.
+    /// </summary>
+    public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations,
+                                 Signal<float> position01,
                                  Action<float, AnnotatedScrollBarScrollKind>? onScroll,
                                  float height = 280f,
                                  float smallChange01 = 0.05f,
@@ -58,7 +87,7 @@ public static class AnnotatedScrollBar
         => Embed.Comp(() => new AnnotatedScrollBarComponent
         {
             Annotations = annotations ?? [],
-            Position = Math.Clamp(position01, 0f, 1f),
+            Position = position01,
             OnScroll = onScroll,
             OnScrolling = onScrolling,
             DetailLabel = detailLabel,
@@ -69,7 +98,7 @@ public static class AnnotatedScrollBar
     internal sealed class AnnotatedScrollBarComponent : Component
     {
         public IReadOnlyList<(string Label, float Position01)> Annotations = [];
-        public float Position;
+        public required Signal<float> Position;
         public Action<float, AnnotatedScrollBarScrollKind>? OnScroll;
         public Func<float, bool>? OnScrolling;
         public Func<float, string>? DetailLabel;
@@ -80,8 +109,7 @@ public static class AnnotatedScrollBar
         {
             var (hoverY, setHoverY) = UseState(float.NaN);   // rail hover → ghost thumb + detail chip
 
-            float railHeight = MathF.Max(1f, Height - 2f * RailWidth);   // minus the two button cells
-            float pos = Math.Clamp(Position, 0f, 1f);
+            float railHeight = MathF.Max(1f, Height - 2f * ButtonCell);   // minus the two 16px button rows (:43-44)
 
             void Scroll(float to, AnnotatedScrollBarScrollKind kind)
             {
@@ -93,7 +121,9 @@ public static class AnnotatedScrollBar
             void RailPress(Point2 p) => Scroll(p.Y / railHeight, AnnotatedScrollBarScrollKind.Click);
             void RailDrag(Point2 p) => Scroll(p.Y / railHeight, AnnotatedScrollBarScrollKind.Drag);
 
-            // Annotation labels, absolutely placed via OffsetY; right-aligned per the LabelTemplate.
+            // Annotation labels (PART_LabelsGrid content): each label is a FULL-WIDTH row with Justify=End — the
+            // ZStack right-alignment idiom — placed via OffsetY; text up-shifted 5 per the LabelTemplate's
+            // Margin 0,-5,0,-2 (xaml:11) so it centers on its position tick.
             var labels = new Element[Annotations.Count];
             for (int i = 0; i < Annotations.Count; i++)
             {
@@ -101,70 +131,106 @@ public static class AnnotatedScrollBar
                 float p = Math.Clamp(p01, 0f, 1f);
                 labels[i] = new BoxEl
                 {
-                    OffsetY = p * railHeight,
+                    OffsetY = p * railHeight - 5f,
                     Direction = 0,
-                    Justify = FlexJustify.End,
+                    Justify = FlexJustify.End,                  // HorizontalAlignment=Right (xaml:12)
                     HitTestVisible = false,
-                    Children = [new TextEl(label ?? "") { Size = LabelSize, Color = Tok.TextSecondary }],
+                    Children = [new TextEl(label ?? "") { Size = LabelSize, Color = Tok.TextPrimary }],
                 };
             }
 
             bool interactive = OnScroll is not null;
             bool hovering = interactive && !float.IsNaN(hoverY);
 
-            var railLayers = new List<Element>(4)
+            var railLayers = new List<Element>(5)
             {
-                // Labels fill the body, right-aligned against the rail (LabelsGrid).
-                new BoxEl { Direction = 1, ZStack = true, MinWidth = LabelsMinWidth, Height = railHeight, Children = labels },
+                // PART_LabelsGrid: HorizontalAlignment=Center MinWidth 44 (xaml:41-45) — center == fill in the
+                // 44-wide control; the label rows right-align inside it.
+                new BoxEl { Key = "asb-labels", ZStack = true, MinWidth = LabelsMinWidth, Height = railHeight, Children = labels },
+                // PART_ToolTipRail: the 1px right-aligned tooltip anchor (xaml:46), right-aligned via a row wrapper.
+                new BoxEl
+                {
+                    Key = "asb-rail",
+                    Direction = 0,
+                    Justify = FlexJustify.End,
+                    HitTestVisible = false,
+                    Children = [new BoxEl { Width = 1f, Height = railHeight }],
+                },
             };
             if (hovering)
             {
-                // Ghost thumb at the hover target (PART_VerticalThumbGhost — AccentFillColorDisabled).
+                // Ghost thumb at the hover target (PART_VerticalThumbGhost xaml:74-83 — AccentFillColorDisabled,
+                // right-aligned, top-anchored).
                 railLayers.Add(new BoxEl
                 {
-                    Width = ThumbWidth,
-                    Height = ThumbHeight,
-                    Corners = CornerRadius4.All(ThumbRadius),
-                    Fill = Tok.AccentDisabled,
+                    Key = "asb-ghost",
+                    Direction = 0,
+                    Justify = FlexJustify.End,
                     OffsetY = Math.Clamp(hoverY, 0f, railHeight - ThumbHeight),
-                    AlignSelf = FlexAlign.End,
                     HitTestVisible = false,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Width = ThumbWidth,
+                            Height = ThumbHeight,
+                            Corners = CornerRadius4.All(ThumbRadius),
+                            Fill = Tok.AccentDisabled,
+                        },
+                    ],
                 });
                 if (DetailLabel is not null)
                 {
-                    // The detail chip (the DetailLabelToolTip seam): resolved text floated at the hover position.
+                    // The detail chip (PART_DetailLabelToolTip xaml:46-73): Placement=Top above the pointer,
+                    // MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold,
+                    // TextBlock_themeresources.xaml:10-18), right-aligned against the tooltip rail.
                     railLayers.Add(new BoxEl
                     {
-                        OffsetY = MathF.Max(0f, hoverY - 24f),
+                        Key = "asb-tip",
                         Direction = 0,
                         Justify = FlexJustify.End,
+                        OffsetY = MathF.Max(0f, hoverY - TooltipMinHeight - 4f),
                         HitTestVisible = false,
                         Children =
                         [
                             new BoxEl
                             {
-                                Padding = new Edges4(8, 4, 8, 4),
+                                MaxWidth = TooltipMaxWidth,
+                                MinHeight = TooltipMinHeight,
+                                Direction = 0,
+                                AlignItems = FlexAlign.Center,          // VerticalContentAlignment=Center (xaml:53)
+                                Padding = new Edges4(12, 6, 12, 8),     // text Margin 0,0,0,2 folded into the bottom (xaml:60)
                                 Corners = Radii.ControlAll,
                                 Fill = Tok.AcrylicFlyout.Fallback,
                                 BorderColor = Tok.StrokeFlyoutDefault,
                                 BorderWidth = 1f,
                                 Shadow = Elevation.Tooltip,
-                                Children = [new TextEl(DetailLabel(Math.Clamp(hoverY / railHeight, 0f, 1f))) { Size = 12f, Color = Tok.TextPrimary }],
+                                Children = [new TextEl(DetailLabel(Math.Clamp(hoverY / railHeight, 0f, 1f))) { Size = 14f, Bold = true, Color = Tok.TextPrimary }],
                             },
                         ],
                     });
                 }
             }
-            // Live thumb (30×3 accent @ r1.5, right-aligned, top-anchored at the position).
+            // Live thumb (PART_VerticalThumb xaml:84-92): 30×3 accent @ r1.5, HorizontalAlignment=Right via the
+            // Justify=End row wrapper, VerticalAlignment=Top + the position translate as a compositor TransformBind
+            // (a position write moves the thumb the same frame — no re-render, no relayout).
             railLayers.Add(new BoxEl
             {
-                Width = ThumbWidth,
-                Height = ThumbHeight,
-                Corners = CornerRadius4.All(ThumbRadius),
-                Fill = Tok.AccentDefault,                       // VerticalThumbBrush (:11/:21)
-                OffsetY = pos * (railHeight - ThumbHeight),
-                AlignSelf = FlexAlign.End,
+                Key = "asb-thumb",
+                Direction = 0,
+                Justify = FlexJustify.End,
                 HitTestVisible = false,
+                TransformBind = () => Affine2D.Translation(0f, Math.Clamp(Position.Value, 0f, 1f) * (railHeight - ThumbHeight)),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = ThumbWidth,
+                        Height = ThumbHeight,
+                        Corners = CornerRadius4.All(ThumbRadius),
+                        Fill = Tok.AccentDefault,               // VerticalThumbBrush = AccentFillColorDefault (:11/:21)
+                    },
+                ],
             });
 
             var rail = new BoxEl
@@ -183,42 +249,46 @@ public static class AnnotatedScrollBar
             {
                 Direction = 1,
                 Height = Height,
-                MinWidth = LabelsMinWidth,
+                MinWidth = LabelsMinWidth,                       // control MinWidth = LabelsGridMinWidth (xaml:4)
                 Role = AutomationRole.ScrollBar,
-                AlignItems = FlexAlign.Stretch,
                 Children =
                 [
                     // Increment on TOP (EDDB), decrement on the BOTTOM (EDDC) — xaml:31-39 / :94-102.
-                    ScrollButton(up: true, interactive ? () => Scroll(Position - SmallChange, AnnotatedScrollBarScrollKind.IncrementButton) : null),
+                    ScrollButton(up: true, interactive ? () => Scroll(Position.Peek() - SmallChange, AnnotatedScrollBarScrollKind.IncrementButton) : null),
                     rail,
-                    ScrollButton(up: false, interactive ? () => Scroll(Position + SmallChange, AnnotatedScrollBarScrollKind.DecrementButton) : null),
+                    ScrollButton(up: false, interactive ? () => Scroll(Position.Peek() + SmallChange, AnnotatedScrollBarScrollKind.DecrementButton) : null),
                 ],
             };
         }
 
-        /// <summary>A repeat-hold scroll button (ScrollButtonStyle): subtle fills, glyph at FontSize 8.</summary>
+        /// <summary>A repeat-hold scroll button (ScrollButtonStyle): 16×16 (:43-44), right-aligned (xaml:36/:99),
+        /// ControlCornerRadius 4 (:49), background TRANSPARENT in every state (:5 + the foreground-only visual
+        /// states :56-87), glyph at FontSize 8 (:40) on the TextFillColor Primary→Secondary→Tertiary ramp (:6-8),
+        /// disabled = TextFillColorDisabled (:9). IsTabStop=False (xaml:37/:100).</summary>
         private static Element ScrollButton(bool up, Action? onClick)
             => new BoxEl
             {
-                Height = RailWidth,
+                Width = ButtonCell,
+                Height = ButtonCell,
+                AlignSelf = FlexAlign.End,                        // HorizontalAlignment=Right in the root COLUMN (flex, not ZStack)
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
-                Justify = FlexJustify.End,
-                Padding = new Edges4(0, 0, ThumbWidth * 0.5f - ButtonGlyph * 0.5f, 0),
-                Corners = Radii.ControlAll,
-                HoverFill = Tok.FillSubtleSecondary,
-                PressedFill = Tok.FillSubtleTertiary,
+                Justify = FlexJustify.Center,
+                Corners = Radii.ControlAll,                       // ControlCornerRadius 4 (:49)
+                Fill = ColorF.Transparent,                        // ScrollButtonBackground, ALL states (:5, :56-87)
                 Repeats = true,
                 TabStop = false,                                  // IsTabStop=False (xaml:37/:100)
                 OnClick = onClick,
                 IsEnabled = onClick is not null,
                 Children =
                 [
-                    new TextEl(up ? "" : "")      // EDDB / EDDC (xaml:38/:101)
+                    new TextEl(up ? "" : "")          // EDDB / EDDC (xaml:38/:101)
                     {
-                        Size = ButtonGlyph,
+                        Size = ButtonGlyph,                       // ScrollButtonFontSize 8 (:40)
                         FontFamily = Theme.IconFont,
-                        Color = Tok.TextSecondary,
+                        Color = onClick is null ? Tok.TextDisabled : Tok.TextPrimary,   // (:9 / :6)
+                        HoverColor = Tok.TextSecondary,           // ScrollButtonForegroundPointerOver (:7)
+                        PressedColor = Tok.TextTertiary,          // ScrollButtonForegroundPressed (:8)
                     },
                 ],
             };

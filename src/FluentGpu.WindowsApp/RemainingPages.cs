@@ -46,12 +46,30 @@ sealed class VariableSizedWrapGridPage : Component
 
 sealed class AnnotatedScrollBarPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("AnnotatedScrollBar",
-        "A scrollbar enhanced with labels/annotations alongside the rail.",
-        ControlExample.Build("An AnnotatedScrollBar", AnnotatedScrollBar.Create(new[]
-        {
-            ("A", 0.04f), ("F", 0.25f), ("M", 0.5f), ("S", 0.75f), ("Z", 0.96f),
-        })));
+    public override Element Render()
+    {
+        // The control is a NARROW (~44px-wide) rail (WinUI AnnotatedScrollBar.xaml:4 MinWidth = LabelsGridMinWidth 44):
+        // host it in a fixed-height ROW at the right edge of a content stand-in so it hugs its natural width — never
+        // let a stretching column blow it up to the page width.
+        var pos = UseSignal(0.2f);
+        return GalleryPage.Shell("AnnotatedScrollBar",
+            "A scrollbar enhanced with labels/annotations alongside the rail.",
+            ControlExample.Build("An AnnotatedScrollBar beside a content region (click, drag, or hold the buttons)",
+                new BoxEl
+                {
+                    Direction = 0, Height = 280f, Gap = 12f,
+                    Children =
+                    [
+                        new BoxEl { Width = 320f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },   // content stand-in
+                        AnnotatedScrollBar.Create(new[]
+                        {
+                            ("A", 0.04f), ("F", 0.25f), ("M", 0.5f), ("S", 0.75f), ("Z", 0.96f),
+                        }, pos, (to, _) => pos.Value = to, height: 280f,
+                        detailLabel: p => p < 0.125f ? "Artists A–E" : p < 0.375f ? "Artists F–L" : p < 0.625f ? "Artists M–R" : p < 0.875f ? "Artists S–Y" : "Artists Z"),
+                    ],
+                },
+                output: GalleryPage.LiveText(() => "position " + pos.Value.ToString("0.00"))));
+    }
 }
 
 sealed class SwipeControlPage : Component

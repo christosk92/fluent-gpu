@@ -252,13 +252,15 @@ public sealed class ListView : Component
         float height = Height;
         // Legacy content-sizing: an unconstrained list realizes all rows at its natural height (the WinUI gallery
         // card shape); apps with big data set Height/Grow and get true windowed virtualization.
-        if (float.IsNaN(height) && Grow == 0f) height = count * ItemExtent;
+        bool natural = float.IsNaN(height) && Grow == 0f;
+        if (natural) height = count * ItemExtent;
 
         return new BoxEl
         {
             Width = Width,
             Height = height,
             Grow = Grow,
+            Direction = 1,   // the list axis is vertical (D1 hygiene): the inner ItemsView grows the HEIGHT axis
             Children =
             [
                 ItemsView.Create(count,
@@ -273,7 +275,11 @@ public sealed class ListView : Component
                     isItemEnabled: IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
                     controller: controller,
                     containerFactory: Chrome,
-                    keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i])),
+                    keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i]),
+                    // Natural (unconstrained) lists size the viewport to its content extent — the auto-WIDTH chain
+                    // also needs the non-flexing viewport's availW fallback (the 280-card gallery shape, D1).
+                    // Constrained lists (explicit Height or Grow) keep the hard-viewport fill path.
+                    grow: natural ? 0f : 1f),
             ],
         };
     }

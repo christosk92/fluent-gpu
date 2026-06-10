@@ -109,11 +109,17 @@ public sealed class ItemsView : Component
     public Action? SelectionChanged;
     public ItemsViewController? Controller;
     public int OverscanItems = 4;
+    /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
+    /// hard-viewport path every big list wants (a Grow viewport never measures its content extent, so 10k rows stay
+    /// windowed). 0 = NATURAL size: an unconstrained ItemsView measures to its layout's ContentExtent — WinUI's
+    /// unconstrained ScrollView-over-ItemsRepeater shape (ItemsView.xaml template) — the gallery card shape.</summary>
+    public float Grow = 1f;
 
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
-    /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav).</summary>
+    /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
+    /// grid sits in an auto-height gallery card, so the view measures to its grid's ContentExtent.</summary>
     public static Element Create(IReadOnlyList<string> items, int columns = 4)
-        => Embed.Comp(() => new ItemsView { Items = items, Columns = columns });
+        => Embed.Comp(() => new ItemsView { Items = items, Columns = columns, Grow = 0f });
 
     /// <summary>The full WinUI-shaped factory: templated items over any <see cref="RepeatLayout"/>.</summary>
     public static Element Create(int itemCount, Func<int, Element> itemTemplate, RepeatLayout layout,
@@ -127,7 +133,8 @@ public sealed class ItemsView : Component
                                  ItemsViewController? controller = null,
                                  int overscan = 4,
                                  ItemContainerFactory? containerFactory = null,
-                                 Func<int, string>? keyOf = null)
+                                 Func<int, string>? keyOf = null,
+                                 float grow = 1f)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -145,6 +152,7 @@ public sealed class ItemsView : Component
             OverscanItems = overscan,
             ContainerFactory = containerFactory,
             KeyOf = keyOf,
+            Grow = grow,
         });
 
     public override Element Render()
@@ -507,7 +515,10 @@ public sealed class ItemsView : Component
                 KeyOf = KeyOf,
                 Overscan = OverscanItems,
                 Horizontal = horizontal,
-                Grow = 1f,
+                // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
+                // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
+                // (the gallery card shape; D1).
+                Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
             }
             // Wrap/Inline small-collection fallback (always a BoxEl) — capture the host box so FocusIndex can
@@ -517,7 +528,10 @@ public sealed class ItemsView : Component
 
         return new BoxEl
         {
-            Grow = 1f,
+            // The root stacks along the LIST axis (D1 hygiene): a vertical view is a column so Grow distributes the
+            // missing axis to the viewport; a horizontal shelf stays a row. Cross axis fills via the default stretch.
+            Direction = horizontal ? (byte)0 : (byte)1,
+            Grow = Grow,
             OnKeyDown = OnRootKey,      // bubbles up from the focused ItemContainer (dispatcher key routing)
             OnCharInput = OnRootChar,   // typeahead
             Children = [itemsHost],

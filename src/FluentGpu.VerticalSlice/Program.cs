@@ -3537,20 +3537,21 @@ static class Slice
         bool noContent = Child(host.Scene, host.Scene.Root, 1).IsNull;
 
         // Toggle open. (a) The chevron rotation TWEENS (167ms): track peak sin θ — a tween passes through a mid-angle
-        // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel FADES in (Enter opacity 0→1):
-        // track its minimum opacity — an instant appear would read 1 from the first frame.
+        // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel SLIDES down from under the
+        // header (WinUI ExpandDown: TranslateY −ContentHeight → 0 over 333ms KeySpline 0,0,0,1 — NO opacity animation,
+        // Expander.xaml:62-77): track its minimum TranslateY — an instant appear would read 0 every frame.
         ClickNode(host, window, Child(host.Scene, host.Scene.Root, 0));
-        float peakSin = 0f, minContentOpacity = 1f;
+        float peakSin = 0f, minContentTy = 0f;
         for (int i = 0; i < 16; i++)
         {
             host.RunFrame();
             var ch = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
             peakSin = MathF.Max(peakSin, MathF.Abs(host.Scene.Paint(ch).LocalTransform.M12));
-            var content = Child(host.Scene, host.Scene.Root, 1);
-            if (!content.IsNull) minContentOpacity = MathF.Min(minContentOpacity, host.Scene.Paint(content).Opacity);
+            var content = Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0);   // clip wrapper → sliding panel
+            if (!content.IsNull) minContentTy = MathF.Min(minContentTy, host.Scene.Paint(content).LocalTransform.Dy);
         }
         bool rotating = peakSin > 0.5f;
-        bool contentFadedIn = minContentOpacity < 0.5f;
+        bool contentSlidIn = minContentTy < -4f;
 
         for (int i = 0; i < 16; i++) host.RunFrame();   // settle
         var chevronDone = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
@@ -3558,9 +3559,9 @@ static class Slice
         bool settled = m11Done < -0.9f;
         bool hasContent = !Child(host.Scene, host.Scene.Root, 1).IsNull && HasGlyph(device, strings, "expander-body");
 
-        Check("W1-P3.a Expander animates chevron rotation + content reveal (mid-flight)",
-            Near(m11Collapsed, 1f, 0.05f) && rotating && settled && contentFadedIn && hasContent,
-            $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minContentOpacity={minContentOpacity:0.00} content {!noContent}→{hasContent}");
+        Check("W1-P3.a Expander animates chevron rotation + content slide (mid-flight)",
+            Near(m11Collapsed, 1f, 0.05f) && rotating && settled && contentSlidIn && hasContent,
+            $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minContentTy={minContentTy:0.0} content {!noContent}→{hasContent}");
     }
 
     // Wave 1 / P5a — popup placement result: vertical flip when a side can't fit, corner-join against the anchor, and
@@ -8412,6 +8413,497 @@ static class Slice
         }
     }
 
+    // D1 — ListView/ItemsView rendered EMPTY when the host imposed no size (gallery regression, commit 4a9047b):
+    // (1) FlexLayout.MeasureViewport collapsed an unsized virtual viewport to 0 (NaN→0), so the auto-width 280-card
+    //     ListView arranged at W=0 and the auto-height Start-row ItemsView at H=0; fixed by the natural-size
+    //     fallback for NON-FLEXING (Grow==0) virtual viewports (cross = availW, main = layout ContentExtent).
+    // (2) Nothing re-realized after layout published the real ViewportW/H (a mount realizes against a hint); fixed
+    //     by realize-after-layout: ArrangeViewport flags VirtualRangeDirty → AppHost re-realizes + relayouts SAME frame.
+    static void D1CollectionHostSizingChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        NodeHandle FindViewport(SceneStore s, int count)
+        {
+            NodeHandle found = default;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (s.TryGetScroll(n, out var sc) && sc.ItemCount == count) found = n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) Visit(c);
+            }
+            Visit(s.Root);
+            return found;
+        }
+
+        // cp1.a — the EXACT gallery ListView shape (CollectionsMenusPages.cs): a Width=280 bordered card with NO
+        // height anywhere above the list — must size naturally (8 × 44 = 352) and realize all 8 rows at W=280.
+        string[] coffees = { "Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado" };
+        var selected = new Signal<int>(0);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("d1-listview", new Size2(640, 480), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+                Padding = new Edges4(0, 4, 0, 4), Children = [ListView.Create(coffees, selected)],
+            },
+        });
+        host.RunFrame();
+        var lv = FindViewport(host.Scene, coffees.Length);
+        var lsc = default(ScrollState);
+        if (!lv.IsNull) host.Scene.TryGetScroll(lv, out lsc);
+        var lvRect = lv.IsNull ? default : host.Scene.AbsoluteRect(lv);
+        int lvRows = lv.IsNull ? 0 : host.Scene.ChildCount(lsc.ContentNode);
+        var row0 = default(RectF);
+        if (lvRows > 0) row0 = host.Scene.Bounds(host.Scene.FirstChild(lsc.ContentNode));
+        bool lvOk = !lv.IsNull && Near(lvRect.W, 280f) && Near(lvRect.H, 8 * ListView.DefaultItemExtent)
+            && Near(lsc.ViewportW, 280f) && Near(lsc.ViewportH, 352f) && Near(lsc.ContentH, 352f)
+            && lvRows == 8 && Near(row0.W, 280f) && Near(row0.H, ListView.DefaultItemExtent);
+        Check("cp1.a — gallery ListView (280-wide card, no height above) sizes naturally to 8×44 and realizes 8 rows at W=280",
+            lvOk, $"vp={lvRect.W:0}x{lvRect.H:0} viewport={lsc.ViewportW:0}x{lsc.ViewportH:0} content={lsc.ContentH:0} rows={lvRows} row0={row0.W:0}x{row0.H:0}");
+
+        // cp1.b — the gallery ItemsView shape (MiscPages.cs): legacy Create(items, columns:4) in an AUTO-HEIGHT,
+        // Start-aligned row (no stretch, no height anywhere). The view must measure to its grid's ContentExtent
+        // (2 rows × 80 + 1 gap × 8 = 168) and realize all 8 tiles at the 4-column width ((420 − 3×8)/4 = 99).
+        string[] photos = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("d1-itemsview", new Size2(640, 480), 1f));
+        window2.Show();
+        using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Width = 420, Direction = 0, AlignItems = FlexAlign.Start,
+                Children = [ItemsView.Create(photos, columns: 4)],
+            },
+        });
+        host2.RunFrame();
+        var iv = FindViewport(host2.Scene, photos.Length);
+        var isc = default(ScrollState);
+        if (!iv.IsNull) host2.Scene.TryGetScroll(iv, out isc);
+        var ivRect = iv.IsNull ? default : host2.Scene.AbsoluteRect(iv);
+        int tiles = iv.IsNull ? 0 : host2.Scene.ChildCount(isc.ContentNode);
+        var tile0 = default(RectF);
+        if (tiles > 0) tile0 = host2.Scene.Bounds(host2.Scene.FirstChild(isc.ContentNode));
+        const float gridExtent = 2 * 80f + 8f;   // GridVirtualLayout(4, 80, 8).ContentExtent(8) — the legacy demo grid
+        bool ivOk = !iv.IsNull && Near(ivRect.W, 420f) && Near(ivRect.H, gridExtent) && Near(isc.ContentH, gridExtent)
+            && tiles == 8 && Near(tile0.W, (420f - 3 * 8f) / 4f) && Near(tile0.H, 80f);
+        Check("cp1.b — gallery ItemsView (legacy 4-col grid, auto-height Start row) sizes to ContentExtent=168 and realizes 8 tiles",
+            ivOk, $"vp={ivRect.W:0}x{ivRect.H:0} content={isc.ContentH:0} tiles={tiles} tile0={tile0.W:0}x{tile0.H:0}");
+
+        // cp1.c — realize-after-layout: a 10k-row ListView FILLING a 400px host stays windowed (<40 realized — the
+        // Grow gate keeps the hard-viewport path; content = 10k × 44 = 440000); growing the host to 3000px must
+        // publish the new viewport AND re-realize the window to cover it in the SAME frame.
+        var hostH = new Signal<float>(400f);
+        using var app3 = new HeadlessPlatformApp();
+        var window3 = new HeadlessWindow(new WindowDesc("d1-grow", new Size2(640, 480), 1f));
+        window3.Show();
+        using var host3 = new AppHost(app3, window3, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Width = 360, Height = hostH.Value,
+                Children = [ListView.Create(10_000, i => new BoxEl(), grow: 1f)],
+            },
+        });
+        host3.RunFrame();
+        var big = FindViewport(host3.Scene, 10_000);
+        var bsc0 = default(ScrollState);
+        if (!big.IsNull) host3.Scene.TryGetScroll(big, out bsc0);
+        int realized0 = big.IsNull ? 0 : host3.Scene.ChildCount(bsc0.ContentNode);
+        bool windowed = !big.IsNull && realized0 > 0 && realized0 < 40
+            && Near(bsc0.ViewportH, 400f) && Near(bsc0.ContentH, 10_000 * ListView.DefaultItemExtent, 1f);
+
+        hostH.Value = 3000f;   // grow the host — ONE RunFrame must both publish 3000 and re-realize to cover it
+        host3.RunFrame();
+        var bsc1 = default(ScrollState);
+        if (!big.IsNull) host3.Scene.TryGetScroll(big, out bsc1);
+        int realized1 = big.IsNull ? 0 : host3.Scene.ChildCount(bsc1.ContentNode);
+        bool covered = Near(bsc1.ViewportH, 3000f) && bsc1.FirstRealized == 0
+            && bsc1.LastRealized * ListView.DefaultItemExtent >= 3000f && realized1 > realized0 && realized1 < 120;
+        Check("cp1.c — 10k rows stay windowed (<40) at 400px; growing the host re-realizes to cover in the SAME frame",
+            windowed && covered, $"realized {realized0}→{realized1} viewport {bsc0.ViewportH:0}→{bsc1.ViewportH:0} last={bsc1.LastRealized} content={bsc0.ContentH:0}");
+    }
+
+    // D2 — the PasswordBox reveal eye must SURVIVE its own click. Regression: engine pointer focus moved to ANY
+    // clicked node with a handler, so clicking the eye blurred the field; the blur→refocus storm re-ran the WinUI
+    // OnGotFocus arm-clear (CPasswordBox::OnGotFocus, PasswordBox.cpp:572–581) and the eye unmounted until the box
+    // was emptied and retyped. WinUI: the RevealButton is IsTabStop=False (PasswordBox_themeresources.xaml:193) — it
+    // can never take focus, so the field stays focused and CanInvokeRevealButton (= canShow ∧ hasSpace ∧ IsFocused,
+    // PasswordBox.cpp:618–626) keeps the eye visible across its own clicks.
+    static void D2PasswordRevealFocusChecks(StringTable strings)
+    {
+        static NodeHandle TextVisual(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (s.Paint(n).VisualKind == VisualKind.Text) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = TextVisual(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("d2-pw", new Size2(420, 280), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        NodeHandle other = default;
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Gap = 16, Padding = Edges4.All(12),
+                Children =
+                [
+                    PasswordBox.Create("Password", 280f),
+                    // A focusable blur target (OnClick ⇒ auto-focusable). Deliberately NOT AutomationRole.Button so
+                    // Roles(Button) below counts exactly the reveal eye.
+                    new BoxEl { Width = 120, Height = 32, OnClick = () => { }, OnRealized = h => other = h },
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        var scene = host.Scene;
+        var field = FindRole(scene, scene.Root, AutomationRole.Text);
+        var tn = TextVisual(scene, field);
+
+        // Focus the EMPTY box and type — the empty→non-empty transition arms + mounts the eye
+        // (CPasswordBox::OnContentChanged, PasswordBox.cpp:366–377).
+        ClickNode(host, window, field);
+        host.RunFrame();
+        foreach (char c in "ab") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+        host.RunFrame();
+        host.RunFrame();
+        var btns = Roles(scene, AutomationRole.Button);
+        bool mounted = btns.Count == 1 && HasGlyph(device, strings, Icons.RevealPassword);
+
+        // cp2.a — CLICK the eye: it is not a focus target (RevealButton IsTabStop=False,
+        // PasswordBox_themeresources.xaml:193), so the field never blurs, the arm flag survives, and the eye STAYS
+        // mounted; the click's release re-masks (the press peeked).
+        if (mounted) ClickNode(host, window, btns[0]);
+        host.RunFrame();
+        bool stillMounted = Roles(scene, AutomationRole.Button).Count == 1 && HasGlyph(device, strings, Icons.RevealPassword);
+        bool maskedAfterClick = strings.Resolve(scene.Paint(tn).Text) == "●●";
+        bool fieldFocused = (scene.Flags(field) & NodeFlags.Focused) != 0;
+        Check("cp2.a — clicking the reveal eye keeps it mounted + masked, field still focused",
+            mounted && stillMounted && maskedAfterClick && fieldFocused,
+            $"mounted={mounted} still={stillMounted} masked={maskedAfterClick} focus={fieldFocused}");
+
+        // cp2.b — press-and-HOLD peek: pointer-down on the eye renders the raw password mid-press; pointer-up
+        // re-masks (RevealPassword on the ToggleButton press, PasswordBox.cpp:260–308).
+        var eyes = Roles(scene, AutomationRole.Button);
+        bool peeked = false, remasked = false, focusHeld = false;
+        if (eyes.Count == 1)
+        {
+            var bc = CenterOf(scene, eyes[0]);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
+            host.RunFrame();
+            host.RunFrame();
+            peeked = strings.Resolve(scene.Paint(tn).Text) == "ab";
+            window.QueueInput(new InputEvent(InputKind.PointerUp, bc, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_100));
+            host.RunFrame();
+            host.RunFrame();
+            remasked = strings.Resolve(scene.Paint(tn).Text) == "●●";
+            focusHeld = (scene.Flags(field) & NodeFlags.Focused) != 0;
+        }
+        Check("cp2.b — press-and-hold on the eye reveals the raw password mid-press; release re-masks (field still focused)",
+            peeked && remasked && focusHeld, $"peeked={peeked} remasked={remasked} focus={focusHeld}");
+
+        // cp2.c — blur to ANOTHER control, refocus the populated box: the eye must NOT return (OnGotFocus arm-clear,
+        // PasswordBox.cpp:572–581); typing into the populated box keeps it hidden (the arm is the empty→non-empty
+        // transition ONLY, PasswordBox.cpp:366–377; cleared while empty, :430–434); emptying + retyping re-arms.
+        ClickNode(host, window, other);
+        host.RunFrame();
+        bool blurUnmounts = Roles(scene, AutomationRole.Button).Count == 0 && (scene.Flags(field) & NodeFlags.Focused) == 0;
+        ClickNode(host, window, field);
+        host.RunFrame();
+        bool noEyeOnRefocus = Roles(scene, AutomationRole.Button).Count == 0;
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'c'));
+        host.RunFrame();
+        host.RunFrame();
+        bool typingPopulatedHidden = Roles(scene, AutomationRole.Button).Count == 0;
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, 0f, KeyModifiers.Ctrl));
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back));
+        host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
+        host.RunFrame();
+        host.RunFrame();
+        bool rearmed = Roles(scene, AutomationRole.Button).Count == 1;
+        Check("cp2.c — blur→refocus shows no eye (OnGotFocus arm-clear); typing populated stays hidden; empty→retype re-arms",
+            blurUnmounts && noEyeOnRefocus && typingPopulatedHidden && rearmed,
+            $"blur={blurUnmounts} refocus={noEyeOnRefocus} typing={typingPopulatedHidden} rearmed={rearmed}");
+    }
+
+    // D3 — Expander motion parity (Expander.xaml ExpandDown ~62-77 / CollapseUp ~78-90): the card height SNAPS (WinUI
+    // never tweens it) while the content SLIDES under the header behind the clip wrapper — expand TranslateY
+    // −ContentHeight → 0 over 333ms (KeySpline 0,0,0,1), collapse 0 → −ContentHeight over 167ms (KeySpline 1,1,0,1)
+    // with the panel kept mounted until settle (the Visibility=Collapsed keyframe at t=167ms). NO opacity animation.
+    // An initiallyExpanded mount rests at TranslateY 0 with no motion and no presented-height residue (the gallery
+    // "content clipped at the card bottom" bug).
+    static void D3ExpanderChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("expander-d3", new Size2(360, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        // Host the Expander INSIDE a column wrapper (the scene root always fills the window, so the card's
+        // snap-to-natural-height is only observable on a non-root box — the gallery shape).
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    Embed.Comp(() => new Expander
+                    {
+                        Header = "Section",
+                        Content = new BoxEl { Height = 60f, Children = new Element[] { new TextEl("expander-action") { Size = 14f } } },
+                        InitiallyExpanded = false,
+                    }),
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+
+        host.RunFrame();   // mount collapsed
+        var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));   // component anchor → the card box
+        var header = Child(host.Scene, card, 0);
+        float headerH = host.Scene.AbsoluteRect(header).H;
+
+        // cp3.a — open click: the card height snaps to header+content THIS frame (no height tween) while the content
+        // TranslateY sits at −ContentHeight (WinUI's discrete keyframe at t=0), tweens mid-flight, settles at 0.
+        ClickNode(host, window, header);
+        var clip = Child(host.Scene, card, 1);
+        var content = clip.IsNull ? NodeHandle.Null : Child(host.Scene, clip, 0);
+        float cardH = host.Scene.AbsoluteRect(card).H;
+        float clipH = clip.IsNull ? 0f : host.Scene.AbsoluteRect(clip).H;
+        float contentH = content.IsNull ? 0f : host.Scene.AbsoluteRect(content).H;
+        float tySeed = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
+        bool snapped = !clip.IsNull && !content.IsNull && cardH > headerH + 40f && Near(cardH, headerH + clipH, 1.5f);
+        host.RunFrame();
+        float tyMid = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
+        for (int i = 0; i < 30; i++) host.RunFrame();   // ≥ 333ms — settle
+        float tyDone = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
+        Check("cp3.a — expand: card snaps to header+content while the slide runs −H → 0 (333ms) and settles at 0",
+            snapped && Near(tySeed, -contentH, 1.5f) && tyMid < -1f && tyMid > -contentH && MathF.Abs(tyDone) < 0.5f,
+            $"cardH={cardH:0} headerH={headerH:0} clipH={clipH:0} ty {tySeed:0.0}→{tyMid:0.0}→{tyDone:0.00}");
+
+        // cp3.b — close click: the content stays LIVE through the 167ms slide (TranslateY heading to −H), then
+        // unmounts at settle and the card height snaps back to the header height (WinUI Collapsed at t=167ms).
+        ClickNode(host, window, header);                 // collapse — seeds TranslateY 0 → −H this frame
+        for (int i = 0; i < 3; i++) host.RunFrame();     // ~48ms into the 167ms slide
+        var clipEarly = Child(host.Scene, card, 1);
+        var contentEarly = clipEarly.IsNull ? NodeHandle.Null : Child(host.Scene, clipEarly, 0);
+        bool liveEarly = !contentEarly.IsNull && host.Scene.IsLive(contentEarly);
+        float tyClosing = liveEarly ? host.Scene.Paint(contentEarly).LocalTransform.Dy : 0f;
+        for (int i = 0; i < 6; i++) host.RunFrame();     // ~144ms — still inside the slide window
+        var clipLate = Child(host.Scene, card, 1);
+        bool lateMounted = !clipLate.IsNull && !Child(host.Scene, clipLate, 0).IsNull;
+        for (int i = 0; i < 20; i++) host.RunFrame();    // settle + the watcher's unmount frame
+        bool unmounted = Child(host.Scene, card, 1).IsNull;
+        float closedH = host.Scene.AbsoluteRect(card).H;
+        Check("cp3.b — collapse: content live mid-slide heading to −H, unmounted at settle, card snaps to header height",
+            liveEarly && tyClosing < -8f && tyClosing > -contentH + 0.5f && lateMounted && unmounted && Near(closedH, headerH, 1.5f),
+            $"liveEarly={liveEarly} tyClosing={tyClosing:0.0} (−H={-contentH:0}) lateMounted={lateMounted} unmounted={unmounted} closedH={closedH:0} headerH={headerH:0}");
+
+        // cp3.c — resting expanded mount (the gallery page mounts initiallyExpanded:true): no motion is seeded
+        // (TranslateY rests at 0), the content paints, and the LAST content child's absolute bottom sits INSIDE the
+        // card's absolute bottom — the clipped "An action" gallery bug.
+        using var app2 = new HeadlessPlatformApp();
+        var window2 = new HeadlessWindow(new WindowDesc("expander-d3b", new Size2(360, 320), 1f));
+        window2.Show();
+        var device2 = new HeadlessGpuDevice();
+        var root2 = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    Embed.Comp(() => new Expander
+                    {
+                        Header = "Section",
+                        Content = new BoxEl { Height = 60f, Children = new Element[] { new TextEl("expander-action") { Size = 14f } } },
+                        InitiallyExpanded = true,
+                    }),
+                ],
+            },
+        };
+        using var host2 = new AppHost(app2, window2, device2, new HeadlessFontSystem(strings), strings, root2);
+        for (int i = 0; i < 4; i++) host2.RunFrame();
+        var card2 = host2.Scene.FirstChild(Child(host2.Scene, host2.Scene.Root, 0));   // component anchor → card box
+        var clip2 = Child(host2.Scene, card2, 1);
+        var content2 = clip2.IsNull ? NodeHandle.Null : Child(host2.Scene, clip2, 0);
+        var inner2 = content2.IsNull ? NodeHandle.Null : Child(host2.Scene, content2, 0);   // the user content row
+        float tyRest = content2.IsNull ? 1f : host2.Scene.Paint(content2).LocalTransform.Dy;
+        var rootR = host2.Scene.AbsoluteRect(card2);
+        var innerR = inner2.IsNull ? default : host2.Scene.AbsoluteRect(inner2);
+        bool contained = !inner2.IsNull && innerR.Y + innerR.H <= rootR.Y + rootR.H + 0.5f;
+        bool noStaleReveal = float.IsNaN(host2.Scene.Paint(card2).PresentedH);
+        Check("cp3.c — initiallyExpanded rests at TranslateY 0 with the content inside the card bottom (no clipping)",
+            MathF.Abs(tyRest) < 0.01f && contained && noStaleReveal && HasGlyph(device2, strings, "expander-action"),
+            $"tyRest={tyRest:0.00} innerBottom={(innerR.Y + innerR.H):0} cardBottom={(rootR.Y + rootR.H):0} presentedHNaN={noStaleReveal}");
+    }
+
+    // ── D4 — ScrollBar conscious anatomy + AnnotatedScrollBar template geometry ─────────────────────────────────
+    // Grounded against microsoft-ui-xaml: ScrollBar_themeresources.xaml (ScrollBarSize 12 :180, thumb min length 30
+    // :181, ExpandBeginTime 400ms :188 / ContractBeginTime 500ms :189, Expand/ContractDuration 167ms :173/:176,
+    // OpacityChangeDuration 83ms :174, arrow cells ALWAYS in fixed grid rows :703/:711) and AnnotatedScrollBar.xaml +
+    // _themeresources.xaml (MinWidth 44 :37/xaml:4, thumb 30×3 r1.5 right-aligned top-anchored xaml:84-92,
+    // ScrollButtonStyle 16×16 :43-44, right-aligned labels xaml:8-19).
+    static void D4ScrollBarChecks(StringTable strings)
+    {
+        // ── ScrollBar.Anatomy: reserved arrow cells, instant signal-bound position, debounced 167ms expand ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-sb", new Size2(320, 280), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var pos = new Signal<float>(0f);
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                    Children = [ScrollBar.Anatomy(0.25f, pos, p => pos.Value = p, 200f)],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var column = Child(host.Scene, bar, 2);                 // root ZStack = [track, strip, column(, ticker)]
+            var arrowUp = Child(host.Scene, column, 0);             // column = [arrowUp, thumb, grow, arrowDown]
+            var thumb = Child(host.Scene, column, 1);
+            var barR = host.Scene.AbsoluteRect(bar);
+            var t0 = host.Scene.AbsoluteRect(thumb);
+            // Length 200 − 2×12 reserved arrow cells → track 176; fraction 0.25 → thumbLen max(30, 44) = 44; travel 132.
+            Check("cp4.1 — arrow cells ALWAYS reserved; collapsed thumb 2px, fill right edge inset 3 (stroke-trick math)",
+                Near(host.Scene.Bounds(arrowUp).H, 12f) && Near(t0.W, 2f) && Near(t0.H, 44f)
+                && Near(t0.Y, barR.Y + 12f) && Near(t0.Right, barR.Right - 3f),
+                $"cellH={host.Scene.Bounds(arrowUp).H:0.#} thumb={t0.W:0.#}x{t0.H:0.#} y={t0.Y - barR.Y:0.#} rightInset={barR.Right - t0.Right:0.#}");
+
+            // Position 0 → 0.5 while COLLAPSED: the TransformBind moves the thumb next frame — no 400ms begin-time lag.
+            pos.Value = 0.5f;
+            host.RunFrame();
+            var t1 = host.Scene.AbsoluteRect(thumb);
+            Check("cp4.2 — position 0→0.5 moves the thumb the NEXT frame (no expand-delay on position; width untouched)",
+                Near(t1.Y, barR.Y + 12f + 66f, 1f) && Near(t1.W, 2f),
+                $"y={t1.Y - barR.Y:0.#} (expect 78) w={t1.W:0.#}");
+
+            // Hover the lane: nothing changes immediately (the 400ms dwell debounces the expand)…
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.X + 6f, barR.Y + 100f), 0, 0));
+            host.RunFrame();
+            bool noInstantExpand = Near(host.Scene.AbsoluteRect(thumb).W, 2f);
+            // …then ~45 frames ≈ 720ms of engine time: past the 400ms begin + the 167ms KeySpline(0,0,0,1) width tween.
+            for (int i = 0; i < 45; i++) host.RunFrame();
+            var t2 = host.Scene.AbsoluteRect(thumb);
+            Check("cp4.3 — lane dwell 400ms then 167ms expand: thumb 2px→6px, right edge stays anchored (inset 3)",
+                noInstantExpand && Near(t2.W, 6f) && Near(t2.Right, barR.Right - 3f),
+                $"instantExpand={!noInstantExpand} w={t2.W:0.#} rightInset={barR.Right - t2.Right:0.#}");
+            Check("cp4.4 — hovering changes neither thumb Y/length nor the track (no geometry jump from arrow cells)",
+                Near(t2.Y, t1.Y) && Near(t2.H, t1.H) && Near(host.Scene.Bounds(arrowUp).H, 12f),
+                $"y={t2.Y - barR.Y:0.#} len={t2.H:0.#} cellH={host.Scene.Bounds(arrowUp).H:0.#}");
+            Check("cp4.5 — expanded chrome faded IN (arrow opacity 1 — the 83ms linear fade after the same begin time)",
+                Near(host.Scene.Paint(arrowUp).Opacity, 1f, 0.02f),
+                $"opacity={host.Scene.Paint(arrowUp).Opacity:0.00}");
+
+            // Leave the bar: the contract begins after 500ms and plays 167ms; the chrome fades back out.
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.Right + 80f, barR.Y + 100f), 0, 0));
+            host.RunFrame();
+            for (int i = 0; i < 55; i++) host.RunFrame();
+            var t3 = host.Scene.AbsoluteRect(thumb);
+            Check("cp4.6 — leave contracts to 2px after the 500ms begin; chrome fades out",
+                Near(t3.W, 2f) && Near(host.Scene.Paint(arrowUp).Opacity, 0f, 0.02f),
+                $"w={t3.W:0.#} opacity={host.Scene.Paint(arrowUp).Opacity:0.00}");
+            Check("cp4.7 — conscious ticker unmounts: the frame loop idles once settled", !host.HasActiveWork);
+        }
+
+        // ── AnnotatedScrollBar: 44px right-rail template geometry + jump/step interactions ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-asb", new Size2(360, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var pos = new Signal<float>(0.2f);
+            var lastKind = (AnnotatedScrollBarScrollKind)255;
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                    Children =
+                    [
+                        AnnotatedScrollBar.Create(new[] { ("A", 0.04f), ("M", 0.5f), ("Z", 0.96f) },
+                            pos, (to, kind) => { pos.Value = to; lastKind = kind; }, height: 280f),
+                    ],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var asb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var asbR = host.Scene.AbsoluteRect(asb);
+            var btnUp = Child(host.Scene, asb, 0);                  // root column = [btnUp, rail, btnDown]
+            var rail = Child(host.Scene, asb, 1);
+            var railR = host.Scene.AbsoluteRect(rail);
+            var thumb = Child(host.Scene, host.Scene.LastChild(rail), 0);   // last rail layer = the live-thumb row
+            var thumbR = host.Scene.AbsoluteRect(thumb);
+            // Height 280 − 2×16 button cells → rail 248; pos 0.2 → thumb Y = 0.2 × (248−3) = 49.
+            Check("cp4.8 — AnnotatedScrollBar hugs the 44px LabelsGridMinWidth (no full-width panel)",
+                Near(asbR.W, 44f, 0.6f), $"w={asbR.W:0.#}");
+            Check("cp4.9 — 30×3 accent thumb, right edge == rail right edge, Y proportional to position",
+                Near(thumbR.W, 30f) && Near(thumbR.H, 3f) && Near(thumbR.Right, railR.Right, 0.6f)
+                && Near(thumbR.Y, railR.Y + 49f, 1f),
+                $"thumb={thumbR.W:0.#}x{thumbR.H:0.#} rightGap={railR.Right - thumbR.Right:0.#} y={thumbR.Y - railR.Y:0.#} (expect 49)");
+            var mLabel = FindTextNode(host.Scene, strings, asb, "M");
+            var mR = mLabel.IsNull ? default(RectF) : host.Scene.AbsoluteRect(mLabel);
+            Check("cp4.10 — label text right-aligned to the labels-column edge, up-shifted 5 (LabelTemplate margin)",
+                !mLabel.IsNull && Near(mR.Right, railR.Right, 1.5f) && Near(mR.Y, railR.Y + 119f, 1.5f),
+                $"rightGap={railR.Right - mR.Right:0.#} y={mR.Y - railR.Y:0.#} (expect 119)");
+
+            // Hover the rail → the ghost preview row mounts (PART_VerticalThumbGhost).
+            int layers0 = host.Scene.ChildCount(rail);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(railR.X + 22f, railR.Y + 60f), 0, 0));
+            host.RunFrame();
+            Check("cp4.11 — rail hover mounts the ghost thumb preview", host.Scene.ChildCount(rail) == layers0 + 1,
+                $"layers {layers0}→{host.Scene.ChildCount(rail)}");
+
+            // Rail click-to-jump: local Y 124 of 248 → position 0.5, kind=Click; the thumb follows the same flush.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(railR.X + 22f, railR.Y + 124f), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(railR.X + 22f, railR.Y + 124f), 0, 0));
+            host.RunFrame();
+            thumb = Child(host.Scene, host.Scene.LastChild(rail), 0);
+            var thumbR2 = host.Scene.AbsoluteRect(thumb);
+            Check("cp4.12 — rail click jumps: onScroll(0.5, Click), thumb lands at 0.5 × (railH−3) the next frame",
+                Near(pos.Peek(), 0.5f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.Click
+                && Near(thumbR2.Y, railR.Y + 122.5f, 1f),
+                $"pos={pos.Peek():0.00} kind={lastKind} y={thumbR2.Y - railR.Y:0.#} (expect 122.5)");
+
+            // Top (increment) ScrollButton: a 16×16 right-aligned transparent cell stepping by SmallChange (0.05).
+            var b = host.Scene.AbsoluteRect(btnUp);
+            Check("cp4.13 — ScrollButtons are 16×16 right-aligned cells",
+                Near(b.W, 16f) && Near(b.H, 16f) && Near(b.Right, asbR.Right, 0.6f),
+                $"btn={b.W:0.#}x{b.H:0.#} rightGap={asbR.Right - b.Right:0.#}");
+            window.QueueInput(new InputEvent(InputKind.PointerDown, CenterOf(host.Scene, btnUp), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, CenterOf(host.Scene, btnUp), 0, 0));
+            host.RunFrame();
+            Check("cp4.14 — increment button steps −0.05 with kind=IncrementButton",
+                Near(pos.Peek(), 0.45f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.IncrementButton,
+                $"pos={pos.Peek():0.00} kind={lastKind}");
+        }
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -8552,6 +9044,13 @@ static class Slice
         // E11 — unified virtualization substrate (measured seam, LinedFlow/GroupedList, repeater lifecycle,
         // SelectionModel, ItemContainer, ItemsView).
         E11VirtChecks(strings);
+
+        // Parity wave-1 defect fixes (D1 collection-host sizing, D2 pointer-focus/PasswordBox reveal,
+        // D3 Expander WinUI motion, D4 ScrollBar/AnnotatedScrollBar anatomy).
+        D1CollectionHostSizingChecks(strings);
+        D2PasswordRevealFocusChecks(strings);
+        D3ExpanderChecks(strings);
+        D4ScrollBarChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

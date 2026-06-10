@@ -401,6 +401,21 @@ public sealed class AppHost : IDisposable
                     _invalidator.RunDirty(layoutSize);         // 6 scoped relayout: only dirty subtrees, firewalled at boundaries
                 }
                 _scene.ClearLayoutDirty();
+
+                // D1 realize-after-layout (bounded): ArrangeViewport flags viewports whose realized window no longer
+                // covers the viewport size it just published (a mount realizes against a hint BEFORE any layout; a
+                // relayout can also grow the host). Re-realize + scoped relayout here so the FIRST presented frame
+                // already shows the real rows — max 2 passes (a pass realizes the exact computed window, so a
+                // further pass only fires on measured-extent drift; any residue is caught by the next frame's
+                // pre-layout ReRealizeVirtuals). Cold realize edge only — steady frames never enter the loop.
+                for (int realizePass = 0; realizePass < 2 && _reconciler.ReRealizeVirtuals(); realizePass++)
+                {
+                    if (_runtime.HasPending) _runtime.Flush(); // bound-slot rebinds (RowBind) land THIS frame
+                    _reconciler.ConsumeReconciled();           // realize mounts are folded into this frame's layout
+                    reconciled = true;
+                    _invalidator.RunDirty(layoutSize);
+                    _scene.ClearLayoutDirty();
+                }
             }
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
