@@ -139,9 +139,12 @@ public sealed class ComboBox : Component
             });
             // Editable mode keeps focus IN the text field while the list is open (WinUI: arrows preview from the
             // TextBox, ComboBox_Partial.cpp:2840–2886) — no focus trap; the non-editable list takes focus + owns keys.
+            // Chrome=Dropdown: the ComboBox dropdown animates with SplitOpen/SplitCloseThemeAnimation (the template's
+            // DropDownStates Opened/Closed storyboards, generic.xaml:9047/9056) — clip reveal with no translate/fade
+            // on open, 167ms clip collapse + late fade on close — NOT the menus' MenuPopupThemeTransition.
             handle.Value = Editable
-                ? svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch)
-                : svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch, new PopupOptions(FocusTrap: true));
+                ? svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch, new PopupOptions(Chrome: PopupChrome.Dropdown))
+                : svc.Open(anchorOf, body, FlyoutPlacement.BottomStretch, new PopupOptions(FocusTrap: true, Chrome: PopupChrome.Dropdown));
             handle.Value.ClosedAction = () =>
             {
                 handle.Value = null;

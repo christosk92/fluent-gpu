@@ -310,12 +310,15 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         else
         {
+            _acrylic?.TickIdle(_fence->GetCompletedValue());   // age/trim the layer RT pool while no acrylic is on screen
             _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
             float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
             _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
             SetFullViewport();
             SubmitStreaming(drawList, lw, lh);
         }
+        Diag.Set("d3d12", "acrylicLayers", _acrylic?.LayersThisFrame ?? 0);   // PushLayer composites this frame
+        Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("d3d12", "images", _frameImageCount);
@@ -703,7 +706,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // backdrop drawn so far, then composites the acrylic and lets the layer's content draw on top.
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
-        _acrylic!.BeginCanvas(_cmdList, ctx.Clear);
+        // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
+        _acrylic!.BeginCanvas(_cmdList, ctx.Clear, _fence->GetCompletedValue(), (int)(_frameIndex & 1));
         ClearInsts();
         _clipStack.Clear();
         int pos = 0;
@@ -732,7 +736,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
                 FlushSegment(lw, lh);                       // draw the backdrop-so-far into the canvas
-                _acrylic.BlurAndComposite(_cmdList, L, lw, lh);  // blur + acrylic composite (re-binds canvas + full viewport)
+                // region snapshot → pooled-RT separable blur → acrylic composite (re-binds canvas + full viewport).
+                // _fenceValue + 1 is the fence value SignalFrame will signal for THIS frame (gates pooled-RT retire).
+                _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1);
                 ApplyCurrentScissor();
                 continue;
             }

@@ -803,6 +803,23 @@ sealed class OverlayProbeInner : Component
     }
 }
 
+// E4 — ToolTip timing probe: a plain (non-interactive) target wrapped by ToolTip inside an OverlayHost; the ToolTip
+// wrapper itself carries the hover/press handlers, so the pointer hits IT (the inner target has no handlers).
+sealed class E4ToolTipProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = new BoxEl
+        {
+            Width = 480, Height = 360, Padding = Edges4.All(40),
+            Children =
+            [
+                ToolTip.Wrap(new BoxEl { Width = 120, Height = 32, Fill = ColorF.FromRgba(40, 40, 40) }, "tip-body"),
+            ],
+        },
+    });
+}
+
 sealed class CheckBoxProbe : Component
 {
     public CheckState State;
@@ -891,6 +908,110 @@ sealed class RangeSliderProbe : Component
         Val = v;
         return Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
     }
+}
+
+// ── Wave-1 control-parity probes (w1controls.*) ─────────────────────────────────────────────
+// A standard Button stretched wider than its label (content-alignment + no-scale + focus-margin assertions), behind a
+// leading dummy focusable so the Tab order is deterministic (dummy → button).
+sealed class W1ButtonProbe : Component
+{
+    public int Clicks;
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 12, Padding = Edges4.All(20),
+        Children =
+        [
+            new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
+            Button.Standard("w1-btn", () => Clicks++) with { Width = 200f },
+        ],
+    };
+}
+
+// A ToggleButton over a bool signal: the signal flip (not the pointer) drives the checked-state BrushTransition, so the
+// 83ms cross-fade is sampled without hover/press-ramp pollution.
+sealed class W1ToggleButtonProbe : Component
+{
+    public Signal<bool>? On;
+    public override Element Render()
+    {
+        var on = UseSignal(false);
+        On = on;
+        return new BoxEl
+        {
+            Padding = Edges4.All(20),
+            Children = [ToggleButton.Create("w1-tb", on.Value, () => on.Value = !on.Value)],
+        };
+    }
+}
+
+// A HyperlinkButton with a NavigateUri: records how many URIs had already launched when Click fired — WinUI raises
+// Click FIRST, then Launcher::TryInvokeLauncher (HyperLinkButton_Partial.cpp:149-177).
+sealed class W1HyperlinkProbe : Component
+{
+    public HeadlessPlatformApp? App;
+    public int UrisAtClick = -1;
+    public override Element Render() => new BoxEl
+    {
+        Padding = Edges4.All(20),
+        Children = [HyperlinkButton.Create("w1-link", "https://wavee.app/w1", onClick: () => UrisAtClick = App!.OpenedUris.Count)],
+    };
+}
+
+// The RadioButtons container: 5 string items in 2 columns + header (column-major grid + roving-keyboard assertions).
+sealed class W1RadioButtonsProbe : Component
+{
+    public int Selected;
+    public int SelectCalls;
+    public override Element Render()
+    {
+        var (sel, setSel) = UseState(0);
+        Selected = sel;
+        return new BoxEl
+        {
+            Padding = Edges4.All(10),
+            Children =
+            [
+                RadioButtons.Create(new[] { "A", "B", "C", "D", "E" }, sel,
+                    i => { SelectCalls++; setSel(i); }, header: "w1-group", maxColumns: 2),
+            ],
+        };
+    }
+}
+
+// Slider.Ranged over 0..200 with a header — exercises the AUTO step sizes (SmallChange 0 → range/100 = 2,
+// LargeChange 0 → range/10 = 20; WinUI's absolute defaults 1/10 on its 0–100 range, Slider_Partial.h:13-15).
+sealed class W1SliderKeysProbe : Component
+{
+    public float Val;
+    public override Element Render()
+    {
+        var (v, setV) = UseState(0f);
+        Val = v;
+        return new BoxEl
+        {
+            Padding = Edges4.All(20),
+            Children = [Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 200f, Header = "w1-vol" }, length: 200f, thickness: 32f)],
+        };
+    }
+}
+
+// Slider.Ranged inside an OverlayHost (the thumb value tooltip needs a real overlay service) + inline ticks; a leading
+// dummy focusable pins the Tab order. The probe never re-renders — the tooltip readout is the live tipValue signal.
+sealed class W1SliderTipProbe : Component
+{
+    public float Val = -1f;
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = new BoxEl
+        {
+            Direction = 1, Gap = 12, Padding = Edges4.All(20),
+            Children =
+            [
+                new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
+                Slider.Ranged(0f, v => Val = v, new Slider.Options { Min = 0f, Max = 200f, TickFrequency = 50f }, length: 200f, thickness: 32f),
+            ],
+        },
+    });
 }
 
 sealed class ColorPickerProbe : Component
@@ -988,6 +1109,26 @@ sealed class NavHierarchyProbe : Component
     });
 }
 
+// E5 — a draggable row for the drag-frame alloc tripwire: the delta handler copies one scalar (alloc-free), so a
+// steady pointer-rate drag frame must be 0-alloc on phases 6–13 (transform-only repaint of the lifted visual).
+sealed class DragFrameProbe : Component
+{
+    public float LastTotalDx;
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 8, Padding = Edges4.All(12),
+        Children =
+        [
+            new BoxEl
+            {
+                Key = "drag", Width = 160, Height = 40, Fill = ColorF.FromRgba(0x40, 0x40, 0x40),
+                CanDrag = true, OnDragDelta = e => LastTotalDx = e.TotalDx,
+            },
+            new BoxEl { Key = "rest", Width = 160, Height = 40, Fill = ColorF.FromRgba(0x30, 0x30, 0x30) },
+        ],
+    };
+}
+
 // ── The harness: run the slice end-to-end on the headless backends + assert ───────
 sealed class PipsPagerOutputProbe : Component
 {
@@ -1004,6 +1145,122 @@ sealed class PipsPagerOutputProbe : Component
             ],
         };
     }
+}
+
+// ── E11 virtualization-substrate probes (measured seam / repeater lifecycle / ItemsView L3) ──────────
+
+// E11-L0 — a variable-extent list through the USER-REACHABLE IMeasuredVirtualLayout seam: rows realize at the
+// 40px estimate and correct to H(i) at arrange (SetMeasured); scrolls must anchor across corrections.
+sealed class MeasuredSeamProbe : Component
+{
+    public const int N = 300;
+    public const float Estimate = 40f;
+    public static float H(int i) => 40f + (i % 4) * 14f;   // 40, 54, 68, 82 — mean 61 ≠ the 40 estimate (≥ estimate, so
+                                                           // a fresh correction never shrinks the anchor row's band)
+    public MeasuredStackVirtualLayout? Layout;
+    public override Element Render()
+    {
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        Layout = layout;
+        return Virtual.Measured(N, layout,
+                   renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
+                   keyOf: i => "m" + i)
+               with { Width = 300, Height = 300 };
+    }
+}
+
+// E11-L2 — ItemsRepeater lifecycle (ElementPrepared/ElementClearing/visible-range) recorded across a scroll recycle.
+sealed class LifecycleRepeaterProbe : Component
+{
+    public const int N = 1000;
+    public readonly List<int> Prepared = new();
+    public readonly List<int> Cleared = new();
+    public readonly List<(int First, int Last)> Ranges = new();
+    public override Element Render()
+        => ((VirtualListEl)Repeater.ItemsRepeater(N, i => new BoxEl { Height = 40f, Fill = ColorF.FromRgba(28, 28, 28) },
+                RepeatLayout.Stack(40f), keyOf: i => "lc" + i,
+                elementPrepared: Prepared.Add, elementClearing: Cleared.Add,
+                visibleRange: (f, l) => Ranges.Add((f, l))))
+           with { Width = 300, Height = 400 };   // explicit size ⇒ the MOUNT realize windows against 400, not the hint
+}
+
+// E11-L3 — ItemsView keyboard surface (Single over a virtualized stack): arrows/Home/End/PageUp-Down, typeahead,
+// StartBringItemIntoView, the CanRaiseItemInvoked matrix (ItemsView.cpp:423-426).
+sealed class ItemsViewKeyboardProbe : Component
+{
+    public const int N = 100;
+    public const float Row = 40f;
+    public readonly ItemsViewController Controller = new();
+    public int InvokedCount;
+    public int LastInvoked = -1;
+    public static string NameOf(int i) => i == 57 ? "zebra" : $"item {i:000}";
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 320,
+            Children =
+            [
+                ItemsView.Create(N,
+                    itemTemplate: i => new BoxEl { Children = [new TextEl(NameOf(i)) { Size = 12f }] },
+                    layout: RepeatLayout.Stack(Row),
+                    isItemInvokedEnabled: true,
+                    itemInvoked: i => { InvokedCount++; LastInvoked = i; },
+                    itemText: NameOf,
+                    controller: Controller),
+            ],
+        };
+}
+
+// E11-L3 — grid arrow navigation: Left/Right = index ±1, Up/Down = ±columns (the index-based layout-orientation
+// path, ItemsViewInteractions.cpp:1051-1067).
+sealed class ItemsViewGridProbe : Component
+{
+    public const int N = 40;
+    public readonly ItemsViewController Controller = new();
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 320,
+            Children = [ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Grid(4, 72f, 8f), controller: Controller)],
+        };
+}
+
+// E11-L3 — Extended-mode pointer chords (plain / Shift / Ctrl) + Shift+arrow + Ctrl+A (ExtendedSelector.cpp).
+sealed class ItemsViewExtendedProbe : Component
+{
+    public const int N = 60;
+    public readonly ItemsViewController Controller = new();
+    public int SelectionChangedCount;
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 320,
+            Children =
+            [
+                ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Stack(40f),
+                    selectionMode: ItemsSelectionMode.Extended,
+                    selectionChanged: () => SelectionChangedCount++,
+                    controller: Controller),
+            ],
+        };
+}
+
+// E11-L3 — Multiple mode over 10k items: select-all must store ONE range and realize nothing (window-only re-skin).
+sealed class ItemsViewMultipleProbe : Component
+{
+    public const int N = 10_000;
+    public readonly ItemsViewController Controller = new();
+    public int TemplateCalls;
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 360, Height = 320,
+            Children =
+            [
+                ItemsView.Create(N, i => { TemplateCalls++; return new BoxEl(); }, RepeatLayout.Stack(40f),
+                    selectionMode: ItemsSelectionMode.Multiple, controller: Controller),
+            ],
+        };
 }
 
 static class Slice
@@ -3596,6 +3853,450 @@ static class Slice
         }
     }
 
+    // E5 — the drag-reorder gesture engine: BoxEl.CanDrag arms Input.DragController on press; pointer travel past the
+    // 4px per-axis drag box (Win32 SM_CXDRAG/SM_CYDRAG defaults — microsoft-ui-xaml
+    // dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:1864-1878 IsOutsideDragRectangle: dx > maxDx || dy > maxDy)
+    // promotes the press to a drag: the node follows the pointer at WinUI ListViewItemDragThemeOpacity 0.80
+    // (controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7) with a flyout-class shadow, stops hit-testing,
+    // and the eventual release SUPPRESSES the click (a finished WinUI drag never raises the item's click/Tapped).
+    // ReorderList carries the live-reorder slot math: midpoint rule (GetDragOverIndex —
+    // ListViewBase_Partial_Reorder.cpp:984-1063), the 200ms LISTVIEW_LIVEREORDER_TIMER dwell (:50) and the
+    // part-to-make-room displacement (MoveItemsForLiveReorder :2125-2158).
+    static void E5DragDropChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // e5dragdrop.1 — a press that never leaves the 4px per-axis drag box stays a plain click: release fires
+        // OnClick, no drag lifecycle event fires, and the node's transform is untouched. +4/+4 sits ON the box edge —
+        // WinUI promotes only strictly OUTSIDE it (dx > maxDx || dy > maxDy, ListViewBaseItem_Partial.cpp:1877).
+        {
+            var scene = new SceneStore();
+            int clicks = 0, started = 0, deltas = 0, completed = 0, canceled = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 60, CanDrag = true,
+                OnClick = () => clicks++,
+                OnDragStarted = _ => started++,
+                OnDragDelta = _ => deltas++,
+                OnDragCompleted = _ => completed++,
+                OnDragCanceled = () => canceled++,
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var node = scene.Root;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+            bool armed = disp.Drag.IsArmed && !disp.Drag.IsActive;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(104, 34), 0, 0) });
+            bool stillArmed = disp.Drag.IsArmed && !disp.Drag.IsActive && started == 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(104, 34), 0, 0) });
+            bool clicked = clicks == 1 && started == 0 && deltas == 0 && completed == 0 && canceled == 0;
+            bool untouched = scene.Paint(node).LocalTransform.Dx == 0f && !disp.Drag.IsArmed && !disp.Drag.IsActive;
+            Check("e5dragdrop.1 press inside the 4px per-axis drag box stays a click (no drag lifecycle)",
+                armed && stillArmed && clicked && untouched,
+                $"armed={armed} stillArmed={stillArmed} clicks={clicks} started={started}");
+        }
+
+        // e5dragdrop.2/.2b — crossing the drag box on a press that began on a CHILD of the CanDrag row promotes the
+        // ROW (TryArm walks up like WinUI's item container): OnDragStarted fires once BEFORE the first OnDragDelta,
+        // the transient pressed visuals are cleared, and the row carries the drag visuals — opacity 0.80
+        // (ListViewItemDragThemeOpacity — ListViewItem_themeresources.xaml:7), the flyout-class shadow, hit-test off,
+        // and a parent-space translate equal to the gesture delta. Release restores everything, fires DragCompleted,
+        // SUPPRESSES the click, and hands OnSettle the (drop → resting) rects for the FLIP glide.
+        {
+            var scene = new SceneStore();
+            int rowClicks = 0, childClicks = 0, started = 0, deltas = 0, completed = 0;
+            int firstEvent = 0;                       // 1 = started first, 2 = delta first — order proof
+            float doneDx = 0f, doneDy = 0f;
+            NodeHandle settleNode = default; RectF settleFrom = default, settleTo = default; int settles = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 240, Height = 120,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "row", Width = 200, Height = 60, CanDrag = true,
+                        OnClick = () => rowClicks++,
+                        OnDragStarted = _ => { started++; if (firstEvent == 0) firstEvent = 1; },
+                        OnDragDelta = _ => { deltas++; if (firstEvent == 0) firstEvent = 2; },
+                        OnDragCompleted = e => { completed++; doneDx = e.TotalDx; doneDy = e.TotalDy; },
+                        Children = [new BoxEl { Key = "child", Width = 80, Height = 30, OnClick = () => childClicks++ }],
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.Drag.OnSettle = (n, from, to) => { settles++; settleNode = n; settleFrom = from; settleTo = to; };
+            var row = Child(scene, scene.Root, 0);
+            var child = Child(scene, row, 0);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 15), 0, 0) });
+            bool pressedChild = (scene.Flags(child) & NodeFlags.Pressed) != 0 && disp.Drag.IsArmed;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(50, 15), 0, 0) });   // dx 10 > 4 → promote
+            bool promoted = started == 1 && deltas == 1 && firstEvent == 1
+                && disp.Drag.IsActive && disp.Drag.ActiveNode == row
+                && (scene.Flags(child) & NodeFlags.Pressed) == 0;                  // pressed visuals cleared on promotion
+            bool visuals = Near(scene.Paint(row).Opacity, 0.80f)                   // ListViewItemDragThemeOpacity
+                && scene.TryGetShadow(row, out var sh) && sh == DragController.DragShadow
+                && (scene.Flags(row) & NodeFlags.HitTestVisible) == 0              // drop-targets see THROUGH the visual
+                && Near(scene.Paint(row).LocalTransform.Dx, 10f) && Near(scene.Paint(row).LocalTransform.Dy, 0f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 40), 0, 0) });
+            bool follows = deltas == 2
+                && Near(scene.Paint(row).LocalTransform.Dx, 30f) && Near(scene.Paint(row).LocalTransform.Dy, 25f);
+            Check("e5dragdrop.2 over-threshold promotes the CanDrag row (child press arms it): Started→Delta, pressed cleared, drag visuals on",
+                pressedChild && promoted && visuals && follows,
+                $"pressed={pressedChild} promoted={promoted} visuals={visuals} follows={follows}");
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(70, 40), 0, 0) });
+            bool suppressed = rowClicks == 0 && childClicks == 0;                  // WinUI: a finished drag never clicks
+            bool restored = Near(scene.Paint(row).Opacity, 1f) && !scene.TryGetShadow(row, out _)
+                && (scene.Flags(row) & NodeFlags.HitTestVisible) != 0
+                && scene.Paint(row).LocalTransform.Dx == 0f && scene.Paint(row).LocalTransform.Dy == 0f
+                && !disp.Drag.IsActive && disp.Drag.ActiveNode.IsNull;
+            bool settled = completed == 1 && Near(doneDx, 30f) && Near(doneDy, 25f)
+                && settles == 1 && settleNode == row
+                && Near(settleFrom.X - settleTo.X, 30f) && Near(settleFrom.Y - settleTo.Y, 25f);
+            Check("e5dragdrop.2b release after a drag suppresses the click, restores resting visuals, and hands OnSettle the drop→resting rects",
+                suppressed && restored && settled,
+                $"suppressed={suppressed} restored={restored} completed={completed} settles={settles} dxdy=({doneDx:0.#},{doneDy:0.#})");
+        }
+
+        // e5dragdrop.3 — DragEventArgs: Total deltas measured from the arming press, Absolute = the raw pointer,
+        // Local ≈ the grab offset on the MOVING box, and the ~50ms-EMA pointer velocity driven by PLATFORM timestamps
+        // (alpha = dt/(dt+50): 10px/16ms moves → 625 px/s instantaneous → 151.5 then 266.3 px/s smoothed). A gesture
+        // whose events carry TimestampMs == 0 (the headless default) leaves the velocity at 0.
+        {
+            var scene = new SceneStore();
+            float vx = float.NaN, vy = float.NaN, dx = float.NaN, dy = float.NaN;
+            Point2 local = default, abs = default;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 100, CanDrag = true,
+                OnDragDelta = e => { vx = e.VelocityX; vy = e.VelocityY; dx = e.TotalDx; dy = e.TotalDy; local = e.Local; abs = e.Absolute; },
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_016) });
+            bool firstMove = Near(dx, 10f) && Near(vx, 151.5f, 0.5f) && vy == 0f;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_032) });
+            bool secondMove = Near(dx, 20f) && Near(dy, 0f) && Near(vx, 266.3f, 0.5f)
+                && Near(abs.X, 70f) && Near(abs.Y, 50f)
+                && Near(local.X, 50f) && Near(local.Y, 50f);   // grab offset: Local tracks the MOVING box
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(70, 50), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_048) });
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 50), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(80, 50), 0, 0) });
+            bool zeroStamp = Near(dx, 30f) && vx == 0f && vy == 0f;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(80, 50), 0, 0) });
+            Check("e5dragdrop.3 DragEventArgs coords + ~50ms-EMA velocity from platform timestamps (0-stamps leave velocity 0)",
+                firstMove && secondMove && zeroStamp, $"first={firstMove} second={secondMove} zero={zeroStamp} vx={vx:0.#}");
+        }
+
+        // e5dragdrop.4 — cancel paths: Escape mid-drag (the most-modal gesture — WinUI drag cancel routes before any
+        // other key handling) and window deactivation both abort the drag: resting visuals restore, OnDragCanceled
+        // fires (never OnDragCompleted), OnSettle glides the visual home, and the still-down pointer's eventual
+        // release does NOT click (a canceled drag never raises a click or a drop).
+        {
+            var scene = new SceneStore();
+            int clicks = 0, canceled = 0, completed = 0, settles = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 60, CanDrag = true,
+                OnClick = () => clicks++,
+                OnDragCompleted = _ => completed++,
+                OnDragCanceled = () => canceled++,
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var node = scene.Root;
+            disp.Drag.OnSettle = (_, _, _) => settles++;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 30), 0, 0) });
+            bool active1 = disp.Drag.IsActive && Near(scene.Paint(node).LocalTransform.Dx, 20f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+            bool escCancel = canceled == 1 && completed == 0 && settles == 1 && !disp.Drag.IsActive
+                && scene.Paint(node).LocalTransform.Dx == 0f && Near(scene.Paint(node).Opacity, 1f)
+                && !scene.TryGetShadow(node, out _) && (scene.Flags(node) & NodeFlags.HitTestVisible) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(70, 30), 0, 0) });
+            bool noClick1 = clicks == 0;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(75, 30), 0, 0) });
+            bool active2 = disp.Drag.IsActive;
+            disp.Dispatch(new[] { new InputEvent(InputKind.WindowBlur, default, 0, 0) });
+            bool blurCancel = canceled == 2 && settles == 2 && !disp.Drag.IsActive
+                && scene.Paint(node).LocalTransform.Dx == 0f && Near(scene.Paint(node).Opacity, 1f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(75, 30), 0, 0) });
+            bool noClick2 = clicks == 0 && completed == 0;
+            Check("e5dragdrop.4 Escape / window-blur cancel the drag: visuals restore, DragCanceled fires, release does not click",
+                active1 && escCancel && noClick1 && active2 && blurCancel && noClick2,
+                $"esc={escCancel} blur={blurCancel} clicks={clicks} canceled={canceled} settles={settles}");
+        }
+
+        // e5dragdrop.5 — arena-lite (promotion-time arbitration, DragController.YieldsToPan): the item's reorder axis
+        // is its PARENT container's main axis; a dominant-axis gesture PERPENDICULAR to it yields to a scrollable
+        // ancestor that actually overflows along the gesture axis (the WinUI manipulation-arena outcome for a tab
+        // strip inside a scrolling page) — the candidate silently disarms, no DragStarted. Along-axis gestures and
+        // no-overflow scrollables never yield.
+        {
+            // a) horizontal strip (row ⇒ items drag horizontally) inside a vertically OVERFLOWING scroll viewport.
+            var sceneA = new SceneStore();
+            int startedA = 0;
+            new TreeReconciler(sceneA, strings).ReconcileRoot(new ScrollEl
+            {
+                Width = 200, Height = 100,
+                Content = new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Direction = 0,
+                            Children =
+                            [
+                                new BoxEl { Key = "a", Width = 60, Height = 40, CanDrag = true, OnDragStarted = _ => startedA++ },
+                                new BoxEl { Key = "b", Width = 60, Height = 40, CanDrag = true, OnDragStarted = _ => startedA++ },
+                                new BoxEl { Key = "c", Width = 60, Height = 40, CanDrag = true, OnDragStarted = _ => startedA++ },
+                            ],
+                        },
+                        new BoxEl { Key = "filler", Width = 10, Height = 300 },
+                    ],
+                },
+            }, null);
+            new FlexLayout(sceneA, fonts).Run(sceneA.Root);
+            var dispA = new InputDispatcher(sceneA);
+            sceneA.TryGetScroll(sceneA.Root, out var scA);
+            bool overflows = scA.ContentH - scA.ViewportH > 0.5f;   // 340 content over a 100 viewport
+
+            dispA.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(30, 20), 0, 0) });
+            bool armedA = dispA.Drag.IsArmed;
+            dispA.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(30, 60), 0, 0) });   // dy 40 ⊥ the row axis
+            bool yielded = startedA == 0 && !dispA.Drag.IsActive && !dispA.Drag.IsArmed;                 // the pan owns it
+            dispA.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(30, 60), 0, 0) });
+
+            dispA.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(30, 20), 0, 0) });
+            dispA.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(80, 20), 0, 0) });   // dx 50 along the row axis
+            bool alongDrags = startedA == 1 && dispA.Drag.IsActive;
+            dispA.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+
+            // b) the same strip in a NON-overflowing viewport: the vertical gesture has no pan to yield to → it drags.
+            var sceneB = new SceneStore();
+            int startedB = 0;
+            new TreeReconciler(sceneB, strings).ReconcileRoot(new ScrollEl
+            {
+                Width = 200, Height = 100,
+                Content = new BoxEl
+                {
+                    Direction = 0,
+                    Children =
+                    [
+                        new BoxEl { Key = "a", Width = 60, Height = 40, CanDrag = true, OnDragStarted = _ => startedB++ },
+                        new BoxEl { Key = "b", Width = 60, Height = 40, CanDrag = true, OnDragStarted = _ => startedB++ },
+                    ],
+                },
+            }, null);
+            new FlexLayout(sceneB, fonts).Run(sceneB.Root);
+            var dispB = new InputDispatcher(sceneB);
+            dispB.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(30, 20), 0, 0) });
+            dispB.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(30, 60), 0, 0) });
+            bool noOverflowDrags = startedB == 1 && dispB.Drag.IsActive;
+            dispB.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+
+            // c) a vertical (column) list inside the overflowing vertical viewport: the vertical gesture runs ALONG
+            //    the item's own reorder axis → the drag wins even over a real pan candidate.
+            var sceneC = new SceneStore();
+            int startedC = 0;
+            new TreeReconciler(sceneC, strings).ReconcileRoot(new ScrollEl
+            {
+                Width = 200, Height = 100,
+                Content = new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new BoxEl { Key = "a", Width = 160, Height = 60, CanDrag = true, OnDragStarted = _ => startedC++ },
+                        new BoxEl { Key = "b", Width = 160, Height = 60, CanDrag = true, OnDragStarted = _ => startedC++ },
+                        new BoxEl { Key = "c", Width = 160, Height = 60, CanDrag = true, OnDragStarted = _ => startedC++ },
+                    ],
+                },
+            }, null);
+            new FlexLayout(sceneC, fonts).Run(sceneC.Root);
+            var dispC = new InputDispatcher(sceneC);
+            sceneC.TryGetScroll(sceneC.Root, out var scC);
+            bool overflowsC = scC.ContentH - scC.ViewportH > 0.5f;   // 180 content over a 100 viewport
+            dispC.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(80, 30), 0, 0) });
+            dispC.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(80, 70), 0, 0) });
+            bool axisDrags = startedC == 1 && dispC.Drag.IsActive;
+            dispC.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+
+            Check("e5dragdrop.5 arena-lite: cross-axis gesture over an overflowing scrollable yields to the pan; along-axis and no-overflow gestures drag",
+                overflows && armedA && yielded && alongDrags && noOverflowDrags && overflowsC && axisDrags,
+                $"overflow={overflows} yielded={yielded} along={alongDrags} noOverflow={noOverflowDrags} axis={axisDrags}");
+        }
+
+        // e5dragdrop.6 — ReorderList midpoint slot math: the dragged item's centre crossing a sibling's midpoint
+        // claims its slot (GetDragOverIndex — ListViewBase_Partial_Reorder.cpp:984-1063); the SHOWN target waits on
+        // the 200ms live-reorder dwell that re-arms on every pending change (LISTVIEW_LIVEREORDER_TIMER :50, restart
+        // :1068-1074); displaced items shift one dragged-extent (+spacing) toward the vacated slot.
+        {
+            var rl = new ReorderList();
+            bool defaults = rl.DwellMs == ReorderList.ListDwellMs && ReorderList.ListDwellMs == 200f && ReorderList.GridDwellMs == 300f;
+            rl.Begin(1, 5, itemExtent: 40f, spacing: 8f);     // starts 0,48,96,144,192; dragged centre 68
+            bool init = rl.IsActive && rl.DraggedIndex == 1 && rl.PendingIndex == 1 && rl.TargetIndex == 1;
+            bool stay = !rl.Update(47f) && rl.PendingIndex == 1;                       // 115 < sibling-2 mid 116
+            bool cross = rl.Update(49f) && rl.PendingIndex == 2 && rl.TargetIndex == 1;   // 117 > 116; dwell pending
+            bool dwellHeld = !rl.Advance(199f) && rl.TargetIndex == 1;
+            bool dwellFire = rl.Advance(1f) && rl.TargetIndex == 2;
+            bool hints = Near(rl.OffsetFor(2), -48f) && rl.OffsetFor(0) == 0f && rl.OffsetFor(1) == 0f
+                && rl.OffsetFor(3) == 0f && rl.OffsetFor(4) == 0f;
+            Span<int> order = stackalloc int[5];
+            rl.ProjectOrder(order);
+            bool proj = order[0] == 0 && order[1] == 2 && order[2] == 1 && order[3] == 3 && order[4] == 4;
+            bool tgtStart = Near(rl.DraggedTargetStart, 96f);
+
+            bool flip = rl.Update(-100f) && rl.PendingIndex == 0 && rl.TargetIndex == 2;   // centre −32 < sibling-0 mid 20
+            bool reArm = !rl.Advance(199f) && rl.Advance(1f) && rl.TargetIndex == 0;       // the dwell re-armed in full
+            bool upHints = Near(rl.OffsetFor(0), 48f) && rl.OffsetFor(2) == 0f;
+            rl.ProjectOrder(order);
+            bool upProj = order[0] == 1 && order[1] == 0 && order[2] == 2 && Near(rl.DraggedTargetStart, 0f);
+            Check("e5dragdrop.6 ReorderList midpoint slot math + 200ms dwell-committed target + displacement hints + ProjectOrder",
+                defaults && init && stay && cross && dwellHeld && dwellFire && hints && proj && tgtStart && flip && reArm && upHints && upProj,
+                $"init={init} stay={stay} cross={cross} dwell={dwellHeld}/{dwellFire} hints={hints} proj={proj} flip={flip} reArm={reArm}");
+        }
+
+        // e5dragdrop.7 — drop commit: Complete() lands at the LATEST pending slot (the release point never waits for
+        // the dwell), resets all hints BEFORE firing OnCommit (from,to in ORIGINAL indices), and ReorderList.Move
+        // applies exactly WinUI's RemoveAt(from)+Insert(to) drop (ListViewBase::ReorderItemsTo —
+        // ListViewBase_Partial_Reorder.cpp:1536-1537). Cancel drops the hints without committing. Variable extents
+        // honor per-item midpoints; DwellMs = 0 commits the shown target on the next Advance.
+        {
+            var rl = new ReorderList { DwellMs = 0f };
+            rl.Begin(0, new[] { 30f, 50f, 20f }, spacing: 4f);    // starts 0,34,88; dragged centre 15
+            bool varStay = !rl.Update(40f);                       // 55 < sibling-1 mid 59
+            bool varCross = rl.Update(45f) && rl.PendingIndex == 1;   // 60 > 59
+            bool zeroDwell = rl.Advance(0f) && rl.TargetIndex == 1 && Near(rl.OffsetFor(1), -34f);
+            rl.Cancel();
+            bool dropped = !rl.IsActive && rl.OffsetFor(1) == 0f && rl.PendingIndex == -1;
+
+            int commitFrom = -1, commitTo = -1; bool hintsClearedAtCommit = false;
+            var rl2 = new ReorderList();
+            rl2.OnCommit = (from, to) => { commitFrom = from; commitTo = to; hintsClearedAtCommit = rl2.TargetIndex == -1 && rl2.OffsetFor(1) == 0f; };
+            rl2.Begin(0, 4, itemExtent: 40f);                     // starts 0,40,80,120; dragged centre 20
+            rl2.Update(85f);                                      // 105 > mid-1 60 and > mid-2 100 → pending 2 (no Advance)
+            int dest = rl2.Complete();
+            bool commit = dest == 2 && commitFrom == 0 && commitTo == 2 && hintsClearedAtCommit && !rl2.IsActive;
+
+            var list = new List<char> { 'a', 'b', 'c', 'd' };
+            ReorderList.Move(list, 0, 2);
+            bool moved = list[0] == 'b' && list[1] == 'c' && list[2] == 'a' && list[3] == 'd';
+            ReorderList.Move(list, 0, 9);                         // out of range → ignored
+            ReorderList.Move(list, 2, 2);                         // no-op
+            bool guarded = list[0] == 'b' && list[1] == 'c' && list[2] == 'a' && list[3] == 'd';
+            Check("e5dragdrop.7 Complete commits at the latest pending slot (hints reset before OnCommit); Move applies RemoveAt+Insert; Cancel drops",
+                varStay && varCross && zeroDwell && dropped && commit && moved && guarded,
+                $"varCross={varCross} zeroDwell={zeroDwell} dropped={dropped} dest={dest} commit=({commitFrom}->{commitTo}) moved={moved}");
+        }
+
+        // e5dragdrop.7b — the full pipeline: CanDrag rows wired to ReorderList through the drag lifecycle (Begin in
+        // OnDragStarted, Update(e.TotalDy) in OnDragDelta, Complete in OnDragCompleted); dragging row 0 past row 1's
+        // midpoint and releasing commits the collection move 0→1 via OnCommit + ReorderList.Move.
+        {
+            var scene = new SceneStore();
+            var items = new List<int> { 0, 1, 2 };
+            var rl = new ReorderList();
+            rl.OnCommit = (from, to) => ReorderList.Move(items, from, to);
+            var children = new Element[3];
+            for (int i = 0; i < 3; i++)
+            {
+                int idx = i;
+                children[i] = new BoxEl
+                {
+                    Key = "row" + i, Width = 120, Height = 40, CanDrag = true,
+                    OnDragStarted = _ => rl.Begin(idx, 3, itemExtent: 40f),
+                    OnDragDelta = e => rl.Update(e.TotalDy),
+                    OnDragCompleted = _ => rl.Complete(),
+                    OnDragCanceled = rl.Cancel,
+                };
+            }
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl { Direction = 1, Children = children }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(60, 20), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 40), 0, 0) });   // promote; centre 40 < mid-1 60
+            bool pendingHome = rl.IsActive && rl.DraggedIndex == 0 && rl.PendingIndex == 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 67), 0, 0) });   // centre 67 > mid-1 60 → pending 1
+            bool pendingNext = rl.PendingIndex == 1;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(60, 67), 0, 0) });
+            bool committed = !rl.IsActive && items[0] == 1 && items[1] == 0 && items[2] == 2;
+            Check("e5dragdrop.7b end-to-end: dragging row 0 past row 1's midpoint commits the reorder through the drag lifecycle",
+                pendingHome && pendingNext && committed,
+                $"home={pendingHome} next={pendingNext} items=[{string.Join(",", items)}]");
+        }
+
+        // e5dragdrop.8 — steady-state drag dispatch is allocation-free: the controller reuses ONE DragEventArgs for
+        // the whole gesture and the move path writes only scene columns (no closures, no boxing).
+        {
+            var scene = new SceneStore();
+            float lastDx = 0f;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 400, Height = 60, CanDrag = true, OnDragDelta = e => lastDx = e.TotalDx,
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var ev = new InputEvent[1];
+            ev[0] = new InputEvent(InputKind.PointerDown, new Point2(50, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000);
+            disp.Dispatch(ev);
+            for (int i = 1; i <= 6; i++)   // promote + warm the move path (shadow row, EMA, transform writes)
+            {
+                ev[0] = new InputEvent(InputKind.PointerMove, new Point2(50 + i * 10, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16));
+                disp.Dispatch(ev);
+            }
+            ev[0] = new InputEvent(InputKind.PointerMove, new Point2(140, 30), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_200);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            disp.Dispatch(ev);
+            long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("e5dragdrop.8 steady drag-move dispatch allocates 0 bytes (one reused DragEventArgs per gesture)",
+                bytes == 0 && Near(lastDx, 90f), $"{bytes} bytes dx={lastDx:0.#}");
+        }
+
+        // e5dragdrop.8b — the whole drag FRAME at pointer rate is 0-alloc on phases 6–13: a drag move never
+        // reconciles or relayouts (LocalTransform + dirty flags only), and the record/submit of the lifted visual
+        // (0.80 opacity + shadow) reuses pooled storage.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-alloc", new Size2(480, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new DragFrameProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+
+            host.RunFrame();   // mount + layout
+            var item = Child(host.Scene, host.Scene.Root, 0);
+            var c = CenterOf(host.Scene, item);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000));
+            host.RunFrame();
+            for (int i = 1; i <= 12; i++)   // promote, then warm: shadow slab, draw-list growth, eased press/hover settle
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + i * 4, c.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_000 + (uint)(i * 16)));
+                host.RunFrame();
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60, c.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_300));
+            var dragFrame = host.RunFrame();
+            bool zero = dragFrame.HotPhaseAllocBytes == 0;
+            bool tracked = Near(root.LastTotalDx, 60f) && Near(host.Scene.Paint(item).LocalTransform.Dx, 60f)
+                && Near(host.Scene.Paint(item).Opacity, 0.80f);
+            Check("e5dragdrop.8b steady drag frame is 0-alloc on phases 6–13 (transform-only repaint of the lifted visual)",
+                zero && tracked, $"{dragFrame.HotPhaseAllocBytes} bytes dx={root.LastTotalDx:0.#}");
+        }
+    }
+
     // E1 — the WinUI focus visual: 2px primary + 1px secondary BOTH outside the bounds (FocusVisualMargin −3 default),
     // keyboard-only, margin-aware (Slider −7,0,−7,0), light-theme inner alpha #B3FFFFFF.
     static void FocusRingChecks(StringTable strings)
@@ -4246,7 +4947,20 @@ static class Slice
             bool noBtn0 = Roles(scene, AutomationRole.Button).Count == 0;   // ButtonCollapsed while unfocused
 
             ClickNode(host, window, field);
-            host.RunFrame();   // focus re-render mounts the reveal button (ButtonVisible: focused ∧ non-empty)
+            host.RunFrame();
+            // Focusing a POPULATED box does NOT show the eye: CPasswordBox::OnGotFocus clears m_fCanShowRevealButton
+            // (PasswordBox.cpp:572–581) and CanInvokeRevealButton requires it (PasswordBox.cpp:618–626).
+            bool noBtnOnFocus = Roles(scene, AutomationRole.Button).Count == 0;
+
+            // Empty the box, then type a fresh password — the empty→non-empty content change arms the button
+            // (OnContentChanged, PasswordBox.cpp:366–377: "only allow password reveal button if transitioning from
+            // empty to non-empty state").
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, 0f, KeyModifiers.Ctrl));
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Back, 0f, KeyModifiers.None));
+            host.RunFrame();
+            foreach (char c in "secret") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            host.RunFrame();
             var btns = Roles(scene, AutomationRole.Button);
             bool shown = btns.Count == 1;
             bool w30 = shown && Near(scene.AbsoluteRect(btns[0]).W, 30f);
@@ -4268,9 +4982,60 @@ static class Slice
             host.RunFrame();
             bool remasked = strings.Resolve(scene.Paint(tn).Text) == "●●●●●●";
             bool focusKept = (scene.Flags(field) & NodeFlags.Focused) != 0;
-            Check("W0f.1 PasswordBox Peek: reveal (F78D, width 30, TextSecondary) shows on focus∧non-empty; press-and-hold reveals, release re-masks + keeps focus",
-                masked0 && noBtn0 && shown && w30 && glyph && peeked && remasked && focusKept,
-                $"masked0={masked0} noBtn0={noBtn0} shown={shown} w30={w30} glyph={glyph} peeked={peeked} remasked={remasked} focus={focusKept}");
+            Check("W0f.1 PasswordBox Peek: no eye on focusing a populated box; typing fresh content shows it (F78D, width 30, TextSecondary); press-and-hold reveals, release re-masks + keeps focus",
+                masked0 && noBtn0 && noBtnOnFocus && shown && w30 && glyph && peeked && remasked && focusKept,
+                $"masked0={masked0} noBtn0={noBtn0} noBtnOnFocus={noBtnOnFocus} shown={shown} w30={w30} glyph={glyph} peeked={peeked} remasked={remasked} focus={focusKept}");
+        }
+
+        // ── W0f.1b — PasswordBox reveal arming (the REAL WinUI ButtonStates rule): the eye appears while TYPING a
+        // new password from empty (CPasswordBox::OnContentChanged arms m_fCanShowRevealButton only on the
+        // empty→non-empty transition, PasswordBox.cpp:366–377; CanInvokeRevealButton = canShow ∧ hasSpace ∧ focused,
+        // PasswordBox.cpp:618–626), and does NOT appear from merely focusing a populated box
+        // (CPasswordBox::OnGotFocus clears m_fCanShowRevealButton, PasswordBox.cpp:572–581). ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-pwt", new Size2(420, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fPasswordProbe { Initial = "" };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            var field = FindRole(scene, scene.Root, AutomationRole.Text);
+
+            ClickNode(host, window, field);
+            host.RunFrame();
+            bool noBtnEmptyFocused = Roles(scene, AutomationRole.Button).Count == 0;   // focused but empty → collapsed
+
+            // Type into the focused empty box — the empty→non-empty content change arms the reveal button
+            // (PasswordBox.cpp:366–377) and it must actually RENDER (F78D glyph, the user-visible eye).
+            foreach (char c in "abc") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            host.RunFrame();
+            int countAfterType = Roles(scene, AutomationRole.Button).Count;
+            bool glyphAfterType = HasGlyph(device, strings, "");   // the reveal eye (PasswordBox_themeresources.xaml:100)
+            bool shownAfterType = countAfterType == 1 && glyphAfterType;
+
+            // Clear to empty → the flag drops (OnContentChanged: IsEmpty ⇒ m_fCanShowRevealButton = FALSE,
+            // PasswordBox.cpp:430–434) and the button unmounts.
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+            Key(Keys.A, KeyModifiers.Ctrl);
+            Key(Keys.Back);
+            host.RunFrame();
+            bool hiddenOnEmpty = Roles(scene, AutomationRole.Button).Count == 0;
+
+            // Typing again from empty re-arms (the empty→non-empty transition, PasswordBox.cpp:366–377).
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
+            host.RunFrame();
+            host.RunFrame();
+            bool rearmed = Roles(scene, AutomationRole.Button).Count == 1;
+            Check("W0f.1b PasswordBox reveal arming: typing from empty shows the eye; focused-empty does not; emptying hides + retype re-arms",
+                noBtnEmptyFocused && shownAfterType && hiddenOnEmpty && rearmed,
+                $"noBtnEmptyFocused={noBtnEmptyFocused} shownAfterType={shownAfterType} (count={countAfterType} glyph={glyphAfterType}) hiddenOnEmpty={hiddenOnEmpty} rearmed={rearmed}");
         }
 
         // ── W0f.2 — PasswordRevealMode matrix: Hidden = no button + masked; Visible = no button + clear; copy blocked ──
@@ -5177,8 +5942,14 @@ static class Slice
             host.RunFrame();
             float closeOp = !surface.IsNull && host.Scene.IsLive(surface) ? host.Scene.Paint(surface).Opacity : 0f;
             float closeScrim = !scrim.IsNull && host.Scene.IsLive(scrim) ? host.Scene.Paint(scrim).Opacity : 0f;
-            bool fading = !surface.IsNull && host.Scene.IsLive(surface) && closeOp < 0.99f
-                && (chrome != PopupChrome.Modal || (!scrim.IsNull && host.Scene.IsLive(scrim) && closeScrim < 0.99f));
+            // The TeachingTip close is the muxc CONTRACT animation: scale 1 → 20/Width over 200ms
+            // cubic-bezier(0.7,0,1,0.5) with NO opacity keyframes (TeachingTip.cpp:1695-1712 contractAnimation;
+            // TeachingTip.h:235 + :306-307) — the host-owned close is a live scale track, not a fade (the ease-in
+            // curve has barely moved at a 16ms sample, so assert the seeded track; 64k samples the kinematics).
+            bool fading = chrome == PopupChrome.TeachingTip
+                ? !surface.IsNull && host.Scene.IsLive(surface) && host.Animation.HasTracks(surface)
+                : !surface.IsNull && host.Scene.IsLive(surface) && closeOp < 0.99f
+                    && (chrome != PopupChrome.Modal || (!scrim.IsNull && host.Scene.IsLive(scrim) && closeScrim < 0.99f));
 
             for (int i = 0; i < 16; i++) { clock.Advance(16f); host.RunFrame(); }
             bool settled = surface.IsNull || !host.Scene.IsLive(surface) || !host.Animation.HasTracks(surface);
@@ -5262,6 +6033,722 @@ static class Slice
             $"flyout=({flyoutClose.Fading},{flyoutClose.Settled},max={flyoutClose.MaxSurface:0.00}) " +
             $"modal=({modalClose.Fading},{modalClose.Settled},card={modalClose.MaxSurface:0.00},scrim={modalClose.MaxScrim:0.00}) " +
             $"tip=({teachingClose.Fading},{teachingClose.Settled},max={teachingClose.MaxSurface:0.00})");
+
+        // ── 64g–64l. Per-kind WinUI motion: KEYFRAME SAMPLES at known t (ManualFrameTimeSource). ──
+        // cubic-bezier(0,0,0,1) (the WinUI "control fast out / slow in" curve used by MenuPopup/Split open) has the
+        // closed form y(x) = 3·x^(2/3) − 2x (P1.x = P2.x = 0 ⇒ x(s) = s³): E(48/250)=0.6144, E(128/250)=0.8960,
+        // E(48/167)=0.7320 — the expected sample values asserted below.
+        {
+            (NodeHandle Surface, OverlayHandle Handle) OpenKind(PopupChrome chrome, float w = 240f, float h = 88f)
+            {
+                NodeHandle body = NodeHandle.Null;
+                var hd = svc.Open(() => root.Anchor,
+                    () => new BoxEl { Width = w, Height = h, Fill = Tok.FillCardDefault, OnRealized = n => body = n },
+                    FlyoutPlacement.BottomLeft,
+                    new PopupOptions(Chrome: chrome));
+                host.RunFrame();   // mount + place + seed (layout effect)
+                host.RunFrame();   // compose the t=0 keyframes
+                NodeHandle s = SurfaceOf(body);
+                if (s.IsNull)      // bare chromes (Raw/TeachingTip) have no acrylic — find the clipping surface box
+                    for (var n = host.Scene.Parent(body); !n.IsNull; n = host.Scene.Parent(n))
+                        if ((host.Scene.Flags(n) & NodeFlags.ClipsToBounds) != 0) { s = n; break; }
+                return (s, hd);
+            }
+            void SettleAll() { for (int i = 0; i < 40; i++) { clock.Advance(16f); host.RunFrame(); } }
+
+            // 64g — menus (MenuPopupThemeTransition load, LayoutTransition_partial.cpp:441-473): clip-translate and
+            // content translate BOTH go ±H·ClosedRatio(0.5) → 0 over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
+            // (MenuPopupThemeTransition_Partial.h:24; cpp:443-444), with NO presenter opacity at load (only the
+            // overlay element fades, cpp:508-519). Unload = 83ms linear fade (cpp:525-531, _Partial.h:23).
+            {
+                var (s, _) = OpenKind(PopupChrome.Flyout);
+                float menuH = host.Scene.Bounds(s).H, slide = menuH * 0.5f;
+                var p0 = host.Scene.Paint(s);
+                bool t0 = Near(p0.ClipRect.Y, slide, 1f) && Near(p0.LocalTransform.Dy, -slide, 1f) && p0.Opacity > 0.99f;
+                clock.Advance(128f); host.RunFrame();
+                var p1 = host.Scene.Paint(s);
+                bool t128 = Near(p1.ClipRect.Y, slide * (1f - 0.8960f), 1f)
+                    && Near(p1.LocalTransform.Dy, -slide * (1f - 0.8960f), 1f) && p1.Opacity > 0.99f;
+                clock.Advance(160f); host.RunFrame();   // t=288 > 250 → settled
+                var p2 = host.Scene.Paint(s);
+                bool tEnd = p2.ClipRect.IsInfinite && Near(p2.LocalTransform.Dy, 0f, 0.1f);
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(48f); host.RunFrame();
+                float op48 = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
+                bool close48 = Near(op48, 1f - 48f / 83f, 0.02f);   // 83ms LINEAR fade → 0.4217 at t=48
+                SettleAll();
+                Check("64g. menu motion samples: clip+translate H/2→0 over 250ms cb(0,0,0,1), no open fade; close = 83ms linear fade",
+                    t0 && t128 && tEnd && close48,
+                    $"t0={t0} (clipT={p0.ClipRect.Y:0.0}/{slide:0.0} dy={p0.LocalTransform.Dy:0.0}) t128={t128} " +
+                    $"(clipT={p1.ClipRect.Y:0.0}≈{slide * 0.104f:0.0}) end={tEnd} close48={close48} (op={op48:0.000}≈{1f - 48f / 83f:0.000})");
+            }
+
+            // 64h — ComboBox dropdown (SplitOpen/SplitCloseThemeAnimation, generic.xaml:9047/9056). Open: the clip
+            // grows from closedRatio 0.50 over 250ms cubic-bezier(0,0,0,1) with NO content translate (the template
+            // sets no ContentTranslationOffset, ThemeAnimations.cpp:692-711) and NO fade (opacity pinned 1,
+            // cpp:684). Close: clip collapses to closedRatio 0.15 over s_CloseDuration=167ms (cpp:741 + 826-828),
+            // opacity fades only during the LAST 83ms (s_OpacityChangeBeginTime = 167−83 = 84,
+            // SplitCloseThemeAnimation_Partial.h:16-18).
+            {
+                var (s, _) = OpenKind(PopupChrome.Dropdown);
+                float ddH = host.Scene.Bounds(s).H;
+                var p0 = host.Scene.Paint(s);
+                bool t0 = Near(p0.ClipRect.H, ddH * 0.5f, 1f) && Near(p0.LocalTransform.Dy, 0f, 0.1f) && p0.Opacity > 0.99f;
+                clock.Advance(128f); host.RunFrame();
+                var p1 = host.Scene.Paint(s);
+                bool t128 = Near(p1.ClipRect.H, ddH * (0.5f + 0.5f * 0.8960f), 1f)
+                    && Near(p1.LocalTransform.Dy, 0f, 0.1f) && p1.Opacity > 0.99f;
+                clock.Advance(160f); host.RunFrame();
+                bool tEnd = host.Scene.Paint(s).ClipRect.IsInfinite;
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(48f); host.RunFrame();
+                var c48 = host.Scene.Paint(s);
+                // t=48 < 84ms begin time → STILL FULLY OPAQUE while the clip is already collapsing: E(48/167)=0.7320
+                // → clipH = H·(1 − 0.85·0.7320) = 0.3778·H.
+                bool close48 = c48.Opacity > 0.99f && Near(c48.ClipRect.H, ddH * (1f - 0.85f * 0.7320f), 1.5f);
+                clock.Advance(64f); host.RunFrame();   // t=112 → fade progress (112−84)/83 = 0.3373
+                float op112 = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
+                bool close112 = Near(op112, 1f - (112f - 84f) / 83f, 0.03f);
+                SettleAll();
+                Check("64h. ComboBox dropdown samples: SplitOpen clip 0.5H→H 250ms no translate/fade; SplitClose 167ms clip→0.15H + fade only after 84ms",
+                    t0 && t128 && tEnd && close48 && close112,
+                    $"t0={t0} (clipH={p0.ClipRect.H:0.0}/{ddH * 0.5f:0.0}) t128={t128} (clipH={p1.ClipRect.H:0.0}≈{ddH * 0.948f:0.0}) " +
+                    $"end={tEnd} close48={close48} (op={c48.Opacity:0.00} clipH={c48.ClipRect.H:0.0}≈{ddH * 0.3778f:0.0}) close112={close112} (op={op112:0.000})");
+            }
+
+            // 64i — Flyout/FlyoutPresenter (PopupThemeTransition → TAS_SHOWPOPUP/TAS_HIDEPOPUP; FlyoutBase attaches it,
+            // FlyoutBase_Partial.cpp:1968-1975). OS PVL ground truth (uxtheme "Animations" storyboard 18/19 dump,
+            // stock Windows 11): TRANSLATE offset→0 over 367ms cubic-bezier(0.1,0.9,0.2,1.0); OPACITY 0→1 with
+            // start=83ms dur=83ms LINEAR (holds 0 for the first 83ms); hide = OPACITY →0 over 83ms linear. The
+            // offset is ±g_entranceThemeOffset = 50px (FlyoutBase_Partial.cpp:68 + 2024-2059): below-anchor starts
+            // 50px above its resting spot.
+            {
+                var (s, _) = OpenKind(PopupChrome.Popup);
+                var p0 = host.Scene.Paint(s);
+                bool t0 = Near(p0.LocalTransform.Dy, -50f, 1f) && p0.Opacity < 0.01f;
+                clock.Advance(48f); host.RunFrame();
+                var p1 = host.Scene.Paint(s);
+                bool t48 = p1.Opacity < 0.01f                       // still inside the 83ms opacity hold
+                    && p1.LocalTransform.Dy > -25f && p1.LocalTransform.Dy < -10f;   // decel curve well underway
+                clock.Advance(80f); host.RunFrame();                // t=128 → fade progress (128−83)/83 = 0.5422
+                var p2 = host.Scene.Paint(s);
+                bool t128 = Near(p2.Opacity, (128f - 83f) / 83f, 0.03f)
+                    && p2.LocalTransform.Dy > -8f && p2.LocalTransform.Dy < -0.5f;
+                clock.Advance(320f); host.RunFrame();               // t=448 > 367 → settled
+                var p3 = host.Scene.Paint(s);
+                bool tEnd = Near(p3.LocalTransform.Dy, 0f, 0.1f) && p3.Opacity > 0.99f;
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(48f); host.RunFrame();
+                float op48 = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
+                bool close48 = Near(op48, 1f - 48f / 83f, 0.02f);   // TAS_HIDEPOPUP: 83ms linear
+                SettleAll();
+                Check("64i. Flyout samples: PopupThemeTransition slide −50→0 over 367ms decel + opacity 0 held 83ms then 83ms linear; close 83ms fade",
+                    t0 && t48 && t128 && tEnd && close48,
+                    $"t0={t0} (dy={p0.LocalTransform.Dy:0.0} op={p0.Opacity:0.00}) t48={t48} (dy={p1.LocalTransform.Dy:0.0} op={p1.Opacity:0.00}) " +
+                    $"t128={t128} (op={p2.Opacity:0.000}≈{(128f - 83f) / 83f:0.000} dy={p2.LocalTransform.Dy:0.0}) end={tEnd} close48={close48} (op={op48:0.000})");
+            }
+
+            // 64j — ToolTip (FadeIn/FadeOutThemeAnimation, the template's Opened/Closed states,
+            // ToolTip_themeresources.xaml:56-70): TAS_FADEIN/TAS_FADEOUT = OPACITY over 167ms LINEAR both ways
+            // (OS PVL storyboard 4/5 dump; WinTheme.cpp:165-182).
+            {
+                var (s, _) = OpenKind(PopupChrome.Raw);
+                clock.Advance(80f); host.RunFrame();
+                float opIn = host.Scene.Paint(s).Opacity;
+                bool in80 = Near(opIn, 80f / 167f, 0.02f);
+                SettleAll();
+                bool inEnd = host.Scene.Paint(s).Opacity > 0.99f;
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(80f); host.RunFrame();
+                float opOut = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
+                bool out80 = Near(opOut, 1f - 80f / 167f, 0.02f);
+                SettleAll();
+                Check("64j. ToolTip samples: FadeIn/FadeOut 167ms linear (TAS_FADEIN/TAS_FADEOUT)",
+                    in80 && inEnd && out80,
+                    $"in80={in80} (op={opIn:0.000}≈{80f / 167f:0.000}) inEnd={inEnd} out80={out80} (op={opOut:0.000}≈{1f - 80f / 167f:0.000})");
+            }
+
+            // 64k — TeachingTip (muxc expand/contract): expand scale Min(0.01, 20/W)→1 over 300ms
+            // cubic-bezier(0.1,0.9,0.2,1) (TeachingTip.cpp:1660-1664; TeachingTip.h:234+304-305); contract 1→20/W
+            // over 200ms cubic-bezier(0.7,0,1,0.5) (cpp:1695-1712; h:235+306-307). NEITHER storyboard has opacity
+            // keyframes — the tip is fully opaque while scaling.
+            {
+                var (s, _) = OpenKind(PopupChrome.TeachingTip, w: 320f, h: 96f);
+                var p0 = host.Scene.Paint(s);
+                bool t0 = Near(p0.LocalTransform.M11, 0.01f, 0.005f) && p0.Opacity > 0.99f;
+                clock.Advance(160f); host.RunFrame();
+                bool mid = host.Scene.Paint(s).Opacity > 0.99f;   // no fade at any point of the expand
+                SettleAll();
+                var pEnd = host.Scene.Paint(s);
+                bool tEnd = Near(pEnd.LocalTransform.M11, 1f, 0.01f) && pEnd.Opacity > 0.99f;
+                svc.CloseTop(); host.RunFrame();
+                clock.Advance(208f); host.RunFrame();             // ≥200ms → contract target reached
+                var pC = host.Scene.Paint(s);
+                bool contracted = !host.Scene.IsLive(s) || Near(pC.LocalTransform.M11, 20f / 320f, 0.01f) || pC.Opacity < 0.01f;
+                SettleAll();
+                Check("64k. TeachingTip samples: expand scale 0.01→1 (300ms), contract →20/W (200ms), NO opacity keyframes",
+                    t0 && mid && tEnd && contracted,
+                    $"t0={t0} (sx={p0.LocalTransform.M11:0.000}) mid={mid} end={tEnd} (sx={pEnd.LocalTransform.M11:0.00}) contracted={contracted}");
+            }
+
+            // 64l — AutoSuggestBox suggestions (a bare WinUI Popup, no TransitionCollection in the template and
+            // AutoSuggestBox_Partial.cpp attaches none): NO open/close animation — instant in, instant out.
+            {
+                var (s, _) = OpenKind(PopupChrome.Static);
+                var p0 = host.Scene.Paint(s);
+                bool instantIn = p0.Opacity > 0.99f && p0.ClipRect.IsInfinite
+                    && Near(p0.LocalTransform.Dy, 0f, 0.1f) && !host.Animation.HasTracks(s);
+                svc.CloseTop(); host.RunFrame();
+                bool instantOut = !host.Scene.IsLive(s) || host.Scene.Paint(s).Opacity < 0.01f;
+                SettleAll();
+                Check("64l. AutoSuggest popup: bare Popup — no open/close animation (instant show/hide)",
+                    instantIn && instantOut, $"in={instantIn} out={instantOut}");
+            }
+        }
+    }
+
+    // ── E4 — popup windowing: out-of-bounds popup WINDOWS (WinUI windowed CPopup — Popup_Partial.cpp:951-970,
+    // FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup), monitor work-area placement (FlyoutBase_Partial.cpp:
+    // 3382-3392 useMonitorBounds), window-deactivation light dismiss (Popup_Partial.h:38 DismissalTriggerFlags),
+    // the full FlyoutPlacementMode matrix + fallback (FlyoutBase_Partial.cpp:2503-2659), ToolTipService timing
+    // (ToolTipService_Partial.cpp:1771-1780), focus-restore-at-close-START (Popup_Partial.h:63-64 SavedFocusState)
+    // and nested cascade close (MenuFlyoutSubItem child-first close order). All headless.
+    static void E4PopupWindowingChecks(StringTable strings)
+    {
+        // e4popup.1 — WindowBlur (WM_ACTIVATE WA_INACTIVE) closes every LIGHT-DISMISS overlay; Modal (ContentDialog)
+        // and None (ToolTip) stay. WinUI: DismissalTriggerFlags::WindowDeactivated is part of the default
+        // light-dismiss trigger set (Popup_Partial.h:38); ContentDialog's modal popup excludes it; ToolTipService
+        // owns its tooltip's close itself.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4blur", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+
+            static Func<Element> Body(string label) => () => new BoxEl
+            {
+                Width = 120, Height = 40,
+                Children = [new TextEl(label) { Size = 12f }],
+            };
+            var light = svc.Open(() => root.Anchor, Body("ld-body"), FlyoutPlacement.BottomLeft);
+            var modal = svc.Open(() => root.Anchor, Body("modal-body"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
+            var none = svc.Open(() => root.Anchor, Body("none-body"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            host.RunFrame();
+            bool allOpen = !FindTextNode(host.Scene, strings, host.Scene.Root, "ld-body").IsNull
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "modal-body").IsNull
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "none-body").IsNull;
+
+            window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0));
+            host.RunFrame();
+            bool lightClosedNow = !light.IsOpen && modal.IsOpen && none.IsOpen;
+            for (int i = 0; i < 20; i++) host.RunFrame();   // the 83ms close fade settles → entry finalized
+            bool after = FindTextNode(host.Scene, strings, host.Scene.Root, "ld-body").IsNull
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "modal-body").IsNull
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "none-body").IsNull;
+            Check("e4popup.1 WindowBlur closes light-dismiss overlays only (Modal + None stay)",
+                allOpen && lightClosedNow && after,
+                $"allOpen={allOpen} closedNow={lightClosedNow} after={after}");
+        }
+
+        // e4popup.2 — work-area clamp math (pure FlyoutPositioner). Windowed popups collide against the MONITOR work
+        // area passed as the container (FlyoutBase_Partial.cpp:3382-3392) and skip the final min-edge clamp
+        // (cpp:2648-2653 — applied to non-windowed popups only), so they may extend above/left of the window.
+        {
+            // (a) min-edge clamp: a flyout fitting EXACTLY above lands at container-top − FlyoutMargin(4) after the
+            // margin shift (cpp:2622-2646); non-windowed clamps back to the container origin, windowed keeps −4.
+            var anchorA = new RectF(100, 60, 80, 20);
+            var view = new RectF(0, 0, 480, 360);
+            var pcA = FlyoutPositioner.Place(anchorA, new Size2(100, 60), view, FlyoutPlacement.TopEdgeAlignedLeft, isWindowed: false);
+            var pwA = FlyoutPositioner.Place(anchorA, new Size2(100, 60), view, FlyoutPlacement.TopEdgeAlignedLeft, isWindowed: true);
+            bool minEdge = Near(pcA.X, 100) && Near(pcA.Y, 0) && pcA.OpensUp
+                        && Near(pwA.X, 100) && Near(pwA.Y, -4) && pwA.OpensUp;
+
+            // (b) monitor container vs viewport: an anchor near the window top fits ABOVE against the work area
+            // (negative window-DIP coords) but must FLIP BELOW when constrained to the viewport.
+            var anchorB = new RectF(10, 10, 50, 20);
+            var workB = new RectF(-500, -300, 1000, 400);
+            var pwB = FlyoutPositioner.Place(anchorB, new Size2(100, 50), workB, FlyoutPlacement.TopEdgeAlignedLeft, isWindowed: true);
+            var pcB = FlyoutPositioner.Place(anchorB, new Size2(100, 50), view, FlyoutPlacement.TopEdgeAlignedLeft, isWindowed: false);
+            bool monitor = pwB.OpensUp && Near(pwB.X, 10) && Near(pwB.Y, 10 - 50 - 4)
+                        && !pcB.OpensUp && Near(pcB.Y, 30 + 4) && pcB.Placement == FlyoutPlacement.BottomEdgeAlignedLeft;
+
+            // (c) secondary-axis clamp INTO the work area: a left-justified popup wider than the space right of the
+            // anchor slides left to stay on the monitor (TestAndCenterAlignWithinLimits clamp, cpp:415-483).
+            var anchorC = new RectF(940, 50, 50, 20);
+            var workC = new RectF(0, 0, 1000, 400);
+            var pwC = FlyoutPositioner.Place(anchorC, new Size2(200, 60), workC, FlyoutPlacement.BottomEdgeAlignedLeft, isWindowed: true);
+            bool secondary = Near(pwC.X, 800) && Near(pwC.Y, 74) && !pwC.OpensUp;
+
+            Check("e4popup.2 work-area clamp math: windowed skips the min-edge clamp, collides vs the monitor rect, clamps the secondary axis",
+                minEdge && monitor && secondary,
+                $"minEdge={minEdge} monitor={monitor} secondary={secondary} (pwA.Y={pwA.Y:0.#} pwB.Y={pwB.Y:0.#} pwC.X={pwC.X:0.#})");
+        }
+
+        // e4popup.3 — the windowed-popup headless pipeline: PopupOptions.ConstrainToRootBounds=false leases a PAL
+        // popup window + its own swapchain, the subtree records into ITS OWN DrawList re-origined to the popup's
+        // (0,0) (SceneRecorder.RecordSubtree) while the MAIN record skips it (skipRoots); default (true) keeps
+        // today's in-window path, and PopupWindowsEnabled=false falls back silently (CPopup::
+        // DoesPlatformSupportWindowedPopup == false, FlyoutBase_Partial.cpp:3188).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4win", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+            var anchorRect = host.Scene.AbsoluteRect(root.Anchor);
+
+            var hWin = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 180, Height = 80, Children = [new TextEl("popup-window-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
+            host.RunFrame();
+
+            bool leased = host.PopupWindows.Count == 1 && app.PopupWindows.Count == 1;
+            PopupWindowSlot? slot = host.PopupWindows.Count > 0 ? host.PopupWindows[0] : null;
+            HeadlessPopupWindow? pal = app.PopupWindows.Count > 0 ? app.PopupWindows[0] : null;
+            bool shown = pal is { IsShown: true } && pal.ShowCount >= 1;
+            // BottomLeft = below the anchor + FlyoutMargin 4; window scale 1 + client origin (0,0) ⇒ px == DIP.
+            bool placed = slot is not null && pal is not null
+                && Near(slot.BoundsDip.X, anchorRect.X) && Near(slot.BoundsDip.Y, anchorRect.Bottom + FlyoutPositioner.FlyoutMargin)
+                && slot.BoundsDip.W >= 180f && slot.BoundsDip.H >= 80f
+                && Near(pal.BoundsPx.X, slot.BoundsDip.X) && Near(pal.BoundsPx.Y, slot.BoundsDip.Y)
+                && Near(pal.BoundsPx.W, slot.BoundsDip.W) && Near(pal.BoundsPx.H, slot.BoundsDip.H);
+
+            for (int i = 0; i < 20; i++) host.RunFrame();   // the 250ms open clip-reveal settles → full content records
+
+            var scratch = new HeadlessGpuDevice();          // decode the popup's own DrawList
+            if (slot is not null)
+                scratch.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
+                    new FrameInfo(new Size2(slot.BoundsDip.W, slot.BoundsDip.H), 1f, default));
+            bool routed = HasGlyph(scratch, strings, "popup-window-body");
+            bool reorigined = scratch.LastLayers.Count > 0   // the acrylic surface layer sits at the popup's own (0,0)
+                && Near(scratch.LastLayers[0].DeviceRect.X, 0f, 1.5f) && Near(scratch.LastLayers[0].DeviceRect.Y, 0f, 1.5f);
+            bool mainSkips = !HasGlyph(device, strings, "popup-window-body") && HasGlyph(device, strings, "anchor")
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "popup-window-body").IsNull;   // scene keeps it (hit-test)
+            bool presented = slot?.Swapchain is HeadlessSwapchain sc && sc.PresentCount >= 1;
+
+            // Default (ConstrainToRootBounds = true): in-window popup — no window lease, content in the MAIN DrawList.
+            var hIn = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("inwin-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft);
+            host.RunFrame();
+            bool defaultInWindow = app.PopupWindows.Count == 1 && HasGlyph(device, strings, "inwin-body");
+            hIn.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            // Close: a CLOSING entry keeps its popup window while it fades; the lease releases with the entry.
+            hWin.Close();
+            host.RunFrame();   // 16ms into the 83ms fade
+            bool keptWhileFading = host.PopupWindows.Count == 1 && pal is { IsShown: true };
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool released = host.PopupWindows.Count == 0 && pal is { Disposed: true, IsShown: false };
+
+            // PopupWindowsEnabled = false (the DoesPlatformSupportWindowedPopup gate): silent constrained fallback.
+            host.PopupWindowsEnabled = false;
+            var hFb = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("fb-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool fallback = app.PopupWindows.Count == 1 && HasGlyph(device, strings, "fb-body");
+            hFb.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            Check("e4popup.3 windowed popup: PAL lease + own DrawList/swapchain, main record skips the subtree; default + disabled stay in-window",
+                leased && shown && placed && routed && reorigined && mainSkips && presented
+                && defaultInWindow && keptWhileFading && released && fallback,
+                $"leased={leased} shown={shown} placed={placed} routed={routed} reorig={reorigined} skip={mainSkips} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
+        }
+
+        // e4popup.4 — the GetWorkArea seam through the host: the work-area query lands at the anchor's centre in
+        // physical virtual-screen px (client origin + scale, IPlatformWindow.ClientOriginPx), the windowed popup
+        // flips ABOVE because the MONITOR (not the viewport) has no room below, may take negative window-DIP Y
+        // (out-of-bounds), and the PAL window bounds round-trip DIP→px. A constrained popup at the same anchor
+        // stays BELOW (the viewport has room) — the monitor flip is windowed-only behavior.
+        {
+            using var app = new HeadlessPlatformApp();
+            Point2 queried = default;
+            app.WorkAreaResolver = p => { queried = p; return new RectF(0f, 0f, 2000f, 800f); };
+            var window = new HeadlessWindow(new WindowDesc("e4wa", new Size2(960, 720), 2f)) { ClientOriginPx = new Point2(1000f, 600f) };
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+            var anchorRect = host.Scene.AbsoluteRect(root.Anchor);   // (20,20,120,32) DIP
+
+            var hWin = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 180, Height = 80, Children = [new TextEl("wa-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
+            host.RunFrame();
+
+            bool leased = host.PopupWindows.Count == 1 && app.PopupWindows.Count == 1;
+            PopupWindowSlot? slot = host.PopupWindows.Count > 0 ? host.PopupWindows[0] : null;
+            HeadlessPopupWindow? pal = app.PopupWindows.Count > 0 ? app.PopupWindows[0] : null;
+            bool query = Near(queried.X, 1000f + (anchorRect.X + anchorRect.W * 0.5f) * 2f)
+                      && Near(queried.Y, 600f + (anchorRect.Y + anchorRect.H * 0.5f) * 2f);
+            float hDip = slot?.BoundsDip.H ?? 0f;
+            // Work area px (0,0,2000,800) → window DIP (−500,−300,1000,400): monitor bottom = 100 DIP < the popup's
+            // below-anchor bottom ⇒ flips ABOVE the anchor, past the window top (negative DIP Y).
+            bool flipped = slot is not null
+                && Near(slot.BoundsDip.Y, anchorRect.Y - hDip - FlyoutPositioner.FlyoutMargin) && slot.BoundsDip.Y < 0f;
+            bool px = slot is not null && pal is not null
+                && Near(pal.BoundsPx.X, 1000f + anchorRect.X * 2f) && Near(pal.BoundsPx.Y, 600f + slot.BoundsDip.Y * 2f)
+                && Near(pal.BoundsPx.W, slot.BoundsDip.W * 2f) && Near(pal.BoundsPx.H, hDip * 2f);
+            bool inWork = pal is not null && pal.BoundsPx.Y >= 0f && pal.BoundsPx.Y + pal.BoundsPx.H <= 800f;
+
+            var hIn = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 180, Height = 80, Children = [new TextEl("wa-in-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            var inBody = FindTextNode(host.Scene, strings, host.Scene.Root, "wa-in-body");
+            bool constrainedBelow = !inBody.IsNull && host.Scene.AbsoluteRect(inBody).Y > anchorRect.Bottom;
+
+            Check("e4popup.4 GetWorkArea seam: px query at the anchor centre, monitor flip above the window (negative DIP Y), DIP→px bounds round-trip",
+                leased && query && flipped && px && inWork && constrainedBelow,
+                $"leased={leased} query={query}@({queried.X:0.#},{queried.Y:0.#}) flip={flipped}(dipY={slot?.BoundsDip.Y ?? 0f:0.#}) px={px} inWork={inWork} below={constrainedBelow}");
+        }
+
+        // e4popup.5 — the 8 edge-aligned FlyoutPlacementMode variants (FlyoutBase_Partial.cpp:84-110 major side +
+        // :78-113 edge justification; TryPlacement cpp:415-483) with room on every side: exact rects including the
+        // FlyoutMargin 4 shift away from the anchor (cpp:65 + 2622-2646).
+        {
+            var anchor = new RectF(200, 150, 80, 40);
+            var c = new RectF(0, 0, 600, 500);
+            var size = new Size2(100, 60);
+            bool At(FlyoutPlacement p, float x, float y, bool up)
+            {
+                var r = FlyoutPositioner.Place(anchor, size, c, p, isWindowed: false);
+                return Near(r.X, x) && Near(r.Y, y) && r.OpensUp == up && r.Placement == p;
+            }
+            bool tal = At(FlyoutPlacement.TopEdgeAlignedLeft, 200, 86, true);       // y = 150−60−4
+            bool tar = At(FlyoutPlacement.TopEdgeAlignedRight, 180, 86, true);      // x = 280−100
+            bool bal = At(FlyoutPlacement.BottomEdgeAlignedLeft, 200, 194, false);  // y = 190+4
+            bool bar = At(FlyoutPlacement.BottomEdgeAlignedRight, 180, 194, false);
+            bool lat = At(FlyoutPlacement.LeftEdgeAlignedTop, 96, 150, false);      // x = 200−100−4
+            bool lab = At(FlyoutPlacement.LeftEdgeAlignedBottom, 96, 130, false);   // y = 190−60
+            bool rat = At(FlyoutPlacement.RightEdgeAlignedTop, 284, 150, false);    // x = 280+4
+            bool rab = At(FlyoutPlacement.RightEdgeAlignedBottom, 284, 130, false);
+            Check("e4popup.5 the 8 edge-aligned placements produce the exact WinUI rects (major side + edge justify + FlyoutMargin 4)",
+                tal && tar && bal && bar && lat && lab && rat && rab,
+                $"TAL={tal} TAR={tar} BAL={bal} BAR={bar} LAT={lat} LAB={lab} RAT={rat} RAB={rab}");
+        }
+
+        // e4popup.6 — PerformPlacementWithFallback (FlyoutBase_Partial.cpp:488-537; per-side order cpp:2559-2593):
+        // a side that can't fit walks its fallback order and REPORTS the effective placement; an edge justification
+        // survives a vertical↔vertical (or horizontal↔horizontal) flip and centers on a perpendicular fallback.
+        {
+            var c = new RectF(0, 0, 600, 500);
+            var size = new Size2(100, 60);
+
+            var low = new RectF(50, 440, 80, 20);     // no room below → Bottom flips to Top, Left justify kept
+            var pb = FlyoutPositioner.Place(low, size, c, FlyoutPlacement.BottomEdgeAlignedLeft, isWindowed: false);
+            bool flipUp = pb.OpensUp && Near(pb.X, 50) && Near(pb.Y, 376) && pb.Placement == FlyoutPlacement.TopEdgeAlignedLeft;
+
+            var right = new RectF(520, 100, 60, 30);  // no room right → Right flips to Left (order R,L,T,B), Top justify kept
+            var pr = FlyoutPositioner.Place(right, size, c, FlyoutPlacement.RightEdgeAlignedTop, isWindowed: false);
+            bool flipLeft = !pr.OpensUp && Near(pr.X, 416) && Near(pr.Y, 100) && pr.Placement == FlyoutPlacement.LeftEdgeAlignedTop;
+
+            var wide = new RectF(10, 200, 280, 30);   // Left AND Right blocked → 3rd choice Top (order L,R,T,B), centered
+            var narrow = new RectF(0, 0, 300, 500);
+            var pt = FlyoutPositioner.Place(wide, size, narrow, FlyoutPlacement.Left, isWindowed: false);
+            bool thirdChoice = pt.OpensUp && Near(pt.X, 100) && Near(pt.Y, 136) && pt.Placement == FlyoutPlacement.Top;
+
+            Check("e4popup.6 placement fallback: Bottom→Top and Right→Left flips keep the justification; a blocked Left walks to Top centered",
+                flipUp && flipLeft && thirdChoice,
+                $"flipUp={flipUp} flipLeft={flipLeft} third={thirdChoice} (pb=({pb.X:0.#},{pb.Y:0.#}) pr=({pr.X:0.#},{pr.Y:0.#}) pt=({pt.X:0.#},{pt.Y:0.#}))");
+        }
+
+        // e4popup.7 — ToolTipService timing (ToolTipService_Partial.cpp:1771-1780): mouse initial show delay =
+        // SPI_GETMOUSEHOVERTIME(400) × 2 = 800ms; auto-dismiss after SPI_GETMESSAGEDURATION = 5s
+        // (DEFAULT_SHOW_DURATION_SECONDS, ToolTipService_Partial.h:19; the close timer is armed on automatic open,
+        // cpp:429-459); a re-hover within BETWEEN_SHOW_DELAY_MS 200ms of the close (cpp:659, .h:17) uses the RESHOW
+        // delay = 400ms — ×1, because the shipping static_cast<INT64>(1.5) truncates (cpp:1775).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4tip", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new E4ToolTipProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+
+            bool TipOpen() => !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-body").IsNull;
+            void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
+            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
+            // 0-dt frames: a just-seeded AnimEngine track consumes no dt on its FIRST tick (AnimEngine.cs JustSeeded —
+            // idle time pending before the seed must not run a track early), and a finished track frees at the END of
+            // the tick that crossed it with the clock firing one passive pass later. Polling at dt=0 drains that
+            // frame-granularity latency WITHOUT advancing the clock — the ms thresholds below stay exact.
+            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }
+
+            Hover(50f, 50f);                  // pointer enters the target → the 800ms show-delay clock arms
+            Poll();                           // the countdown track seeds + clears JustSeeded at 0ms
+            Step(700f);
+            Poll();
+            bool notAt700 = !TipOpen();       // 700ms < 800 — must still be closed
+            Step(150f);                       // 850ms total ≥ 800 → the delay elapses
+            Poll();
+            bool openAt800 = TipOpen();
+
+            Poll();                           // the 5s auto-dismiss clock seeds with the open bubble
+            Step(4800f);                      // dwell: 4.8s of the 5s auto-dismiss window
+            Poll();
+            bool stillOpenAt4800 = TipOpen();
+            Step(300f);                       // ≥ 5000 → auto-dismiss fires
+            Poll();
+            for (int i = 0; i < 4; i++) Step(80f);   // the FadeOut (167ms) settles → bubble removed
+            Poll();
+            bool autoClosed = !TipOpen();
+
+            Hover(52f, 50f);                  // re-hover < 200ms (wall) after the close → RESHOW delay (400ms)
+            Poll();
+            Step(300f);
+            Poll();
+            bool reshowNotAt300 = !TipOpen(); // 300ms < 400 — must still be closed
+            Step(150f);                       // 450ms ≥ 400 → fires (an un-truncated 1.5× = 600ms would still be closed)
+            Poll();
+            bool reshowAt400 = TipOpen();
+
+            Check("e4popup.7 ToolTip timing: 800ms initial show, 5s auto-dismiss, 400ms reshow inside the 200ms window",
+                notAt700 && openAt800 && stillOpenAt4800 && autoClosed && reshowNotAt300 && reshowAt400,
+                $"!700={notAt700} 800={openAt800} dwell={stillOpenAt4800} auto={autoClosed} !300={reshowNotAt300} 400={reshowAt400}");
+        }
+
+        // e4popup.8 — focus restores to the pre-open node when the close STARTS, not when the fade finishes: WinUI
+        // restores the popup's SavedFocusState synchronously in Hide()/CPopup::Close (Popup_Partial.h:63-64;
+        // FlyoutBase returns focus to the invoker on Hide, not after the close animation) — the popup is still on
+        // screen fading while the invoker already has focus back.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4focus", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+
+            ClickNode(host, window, root.Anchor);   // pre-open focus = the anchor
+            bool anchorFocused0 = (host.Scene.Flags(root.Anchor) & NodeFlags.Focused) != 0;
+
+            NodeHandle body = default;
+            var h = svc.Open(() => root.Anchor, () => new BoxEl
+            {
+                Width = 140, Height = 60, Padding = Edges4.All(10),
+                Children = [new BoxEl { Width = 100, Height = 24, Role = AutomationRole.Button, OnClick = () => { }, OnRealized = n => body = n }],
+            }, FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 18; i++) host.RunFrame();   // the open reveal settles
+            ClickNode(host, window, body);                  // focus moves INTO the popup
+            bool movedIn = (host.Scene.Flags(body) & NodeFlags.Focused) != 0;
+
+            h.Close();   // the restore happens HERE — synchronously at close start
+            bool restoredAtCloseStart = (host.Scene.Flags(root.Anchor) & NodeFlags.Focused) != 0;
+            bool stillFadingNow = host.Scene.IsLive(body) && !h.IsOpen;
+            host.RunFrame();   // 16ms into the 83ms fade — the popup is still alive on screen
+            bool fadingAfterFrame = host.Scene.IsLive(body);
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool removed = !host.Scene.IsLive(body) && (host.Scene.Flags(root.Anchor) & NodeFlags.Focused) != 0;
+
+            Check("e4popup.8 focus restores at close START (popup still fading) and survives the removal",
+                anchorFocused0 && movedIn && restoredAtCloseStart && stillFadingNow && fadingAfterFrame && removed,
+                $"pre={anchorFocused0} in={movedIn} atStart={restoredAtCloseStart} fading={stillFadingNow}/{fadingAfterFrame} removed={removed}");
+        }
+
+        // e4popup.9 — nested cascade close (WinUI MenuFlyoutSubItem close order): closing the parent closes its
+        // children FIRST; each level restores its own saved focus, so the chain unwinds child → parent content →
+        // original invoker; both windowed-popup leases release with their entries.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4cascade", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+            ClickNode(host, window, root.Anchor);   // pre-open focus = the anchor
+
+            NodeHandle pItem = default, cItem = default;
+            OverlayHandle? hChild = null;
+            var hParent = svc.Open(() => root.Anchor, () => new BoxEl
+            {
+                Width = 160, Height = 80, Padding = Edges4.All(8),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 120, Height = 24, Role = AutomationRole.MenuItem, OnRealized = n => pItem = n,
+                        OnClick = () => hChild = svc.Open(() => pItem, () => new BoxEl
+                        {
+                            Width = 120, Height = 50,
+                            Children = [new BoxEl { Width = 100, Height = 24, Role = AutomationRole.MenuItem, OnClick = () => { }, OnRealized = n2 => cItem = n2 }],
+                        }, FlyoutPlacement.RightEdgeAlignedTop, new PopupOptions { ConstrainToRootBounds = false }),
+                    },
+                ],
+            }, FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
+            for (int i = 0; i < 18; i++) host.RunFrame();   // parent open settles
+
+            ClickNode(host, window, pItem);                  // focuses the item + opens the windowed child
+            for (int i = 0; i < 18; i++) host.RunFrame();    // child open settles
+            bool bothLeased = app.PopupWindows.Count == 2 && host.PopupWindows.Count == 2;
+
+            ClickNode(host, window, cItem);                  // focus moves into the CHILD popup
+            bool inChild = (host.Scene.Flags(cItem) & NodeFlags.Focused) != 0;
+
+            hParent.Close();
+            bool cascade = !hParent.IsOpen && hChild is { IsOpen: false };
+            // Child closed first: its restore put focus on pItem (inside the parent wrapper), so the parent's restore
+            // then chained to the original anchor — a parent-first order would strand focus on pItem.
+            bool chained = (host.Scene.Flags(root.Anchor) & NodeFlags.Focused) != 0;
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool released = host.PopupWindows.Count == 0
+                && app.PopupWindows.Count == 2 && app.PopupWindows[0].Disposed && app.PopupWindows[1].Disposed;
+            bool gone = !host.Scene.IsLive(pItem) && !host.Scene.IsLive(cItem);
+
+            Check("e4popup.9 cascade close: parent close closes children first, focus chains back to the invoker, windowed leases release",
+                bothLeased && inChild && cascade && chained && released && gone,
+                $"leased={bothLeased} inChild={inChild} cascade={cascade} chained={chained} released={released} gone={gone}");
+        }
+    }
+
+    // 64m — every WinUI transient surface records the ONE default acrylic recipe (PushLayer cmd) in BOTH themes.
+    // WinUI ground truth (AcrylicBrush_themeresources.xaml): AcrylicBackgroundFillColorDefaultBrush ==
+    // AcrylicInAppFillColorDefaultBrush =
+    //   dark  "Default": TintColor #2C2C2C, TintOpacity 0.15, TintLuminosityOpacity 0.96, FallbackColor #2C2C2C
+    //   light "Light":   TintColor #FCFCFC, TintOpacity 0.0,  TintLuminosityOpacity 0.85, FallbackColor #F9F9F9
+    // Carried by: FlyoutPresenterBackground (FlyoutPresenter_themeresources.xaml:5/15), the MenuFlyout system
+    // backdrop AcrylicBackgroundFillColorDefaultBackdrop (MenuFlyout_themeresources.xaml:264+271),
+    // ComboBoxDropDownBackground (ComboBox_themeresources.xaml:63/273), AutoSuggestBoxSuggestionsListBackground
+    // (AutoSuggestBox_themeresources.xaml:5/17) and ToolTipBackgroundBrush (ToolTip_themeresources.xaml:14/40).
+    // The FALLBACK color in the PushLayer cmd is the solid paint when blur is unavailable (AcrylicBrush FallbackColor).
+    static void FlyoutAcrylicChecks(StringTable strings)
+    {
+        try
+        {
+            foreach (var (kind, label) in new[] { (ThemeKind.Dark, "dark"), (ThemeKind.Light, "light") })
+            {
+                Tok.Use(kind);
+                ColorF tint = kind == ThemeKind.Dark ? ColorF.FromRgba(0x2C, 0x2C, 0x2C) : ColorF.FromRgba(0xFC, 0xFC, 0xFC);
+                ColorF fall = kind == ThemeKind.Dark ? ColorF.FromRgba(0x2C, 0x2C, 0x2C) : ColorF.FromRgba(0xF9, 0xF9, 0xF9);
+                float tintOp = kind == ThemeKind.Dark ? 0.15f : 0.0f;
+                float lumOp = kind == ThemeKind.Dark ? 0.96f : 0.85f;
+
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("acry-" + label, new Size2(480, 400), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                var root = new OverlayProbe();
+                using var host = new AppHost(app, window, device, fonts, strings, root);
+                host.RunFrame();
+                var svc = root.Service!;
+
+                bool SurfaceLayerOk(PopupChrome chrome)
+                {
+                    var hd = svc.Open(() => root.Anchor,
+                        () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                        FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: chrome));
+                    host.RunFrame();
+                    host.RunFrame();
+                    bool found = false;
+                    foreach (var l in device.LastLayers)
+                        if (ColorClose(l.Tint, tint, 0.004f) && ColorClose(l.Fallback, fall, 0.004f)
+                            && Near(l.TintOpacity, tintOp, 0.005f) && Near(l.LuminosityOpacity, lumOp, 0.005f)
+                            && Near(l.BlurSigma, 30f, 0.5f) && l.NoiseOpacity > 0f)
+                            found = true;
+                    hd.Close();
+                    for (int i = 0; i < 16; i++) host.RunFrame();
+                    return found;
+                }
+
+                bool menuOk = SurfaceLayerOk(PopupChrome.Flyout);      // MenuFlyoutPresenter (system backdrop recipe)
+                bool comboOk = SurfaceLayerOk(PopupChrome.Dropdown);   // ComboBox PopupBorder
+                bool suggestOk = SurfaceLayerOk(PopupChrome.Static);   // AutoSuggestBox SuggestionsContainer
+                bool flyoutOk = SurfaceLayerOk(PopupChrome.Popup);     // FlyoutPresenter
+                // ToolTip + the Slider value tip bind Tok.AcrylicFlyout directly (ToolTip.cs BubbleContent /
+                // Slider.cs TipBubble) — assert the token equals the WinUI recipe so those surfaces are covered too.
+                var spec = Tok.AcrylicFlyout;
+                bool tokenOk = ColorClose(spec.Tint, tint, 0.004f) && ColorClose(spec.Fallback, fall, 0.004f)
+                    && Near(spec.TintOpacity, tintOp, 0.005f) && Near(spec.LuminosityOpacity, lumOp, 0.005f);
+                Check($"64m. {label} flyout acrylic: PushLayer tint/fallback/tint-opacity/luminosity match the WinUI default acrylic on every transient surface",
+                    menuOk && comboOk && suggestOk && flyoutOk && tokenOk,
+                    $"menu={menuOk} combo={comboOk} suggest={suggestOk} flyout={flyoutOk} token={tokenOk}");
+            }
+        }
+        finally { Tok.Use(ThemeKind.Dark); }
+    }
+
+    // 64n — the in-app acrylic effect runner's portable math (FluentGpu.Render AcrylicBackdropMath; consumed by the
+    // D3D12 AcrylicCompositor's PushLayer{Acrylic} schedule: region snapshot → pooled downsampled RT → two-pass
+    // separable gaussian → WinUI composite). WinUI ground truth: microsoft-ui-xaml AcrylicBrush.h:64
+    // sc_blurRadius = 30.0f applied as GaussianBlurEffect.BlurAmount (= gaussian STANDARD DEVIATION in DIPs,
+    // AcrylicBrush.cpp:521-525). The runner reproduces sigma = 30·dpiScale physical px with ONE fixed kernel by
+    // choosing the snapshot downsample factor (down · KernelSigma == sigmaPhys). The composited GPU pixels themselves
+    // are needs-pixels (manual --shot) — these checks pin every number the leaf composites with.
+    static void AcrylicBackdropMathChecks()
+    {
+        var off = AcrylicBackdropMath.TapOffsets;
+        var wgt = AcrylicBackdropMath.TapWeights;
+        double mass = wgt[0];                                        // total kernel mass: center + 2·(mirrored taps)
+        double variance = 0;
+        for (int i = 1; i < wgt.Length; i++) { mass += 2.0 * wgt[i]; variance += 2.0 * wgt[i] * off[i] * off[i]; }
+        double sigma = Math.Sqrt(variance);                          // effective std-dev of the folded bilinear kernel
+        bool monotone = true;
+        for (int i = 2; i < off.Length; i++) if (off[i] <= off[i - 1]) monotone = false;
+        Check("64n. acrylic blur kernel: normalized symmetric linear-tap gaussian at the fixed sigma the /down schedule assumes",
+            off.Length == AcrylicBackdropMath.TapCount && wgt.Length == AcrylicBackdropMath.TapCount
+            && off[0] == 0f && monotone && off[^1] <= AcrylicBackdropMath.KernelRadius
+            && Math.Abs(mass - 1.0) < 1e-4 && Math.Abs(sigma - AcrylicBackdropMath.KernelSigma) < 0.25,
+            $"taps={off.Length} mass={mass:0.00000} sigma={sigma:0.000} (kernel sigma {AcrylicBackdropMath.KernelSigma})");
+
+        // down(BlurSigma=30 DIP) ⇒ effective full-res sigma = down·KernelSigma = 30·scale physical px, exactly
+        // reproducing AcrylicBrush.h:64 sc_blurRadius at the common DPI scales ("downsample /2 or /4" + DPI-aware).
+        bool downOk = AcrylicBackdropMath.DownsampleFactor(30f, 1f) == 4       // 4·7.5  = 30  phys px @ 100%
+            && AcrylicBackdropMath.DownsampleFactor(30f, 1.5f) == 6            // 6·7.5  = 45  phys px @ 150%
+            && AcrylicBackdropMath.DownsampleFactor(30f, 2f) == 8              // 8·7.5  = 60  phys px @ 200%
+            && AcrylicBackdropMath.DownsampleFactor(15f, 1f) == 2              // smaller sigma ⇒ /2
+            && AcrylicBackdropMath.DownsampleFactor(120f, 2f) == 8;            // clamped at /8
+        Check("64n2. acrylic downsample factor: down·KernelSigma reproduces WinUI BlurAmount 30 DIP across DPI scales (clamped /8)",
+            downOk,
+            $"down@1x={AcrylicBackdropMath.DownsampleFactor(30f, 1f)} @1.5x={AcrylicBackdropMath.DownsampleFactor(30f, 1.5f)} @2x={AcrylicBackdropMath.DownsampleFactor(30f, 2f)}");
+
+        // Snapshot region: the layer rect inflated by the FULL blur support (KernelRadius·down phys px) on every side
+        // (so blurred texels under the rect see real backdrop — bit-identical to blurring the whole backdrop inside
+        // the rect), clamped to the canvas at window edges.
+        int pad = AcrylicBackdropMath.KernelRadius * 4;   // 88 px at /4
+        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 200f, 120f), 1f, 4, 1920, 1080, out int x, out int y, out int w, out int h);
+        bool interiorOk = x == 200 - pad && y == 160 - pad && w == 200 + 2 * pad && h == 120 + 2 * pad;
+        AcrylicBackdropMath.SnapshotRegion(new RectF(2f, 2f, 60f, 40f), 1f, 4, 480, 400, out int cx, out int cy, out int cw, out int ch);
+        bool clampOk = cx == 0 && cy == 0 && cw == 2 + 60 + pad && ch == 2 + 40 + pad;   // left/top clamped at the canvas edge
+        int pad8 = AcrylicBackdropMath.KernelRadius * 8;  // 176 px at /8 (200% DPI)
+        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 100f, 60f), 2f, 8, 4000, 4000, out int sx, out int sy, out int sw, out int sh);
+        bool scaleOk = sx == 400 - pad8 && sy == 320 - pad8 && sw == 200 + 2 * pad8 && sh == 120 + 2 * pad8;   // DIP→phys at 200% DPI
+        Check("64n3. acrylic snapshot region: rect inflated by the full kernel support and clamped to the canvas (phys px, DPI-aware)",
+            interiorOk && clampOk && scaleOk, $"interior={interiorOk} clamp={clampOk} scale={scaleOk}");
+
+        // LayerPool size buckets (gpu-renderer.md §7.1 quantized pow2 buckets, floor 64): monotone, covering, few
+        // distinct sizes ⇒ a steady-state frame re-acquires the same bucket and never creates a texture.
+        bool bucketOk = AcrylicBackdropMath.BucketDim(1) == 64 && AcrylicBackdropMath.BucketDim(64) == 64
+            && AcrylicBackdropMath.BucketDim(65) == 128 && AcrylicBackdropMath.BucketDim(240) == 256
+            && AcrylicBackdropMath.BucketDim(960) == 1024;
+        Check("64n4. acrylic LayerPool buckets: next-pow2 (floor 64) so pooled RTs reuse across layers and frames",
+            bucketOk,
+            $"b(1)={AcrylicBackdropMath.BucketDim(1)} b(65)={AcrylicBackdropMath.BucketDim(65)} b(960)={AcrylicBackdropMath.BucketDim(960)}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)
@@ -5771,6 +7258,1146 @@ static class Slice
         }
     }
 
+    // ── w1controls — Wave-1 control parity (Button family, ToggleSwitch, RadioButtons, Slider, RatingControl).
+    //    Every value asserted against microsoft-ui-xaml (citations inline); colors compared on FULL ARGB. ─────────────
+    static void W1ControlsChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // Recorder geometry: rect/stroke commands carry the NODE-LOCAL rect with the absolute placement on Transform.
+        static FillRoundRectCmd FillAt(HeadlessGpuDevice dev, RectF abs)
+        {
+            foreach (var r in dev.LastRects)
+                if (Near(r.Transform.Dx, abs.X, 0.6f) && Near(r.Transform.Dy, abs.Y, 0.6f)
+                    && Near(r.Rect.W, abs.W, 0.6f) && Near(r.Rect.H, abs.H, 0.6f))
+                    return r;
+            return default;
+        }
+        static DrawRoundRectStrokeCmd StrokeOfWidth(HeadlessGpuDevice dev, float strokeW, float rectW)
+        {
+            foreach (var s in dev.LastStrokes)
+                if (Near(s.StrokeWidth, strokeW, 0.01f) && Near(s.Rect.W, rectW, 0.6f)) return s;
+            return default;
+        }
+
+        // w1controls.1 — Button: color-only states (NO scale — WinUI Button state storyboards swap brushes only,
+        // Button_themeresources.xaml:176-229), content centred (Control defaults HorizontalContentAlignment /
+        // VerticalContentAlignment = Center, DependencyProperty.cpp:646-652), resting fill = ButtonBackground =
+        // ControlFillColorDefault (Button_themeresources.xaml:30/128), FocusVisualMargin −3 (:167).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1btn", new Size2(360, 200), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1ButtonProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var btn = FindRole(host.Scene, host.Scene.Root, AutomationRole.Button);
+            var br = host.Scene.AbsoluteRect(btn);
+            var fill = FillAt(device, br).Fill;
+            bool restFill = ColorClose(fill, Tok.FillControlDefault, 0.004f);
+
+            var label = FindTextNode(host.Scene, strings, host.Scene.Root, "w1-btn");
+            var lr = host.Scene.AbsoluteRect(label);
+            bool centred = Near(lr.X + lr.W / 2f, br.X + br.W / 2f, 1f) && Near(lr.Y + lr.H / 2f, br.Y + br.H / 2f, 1f);
+
+            bool noScaleWired = !host.Scene.TryGetInteract(btn, out var ia)
+                || (Near(ia.HoverScale, 1f, 0.001f) && Near(ia.PressScale, 1f, 0.001f));
+            var c = CenterOf(host.Scene, btn);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            bool pressIdentity = true;
+            for (int i = 0; i < 6; i++)
+            {
+                host.RunFrame();
+                var t = host.Scene.Paint(btn).LocalTransform;
+                pressIdentity &= Near(t.M11, 1f, 0.001f) && Near(t.M22, 1f, 0.001f) && Near(t.Dx, 0f, 0.001f) && Near(t.Dy, 0f, 0.001f);
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+            host.RunFrame();
+
+            Check("w1controls.1 Button: NO scale on press (color-only states), content centres both axes, resting fill = ControlFillColorDefault (ARGB)",
+                restFill && centred && noScaleWired && pressIdentity && root.Clicks == 1,
+                $"fillA={fill.A:0.###} centred={centred} noScale={noScaleWired} identity={pressIdentity} clicks={root.Clicks}");
+
+            // The −3 focus rect inset by the 2px primary's 1px centerline → local (−2,−2,W+4,H+4); 1px secondary at −0.5.
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            DrawRoundRectStrokeCmd prim = default, sec = default;
+            foreach (var s in device.LastStrokes)
+            {
+                if (Near(s.StrokeWidth, 2f)) prim = s;
+                else if (Near(s.StrokeWidth, 1f)) sec = s;
+            }
+            bool primGeom = Near(prim.Rect.X, -2f) && Near(prim.Rect.Y, -2f) && Near(prim.Rect.W, br.W + 4f) && Near(prim.Rect.H, br.H + 4f);
+            bool secGeom = Near(sec.Rect.X, -0.5f) && Near(sec.Rect.Y, -0.5f) && Near(sec.Rect.W, br.W + 1f) && Near(sec.Rect.H, br.H + 1f);
+            Check("w1controls.1b Button keyboard focus ring honours FocusVisualMargin −3 (primary −2,−2,+4,+4; secondary −0.5)",
+                primGeom && secGeom,
+                $"prim=({prim.Rect.X:0.#},{prim.Rect.Y:0.#} {prim.Rect.W:0.#}x{prim.Rect.H:0.#}) sec=({sec.Rect.X:0.#},{sec.Rect.Y:0.#} {sec.Rect.W:0.#}x{sec.Rect.H:0.#})");
+        }
+
+        // w1controls.2 — RepeatButton cadence-exact: Delay = 500ms, Interval = 33ms — the WinUI DP metadata defaults
+        // (dxaml\xcp\components\DependencyObject\DependencyProperty.cpp:714-720), sampled on a manual clock.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1rpt", new Size2(320, 200), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new RepeatProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+            var btn = FindRole(host.Scene, host.Scene.Root, AutomationRole.Button);
+            var c = CenterOf(host.Scene, btn);
+
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();                                  // arm → fires once immediately
+            int onPress = root.Clicks;                        // 1
+            clock.Advance(499f); host.RunFrame();
+            int at499 = root.Clicks;                          // still 1 (inside the 500ms initial delay)
+            clock.Advance(1f); host.RunFrame();
+            int at500 = root.Clicks;                          // 2 — fired exactly at the 500ms boundary
+            clock.Advance(32f); host.RunFrame();
+            int at532 = root.Clicks;                          // still 2 (inside the 33ms interval)
+            clock.Advance(1f); host.RunFrame();
+            int at533 = root.Clicks;                          // 3 — fired exactly at the 33ms boundary
+            clock.Advance(66f); host.RunFrame();
+            int at599 = root.Clicks;                          // 5 — a slow frame fires once per elapsed interval
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+            host.RunFrame();
+            clock.Advance(1000f); host.RunFrame();
+            int afterRelease = root.Clicks;
+
+            Check("w1controls.2 RepeatButton cadence-exact: fire on press, again at exactly 500ms, then every 33ms (catch-up on a slow frame); release stops",
+                onPress == 1 && at499 == 1 && at500 == 2 && at532 == 2 && at533 == 3 && at599 == 5 && afterRelease == 5,
+                $"press={onPress} 499={at499} 500={at500} 532={at532} 533={at533} 599={at599} rel={afterRelease}");
+        }
+
+        // w1controls.3 — HyperlinkButton: the ONE WinUI control with a hand cursor (SetCursor(MouseCursorHand) at
+        // initialize, HyperLinkButton_Partial.cpp:28-34); Click raises FIRST, then the NavigateUri launches through the
+        // IPlatformApp.OpenUri PAL seam (Click → Launcher::TryInvokeLauncher, HyperLinkButton_Partial.cpp:149-177 —
+        // headless records into OpenedUris instead of launching).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1link", new Size2(320, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1HyperlinkProbe { App = app };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var link = FindRole(host.Scene, host.Scene.Root, AutomationRole.Hyperlink);
+            var c = CenterOf(host.Scene, link);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, c, 0, 0));
+            host.RunFrame();
+            bool hand = window.LastCursor == CursorId.Hand;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(5f, 5f), 0, 0));
+            host.RunFrame();
+            bool arrowOff = window.LastCursor == CursorId.Arrow;
+
+            ClickNode(host, window, link);
+            bool launched = app.OpenedUris.Count == 1 && app.OpenedUris[0] == "https://wavee.app/w1";
+            bool clickFirst = root.UrisAtClick == 0;
+
+            Check("w1controls.3 HyperlinkButton: hand cursor on hover (arrow off-control); Click→OpenUri records the NavigateUri in WinUI order (Click first)",
+                hand && arrowOff && launched && clickFirst,
+                $"hand={hand} arrow={arrowOff} uris=[{string.Join(",", app.OpenedUris)}] urisAtClick={root.UrisAtClick}");
+        }
+
+        // w1controls.4 — ToggleButton checked flip: the fill cross-fades over the 83ms ContentPresenter.BackgroundTransition
+        // (ToggleButton_themeresources.xaml:199-201) while the FOREGROUND flips discretely (KeyTime-0 storyboards, :202-357).
+        // Sampled cadence-exact on a manual clock: T=0 old brush, T=0.5 mid, T=1.0 (83ms) exactly AccentFillColorDefault.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1tb", new Size2(320, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1ToggleButtonProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+
+            var tb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleButton);
+            var tr = host.Scene.AbsoluteRect(tb);
+            var off = FillAt(device, tr).Fill;
+            var fgOff = GlyphColor(device, strings, "w1-tb");
+            bool offState = ColorClose(off, Tok.FillControlDefault, 0.004f) && ColorClose(fgOff, Tok.TextPrimary, 0.004f);
+
+            root.On!.Value = true;
+            host.RunFrame();                                     // commit frame, dt 0 → T=0: fill still the unchecked brush
+            var atFlip = FillAt(device, tr).Fill;
+            var fgFlip = GlyphColor(device, strings, "w1-tb");
+            bool t0 = ColorClose(atFlip, Tok.FillControlDefault, 0.004f) && ColorClose(fgFlip, Tok.TextOnAccentPrimary, 0.004f);
+
+            clock.Advance(41.5f); host.RunFrame();               // T = 0.5: mid cross-fade (neither endpoint)
+            var mid = FillAt(device, tr).Fill;
+            bool midFade = mid.A > Tok.FillControlDefault.A + 0.15f && mid.A < Tok.AccentDefault.A - 0.15f;
+
+            clock.Advance(41.5f); host.RunFrame();               // T = 1.0 at exactly 83ms: settled, anim row dropped
+            var done = FillAt(device, tr).Fill;
+            bool settled = ColorClose(done, Tok.AccentDefault, 0.004f) && !host.Scene.HasBrushAnims;
+
+            ClickNode(host, window, tb);                         // the pointer path toggles back
+            bool clicked = !root.On!.Peek();
+
+            Check("w1controls.4 ToggleButton checked flip: 83ms BrushTransition on the fill (old at T0 → mid → exact accent at 83ms); foreground steps discretely; click toggles",
+                offState && t0 && midFade && settled && clicked,
+                $"off={offState} t0={t0} midA={mid.A:0.00} settled={settled} clicked={clicked}");
+        }
+
+        // w1controls.5 — ToggleSwitch geometry + brush ladder (ToggleSwitch_themeresources.xaml, "the template"):
+        // 40×20 track (:507), 20×20 knob host (:509), knob 12 rest (:510/515 + Normal :231-242) / 14 hover (:268-279) /
+        // 17×14 pressed pinned 3px off the near edge (:311-322 + :284-287); tap toggles and the knob travels +20 (:445).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1ts", new Size2(320, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new ToggleSwitchProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var control = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
+            var track = Child(host.Scene, control, 0);
+            var knobHost = Child(host.Scene, track, 1);
+            var knob = Child(host.Scene, knobHost, 0);
+            var trk = host.Scene.AbsoluteRect(track);
+            var kr = host.Scene.AbsoluteRect(knob);
+            var khr = host.Scene.AbsoluteRect(knobHost);
+            bool geom = Near(trk.W, 40f) && Near(trk.H, 20f) && Near(khr.W, 20f) && Near(khr.H, 20f)
+                && Near(kr.W, 12f) && Near(kr.H, 12f) && Near(kr.X - khr.X, 4f) && Near(khr.X - trk.X, 0f);
+
+            // Off ARGB: fill = ControlAltFillColorSecondary (template:15/135), stroke = ControlStrongStrokeColorDefault
+            // (:19/139), knob = TextFillColorSecondary (:31-33/151-153). Stroke cmds carry the CENTERLINE rect: the 1px
+            // border of the 40×20 track records as (0.5,0.5,39,19).
+            var trackFill = FillAt(device, trk).Fill;
+            var knobFill = FillAt(device, kr).Fill;
+            var trackStroke = StrokeOfWidth(device, 1f, 39f);
+            bool offColors = ColorClose(trackFill, Tok.FillControlAltSecondary, 0.004f)
+                && ColorClose(knobFill, Tok.TextSecondary, 0.004f)
+                && ColorClose(trackStroke.Color, Tok.StrokeControlStrongDefault, 0.004f);
+
+            var c = CenterOf(host.Scene, control);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, c, 0, 0));
+            host.RunFrame();
+            var kHover = host.Scene.AbsoluteRect(knob);
+            bool hover14 = Near(kHover.W, 14f) && Near(kHover.H, 14f);
+
+            // The knob's size/anchor change rides its FLIP transition and AbsoluteRect includes the presented
+            // transform — hold the press a few frames so the 83ms grow/pin settles before sampling the geometry.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            var kPress = host.Scene.AbsoluteRect(knob);
+            var khPress = host.Scene.AbsoluteRect(knobHost);
+            bool press17 = Near(kPress.W, 17f) && Near(kPress.H, 14f) && Near(kPress.X - khPress.X, 3f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+            host.RunFrame();
+            bool toggled = root.On;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(310f, 150f), 0, 0));
+            for (int i = 0; i < 30; i++) host.RunFrame();   // settle: 167ms travel + 83ms brush fades + hover decay
+
+            var kOn = host.Scene.AbsoluteRect(knob);
+            bool traveled = Near(kOn.W, 12f) && Near(kOn.H, 12f) && Near(kOn.X - trk.X, 24f);   // +20 travel, re-centred at 4
+            // On ARGB: track = AccentFillColorDefault (template:23/143), knob = TextOnAccentFillColorPrimary (:35-37/155-157);
+            // ToggleSwitchOnStrokeThickness = 0 (template:5/125) — the 40-wide stroke disappears.
+            var onTrack = FillAt(device, host.Scene.AbsoluteRect(track)).Fill;
+            var onKnob = FillAt(device, kOn).Fill;
+            bool onColors = ColorClose(onTrack, Tok.AccentDefault, 0.004f) && ColorClose(onKnob, Tok.TextOnAccentPrimary, 0.004f);
+            bool strokeGone = StrokeOfWidth(device, 1f, 39f).StrokeWidth == 0f;
+
+            Check("w1controls.5 ToggleSwitch geometry + ARGB: 40×20 track, knob 12 rest / 14 hover / 17×14 pressed (3px pin), tap travels +20; off/on brush ladder exact",
+                geom && offColors && hover14 && press17 && toggled && traveled && onColors && strokeGone,
+                $"geom={geom} off={offColors} hover={kHover.W:0.#}x{kHover.H:0.#} press={kPress.W:0.#}x{kPress.H:0.#}@+{kPress.X - khPress.X:0.#} on={onColors} strokeGone={strokeGone} knobX=+{kOn.X - trk.X:0.#}");
+        }
+
+        // w1controls.6 — ToggleSwitch keyboard: Space activates on KEY-UP (engine focused-clickable contract;
+        // HandlesKey = Space/GamepadA, ToggleSwitch_Partial.cpp:1002-1007), the knob travel TWEENS over the 167ms
+        // ControlFast reposition (template:418-439 → Motion.ControlFast), and arrows toggle directionally
+        // (ToggleSwitchKeyProcess.h:52-71).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1tsk", new Size2(320, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new ToggleSwitchProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+            var control = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
+            var track = Child(host.Scene, control, 0);
+            var knob = Child(host.Scene, Child(host.Scene, track, 1), 0);
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Space));
+            host.RunFrame();
+            bool armedNotToggled = !root.On && (host.Scene.Flags(control) & NodeFlags.Pressed) != 0;
+            window.QueueInput(new InputEvent(InputKind.KeyUp, default, 0, Keys.Space));
+            host.RunFrame();                                       // commit frame (dt 0): FLIP seeded at the full inverse
+            bool toggledOnUp = root.On;
+            float dx0 = host.Scene.Paint(knob).LocalTransform.Dx;  // ≈ −20: presented still at the off spot
+
+            clock.Advance(50f); host.RunFrame();                   // mid-travel of the 167ms tween
+            float dxMid = host.Scene.Paint(knob).LocalTransform.Dx;
+            clock.Advance(500f); host.RunFrame(); host.RunFrame();
+            float dxEnd = host.Scene.Paint(knob).LocalTransform.Dx;
+            var trk = host.Scene.AbsoluteRect(track);
+            var kOn = host.Scene.AbsoluteRect(knob);
+            bool seeded = Near(dx0, -20f, 1.5f);
+            bool tweened = dxMid > -19.5f && dxMid < -0.5f;
+            bool settledTravel = MathF.Abs(dxEnd) < 0.5f && Near(kOn.X - trk.X, 24f);
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Left));
+            host.RunFrame(); bool leftOff = !root.On;
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            host.RunFrame(); bool rightOn = root.On;
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            host.RunFrame(); bool rightNoop = root.On;             // already on → no toggle (Key only handled when it toggles)
+
+            Check("w1controls.6 ToggleSwitch keys: Space toggles on KEY-UP (armed pressed until then); knob travel tweens (seed −20 → mid → settle +20); arrows toggle directionally",
+                armedNotToggled && toggledOnUp && seeded && tweened && settledTravel && leftOff && rightOn && rightNoop,
+                $"armed={armedNotToggled} up={toggledOnUp} dx {dx0:0.#}→{dxMid:0.#}→{dxEnd:0.##} L={leftOff} R={rightOn} Rnoop={rightNoop}");
+        }
+
+        // w1controls.7 — ToggleSwitch drag-to-toggle (ToggleSwitch_Partial.cpp): the 4px drag box arms the knob drag
+        // (:829-836 over the SM_CXDRAG threshold), the knob FOLLOWS the pointer clamped to the travel (:455-457,
+        // :579-589), release toggles iff the knob crossed HALF the travel (MoveCompleted :591-619), and a pointer that
+        // leaves mid-press cancels — the captured outside release must NOT toggle (capture-lost cleanup :728-746).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1tsd", new Size2(480, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new ToggleSwitchProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var control = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
+            var track = Child(host.Scene, control, 0);
+            var knob = Child(host.Scene, Child(host.Scene, track, 1), 0);
+            var trk = host.Scene.AbsoluteRect(track);
+            var c = CenterOf(host.Scene, control);
+
+            // 6px: past the 4px drag box but under half the 20px travel → release does NOT toggle.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 6f, c.Y), 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 6f, c.Y), 0, 0)); host.RunFrame();
+            bool smallDragStaysOff = !root.On;
+
+            // 12px: crosses half the travel; mid-drag the knob follows the pointer (dragX 12 + the 3px pressed pin).
+            // AbsoluteRect includes the presented FLIP transform — hold a few frames so the drag's snap-follow
+            // (1ms tween) and the press-grow settle onto the model spot before sampling.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 12f, c.Y), 0, 0));
+            for (int i = 0; i < 10; i++) host.RunFrame();
+            var kDrag = host.Scene.AbsoluteRect(knob);
+            bool knobFollows = Near(kDrag.X - trk.X, 15f) && Near(kDrag.W, 17f) && Near(kDrag.H, 14f);
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 12f, c.Y), 0, 0)); host.RunFrame();
+            bool bigDragTogglesOn = root.On;
+
+            // Drag back toward off, then EXIT the control and release outside: cancelled, stays ON.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X - 12f, c.Y), 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(450f, 300f), 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(450f, 300f), 0, 0)); host.RunFrame();
+            bool releaseOutsideCancels = root.On;
+
+            // The cancel doesn't wedge the gesture: a later plain tap still toggles.
+            ClickNode(host, window, control);
+            bool tapAfterCancel = !root.On;
+
+            Check("w1controls.7 ToggleSwitch drag: 4px drag box, half-travel rule (6px no / 12px yes), knob follows the pointer, exit + release-outside cancels without toggling",
+                smallDragStaysOff && knobFollows && bigDragTogglesOn && releaseOutsideCancels && tapAfterCancel,
+                $"small={smallDragStaysOff} follows={knobFollows} big={bigDragTogglesOn} cancel={releaseOutsideCancels} tap={tapAfterCancel}");
+        }
+
+        // w1controls.8 — RadioButtons container (controls\dev\RadioButtons): column-major MaxColumns grid
+        // (ColumnMajorUniformToLargestGridLayout.cpp:48-163; ColumnSpacing 7 / RowSpacing 8 / header gap 8,
+        // RadioButtons_themeresources.xaml:18-20), ONE roving tab stop (RadioButtons.xaml:5-6 + OnGettingFocus :80-97),
+        // arrows rove with SELECTION FOLLOWS FOCUS unless Ctrl (:100-107, :135-183), edges swallow (:216-242).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1rb", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1RadioButtonsProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var radios = Roles(host.Scene, AutomationRole.RadioButton);
+            var a = host.Scene.AbsoluteRect(radios[0]);
+            var b = host.Scene.AbsoluteRect(radios[1]);
+            var d = host.Scene.AbsoluteRect(radios[3]);
+            bool grid = radios.Count == 5
+                && Near(d.Y, a.Y) && Near(d.X, a.X + a.W + 7f)
+                && Near(b.Y, a.Y + a.H + 8f) && Near(b.X, a.X);
+            var header = FindTextNode(host.Scene, strings, host.Scene.Root, "w1-group");
+            var hrr = host.Scene.AbsoluteRect(header);
+            bool headerRow = !header.IsNull && Near(a.Y - (hrr.Y + hrr.H), 8f, 1f)
+                && ColorClose(GlyphColor(device, strings, "w1-group"), Tok.TextPrimary, 0.004f);   // RadioButtonsHeaderForeground = TextFillColorPrimary (themeresources:4-10)
+
+            int FocusableIdx(out int count)
+            {
+                count = 0; int idx = -1;
+                for (int i = 0; i < radios.Count; i++)
+                    if ((host.Scene.Flags(radios[i]) & NodeFlags.Focusable) != 0) { count++; idx = i; }
+                return idx;
+            }
+            bool roving0 = FocusableIdx(out int fc0) == 0 && fc0 == 1;
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            bool tabLands = FocusedNode(host.Scene, host.Scene.Root) == radios[0];
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down));
+            host.RunFrame();
+            bool downSelects = root.Selected == 1 && FocusedNode(host.Scene, host.Scene.Root) == radios[1];
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down, Mods: KeyModifiers.Ctrl));
+            host.RunFrame();
+            bool ctrlMovesOnly = root.Selected == 1 && FocusedNode(host.Scene, host.Scene.Root) == radios[2];
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            host.RunFrame();
+            bool rightColumn = root.Selected == 4 && FocusedNode(host.Scene, host.Scene.Root) == radios[4];   // (col0,row2) → col1 clamped to row1 = E
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down));
+            host.RunFrame();
+            bool edgeSwallow = root.Selected == 4 && FocusedNode(host.Scene, host.Scene.Root) == radios[4];
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Left));
+            host.RunFrame();
+            bool leftBack = root.Selected == 1 && FocusableIdx(out int fc1) == 1 && fc1 == 1;   // the tab stop follows the selection
+
+            Check("w1controls.8 RadioButtons: column-major MaxColumns grid (7/8 spacing, header gap 8, TextPrimary ARGB), ONE roving tab stop, arrows rove + selection-follows-focus, Ctrl exempts, edges swallow",
+                grid && headerRow && roving0 && tabLands && downSelects && ctrlMovesOnly && rightColumn && edgeSwallow && leftBack,
+                $"grid={grid} hdr={headerRow} roving={roving0} tab={tabLands} down={downSelects} ctrl={ctrlMovesOnly} right={rightColumn} edge={edgeSwallow} left={leftBack}");
+        }
+
+        // w1controls.9 — Slider keyboard matrix (KeyPress::Slider::KeyDown, SliderKeyProcess.h:28-71 + the PageUp/Down
+        // parity rows on Slider::Step, Slider_Partial.cpp:1713-1819): steps snap to the closest step multiple, and the
+        // AUTO step sizes derive range/100 and range/10 (WinUI's absolute defaults 1/10 on the 0–100 range,
+        // Slider_Partial.h:13-15). Header per Slider_themeresources.xaml:396 + SliderTopHeaderMargin 0,0,0,4 (:161).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1sl", new Size2(320, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1SliderKeysProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var hdr = FindTextNode(host.Scene, strings, host.Scene.Root, "w1-vol");
+            var hr2 = host.Scene.AbsoluteRect(hdr);
+            bool headered = !hdr.IsNull && Near(tr.Y - (hr2.Y + hr2.H), 4f, 1f)
+                && ColorClose(GlyphColor(device, strings, "w1-vol"), Tok.TextPrimary, 0.004f);   // SliderHeaderForeground = TextFillColorPrimary (:28)
+
+            var p = new Point2(tr.X + 100f, tr.Y + tr.H / 2f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
+            host.RunFrame();
+            bool clicked = Near(root.Val, 100f, 0.01f);
+
+            float Key(int key) { window.QueueInput(new InputEvent(InputKind.Key, default, 0, key)); host.RunFrame(); return root.Val; }
+            float right = Key(Keys.Right);     // +SmallChange(auto 2) → 102
+            float pgUp = Key(Keys.PageUp);     // +LargeChange(auto 20), snapped to the 20-grid → 120 (not 122)
+            float pgDn = Key(Keys.PageDown);   // 100
+            float left = Key(Keys.Left);       // 98
+            float down = Key(Keys.Down);       // 96 (Down = backward, SliderKeyProcess.h:52-59)
+            float up = Key(Keys.Up);           // 98 (Up = forward, :44-51)
+            float home = Key(Keys.Home);       // Minimum (:60-65)
+            float end = Key(Keys.End);         // Maximum (:66-71)
+
+            Check("w1controls.9 Slider keyboard matrix + AUTO Small/Large (range/100, range/10): ±2 arrows, PageUp 102→120 (closest-multiple snap), Home/End; header 4px above (ARGB)",
+                headered && clicked && Near(right, 102f, 0.01f) && Near(pgUp, 120f, 0.01f) && Near(pgDn, 100f, 0.01f)
+                && Near(left, 98f, 0.01f) && Near(down, 96f, 0.01f) && Near(up, 98f, 0.01f) && Near(home, 0f, 0.01f) && Near(end, 200f, 0.01f),
+                $"hdr={headered} click={clicked} R={right:0.#} PgUp={pgUp:0.#} PgDn={pgDn:0.#} L={left:0.#} D={down:0.#} U={up:0.#} Home={home:0.#} End={end:0.#}");
+        }
+
+        // w1controls.10 — Slider visuals: inline tick rects (TickPlacement default Inline, visibility mapping
+        // Slider_Partial.cpp:2248-2303; SliderInlineTickBarFill = ControlFillColorInputActive,
+        // Slider_themeresources.xaml:32), the thumb value tooltip shows on PRESS and scrubs live
+        // (UpdateThumbToolTipVisibility, Slider_Partial.cpp:478-543; default converter :1859-1936), hides on release
+        // (PerformPointerUpAction :645-659); FocusVisualMargin −7,0,−7,0 (:184) widens the ring horizontally only.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1slt", new Size2(360, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W1SliderTipProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+
+            var tickXs = new List<float>();
+            bool tickColor = true;
+            foreach (var r in device.LastRects)
+                if (Near(r.Rect.W, 1f, 0.01f) && Near(r.Rect.H, 4f, 0.01f))
+                {
+                    tickXs.Add(r.Transform.Dx);
+                    tickColor &= ColorClose(r.Fill, Tok.FillControlInputActive, 0.004f);
+                }
+            tickXs.Sort();
+            bool ticks = tickXs.Count == 5 && tickColor;
+            for (int i = 1; i < tickXs.Count; i++) ticks &= Near(tickXs[i] - tickXs[i - 1], 50f, 1f);
+
+            var p100 = new Point2(tr.X + 100f, tr.Y + tr.H / 2f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p100, 0, 0));
+            host.RunFrame(); host.RunFrame();                    // open → the overlay content mounts + places next frame
+            bool tipShows = HasGlyph(device, strings, "100") && Near(root.Val, 100f, 0.01f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(tr.X + 150f, tr.Y + tr.H / 2f), 0, 0));
+            host.RunFrame();
+            bool tipScrubs = HasGlyph(device, strings, "150") && Near(root.Val, 150f, 0.01f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(tr.X + 150f, tr.Y + tr.H / 2f), 0, 0));
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool tipHides = !HasGlyph(device, strings, "150");
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            DrawRoundRectStrokeCmd prim = default;
+            foreach (var s in device.LastStrokes) if (Near(s.StrokeWidth, 2f)) prim = s;
+            bool ring = Near(prim.Rect.X, -6f) && Near(prim.Rect.Y, 1f) && Near(prim.Rect.W, tr.W + 12f) && Near(prim.Rect.H, tr.H - 2f);
+
+            Check("w1controls.10 Slider visuals: 5 inline tick rects 50px apart (InputActive ARGB); press shows the thumb tooltip '100', drag scrubs to '150', release hides; focus ring −7,0,−7,0",
+                ticks && tipShows && tipScrubs && tipHides && ring,
+                $"ticks={tickXs.Count} color={tickColor} show={tipShows} scrub={tipScrubs} hide={tipHides} ring=({prim.Rect.X:0.#},{prim.Rect.Y:0.#} {prim.Rect.W:0.#}x{prim.Rect.H:0.#})");
+        }
+
+        // w1controls.11 — RatingControl: the per-star focal hover SCALE (the composition expression,
+        // RatingControl.cpp:350-371, re-based ×2 into the 16px-native strip → focal star 2×c_mouseOverScale = 1.6,
+        // far stars floor at 2×0.5 = 1.0), the pointer-over-UNSET preview brush (RatingControlPointerOverUnselected-
+        // Foreground = ControlAltFillColorTertiary), and the drag-off-the-left-side clear (capture keeps the sweep
+        // alive off-strip, cpp:799-805/856-863; release commits swept 0 → the cleared sentinel, :888-906).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w1rt", new Size2(320, 120), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new RatingProbe { Initial = RatingControl.NoValueSet };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var rating = FindRole(host.Scene, host.Scene.Root, AutomationRole.Rating);
+            var rr = host.Scene.AbsoluteRect(rating);
+            var starRow = Child(host.Scene, rating, 0);
+            var cell0 = Child(host.Scene, starRow, 0);
+            var cell4 = Child(host.Scene, starRow, 4);
+
+            var hov = new Point2(rr.X + 8f, rr.Y + rr.H / 2f);   // star 1 centre (StarCenter(0) = 8)
+            window.QueueInput(new InputEvent(InputKind.PointerMove, hov, 0, 0));
+            host.RunFrame(); host.RunFrame();
+            float s0 = host.Scene.Paint(cell0).LocalTransform.M11;
+            float s4 = host.Scene.Paint(cell4).LocalTransform.M11;
+            bool focal = Near(s0, 1.6f, 0.05f) && Near(s4, 1.0f, 0.02f);
+
+            const string filled = "";
+            int hovFilled = CountGlyph(device, strings, filled);
+            bool hovColor = ColorClose(GlyphColor(device, strings, filled), Tok.FillControlAltTertiary, 0.004f);
+            bool uncommitted = root.Val!.Peek() <= RatingControl.NoValueSet;
+
+            var p3 = new Point2(rr.X + 56f, rr.Y + rr.H / 2f);   // ceil(56/112·5) = 3
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p3, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p3, 0, 0));
+            host.RunFrame();
+            float committed = root.Val!.Peek();
+
+            var p1 = new Point2(rr.X + 20f, rr.Y + rr.H / 2f);   // press on star 1...
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p1, 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rr.X - 80f, rr.Y + rr.H / 2f), 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(rr.X - 80f, rr.Y + rr.H / 2f), 0, 0)); host.RunFrame();
+            float cleared = root.Val!.Peek();                     // ...drag past the LEFT edge and release → cleared
+            host.RunFrame();
+            float s0After = host.Scene.Paint(cell0).LocalTransform.M11;   // focal back at the −100 sentinel → 1.0
+
+            Check("w1controls.11 RatingControl: focal hover scale 1.6 focal / 1.0 far (mouse 0.8 expression), pointer-over-unset preview ARGB, drag-off-left clears to −1, focal resets on release",
+                focal && hovFilled == 1 && hovColor && uncommitted && Near(committed, 3f) && Near(cleared, -1f) && Near(s0After, 1f, 0.02f),
+                $"s0={s0:0.00} s4={s4:0.00} filled={hovFilled} color={hovColor} committed={committed} cleared={cleared} reset={s0After:0.00}");
+        }
+    }
+
+    // ── E11 — unified virtualization substrate (L0 measured seam, L1 viewport, L2 repeater data layer, L3 ItemsView).
+    //    Every behavior/value verified against the WinUI sources cited inline (controls\dev\ItemsView, ItemContainer,
+    //    ItemsRepeater, LinedFlowLayout; Common_themeresources_any.xaml for ARGB). ──────────────────────────────────
+    static void E11VirtChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // e11virt.1/2 — the IMeasuredVirtualLayout seam (E11-L0): estimate-then-correct + scroll anchoring.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-measured", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new MeasuredSeamProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var vp = host.Scene.Root;
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+            var layout = probe.Layout!;
+            const float cross = 300f;
+
+            // Realized rows correct from the 40px estimate to their measured extents at arrange (SetMeasured);
+            // positions are the corrected prefix sums (OffsetOf) — virtualization.md §6.2 through the USER seam.
+            var r1 = Child(host.Scene, content, 1);
+            var r2 = Child(host.Scene, content, 2);
+            var r3 = Child(host.Scene, content, 3);
+            float h01 = MeasuredSeamProbe.H(0) + MeasuredSeamProbe.H(1);
+            bool corrected = Near(host.Scene.Bounds(r1).Y, MeasuredSeamProbe.H(0))
+                && Near(host.Scene.Bounds(r2).Y, h01)
+                && Near(host.Scene.Bounds(r3).Y, h01 + MeasuredSeamProbe.H(2))
+                && Near(layout.ItemRect(1, cross).H, MeasuredSeamProbe.H(1))
+                && Near(layout.OffsetOf(3, cross), h01 + MeasuredSeamProbe.H(2));
+
+            // Unrealized rows still report the estimate; published ContentSize = corrected window + estimate tail.
+            float expected = 0f;
+            for (int i = 0; i < sc0.LastRealized; i++) expected += MeasuredSeamProbe.H(i);
+            expected += (MeasuredSeamProbe.N - sc0.LastRealized) * MeasuredSeamProbe.Estimate;
+            bool estimated = Near(layout.ItemRect(MeasuredSeamProbe.N - 1, cross).H, MeasuredSeamProbe.Estimate)
+                && Near(sc0.ContentH, expected, 1f);
+            Check("e11virt.1 measured seam: realized rows correct to measured extents (positions = corrected prefix sums); unrealized keep the estimate",
+                corrected && estimated, $"y1..3={host.Scene.Bounds(r1).Y:0},{host.Scene.Bounds(r2).Y:0},{host.Scene.Bounds(r3).Y:0} content={sc0.ContentH:0} expected={expected:0}");
+
+            // Anchoring: scroll into the middle — the offset stays inside the anchor item's band across the
+            // realize+correction waves (corrections above the viewport never jump the visible top).
+            var ptr = new Point2(150, 150);
+            for (int s = 0; s < 8; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 400f)); host.RunFrame(); }
+            host.Scene.TryGetScroll(vp, out var sc1);
+            int anchor = layout.IndexAt(sc1.OffsetY, cross);
+            float band0 = layout.OffsetOf(anchor, cross), band1 = layout.OffsetOf(anchor + 1, cross);
+            bool anchored = sc1.AnchorIndex == anchor && sc1.FirstRealized > 0
+                && sc1.OffsetY >= band0 - 0.5f && sc1.OffsetY < band1 + 0.5f;
+
+            // Fling to the end: each fling clamps against the content published SO FAR; the realize wave then corrects
+            // the freshly measured rows and EXTENDS the content (estimate-then-correct), so the true end takes a
+            // couple of flings — after which the offset clamps to the fully corrected extent and realize reaches row N.
+            for (int s = 0; s < 3; s++) { window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 1_000_000f)); host.RunFrame(); }
+            host.Scene.TryGetScroll(vp, out var sc2);
+            bool clamped = sc2.LastRealized == MeasuredSeamProbe.N && Near(sc2.OffsetY, sc2.ContentH - sc2.ViewportH, 2f);
+            Check("e11virt.2 measured seam anchoring: offset pinned inside the anchor band mid-list; end-fling clamps to corrected content",
+                anchored && clamped, $"anchor={anchor} off={sc1.OffsetY:0} band=[{band0:0},{band1:0}) end={sc2.OffsetY:0}/{sc2.ContentH - sc2.ViewportH:0}");
+        }
+
+        // e11virt.3 — LinedFlowLayout (the WinUI ItemsView photo-wall): uniform-height lines, width = aspect × lineHeight
+        // clamped to the cross size, wrap when the next item + MinItemSpacing would overflow, O(1) line-stride windowing.
+        // Defaults LineSpacing 0 / MinItemSpacing 0 (LinedFlowLayout.h s_defaultLineSpacing/s_defaultMinItemSpacing).
+        {
+            float[] aspects = [2f, 1f, 0.5f, 4f];
+            var lf = new LinedFlowLayout(lineHeight: 100f, aspectRatio: i => aspects[i % 4], lineSpacing: 10f, minItemSpacing: 5f);
+            const float cross = 350f;
+            // Flow on cross 350: line0=[0:w200@0, 1:w100@205] line1=[2:w50@0] line2=[3:w350@0 (clamped)]
+            //                    line3=[4:w200@0, 5:w100@205] line4=[6:w50@0] line5=[7:w350@0] → 6 lines.
+            float extent = lf.ContentExtent(8, cross);
+            var i0 = lf.ItemRect(0, cross); var i1 = lf.ItemRect(1, cross); var i2 = lf.ItemRect(2, cross);
+            var i3 = lf.ItemRect(3, cross); var i5 = lf.ItemRect(5, cross); var i7 = lf.ItemRect(7, cross);
+            bool widths = Near(i0.W, 200f) && Near(i1.W, 100f) && Near(i2.W, 50f) && Near(i3.W, 350f) && Near(i0.H, 100f);
+            bool flow = Near(i0.X, 0f) && Near(i0.Y, 0f)
+                && Near(i1.X, 205f) && Near(i1.Y, 0f)            // 200 + MinItemSpacing 5
+                && Near(i2.X, 0f) && Near(i2.Y, 110f)            // wrapped (305+5+50 > 350); line stride = 100+10
+                && Near(i3.X, 0f) && Near(i3.Y, 220f)            // over-wide item → its own full-width line
+                && Near(i5.X, 205f) && Near(i5.Y, 330f)
+                && Near(i7.Y, 550f) && Near(extent, 650f);       // 6×100 + 5×10
+            lf.Window(8, cross, 200f, 115f, 0, out int f0, out int l0);   // band [115,315] → lines 1..3 → items [2,6)
+            lf.Window(8, cross, 200f, 115f, 2, out int f1, out int l1);   // ±2 items of overscan, clamped
+            lf.Window(8, cross, 200f, 0f, 0, out int f2, out int l2);     // top: lines 0..2 → items [0,4)
+            bool windows = f0 == 2 && l0 == 6 && f1 == 0 && l1 == 8 && f2 == 0 && l2 == 4;
+            // WinUI defaults: no spacing — 3 unit-aspect items pack one 100px line.
+            var lfDef = new LinedFlowLayout(100f);
+            bool defaults = Near(lfDef.ContentExtent(3, cross), 100f) && Near(lfDef.ItemRect(2, cross).X, 200f);
+            Check("e11virt.3 LinedFlow: aspect widths (cross-clamped), spacing-aware wrap, line-stride rects + windowing, 0-spacing defaults",
+                widths && flow && windows && defaults, $"extent={extent:0} w0..3={i0.W:0},{i1.W:0},{i2.W:0},{i3.W:0} win=({f0},{l0})/({f1},{l1})/({f2},{l2})");
+        }
+
+        // e11virt.4 — GroupedListVirtualLayout (E11-L0 grouping): headers are a measured item KIND at their own flat
+        // indices; StickyHeaderIndexAt = last header at-or-above the offset band (−1 above the first header), and the
+        // pivot tracks estimate-then-correct band moves.
+        {
+            var gl = new GroupedListVirtualLayout([0, 6, 13], headerExtent: 32f, itemEstimate: 48f);
+            const int n = 20; const float cross = 300f;
+            float total = gl.ContentExtent(n, cross);            // 3×32 + 17×48 = 912
+            bool seeded = Near(total, 912f) && gl.IsHeader(6) && !gl.IsHeader(7)
+                && Near(gl.OffsetOf(6, cross), 272f)             // 32 + 5×48
+                && Near(gl.ItemRect(6, cross).H, 32f) && Near(gl.ItemRect(7, cross).H, 48f);
+            bool sticky = gl.StickyHeaderIndexAt(0f) == 0
+                && gl.StickyHeaderIndexAt(100f) == 0
+                && gl.StickyHeaderIndexAt(272f) == 6             // exactly at the group-2 band start
+                && gl.StickyHeaderIndexAt(591f) == 6             // last row of group 2 (header 13 starts at 592)
+                && gl.StickyHeaderIndexAt(593f) == 13;
+            gl.SetMeasured(3, 80f, cross);                       // estimate-then-correct: row 3 48 → 80 (+32)
+            bool correctedG = Near(gl.ContentExtent(n, cross), 944f)
+                && Near(gl.OffsetOf(6, cross), 304f)
+                && gl.StickyHeaderIndexAt(300f) == 0 && gl.StickyHeaderIndexAt(305f) == 6;
+            var gl2 = new GroupedListVirtualLayout([4], 32f, 48f);
+            _ = gl2.ContentExtent(10, cross);
+            bool none = gl2.StickyHeaderIndexAt(0f) == -1 && gl2.StickyHeaderIndexAt(4 * 48f + 1f) == 4;
+            Check("e11virt.4 GroupedList: header extents seeded, sticky index per offset band (−1 above first), correction moves the pivot",
+                seeded && sticky && correctedG && none, $"total={total:0}→{gl.ContentExtent(n, cross):0} hdr6@{gl.OffsetOf(6, cross):0}");
+        }
+
+        // e11virt.5 — ItemsRepeater lifecycle (E11-L2, ItemsRepeater.idl:186-188): ElementPrepared on entering the
+        // realized window, ElementClearing on leaving (recycle = Clearing(old)+Prepared(new)), visible-range prefetch;
+        // a steady in-window scroll fires NOTHING (transform-only frames never realize).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-lifecycle", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new LifecycleRepeaterProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var vp = host.Scene.Root;
+            host.Scene.TryGetScroll(vp, out var sc0);
+            bool mountSequential = probe.Prepared.Count == sc0.LastRealized && probe.Cleared.Count == 0;
+            for (int i = 0; i < probe.Prepared.Count; i++) mountSequential &= probe.Prepared[i] == i;
+            bool mountRange = probe.Ranges.Count > 0 && probe.Ranges[^1] == (0, sc0.LastRealized);
+
+            // sub-extent scroll: in-window → no realize → no lifecycle.
+            int p0 = probe.Prepared.Count, c0 = probe.Cleared.Count, rg0 = probe.Ranges.Count;
+            var ptr = new Point2(150, 200);
+            window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 2f));
+            host.RunFrame();
+            bool quiet = probe.Prepared.Count == p0 && probe.Cleared.Count == c0 && probe.Ranges.Count == rg0;
+
+            // boundary-crossing scroll: 400px over 40px rows → window [0,14) → [6,24): Clearing 0..5, Prepared 14..23.
+            window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 398f));
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+            var live = new HashSet<int>();
+            foreach (var i in probe.Prepared) live.Add(i);
+            foreach (var i in probe.Cleared) live.Remove(i);
+            bool windowSet = live.Count == sc1.LastRealized - sc1.FirstRealized && sc1.FirstRealized > 0;
+            for (int i = sc1.FirstRealized; i < sc1.LastRealized; i++) windowSet &= live.Contains(i);
+            bool conserved = probe.Prepared.Count - probe.Cleared.Count == sc1.LastRealized - sc1.FirstRealized
+                && probe.Cleared.Count == sc1.FirstRealized                          // exactly the rows that left the top
+                && probe.Ranges[^1] == (sc1.FirstRealized, sc1.LastRealized);
+            Check("e11virt.5 ItemsRepeater lifecycle: Prepared/Clearing mirror the realized window across a recycle; in-window scroll fires nothing",
+                mountSequential && mountRange && quiet && windowSet && conserved,
+                $"mount=[0,{sc0.LastRealized}) → [{sc1.FirstRealized},{sc1.LastRealized}) prepared={probe.Prepared.Count} cleared={probe.Cleared.Count}");
+        }
+
+        // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an
+        // ItemCollectionTransition stamps the engine FLIP/fade spec on each item root — Moves = Position FLIP,
+        // Adds/Removes = opacity 0↔1, over ControlFastAnimationDuration 167ms decelerate (the ItemContainer.xaml:54-56
+        // KeySpline 0,0,0,1 timing).
+        {
+            var data = new List<string> { "alpha", "beta", "gamma" };
+            var el = Repeater.ItemsRepeater(data, (i, s) => new BoxEl { Children = [new TextEl(s) { Size = 12f }] },
+                RepeatLayout.Inline(), transition: ItemCollectionTransition.Default);
+            bool typed = el is BoxEl row && row.Children.Length == 3
+                && row.Children[1] is BoxEl b1 && b1.Children[0] is TextEl t1 && t1.Text == "beta";
+            var spec = el is BoxEl row2 && row2.Children[0] is BoxEl item0 ? item0.Animate : null;
+            bool stamped = spec is { } sp
+                && (sp.Channels & TransitionChannels.Position) != 0 && (sp.Channels & TransitionChannels.Opacity) != 0
+                && sp.Dynamics.Kind == DynamicsKind.Tween && Near(sp.Dynamics.DurationMs, 167f)
+                && sp.Dynamics.Easing == Easing.FluentDecelerate
+                && sp.Enter.Active && Near(sp.Enter.Opacity, 0f) && sp.Exit.Active && Near(sp.Exit.Opacity, 0f);
+            Check("e11virt.6 ItemsRepeater typed template + ItemCollectionTransition → Position FLIP + 167ms enter/exit fades on item roots",
+                typed && stamped, $"typed={typed} stamped={stamped}");
+        }
+
+        // e11virt.7 — SelectionModel Single (SingleSelector.cpp:25-57): Select REPLACES; Ctrl+interact toggles;
+        // plain focus follows (m_followFocus default true); Ctrl+focus moves without selecting.
+        {
+            var m = new SelectionModel { ItemCount = 100 };
+            int events = 0;
+            m.SelectionChanged = () => events++;
+            bool def = m.Mode == ItemsSelectionMode.Single && m.SelectedCount == 0 && m.AnchorIndex == -1;   // ItemsView.h s_defaultSelectionMode
+            m.Select(3); m.Select(7);
+            bool replaces = m.IsSelected(7) && !m.IsSelected(3) && m.SelectedCount == 1 && events == 2;
+            m.OnInteractedAction(7, ctrl: true, shift: false);    // selected + Ctrl → deselect (cpp:39-43)
+            bool ctrlOff = m.SelectedCount == 0 && events == 3;
+            m.OnInteractedAction(7, ctrl: true, shift: false);    // unselected + Ctrl → select (cpp:35-38)
+            bool ctrlOn = m.IsSelected(7) && events == 4;
+            m.OnFocusedAction(8, ctrl: false, shift: false);      // follow-focus (cpp:46-57)
+            bool follow = m.IsSelected(8) && m.SelectedCount == 1;
+            m.OnFocusedAction(9, ctrl: true, shift: false);       // Ctrl+focus: no selection change
+            bool ctrlFocus = m.IsSelected(8) && !m.IsSelected(9) && m.Version.Peek() == events;
+            Check("e11virt.7 SelectionModel Single: replace-on-select, ctrl-toggle, focus-follow, ctrl-focus inert (SingleSelector.cpp:25-57)",
+                def && replaces && ctrlOff && ctrlOn && follow && ctrlFocus, $"events={events} version={m.Version.Peek()}");
+        }
+
+        // e11virt.8 — SelectionModel Multiple (MultipleSelector.cpp:18-92): toggle without modifiers; Shift extends or
+        // deselects the anchor range by the ANCHOR's state (only when the states differ); Shift with NO anchor is a
+        // NO-OP (the toggle is cpp's `else` — it never runs while Shift is held); plain focus moves never select.
+        {
+            var m = new SelectionModel { ItemCount = 100, Mode = ItemsSelectionMode.Multiple };
+            m.OnInteractedAction(4, ctrl: false, shift: true);    // no anchor yet → no-op (cpp:24-63)
+            bool shiftNoAnchor = m.SelectedCount == 0 && m.AnchorIndex == -1;
+            m.OnInteractedAction(2, false, false);                // toggle on → anchor 2
+            m.OnInteractedAction(6, false, true);                 // anchor selected, 6 not → SelectRangeFromAnchorTo
+            bool shiftRange = m.SelectedCount == 5 && m.RangeCount == 1 && m.GetRange(0) == (2, 6);
+            m.OnInteractedAction(4, false, true);                 // anchor and 4 BOTH selected → states equal → nothing (cpp:44-52)
+            bool statesEqual = m.SelectedCount == 5;
+            m.OnFocusedAction(8, false, false);                   // plain focus move never selects (cpp:65-92)
+            bool focusInert = m.SelectedCount == 5 && !m.IsSelected(8);
+            m.OnInteractedAction(2, false, false);                // toggle the anchor itself OFF (anchor stays 2)
+            m.OnInteractedAction(5, false, true);                 // anchor UNselected, 5 selected → DeselectRangeFromAnchorTo
+            bool shiftDeselect = !m.IsSelected(3) && !m.IsSelected(5) && m.IsSelected(6) && m.SelectedCount == 1;
+            Check("e11virt.8 SelectionModel Multiple: modifier-free toggle, shift range by anchor state, shift-no-anchor no-op (MultipleSelector.cpp:18-92)",
+                shiftNoAnchor && shiftRange && statesEqual && focusInert && shiftDeselect,
+                $"count={m.SelectedCount} ranges={m.RangeCount}");
+        }
+
+        // e11virt.9 — SelectionModel Extended (ExtendedSelector.cpp:18-83): plain replaces ONLY on an unselected item;
+        // Ctrl toggles; Shift replaces with the anchor range; focus: Shift+Ctrl additive, Shift replace, plain replace,
+        // Ctrl alone moves without selecting.
+        {
+            var m = new SelectionModel { ItemCount = 100, Mode = ItemsSelectionMode.Extended };
+            m.OnInteractedAction(2, false, false);                // plain → clear+select, anchor 2
+            m.OnInteractedAction(6, false, true);                 // Shift → replace with [anchor..6] (cpp:23-32)
+            bool range = m.SelectedCount == 5 && m.GetRange(0) == (2, 6) && m.AnchorIndex == 2;
+            m.OnInteractedAction(9, true, false);                 // Ctrl → additive toggle (cpp:33-43)
+            bool ctrlAdd = m.SelectedCount == 6 && m.IsSelected(9);
+            m.OnInteractedAction(4, false, false);                // plain on a SELECTED item → keep (cpp:46 "Only clear ... different item")
+            bool keepOnSelected = m.SelectedCount == 6;
+            m.OnInteractedAction(20, false, false);               // plain on unselected → clear+select
+            bool replace = m.SelectedCount == 1 && m.IsSelected(20) && m.AnchorIndex == 20;
+            m.OnFocusedAction(23, false, true);                   // Shift+focus → replace with the anchor range (cpp:66-75)
+            bool focusShift = m.SelectedCount == 4 && m.GetRange(0) == (20, 23) && m.AnchorIndex == 20;
+            m.OnFocusedAction(30, true, false);                   // Ctrl+focus → nothing (cpp falls through)
+            bool focusCtrl = m.SelectedCount == 4;
+            m.OnFocusedAction(28, true, true);                    // Shift+Ctrl+focus → ADDITIVE anchor range (cpp:59-65)
+            bool focusCtrlShift = m.SelectedCount == 9 && m.GetRange(0) == (20, 28);
+            m.OnFocusedAction(40, false, false);                  // plain focus → clear+select (cpp:76-80)
+            bool focusPlain = m.SelectedCount == 1 && m.IsSelected(40);
+            Check("e11virt.9 SelectionModel Extended: plain/ctrl/shift interact + the four focus chords (ExtendedSelector.cpp:18-83)",
+                range && ctrlAdd && keepOnSelected && replace && focusShift && focusCtrl && focusCtrlShift && focusPlain,
+                $"count={m.SelectedCount}");
+        }
+
+        // e11virt.10 — selection is DECOUPLED from realization: SelectAll over 10k stores ONE inclusive range
+        // (never walks indices), deselect splits it, invert complements it, shrinking ItemCount trims it.
+        {
+            var m = new SelectionModel { ItemCount = 10_000, Mode = ItemsSelectionMode.Extended };
+            int events = 0;
+            m.SelectionChanged = () => events++;
+            m.SelectAll();
+            bool one = m.RangeCount == 1 && m.GetRange(0) == (0, 9_999) && m.SelectedCount == 10_000 && events == 1;
+            m.SelectAll();                                       // no actual change → no event (WinUI raises only on change)
+            bool idempotent = events == 1;
+            m.DeselectRange(100, 199);
+            bool split = m.RangeCount == 2 && m.SelectedCount == 9_900 && !m.IsSelected(150) && events == 2;
+            m.InvertSelection();
+            bool inverted = m.RangeCount == 1 && m.GetRange(0) == (100, 199) && m.SelectedCount == 100;
+            m.ItemCount = 150;                                   // shrink trims out-of-range selection
+            bool trimmed = m.SelectedCount == 50 && m.GetRange(0) == (100, 149);
+            Check("e11virt.10 SelectionModel ranges: select-all-over-10k = ONE range (realizes nothing), split/invert/trim stay range-shaped",
+                one && idempotent && split && inverted && trimmed, $"events={events} ranges={m.RangeCount} count={m.SelectedCount}");
+        }
+
+        // e11virt.11 — ItemContainer state ARGB, BOTH themes (full #AARRGGBB; ItemContainer_themeresources.xaml:5-18
+        // dark / :37-49 light → Common_themeresources_any.xaml) + the selected dual-stroke geometry + checkbox plate
+        // + disabled collapse.
+        {
+            bool all = true;
+            var details = new System.Text.StringBuilder();
+            try
+            {
+                foreach (var (kind, hover, pressed, ring, inner, plate, plateStroke) in new (ThemeKind, ColorF, ColorF, ColorF, ColorF, ColorF, ColorF)[]
+                {
+                    // DARK — PointerOver = SubtleFillColorSecondary #0FFFFFFF, Pressed = SubtleFillColorTertiary
+                    // #0AFFFFFF (Common_themeresources_any.xaml:26-27); SelectionVisual = AccentFillColorDefault =
+                    // SystemAccentColorLight2 #60CDFF (:125); SelectedInnerBorder = ControlSolidFillColorDefault
+                    // #454545 (:24); checkbox plate = ControlOnImageFillColorDefault #B31C1C1C (:34); plate stroke =
+                    // CheckBoxCheckBackgroundStrokeUnchecked → ControlStrongStrokeColorDefault #8BFFFFFF (:48).
+                    (ThemeKind.Dark,
+                     ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F), ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
+                     ColorF.FromRgba(0x60, 0xCD, 0xFF), ColorF.FromRgba(0x45, 0x45, 0x45),
+                     ColorF.FromRgba(0x1C, 0x1C, 0x1C, 0xB3), ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B)),
+                    // LIGHT — Secondary #09000000 / Tertiary #06000000 (:230-231); accent = SystemAccentColorDark1
+                    // #005FB8 (:329); inner = #FFFFFF (:228); plate = #C9FFFFFF (:238); stroke = #72000000 (:252).
+                    (ThemeKind.Light,
+                     ColorF.FromRgba(0x00, 0x00, 0x00, 0x09), ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
+                     ColorF.FromRgba(0x00, 0x5F, 0xB8), ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+                     ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC9), ColorF.FromRgba(0x00, 0x00, 0x00, 0x72)),
+                })
+                {
+                    Tok.Use(kind);
+                    const float tol = 1.5f / 255f;
+
+                    // Selected + multi-select + unchecked plate → [ic-content, ic-ring, ic-inner, ic-check].
+                    var scene = LayoutTree(strings, ItemContainer.Build(new BoxEl(), isSelected: true,
+                        onInteraction: (t, mods) => { }, showSelectionCheckbox: true, isChecked: false, width: 120f, height: 48f));
+                    var root = scene.Root;
+                    ref var p = ref scene.Paint(root);
+                    var ringN = Child(scene, root, 1);
+                    var innerN = Child(scene, root, 2);
+                    var plateN = Child(scene, Child(scene, root, 3), 0);
+                    bool states = ColorClose(p.Fill, ColorF.Transparent, tol)                      // ItemContainerBackground = SubtleFillColorTransparent (:5/:37)
+                        && ColorClose(p.HoverFill, hover, tol) && ColorClose(p.PressedFill, pressed, tol)
+                        && ColorClose(scene.Paint(ringN).BorderColor, ring, tol) && Near(scene.Paint(ringN).BorderWidth, 3f)   // PART_SelectionVisual (ItemContainer.xaml:116-126)
+                        && ColorClose(scene.Paint(innerN).BorderColor, inner, tol) && Near(scene.Paint(innerN).BorderWidth, 1f);
+                    var ir = scene.AbsoluteRect(innerN);
+                    var pr = scene.AbsoluteRect(plateN);
+                    bool geometry = Near(ir.X, 2f) && Near(ir.Y, 2f) && Near(ir.W, 116f) && Near(ir.H, 44f)   // ItemContainerSelectedInnerMargin 2 (themeresources:57)
+                        && Near(pr.W, 20f) && Near(pr.H, 20f) && Near(pr.X, 96f) && Near(pr.Y, -2f);          // 20px checkbox, top-right, Margin 4,−2 (:56,:59-60)
+                    bool plateColors = ColorClose(scene.Paint(plateN).Fill, plate, tol)
+                        && ColorClose(scene.Paint(plateN).BorderColor, plateStroke, tol)
+                        && FindPolylineStrokeNode(scene, root).IsNull;                            // unchecked → no checkmark glyph
+
+                    // Checked plate flips to the accent fill + drawn checkmark.
+                    var checkedScene = LayoutTree(strings, ItemContainer.Build(new BoxEl(), true,
+                        (t, mods) => { }, showSelectionCheckbox: true, isChecked: true, width: 120f, height: 48f));
+                    var cPlate = Child(checkedScene, Child(checkedScene, checkedScene.Root, 3), 0);
+                    bool checkedOk = ColorClose(checkedScene.Paint(cPlate).Fill, ring, tol)        // CheckBoxCheckBackgroundFillChecked = AccentFillColorDefault (CheckBox_themeresources.xaml:57)
+                        && !FindPolylineStrokeNode(checkedScene, checkedScene.Root).IsNull;
+
+                    // Disabled: Opacity 0.3 (ItemContainerDisabledOpacity, :54) and PART_SelectionVisual collapses
+                    // (ItemContainer.xaml:108-110) → only the content layer remains.
+                    var disabledScene = LayoutTree(strings, ItemContainer.Build(new BoxEl(), true,
+                        (t, mods) => { }, isEnabled: false, width: 120f, height: 48f));
+                    bool disabled = Near(disabledScene.Paint(disabledScene.Root).Opacity, 0.3f, 0.001f)
+                        && disabledScene.ChildCount(disabledScene.Root) == 1;
+
+                    all &= states && geometry && plateColors && checkedOk && disabled;
+                    details.Append($"{kind}: states={states} geo={geometry} plate={plateColors} checked={checkedOk} disabled={disabled}; ");
+                }
+            }
+            finally { Tok.Use(ThemeKind.Dark); }
+            Check("e11virt.11 ItemContainer: WinUI state ARGB both themes + dual-stroke geometry + checkbox plate + disabled collapse", all, details.ToString());
+        }
+
+        // e11virt.12 — the selection ring and multi-select checkbox FADE IN when they appear: opacity 0 → 1 over
+        // ControlFastAnimationDuration 167ms / KeySpline 0,0,0,1 (ItemContainer.xaml:54-56 SelectedPointerOver and
+        // :93-99 the checkbox storyboard) — the engine carries both as enter transitions on the keyed child nodes.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            Element Tree(bool multi, bool selected) => new BoxEl
+            {
+                Width = 200, Height = 60,
+                Children = [ItemContainer.Build(new BoxEl(), isSelected: selected, onInteraction: (t, mods) => { },
+                                                showSelectionCheckbox: multi, isChecked: false, width: 200f, height: 60f)],
+            };
+            var t0 = Tree(false, false);
+            recon.ReconcileRoot(t0, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var container = Child(scene, scene.Root, 0);
+            bool noChrome = scene.ChildCount(container) == 1;     // unselected + single → content layer only
+
+            recon.ReconcileRoot(Tree(true, true), t0);            // select + flip to Multiple → ring + checkbox enter
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var ring = Child(scene, container, 1);
+            var check = Child(scene, container, 3);
+            engine.Tick(16f);
+            float ring16 = scene.Paint(ring).Opacity, check16 = scene.Paint(check).Opacity;
+            for (int i = 0; i < 4; i++) engine.Tick(16f);         // t = 80ms — mid-flight on the 167ms tween
+            float mid = scene.Paint(check).Opacity;
+            for (int i = 0; i < 30; i++) engine.Tick(16f);        // past 167ms → settled
+            bool settled = Near(scene.Paint(check).Opacity, 1f, 0.001f) && Near(scene.Paint(ring).Opacity, 1f, 0.001f);
+            bool entering = ring16 < 0.95f && check16 < 0.95f && mid > check16 && mid < 1f;
+
+            // the authored spec is exactly the WinUI storyboard: a 167ms decelerate TWEEN entering from opacity 0.
+            var checkEl = (BoxEl)ItemContainer.Build(new BoxEl(), false, (t, mods) => { }, showSelectionCheckbox: true).Children[1];
+            bool spec = checkEl.Animate is { } a && a.Dynamics.Kind == DynamicsKind.Tween && Near(a.Dynamics.DurationMs, 167f)
+                && a.Dynamics.Easing == Easing.FluentDecelerate && a.Enter.Active && Near(a.Enter.Opacity, 0f)
+                && (a.Channels & TransitionChannels.Opacity) != 0;
+            Check("e11virt.12 ItemContainer ring + checkbox enter-fade 0→1 over the 167ms ControlFastAnimationDuration tween",
+                noChrome && entering && settled && spec, $"op16=({ring16:0.00},{check16:0.00}) op80={mid:0.00} settled={settled} spec={spec}");
+        }
+
+        // e11virt.13/14/15 — ItemsView (E11-L3) keyboard surface on a virtualized stack.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-iv", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new ItemsViewKeyboardProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ctl = probe.Controller;
+            var sel = ctl.Selection!;
+
+            NodeHandle vp = NodeHandle.Null;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (host.Scene.TryGetScroll(n, out var s) && s.ItemCount == ItemsViewKeyboardProbe.N) vp = n;
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+            }
+            Visit(host.Scene.Root);
+            ScrollState Sc() { host.Scene.TryGetScroll(vp, out var s); return s; }
+            void Press(float x, float y, uint t, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(x, y), 0, 0, 0f, mods, PointerKind.Mouse, false, t + 10));
+                host.RunFrame();
+            }
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+
+            bool def = ctl.CurrentItemIndex == -1 && sel.Mode == ItemsSelectionMode.Single;   // CurrentItemIndex default −1 (ItemsView.idl:46-47)
+            Press(180f, 100f, 1_000);                                    // row 2
+            bool click = ctl.CurrentItemIndex == 2 && sel.IsSelected(2) && sel.SelectedCount == 1;
+            Key(Keys.Down);
+            bool down = ctl.CurrentItemIndex == 3 && sel.IsSelected(3) && sel.SelectedCount == 1;   // selection follows focus (SingleSelector)
+            Key(Keys.Up);
+            bool up = ctl.CurrentItemIndex == 2 && sel.IsSelected(2);
+            Key(Keys.PageDown);                                          // viewport jump (cpp:1103+): 80 + 320 → row 10
+            bool pgdn = ctl.CurrentItemIndex == 10;
+            Key(Keys.PageUp);
+            bool pgup = ctl.CurrentItemIndex == 2;
+            Key(Keys.End);                                               // End: bottom edge-aligned (cpp:1009-1016, ratio 1)
+            var scEnd = Sc();
+            var focusedEnd = FocusedNode(host.Scene, host.Scene.Root);
+            var fr = host.Scene.AbsoluteRect(focusedEnd);
+            bool end = ctl.CurrentItemIndex == 99 && sel.IsSelected(99)
+                && Near(scEnd.OffsetY, ItemsViewKeyboardProbe.N * 40f - 320f)
+                && Near(fr.Y, 280f) && Near(fr.H, 40f);                  // the realized last container carries keyboard focus
+            Key(Keys.Home);                                              // Home: top edge-aligned (ratio 0)
+            bool home = ctl.CurrentItemIndex == 0 && Near(Sc().OffsetY, 0f);
+            Check("e11virt.13 ItemsView keyboard: arrows follow focus, PageUp/Down jump a viewport, Home/End edge-align + focus the realized container",
+                def && click && down && up && pgdn && pgup && end && home,
+                $"cur 2→3→2→10→2→99→0 end-off={scEnd.OffsetY:0} focusY={fr.Y:0}");
+
+            Key(Keys.A, KeyModifiers.Ctrl);                              // Ctrl+A gated OFF in Single (ItemsViewInteractions.cpp:35-50)
+            bool noSelectAll = sel.SelectedCount == 1;
+            window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'z'));
+            host.RunFrame();
+            bool typeahead = ctl.CurrentItemIndex == 57 && sel.IsSelected(57)
+                && Near(Sc().OffsetY, 57f * 40f + 40f - 320f);           // minimal scroll realizes it at the bottom edge
+            int invoked0 = probe.InvokedCount;
+            Key(Keys.Enter);                                             // EnterKey invokes (ItemsView.cpp:423-426)
+            bool enterInvokes = probe.InvokedCount == invoked0 + 1 && probe.LastInvoked == 57;
+            Key(Keys.Space);                                             // SpaceKey selects WITHOUT invoking
+            bool spaceSilent = probe.InvokedCount == invoked0 + 1 && sel.IsSelected(57);
+            Press(180f, 100f, 80_000);                                   // Tap selects only (no invoke) — row 52 at this offset
+            bool tapSilent = probe.InvokedCount == invoked0 + 1 && ctl.CurrentItemIndex == 52;
+            Press(180f, 100f, 80_100);                                   // ClickCount 2 → DoubleTap invokes
+            bool dblInvokes = probe.InvokedCount == invoked0 + 2 && probe.LastInvoked == 52;
+            Check("e11virt.14 ItemsView typeahead jumps to the prefix match (+min-scroll realize); invoke matrix: Enter/DoubleTap yes, Tap/Space no; Ctrl+A gated in Single",
+                noSelectAll && typeahead && enterInvokes && spaceSilent && tapSilent && dblInvokes,
+                $"type→{ctl.CurrentItemIndex} invoked={probe.InvokedCount} last={probe.LastInvoked}");
+
+            ctl.StartBringItemIntoView(10, 0f);                          // explicit edge-align (ratio 0)
+            host.RunFrame();
+            var scB = Sc();
+            bool bring = Near(scB.OffsetY, 400f) && scB.FirstRealized <= 10 && scB.LastRealized > 10
+                && ctl.CurrentItemIndex == 52;                           // StartBringItemIntoView never moves focus (ItemsView.cpp:119-127)
+            ctl.StartBringItemIntoView(12);                              // already visible + default options → minimal scroll = no-op
+            host.RunFrame();
+            bool minimal = Near(Sc().OffsetY, 400f);
+            Check("e11virt.15 StartBringItemIntoView: realizes + edge-aligns by ratio without moving focus; in-view target is a minimal-scroll no-op",
+                bring && minimal, $"off={scB.OffsetY:0} window=[{scB.FirstRealized},{scB.LastRealized}) cur={ctl.CurrentItemIndex}");
+        }
+
+        // e11virt.16 — grid arrows: Left/Right = index ±1, Up/Down = ±columns (ItemsViewInteractions.cpp:1051-1067).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-grid", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new ItemsViewGridProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ctl = probe.Controller;
+            void Key(int key)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key));
+                host.RunFrame();
+            }
+            // cell 1 of a 4-col grid on 360 cross: colW = (360 − 3×8)/4 = 84 → cell 1 spans x [92,176), y [0,72).
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(134f, 36f), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(134f, 36f), 0, 0));
+            host.RunFrame();
+            bool click = ctl.CurrentItemIndex == 1;
+            Key(Keys.Right); bool right = ctl.CurrentItemIndex == 2;
+            Key(Keys.Down); bool gdown = ctl.CurrentItemIndex == 6;
+            Key(Keys.Left); bool left = ctl.CurrentItemIndex == 5;
+            Key(Keys.Up); bool gup = ctl.CurrentItemIndex == 1;
+            Check("e11virt.16 ItemsView grid arrows: Left/Right ±1, Up/Down ±columns (index-based orientation path)",
+                click && right && gdown && left && gup, $"cur 1→2→6→5→{ctl.CurrentItemIndex}");
+        }
+
+        // e11virt.17 — Extended mode end-to-end through pointer chords + Shift+arrow + Ctrl+A.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-ext", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new ItemsViewExtendedProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ctl = probe.Controller;
+            var sel = ctl.Selection!;
+            void Press(int row, uint t, KeyModifiers mods = KeyModifiers.None)
+            {
+                var pt = new Point2(180f, row * 40f + 20f);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0, 0f, mods, PointerKind.Mouse, false, t));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0, 0f, mods, PointerKind.Mouse, false, t + 10));
+                host.RunFrame();
+            }
+            void Key(int key, KeyModifiers mods = KeyModifiers.None)
+            {
+                window.QueueInput(new InputEvent(InputKind.Key, default, 0, key, 0f, mods));
+                host.RunFrame();
+            }
+
+            Press(2, 1_000);                                             // plain → {2}
+            bool plain = sel.SelectedCount == 1 && sel.IsSelected(2) && ctl.CurrentItemIndex == 2;
+            Press(6, 2_000, KeyModifiers.Shift);                         // Shift → replace with [2..6]
+            bool shiftRange = sel.SelectedCount == 5 && sel.GetRange(0) == (2, 6);
+            Press(7, 3_000, KeyModifiers.Ctrl);                          // Ctrl → additive {2..6, 7}
+            bool ctrlAdd = sel.SelectedCount == 6 && sel.IsSelected(7);
+            Press(4, 4_000);                                             // plain on SELECTED → selection kept
+            bool keep = sel.SelectedCount == 6 && ctl.CurrentItemIndex == 4;
+            Key(Keys.Down, KeyModifiers.Shift);                          // Shift+arrow → replace with [5..anchor(7)]
+            bool shiftArrow = ctl.CurrentItemIndex == 5 && sel.SelectedCount == 3 && sel.GetRange(0) == (5, 7);
+            Key(Keys.A, KeyModifiers.Ctrl);                              // Ctrl+A allowed in Extended
+            bool selectAll = sel.SelectedCount == ItemsViewExtendedProbe.N && sel.RangeCount == 1;
+            bool events = probe.SelectionChangedCount == 5;              // one SelectionChanged per actual change
+            Check("e11virt.17 ItemsView Extended: plain/shift/ctrl pointer chords, plain-on-selected keeps, Shift+arrow anchor range, Ctrl+A",
+                plain && shiftRange && ctrlAdd && keep && shiftArrow && selectAll && events,
+                $"count={sel.SelectedCount} ranges={sel.RangeCount} changes={probe.SelectionChangedCount}");
+        }
+
+        // e11virt.18 — Multiple over 10k: toggle clicks re-skin the window; Ctrl+A selects ALL via one stored range
+        // while realizing nothing (bounded realized children + bounded template re-runs), and every realized
+        // container shows the selected chrome + checkbox.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-multi", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new ItemsViewMultipleProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var ctl = probe.Controller;
+            var sel = ctl.Selection!;
+            int calls0 = probe.TemplateCalls;
+            void Press(int row, uint t, KeyModifiers mods = KeyModifiers.None)
+            {
+                var pt = new Point2(180f, row * 40f + 20f);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0, 0f, mods, PointerKind.Mouse, false, t));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0, 0f, mods, PointerKind.Mouse, false, t + 10));
+                host.RunFrame();
+            }
+            Press(3, 1_000);
+            bool on = sel.IsSelected(3) && sel.SelectedCount == 1;       // Multiple: plain click toggles
+            Press(3, 2_500);
+            bool off = !sel.IsSelected(3) && sel.SelectedCount == 0;
+            Press(3, 4_000);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.A, 0f, KeyModifiers.Ctrl));
+            host.RunFrame();
+            bool allSel = sel.SelectedCount == ItemsViewMultipleProbe.N && sel.RangeCount == 1
+                && sel.GetRange(0) == (0, ItemsViewMultipleProbe.N - 1);
+
+            NodeHandle vp = NodeHandle.Null;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (host.Scene.TryGetScroll(n, out var s) && s.ItemCount == ItemsViewMultipleProbe.N) vp = n;
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Visit(c);
+            }
+            Visit(host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc);
+            int realized = host.Scene.ChildCount(sc.ContentNode);
+            int templateDelta = probe.TemplateCalls - calls0;
+            bool bounded = realized < 40 && templateDelta > 0 && templateDelta < realized * 12;   // window-only re-skin per change
+            var firstContainer = host.Scene.FirstChild(sc.ContentNode);
+            bool chrome = host.Scene.ChildCount(firstContainer) == 4;    // content + ring + inner + checkbox
+            Check("e11virt.18 ItemsView Multiple over 10k: toggle clicks, Ctrl+A = ONE range realizing nothing (bounded window re-skin) + checkbox chrome",
+                on && off && allSel && bounded && chrome,
+                $"count={sel.SelectedCount} ranges={sel.RangeCount} realized={realized} templateΔ={templateDelta}");
+        }
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -5872,6 +8499,7 @@ static class Slice
         ClipChannelChecks();
         FocusNavChecks(strings);
         InputVocabularyChecks(strings);
+        E5DragDropChecks(strings);
         FocusRingChecks(strings);
         BrushTransitionChecks(strings);
         TextServicesSeamChecks();
@@ -5889,6 +8517,9 @@ static class Slice
         TextInputChecks(strings);
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
+        E4PopupWindowingChecks(strings);
+        FlyoutAcrylicChecks(strings);
+        AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
         TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
@@ -5900,6 +8531,13 @@ static class Slice
 
         // Basic-input controls (Part C).
         BasicInputControlChecks(strings);
+
+        // Wave-1 control parity (Button/RepeatButton/HyperlinkButton/ToggleButton/ToggleSwitch/RadioButtons/Slider/Rating).
+        W1ControlsChecks(strings);
+
+        // E11 — unified virtualization substrate (measured seam, LinedFlow/GroupedList, repeater lifecycle,
+        // SelectionModel, ItemContainer, ItemsView).
+        E11VirtChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

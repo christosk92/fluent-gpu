@@ -491,7 +491,12 @@ internal sealed class RangedSlider : Component
         var tip = UseRef<OverlayHandle?>(null);
         var tipPhase = UseSignal(0);                       // 0 idle · 1 hover-arm (initial show delay) · 2 open
         var tipValue = UseFloatSignal(props.Value);        // live value for the bubble's TextBind (granular, no re-render)
-        tipValue.Value = props.Value;                      // follow programmatic/keyboard updates
+        // Follow CONTROLLED value changes (programmatic writes / the owner echoing onChange back) WITHOUT clobbering a
+        // live scrub: a re-render not caused by a Value change — e.g. the tooltip-phase flip on the press itself —
+        // must not reset the readout to the stale prop. (An owner may consume onChange as a side effect without
+        // re-rendering; WinUI's disambiguation UI always shows the live scrubbed value, Slider_Partial.cpp:478-543.)
+        var lastPropValue = UseRef(props.Value);
+        if (lastPropValue.Value != props.Value) { lastPropValue.Value = props.Value; tipValue.Value = props.Value; }
 
         string Format(float v) => o.ThumbToolTipValueConverter is { } conv ? conv(v) : Slider.FormatThumbValue(v, o.Step);
 
@@ -501,7 +506,7 @@ internal sealed class RangedSlider : Component
         Element TipBubble() => new BoxEl
         {
             Fill = ColorF.Transparent,
-            Acrylic = AcrylicSpec.Flyout,
+            Acrylic = Tok.AcrylicFlyout,   // the standard ToolTip surface = AcrylicInAppFillColorDefault (theme-aware)
             BorderColor = Tok.StrokeFlyoutDefault,
             BorderWidth = 1f,
             Corners = Radii.ControlAll,

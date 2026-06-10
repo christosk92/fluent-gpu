@@ -68,6 +68,8 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
 
     // MenuFlyoutPresenter and CommandBarFlyoutPresenter use DesktopAcrylicTransparentBrush plus
     // AcrylicBackgroundFillColorDefaultBackdrop. In-canvas reproduction uses that same acrylic recipe.
+    // NOTE: Flyout/FlyoutLight are the per-theme RAW recipes — controls should read the theme-aware
+    // `Tok.AcrylicFlyout` (FluentGpu.Dsl Tokens.cs) instead of hard-binding the dark constant.
     public static AcrylicSpec Flyout => InAppDefault;
     public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }

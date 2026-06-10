@@ -66,7 +66,9 @@ public readonly record struct ItemCollectionTransition(
     bool AnimateMoves = true,
     float DurationMs = 167f)
 {
-    public static ItemCollectionTransition Default => new();
+    // NOTE: must spell the arguments out — on a record struct the parameterless `new()` ZERO-initializes
+    // (primary-ctor parameter defaults do not apply), which silently made Default an all-off 0ms transition.
+    public static ItemCollectionTransition Default => new(AnimateAdds: true, AnimateRemoves: true, AnimateMoves: true, DurationMs: 167f);
 
     /// <summary>The engine-level spec the repeater stamps onto each item root (<see cref="BoxEl.Animate"/>).</summary>
     internal LayoutTransition ToSpec()

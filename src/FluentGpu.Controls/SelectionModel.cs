@@ -223,15 +223,19 @@ public sealed class SelectionModel
 
             case ItemsSelectionMode.Multiple:
                 // MultipleSelector.cpp:18-63: Shift → extend/deselect range from anchor by the ANCHOR's state
-                // (only when anchor and target state differ); otherwise toggle.
-                if (shift && AnchorIndex >= 0)
+                // (only when anchor and target state differ); otherwise toggle. Shift with NO anchor is a NO-OP
+                // (the toggle is the `else` of `if (shift)` in cpp:24-63 — it never runs while shift is held).
+                if (shift)
                 {
-                    bool anchorSelected = IsSelected(AnchorIndex);
-                    bool indexSelected = IsSelected(index);
-                    if (anchorSelected != indexSelected)
+                    if (AnchorIndex >= 0)
                     {
-                        if (anchorSelected) SelectRangeFromAnchorTo(index);
-                        else DeselectRangeFromAnchorTo(index);
+                        bool anchorSelected = IsSelected(AnchorIndex);
+                        bool indexSelected = IsSelected(index);
+                        if (anchorSelected != indexSelected)
+                        {
+                            if (anchorSelected) SelectRangeFromAnchorTo(index);
+                            else DeselectRangeFromAnchorTo(index);
+                        }
                     }
                 }
                 else if (IsSelected(index)) Deselect(index);

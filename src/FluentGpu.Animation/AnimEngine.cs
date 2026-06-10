@@ -392,7 +392,11 @@ public sealed class AnimEngine
             Track t = _tracks[i];
             if (!_scene.IsLive(t.Node)) { _tracks.RemoveAt(i); continue; }
             float stepMs = dtMs;
-            if (!t.Done && t.DelayRemainingMs > 0f && stepMs > 0f)
+            // A JUST-seeded track must not consume its delay from THIS frame's dt: the dt accumulated BEFORE the
+            // seed (idle frames roll their pending time into the next active frame), so charging it against the
+            // delay starts the track early — a delayed track seeded after an idle gap lost its entire begin time.
+            // JustSeeded already guards ElapsedMs below for exactly this reason; the delay needs the same guard.
+            if (!t.Done && t.DelayRemainingMs > 0f && stepMs > 0f && !t.JustSeeded)
             {
                 float consume = MathF.Min(t.DelayRemainingMs, stepMs);
                 t.DelayRemainingMs -= consume;

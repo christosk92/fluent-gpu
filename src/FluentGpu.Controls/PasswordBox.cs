@@ -20,14 +20,22 @@ public enum PasswordRevealMode : byte { Peek = 0, Hidden = 1, Visible = 2 }
 /// <para>The reveal button (<see cref="PasswordRevealMode.Peek"/>): glyph U+F78D @ PasswordBoxIconFontSize 12
 /// (PasswordBox_themeresources.xaml:100 + :9), button Width 30, VerticalAlignment Stretch
 /// (PasswordBox_themeresources.xaml:193), the TextControlButton state ramp (shared with the TextBox DeleteButton via
-/// <see cref="EditableText.InnerButton"/>). It appears while the field is focused ∧ non-empty (the template's
-/// ButtonStates ButtonVisible/ButtonCollapsed pair, PasswordBox_themeresources.xaml:165–178), and press-and-HOLD
-/// reveals — release anywhere re-masks (the watcher polls the button's engine Pressed flag, so drag-off and
-/// release-outside re-mask too).</para>
+/// <see cref="EditableText.InnerButton"/>). Visibility is the dxaml ButtonStates rule (the template pair
+/// PasswordBox_themeresources.xaml:165–178 is driven by CPasswordBox::UpdateVisualState, PasswordBox.cpp:532–565):
+/// ButtonVisible iff CanInvokeRevealButton() = canShow ∧ hasSpace ∧ focused (PasswordBox.cpp:618–626), where canShow
+/// (m_fCanShowRevealButton) arms ONLY when content changes from EMPTY — "only allow password reveal button if
+/// transitioning from empty to non-empty state" (OnContentChanged, PasswordBox.cpp:366–377) — clears whenever the box
+/// becomes empty again (PasswordBox.cpp:430–434) AND on every focus gain (OnGotFocus, PasswordBox.cpp:572–581:
+/// "Password reveal button should not appear if focus got moved to the PasswordBox control"). Net effect: the eye
+/// shows while the user is TYPING a fresh password, never from focusing/refocusing a populated box. hasSpace
+/// (m_fHasSpaceForRevealButton) requires width &gt; 5 × FontSize (ArrangeOverride, PasswordBox.cpp:237–248).
+/// Press-and-HOLD reveals — release anywhere re-masks (the watcher polls the button's engine Pressed flag, so
+/// drag-off and release-outside re-mask too).</para>
 /// <para>Composition note: the mounted <see cref="EditableText"/> component persists across renders (constructor props
 /// freeze at mount), so the reveal flips and the affix visibility mutate the LIVE instance
-/// (<see cref="EditableText.SetRevealed"/> / <see cref="EditableText.RightAffix"/>) from the focus/text callbacks —
-/// EditableText re-renders itself on exactly those flips and reads the updated fields.</para>
+/// (<see cref="EditableText.SetRevealed"/> / <see cref="EditableText.SetRightAffix"/>) from the focus/text callbacks —
+/// SetRightAffix bumps EditableText's render-subscribed affix epoch, so the eye mounts/unmounts even when no focus
+/// flip re-renders the field (the mid-typing arming case).</para>
 /// </summary>
 public sealed class PasswordBox : Component
 {
@@ -72,11 +80,18 @@ public sealed class PasswordBox : Component
     private InputHooks? _hooks;
     private bool _focused;
     private bool _empty;
+    /// <summary>CPasswordBox::m_fCanShowRevealButton (PasswordBox.cpp:32): armed only by an empty→non-empty content
+    /// change (PasswordBox.cpp:366–377), cleared when the box empties (PasswordBox.cpp:430–434) and on focus gain
+    /// (OnGotFocus, PasswordBox.cpp:572–581).</summary>
+    private bool _canShowReveal;
 
-    /// <summary>ButtonVisible iff Peek ∧ enabled ∧ focused ∧ non-empty (the WinUI ButtonStates pair,
-    /// PasswordBox_themeresources.xaml:165–178).</summary>
+    /// <summary>ButtonVisible iff Peek ∧ enabled ∧ CanInvokeRevealButton() = canShow ∧ hasSpace ∧ focused
+    /// (PasswordBox.cpp:618–626 + UpdateVisualState:532–565; hasSpace = width &gt; 5 × FontSize 14,
+    /// ArrangeOverride PasswordBox.cpp:237–248).</summary>
     private Element? AffixFor()
-        => RevealMode == PasswordRevealMode.Peek && IsEnabled && _focused && !_empty ? _revealButton : null;
+        => RevealMode == PasswordRevealMode.Peek && IsEnabled && _focused && _canShowReveal && !_empty
+           && MathF.Max(Width, MinWidth) > 14f * 5f
+            ? _revealButton : null;
 
     public override Element Render()
     {
@@ -124,17 +139,29 @@ public sealed class PasswordBox : Component
             e.OnFocusChanged = f =>
             {
                 _focused = f;
-                if (!f)
+                if (f)
+                {
+                    // OnGotFocus (PasswordBox.cpp:572–581): "Password reveal button should not appear if focus got
+                    // moved to the PasswordBox control" — refocusing a populated box never shows the eye.
+                    _canShowReveal = false;
+                }
+                else
                 {
                     revealed.Value = false;        // blur always ends a peek (WinUI: the peek lives within the press)
                     e.SetRevealed(RevealMode == PasswordRevealMode.Visible);
                 }
-                e.RightAffix = AffixFor();         // the focus flip re-renders EditableText, which reads the new affix
+                e.SetRightAffix(AffixFor());
             };
             e.OnTextChanged = s =>
             {
+                bool wasEmpty = _empty;
                 _empty = s.Length == 0;
-                e.RightAffix = AffixFor();         // an empty↔non-empty flip re-renders EditableText (button mount/unmount)
+                // OnContentChanged (PasswordBox.cpp:366–377): "only allow password reveal button if transitioning
+                // from empty to non-empty state" — arm on a content change while the box WAS empty…
+                if (!_canShowReveal && wasEmpty) _canShowReveal = true;
+                // …and drop the flag whenever the box empties again (PasswordBox.cpp:430–434).
+                if (_empty) _canShowReveal = false;
+                e.SetRightAffix(AffixFor());       // mounts/unmounts the eye mid-typing (no focus flip to re-render)
                 OnPasswordChanged?.Invoke(s);
             };
             _edit = e;

@@ -160,7 +160,11 @@ public static partial class RadioButton
             MinWidth = s.MinWidth,                                         // 120 (template:194)
             Role = AutomationRole.RadioButton,
             IsEnabled = isEnabled,
-            Focusable = focusable && isEnabled,                            // roving tab stop inside RadioButtons
+            // The roving SINGLE tab stop (RadioButtons.xaml:5-6 IsTabStop=False + TabNavigation=Once): an explicit
+            // TabStop (the WinUI Control.IsTabStop equivalent) — NOT Focusable — because a clickable node is otherwise
+            // auto-derived focusable (Reconciler: TabStop ?? (Focusable || OnClick != null)), which would put every
+            // radio in the tab order instead of only the selected one.
+            TabStop = focusable && isEnabled,
             FocusVisualMargin = s.FocusVisualMargin,                       // −7,−3,−7,−3 (template:196)
             OnClick = onSelect,
             OnKeyDown = onKeyDown,

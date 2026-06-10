@@ -33,8 +33,21 @@ public enum DismissBehavior : byte { LightDismiss, Modal, None }
 /// <summary>Where an overlay close request came from; controls map this to their public close reason.</summary>
 public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 
-/// <summary>Which presenter chrome the overlay host supplies around popup content.</summary>
-public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip }
+/// <summary>Which presenter chrome + open/close MOTION the overlay host supplies around popup content. Each kind maps
+/// 1:1 to the WinUI transition family that owns that surface:
+/// <list type="bullet">
+/// <item><see cref="Flyout"/> — menus (MenuFlyout/DropDownButton/SplitButton/MenuBar/context): MenuPopupThemeTransition
+/// (clip-reveal + content translate 250ms cubic-bezier(0,0,0,1); close = 83ms linear fade) — the default.</item>
+/// <item><see cref="Popup"/> — the WinUI <c>Flyout</c>/FlyoutPresenter (FlyoutBase attaches PopupThemeTransition,
+/// FlyoutBase_Partial.cpp:1968–1975): OS-PVL TAS_SHOWPOPUP/TAS_HIDEPOPUP (slide ±50 + delayed fade; close 83ms fade).</item>
+/// <item><see cref="Dropdown"/> — the ComboBox dropdown: SplitOpen/SplitCloseThemeAnimation (generic.xaml:9047/9056) —
+/// clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade.</item>
+/// <item><see cref="Raw"/> — ToolTip/Slider value tip: FadeIn/FadeOutThemeAnimation (TAS_FADEIN/TAS_FADEOUT, 167ms linear).</item>
+/// <item><see cref="Modal"/> — ContentDialog scale/fade; <see cref="TeachingTip"/> — muxc expand/contract scale.</item>
+/// <item><see cref="Static"/> — a bare WinUI <c>Popup</c> with no transitions (the AutoSuggestBox SuggestionsPopup,
+/// generic.xaml AutoSuggestBox template — no TransitionCollection and AutoSuggestBox_Partial.cpp adds none): instant.</item>
+/// </list></summary>
+public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdown, Static }
 
 /// <summary>Optional popup behavior. <see cref="FocusTrap"/> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).</summary>
 public readonly record struct PopupOptions(
@@ -268,10 +281,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (!inside && !e.WrapperNode.IsNull)
                 for (var n = cur; !n.IsNull; n = sc.Parent(n))
                     if (n == e.WrapperNode) { inside = true; break; }
-            Console.Error.WriteLine($"[DBG-BeginClose] saved={e.SavedFocus} cur={cur} wrapper={e.WrapperNode} inside={inside} savedLive={sc.IsLive(e.SavedFocus)}");
             if (inside && sc.IsLive(e.SavedFocus)) RestoreFocus(e.SavedFocus);
         }
-        else Console.Error.WriteLine($"[DBG-BeginClose] skipped: saved={e.SavedFocus} restoreNull={RestoreFocus is null} sceneNull={Scene is null}");
 
         SeedCloseIfNeeded(e);
         Bump();
@@ -291,12 +302,15 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
         if (e.Chrome == PopupChrome.TeachingTip && e.MeasuredW > 0f && e.MeasuredH > 0f)
         {
+            // WinUI TeachingTip contract: scale 1 → 20/Width over 200ms cubic-bezier(0.7,0,1,0.5)
+            // (TeachingTip.cpp:1695–1712 contractAnimation keyframes; TeachingTip.h:235 m_contractAnimationDuration,
+            // :306–307 contract control points). The contract storyboard has NO opacity keyframes — the tip shrinks
+            // at full opacity, then the popup closes.
             float sx = 20f / e.MeasuredW;
             float sy = 20f / e.MeasuredH;
             var ease = EasingSpec.CubicBezier(0.7f, 0.0f, 1.0f, 0.5f);
             anim.Animate(e.SurfaceNode, AnimChannel.ScaleX, currentScaleX, sx, 200f, ease);
             anim.Animate(e.SurfaceNode, AnimChannel.ScaleY, currentScaleY, sy, 200f, ease);
-            anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, OpacityMs, Easing.Linear);
         }
         else if (e.Chrome == PopupChrome.Modal)
         {
@@ -309,11 +323,39 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 anim.Animate(ScrimNode, AnimChannel.Opacity, scrimOpacity, 0f, OpacityMs, Easing.Linear);
             }
         }
+        else if (e.Chrome == PopupChrome.Dropdown && e.MeasuredH > 0f)
+        {
+            // WinUI ComboBox dropdown close = SplitCloseThemeAnimation (generic.xaml:9056; ThemeAnimations.cpp:733+):
+            // the clip COLLAPSES toward the anchor edge to closedRatio 0.15 of the opened length over
+            // s_CloseDuration=167ms cubic-bezier(0,0,0,1) (ThemeAnimations.cpp:741 closedRatio; cpp:746-747 easing;
+            // SplitCloseThemeAnimation_Partial.h:16), and opacity fades 1→0 over the LAST 83ms — begin time
+            // s_OpacityChangeBeginTime = 167−83 = 84ms (Partial.h:17-18; cpp:826-828 background opacity keyframes).
+            float fullH = e.MeasuredH;
+            float closedH = fullH * 0.15f;
+            float curT = surfacePaint.ClipRect.IsInfinite ? 0f : surfacePaint.ClipRect.Y;
+            float curB = surfacePaint.ClipRect.IsInfinite ? fullH : surfacePaint.ClipRect.Bottom;
+            if (e.OpensUp)
+                anim.Animate(e.SurfaceNode, AnimChannel.ClipT, curT, fullH - closedH, 167f, Easing.FluentPopOpen);
+            else
+                anim.Animate(e.SurfaceNode, AnimChannel.ClipB, curB, closedH, 167f, Easing.FluentPopOpen);
+            anim.Animate(e.SurfaceNode, AnimChannel.Opacity, currentOpacity, 0f, OpacityMs, Easing.Linear, delayMs: 167f - OpacityMs);
+        }
+        else if (e.Chrome == PopupChrome.Static)
+        {
+            // A bare WinUI Popup has no close transition (no TransitionCollection on the AutoSuggestBox
+            // SuggestionsPopup): hide instantly; AfterAnimations finalizes on the next pass (no live tracks).
+            scene.Paint(e.SurfaceNode).Opacity = 0f;
+            scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
+        }
         else
         {
-            // WinUI MenuPopupThemeTransition unload (LayoutTransition_partial.cpp:525-544): an 83ms linear fade; an
-            // interrupted load FREEZES the clip/translate at the interrupt offset (constant keyframes, cpp:538-543)
-            // rather than snapping open — cancel the load tracks and leave the last composed clip/transform in place.
+            // Menus: WinUI MenuPopupThemeTransition unload (LayoutTransition_partial.cpp:525-544): an 83ms linear
+            // fade; an interrupted load FREEZES the clip/translate at the interrupt offset (constant keyframes,
+            // cpp:538-543) rather than snapping open — cancel the load tracks and leave the last composed
+            // clip/transform in place. Generic flyouts (PopupChrome.Popup): TAS_HIDEPOPUP = the same 83ms linear
+            // fade, no translate (OS PVL: OPACITY start=0 dur=83 linear is the only transform). ToolTip
+            // (PopupChrome.Raw): FadeOutThemeAnimation = TAS_FADEOUT, 167ms linear (OS PVL dump; the ToolTip
+            // template's Closed state, ToolTip_themeresources.xaml:59-63).
             anim.Cancel(e.SurfaceNode, AnimChannel.SizeH);
             anim.Cancel(e.SurfaceNode, AnimChannel.TranslateY);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipL);
@@ -406,7 +448,9 @@ public sealed class OverlayHost : Component
     public Element Child = new BoxEl();
 
     // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
-    // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 (MenuFlyout_Partial.cpp:253 closedRatioConstant).
+    // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 for root menus (MenuFlyout_Partial.cpp:253
+    // closedRatioConstant; cascaded MenuFlyoutSubItem popups use 0.67, MenuFlyoutSubItem_Partial.cpp:741 — wire that
+    // through when sub-menus land in Wave 3).
     const float OpenMs = 250f, OpacityMs = 83f, ClosedRatio = 0.5f;
 
     public override Element Render()
@@ -500,7 +544,11 @@ public sealed class OverlayHost : Component
                         ref NodePaint wp = ref scene.Paint(e.WrapperNode);
                         wp.LocalTransform = Affine2D.Translation(place.X, place.Y);
                         scene.Mark(e.WrapperNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-                        if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode) && e.Chrome == PopupChrome.Flyout)
+                        // Corner squaring where the popup abuts the anchor (ComboBox/dropdown attachment). The
+                        // AutoSuggestBox SuggestionsContainer keeps OverlayCornerRadius on ALL corners
+                        // (AutoSuggestBox_themeresources.xaml:283) — Static is excluded.
+                        if (!e.SurfaceNode.IsNull && scene.IsLive(e.SurfaceNode)
+                            && e.Chrome is PopupChrome.Flyout or PopupChrome.Dropdown)
                         {
                             scene.Paint(e.SurfaceNode).Corners = FlyoutSurface.CornersFor(e.CornerJoin);
                             scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
@@ -515,12 +563,15 @@ public sealed class OverlayHost : Component
                 {
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
+                    // WinUI TeachingTip expand: scale Min(0.01, 20/Width) → 1 over 300ms cubic-bezier(0.1,0.9,0.2,1)
+                    // (TeachingTip.cpp:1660-1664 expandAnimation keyframes; TeachingTip.h:234 m_expandAnimationDuration,
+                    // :304-305 expand control points). The expand storyboard has NO opacity keyframes — the tip grows
+                    // from a point at full opacity.
                     float sx = MathF.Min(0.01f, 20f / e.MeasuredW);
                     float sy = MathF.Min(0.01f, 20f / e.MeasuredH);
                     var ease = EasingSpec.CubicBezier(0.1f, 0.9f, 0.2f, 1.0f);
                     anim.Animate(e.SurfaceNode, AnimChannel.ScaleX, sx, 1f, 300f, ease);
                     anim.Animate(e.SurfaceNode, AnimChannel.ScaleY, sy, 1f, 300f, ease);
-                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, 83f, Easing.Linear);
                 }
                 else if (!e.OpenSeeded && e.Chrome == PopupChrome.Modal)
                 {
@@ -538,9 +589,54 @@ public sealed class OverlayHost : Component
                 {
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
-                    // WinUI ToolTip: FadeInThemeAnimation only (ToolTip_themeresources.xaml Opened visual state) — the
-                    // OS-PVL opacity fade (WinTheme.cpp:169 TAS_FADEIN, 167ms on stock themes). No clip reveal, no scale.
+                    // WinUI ToolTip: FadeInThemeAnimation only (the template's Opened state,
+                    // ToolTip_themeresources.xaml:64-68) = TAS_FADEIN (WinTheme.cpp:165-169). OS PVL ground truth
+                    // (uxtheme "Animations" dump, stock Windows 11): OPACITY 0→1, start=0, dur=167ms, linear.
+                    // No clip reveal, no translate, no scale.
                     anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OverlayServiceImpl.RawFadeMs, Easing.Linear);
+                }
+                else if (!e.OpenSeeded && e.Chrome == PopupChrome.Static)
+                {
+                    // A bare WinUI Popup (AutoSuggestBox SuggestionsPopup): no open transition — appears instantly.
+                    e.OpenSeeded = true;
+                    e.Phase = OverlayPhase.Open;
+                }
+                else if (!e.OpenSeeded && e.Chrome == PopupChrome.Popup && e.MeasuredH > 0f)
+                {
+                    e.OpenSeeded = true;
+                    e.Phase = OverlayPhase.Open;
+                    // WinUI Flyout/FlyoutPresenter open = PopupThemeTransition (FlyoutBase_Partial.cpp:1968-1975)
+                    // = TAS_SHOWPOPUP. OS PVL ground truth (uxtheme "Animations" dump, stock Windows 11):
+                    //   TRANSLATE_2D: offset → 0, start=0, dur=367ms, cubic-bezier(0.1, 0.9, 0.2, 1.0)
+                    //   OPACITY:     0 → 1, start=83ms, dur=83ms, linear (holds 0 for the first 83ms)
+                    // The offset is FlyoutBase::g_entranceThemeOffset = 50 px in the major direction
+                    // (FlyoutBase_Partial.cpp:68 + SetTransitionParameters cpp:2024-2059): a below-anchor flyout
+                    // starts 50px ABOVE its resting spot (FromVerticalOffset −50) and slides down; an opens-up
+                    // flyout starts 50px BELOW (+50) and slides up — it emerges out of the anchor.
+                    float fromY = e.OpensUp ? 50f : -50f;
+                    var decel = EasingSpec.CubicBezier(0.1f, 0.9f, 0.2f, 1.0f);
+                    anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, fromY, 0f, 367f, decel);
+                    scene.Paint(e.SurfaceNode).Opacity = 0f;
+                    scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
+                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, 83f, Easing.Linear, delayMs: 83f);
+                }
+                else if (!e.OpenSeeded && e.Chrome == PopupChrome.Dropdown && e.MeasuredH > 0f)
+                {
+                    e.OpenSeeded = true;
+                    e.Phase = OverlayPhase.Open;
+                    // WinUI ComboBox dropdown open = SplitOpenThemeAnimation (generic.xaml:9047-9051): the clip
+                    // grows from closedRatio 0.50 of the opened length (ThemeAnimations.cpp:599 closedRatio;
+                    // cpp:680-681 ClipScaleY keyframes) over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
+                    // (SplitOpenThemeAnimation_Partial.h:16-17; cpp:602-603 easing). The popup itself does NOT fade
+                    // (opacity pinned to 1, cpp:684) and the CONTENT does not translate — the ComboBox template sets
+                    // only OffsetFromCenter/OpenedLength, so ContentTranslationOffset stays 0 (cpp:692-711 would
+                    // animate TranslateY ±0 → 0). The visible window expands from the anchor-joined edge.
+                    float fullH = e.MeasuredH;
+                    float closedH = fullH * 0.50f;
+                    if (e.OpensUp)
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipT, fullH - closedH, 0f, OpenMs, Easing.FluentPopOpen);
+                    else
+                        anim.Animate(e.SurfaceNode, AnimChannel.ClipB, closedH, fullH, OpenMs, Easing.FluentPopOpen);
                 }
                 else if (!e.OpenSeeded && e.MeasuredH > 0f)
                 {
@@ -697,18 +793,35 @@ internal sealed class FlyoutSurface : Component
             };
         }
 
+        // The frosted popup card. Every WinUI transient surface carries the ONE default acrylic recipe
+        // (Tok.AcrylicFlyout — AcrylicInAppFillColorDefaultBrush / the DesktopAcrylic default backdrop,
+        // AcrylicBrush_themeresources.xaml; see Tokens.cs for the per-theme values):
+        //   MenuFlyoutPresenter — transparent background + SystemBackdrop = AcrylicBackgroundFillColorDefaultBackdrop
+        //     (MenuFlyout_themeresources.xaml:40/202 background + :264+271 backdrop), padding 0,2,0,2
+        //     (MenuFlyoutPresenterThemePadding).
+        //   ComboBox PopupBorder — Background = ComboBoxDropDownBackground = AcrylicInAppFillColorDefaultBrush
+        //     (ComboBox_themeresources.xaml:63 dark / :273 light), border SystemControlTransientBorderBrush,
+        //     PopupBorder padding 0 (ComboBoxDropdownBorderPadding, generic.xaml:126) — the 0,4 content inset is
+        //     2px here + 2px in the ComboBox column (see ComboBox.cs).
+        //   AutoSuggestBox SuggestionsContainer — Background = AcrylicBackgroundFillColorDefaultBrush
+        //     (AutoSuggestBox_themeresources.xaml:5 dark / :17 light), Padding = AutoSuggestListMargin 0,2,0,2
+        //     (generic.xaml:119), CornerRadius = OverlayCornerRadius on ALL corners (:283).
+        //   FlyoutPresenter — Background = FlyoutPresenterBackground = AcrylicInAppFillColorDefaultBrush
+        //     (FlyoutPresenter_themeresources.xaml:5 dark / :15 light); NO presenter padding here — the
+        //     FlyoutContentPadding 16,15,16,17 card is supplied by the flyout content (GenericFlyout.cs).
+        bool menuPad = Chrome != PopupChrome.Popup;
         return new BoxEl
     {
         Direction = 1,
         AlignSelf = FlexAlign.Start,
         Fill = ColorF.Transparent,
-        Acrylic = AcrylicSpec.Flyout,
+        Acrylic = Tok.AcrylicFlyout,
         BorderColor = Tok.StrokeFlyoutDefault,
         BorderWidth = 1f,
         Corners = Radii.OverlayAll,
         Shadow = Elevation.Flyout,
         ClipToBounds = true,
-        Padding = new Edges4(0, 2, 0, 2),   // MenuFlyoutPresenterThemePadding
+        Padding = menuPad ? new Edges4(0, 2, 0, 2) : default,
         OnRealized = h => OnSurface?.Invoke(h),
         Children = [Body],
     };

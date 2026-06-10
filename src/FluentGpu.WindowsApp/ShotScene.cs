@@ -48,6 +48,34 @@ sealed class ShotScene : Component
         "tabview" => CenterShot(Embed.Comp(() => new TabViewShot())),
         "navigationview" => CenterShot(Embed.Comp(() => new NavigationViewShot())),
         "treeview" => CenterShot(Embed.Comp(() => new TreeViewShot())),
+        // Acrylic material proof (needs-pixels loop for Rhi.D3D12 AcrylicCompositor): the flyout acrylic surface over
+        // HIGH-CONTRAST saturated bars — the σ=30 DIP backdrop blur (AcrylicBrush.h:64 sc_blurRadius) must read as
+        // soft color washes through the surface; over a flat page the blur would be invisible.
+        "acrylic" => new BoxEl
+        {
+            Grow = 1, ZStack = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1, Direction = 0,   // saturated vertical bars fill the page behind the surface
+                    Children =
+                    [
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0xE8, 0x3C, 0x3C) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0xF5, 0xC5, 0x18) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x18, 0xA0, 0x57) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x2D, 0x7D, 0xF6) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x8B, 0x3C, 0xC9) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x20, 0x20, 0x20) },
+                    ],
+                },
+                new BoxEl
+                {
+                    Grow = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children = [MenuPresenter()],
+                },
+            ],
+        },
         _ => new BoxEl
         {
             Grow = 1,
@@ -156,7 +184,7 @@ sealed class ShotScene : Component
         {
             Direction = 1,
             Fill = ColorF.Transparent,
-            Acrylic = AcrylicSpec.Flyout,
+            Acrylic = Tok.AcrylicFlyout,
             BorderColor = Tok.StrokeFlyoutDefault,
             BorderWidth = 1f,
             Corners = Radii.OverlayAll,

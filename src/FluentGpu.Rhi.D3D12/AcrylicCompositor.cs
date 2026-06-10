@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using FluentGpu.Render;
@@ -10,51 +11,131 @@ using ColorF = FluentGpu.Foundation.ColorF;
 namespace FluentGpu.Rhi.D3D12;
 
 /// <summary>
-/// Real per-node acrylic (frosted glass). The scene renders into an engine-owned canvas RT; at each <c>PushLayer</c> the
-/// canvas-so-far (the backdrop) is downsampled and separable-gaussian blurred, then the WinUI AcrylicBrush recipe is
-/// composited into the canvas at the node's rounded rect (blurred backdrop → luminosity blend → tint → noise). The node's
-/// content then draws on top. At frame end the canvas is blitted to the back buffer. All RTs + ComPtrs are owned here on
-/// the render thread (per the threading-render-seam contract).
+/// Real per-node acrylic (frosted glass) — the in-app acrylic effect runner of
+/// design/subsystems/backdrop-effects-animation.md §2.3 (two-pass PushLayer{Acrylic} schedule) with the
+/// gpu-renderer.md §7.1 LayerPool, inlined HLSL-side in this leaf. The scene renders into an engine-owned canvas RT;
+/// at each <c>PushLayer</c>:
+///   pass A  SNAPSHOT+downsample the canvas region beneath the layer rect (inflated by the full blur support) into a
+///           pooled offscreen RT at 1/down resolution (down = AcrylicBackdropMath.DownsampleFactor — /4 at 100% DPI),
+///   pass B  blur H (fixed bilinear-tap gaussian, σ = AcrylicBackdropMath.KernelSigma in snapshot texels ⇒
+///           effective σ = 30 DIP, matching microsoft-ui-xaml AcrylicBrush.h:64 sc_blurRadius),
+///   pass C  blur V (ping-pong between the two pooled RTs),
+///   pass D  composite the WinUI AcrylicBrush recipe into the canvas clipped to the rounded layer rect
+///           (blurred backdrop SourceOver opaque fallback → luminosity blend → tint/color blend → 2% noise —
+///           AcrylicBrush.cpp:500-548), then the layer's content draws on top.
+/// At frame end the canvas is blitted to the back buffer.
+///
+/// LayerPool: RTs pooled by power-of-two size bucket and reused across layers AND frames — steady state acquires from
+/// the free list (zero resource creation per frame). Reusing an RT on the same DIRECT queue needs no fence (execution
+/// is queue-ordered and barriers carry the state), but DESTRUCTION is fence-gated: evicted/idle-trimmed entries are
+/// retired and released only once the frame fence passes their last use (the ImageTextureStore deferred-reclaim
+/// convention). Shader-visible SRV descriptors are parity-banked per frame so recreating a slot never rewrites a
+/// descriptor an in-flight frame still references. All RTs + ComPtrs are owned here on the render thread (per the
+/// threading-render-seam contract); device-lost ⇒ the whole device (and this compositor) is torn down and rebuilt.
+/// WARP-safe: ps_5_1, static-array kernel, no UAVs, no typed-load requirements.
+///
+/// needs-pixels: the recipe values + region/bucket/kernel math are headless-checked (VerticalSlice 64m/64n via
+/// HeadlessGpuDevice.LastLayers + AcrylicBackdropMath); the composited GPU pixels themselves are verified manually
+/// (--shot) — there is no headless framebuffer for the D3D12 leaf.
 /// </summary>
 internal sealed unsafe class AcrylicCompositor : IDisposable
 {
+    private const int MaxPool = 8;            // pooled RT slots (a frame holds at most 2 at once; steady state uses 2)
+    private const int TrimIdleFrames = 600;   // free entries idle this long (~10 s) are retired (fence-gated release)
+
     private ID3D12Device* _device;
-    private uint _w, _h, _qw, _qh;   // canvas size + quarter size
+    private uint _w, _h;   // canvas size (physical px)
 
     private ID3D12Resource* _canvas; private D3D12_RESOURCE_STATES _canvasState;
-    private ID3D12Resource* _q0; private D3D12_RESOURCE_STATES _q0State;   // downsample / blur ping-pong (quarter res)
-    private ID3D12Resource* _q1; private D3D12_RESOURCE_STATES _q1State;
 
-    private ID3D12DescriptorHeap* _rtvHeap;   // 3 RTVs: canvas, q0, q1
-    private ID3D12DescriptorHeap* _srvHeap;   // 3 shader-visible SRVs: canvas, q0, q1
+    // ── LayerPool (gpu-renderer.md §7.1) ────────────────────────────────────────────────────────────────────────────
+    private struct PoolEntry
+    {
+        public ID3D12Resource* Res;            // null = empty slot
+        public D3D12_RESOURCE_STATES State;    // tracked in record order (single DIRECT queue serializes execution)
+        public int W, H;                       // bucket dims (power-of-two, AcrylicBackdropMath.BucketDim)
+        public ulong LastUseFence;             // frame fence value covering the entry's most recent GPU use
+        public int IdleFrames;                 // consecutive layered frames without an acquire (trim heuristic)
+        public bool InUse;                     // held by an in-progress BlurAndComposite this frame
+    }
+    private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
+
+    private struct Retired { public ID3D12Resource* Res; public ulong Fence; }
+    private readonly List<Retired> _retired = new();   // fence-gated deferred release (eviction/trim/resize)
+
+    private ID3D12DescriptorHeap* _rtvHeap;   // 1 + MaxPool RTVs: slot 0 = canvas, 1+i = pool entry i
+    private ID3D12DescriptorHeap* _srvHeap;   // 1 + 2·MaxPool shader-visible SRVs: slot 0 = canvas; pool SRVs are
+                                              // parity-banked (1 + parity·MaxPool + i) — frame N never rewrites a
+                                              // descriptor the in-flight frame N−1 references
     private uint _rtvInc, _srvInc;
+    private int _parity;                      // this frame's SRV bank (frameIndex & 1), set by BeginCanvas
 
-    private ID3D12RootSignature* _copyRoot;   // copy/blur: root consts + 1 SRV table + static sampler
+    private ID3D12RootSignature* _copyRoot;   // copy/blur: 8 root consts + 1 SRV table + static linear-clamp sampler
     private ID3D12PipelineState* _copyPso, _blurPso;
-    private ID3D12RootSignature* _compRoot;   // composite: root consts + 1 SRV table + static sampler
+    private ID3D12RootSignature* _compRoot;   // composite: 28 root consts + 1 SRV table + static sampler
     private ID3D12PipelineState* _compPso;
 
+    /// <summary>Acrylic layers composited this frame (diagnostics).</summary>
+    public int LayersThisFrame { get; private set; }
+
+    /// <summary>Live pooled RTs (diagnostics; steady state = 2 while any acrylic surface is open).</summary>
+    public int PooledRtCount
+    {
+        get { int n = 0; for (int i = 0; i < MaxPool; i++) if (_pool[i].Res != null) n++; return n; }
+    }
+
+    // Fullscreen-triangle copy/downsample. srcOffScale maps the target viewport's [0,1] uv onto the source sub-rect
+    // (snapshot pass: the layer's backdrop region within the canvas; blit pass: offset 0, scale 1 = whole canvas).
     private const string CopyHlsl = """
-cbuffer C : register(b0) { float4 texelDir; };   // xy = source texel size, zw = blur direction (0 for copy)
+cbuffer C : register(b0) { float4 srcOffScale; };   // xy = source uv offset, zw = source uv scale
 Texture2D gSrc : register(t0);
 SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
-float4 CopyPS(V i) : SV_Target { return gSrc.Sample(gSamp, i.uv); }   // preserve alpha → transparent pixels reach the backbuffer so DWM Mica composites
-float4 BlurPS(V i) : SV_Target
-{
-    float2 d = texelDir.zw * texelDir.xy;
-    float4 c = gSrc.Sample(gSamp, i.uv) * 0.227027;
-    c += gSrc.Sample(gSamp, i.uv + d * 1.3846153846) * 0.3162162;
-    c += gSrc.Sample(gSamp, i.uv - d * 1.3846153846) * 0.3162162;
-    c += gSrc.Sample(gSamp, i.uv + d * 3.2307692308) * 0.0702703;
-    c += gSrc.Sample(gSamp, i.uv - d * 3.2307692308) * 0.0702703;
-    return c;                                                         // preserve premultiplied alpha; transparent Mica must not blur to black
-}
+float4 CopyPS(V i) : SV_Target { return gSrc.Sample(gSamp, srcOffScale.xy + i.uv * srcOffScale.zw); }   // preserve premultiplied alpha → transparent pixels reach the backbuffer so DWM Mica composites
 """;
 
+    // One separable gaussian pass with the FIXED kernel (built at Init from AcrylicBackdropMath so the HLSL constants
+    // cannot drift from the headless-checked weights). Sampling is clamped to the used sub-rect of the (possibly
+    // larger) bucket RT so taps never read stale texels from a previous lease of the pooled texture.
+    private static string BuildBlurHlsl()
+    {
+        var off = AcrylicBackdropMath.TapOffsets;
+        var wgt = AcrylicBackdropMath.TapWeights;
+        var sb = new StringBuilder(1024);
+        sb.Append("static const float OFF[").Append(AcrylicBackdropMath.TapCount).Append("] = {");
+        for (int i = 0; i < off.Length; i++) { if (i > 0) sb.Append(", "); sb.Append(off[i].ToString("G9", CultureInfo.InvariantCulture)); }
+        sb.Append("};\nstatic const float WGT[").Append(AcrylicBackdropMath.TapCount).Append("] = {");
+        for (int i = 0; i < wgt.Length; i++) { if (i > 0) sb.Append(", "); sb.Append(wgt[i].ToString("G9", CultureInfo.InvariantCulture)); }
+        sb.Append("};\nstatic const int TAPS = ").Append(AcrylicBackdropMath.TapCount).Append(";\n");
+        return """
+cbuffer C : register(b0) { float4 texelDir; float4 scaleClamp; };   // texelDir: xy = source texel size, zw = blur direction; scaleClamp: xy = used-uv scale, zw = max uv (used minus half texel)
+Texture2D gSrc : register(t0);
+SamplerState gSamp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+""" + sb + """
+float4 BlurPS(V i) : SV_Target
+{
+    float2 c = i.uv * scaleClamp.xy;
+    float2 lo = texelDir.xy * 0.5;
+    float2 d = texelDir.zw * texelDir.xy;
+    float4 acc = gSrc.Sample(gSamp, clamp(c, lo, scaleClamp.zw)) * WGT[0];
+    [unroll] for (int k = 1; k < TAPS; k++)
+    {
+        acc += gSrc.Sample(gSamp, clamp(c + d * OFF[k], lo, scaleClamp.zw)) * WGT[k];
+        acc += gSrc.Sample(gSamp, clamp(c - d * OFF[k], lo, scaleClamp.zw)) * WGT[k];
+    }
+    return acc;   // preserve premultiplied alpha; transparent Mica regions must not blur to black (fallback resolves at composite)
+}
+""";
+    }
+
     private const string CompHlsl = """
-cbuffer C : register(b0) { float4 rect; float4 vps; float4 tint; float4 fallback; float4 prm; };   // vps = logicalW,logicalH,physW,physH ; prm = radius,tintOp,lumOp,noiseOp
+cbuffer C : register(b0) { float4 rect; float4 vpro; float4 rsuf; float4 tint; float4 fallback; float4 prm; float4 blurTexel; };
+// rect = layer rect (logical DIP); vpro = logical viewport W,H + snapshot-region origin (phys px);
+// rsuf = snapshot-region size (phys px) + blurred-RT used-uv fraction; prm = radius,tintOp,lumOp,noiseOp;
+// blurTexel.xy = blurred-RT texel size (for the half-texel edge clamp).
 Texture2D gBlur : register(t0);
 SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 half : TEXCOORD1; };
@@ -63,7 +144,7 @@ V VSMain(uint id : SV_VertexID)
     float2 corner = float2(id & 1, (id >> 1) & 1);
     float2 world = rect.xy + corner * rect.zw;                    // DeviceRect is already in logical device space (identity)
     V o;
-    o.pos = float4(world.x / vps.x * 2.0 - 1.0, 1.0 - world.y / vps.y * 2.0, 0, 1);
+    o.pos = float4(world.x / vpro.x * 2.0 - 1.0, 1.0 - world.y / vpro.y * 2.0, 0, 1);
     o.local = corner * rect.zw - rect.zw * 0.5;
     o.half = rect.zw * 0.5;
     return o;
@@ -86,22 +167,25 @@ float4 PSMain(V i) : SV_Target
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     float fw = max(fwidth(d), 1e-4);
     float cov = saturate(0.5 - d / fw);
-    float2 uv = i.pos.xy / vps.zw;                                // SV_Position is physical px → uv into the physical-size blurred texture
-    float4 src = gBlur.Sample(gSamp, uv);                         // premultiplied blurred backdrop
+    // SV_Position is physical px → uv into the blurred snapshot: region-relative position × used fraction of the
+    // bucket RT, clamped half a texel inside the used sub-rect (pooled RTs can be larger than the snapshot).
+    float2 uv = (i.pos.xy - vpro.zw) / rsuf.xy * rsuf.zw;
+    float4 src = gBlur.Sample(gSamp, clamp(uv, blurTexel.xy * 0.5, rsuf.zw - blurTexel.xy * 0.5));   // premultiplied blurred backdrop
 
-    // WinUI resolves transparent backdrop over opaque FallbackColor before blur. We preserve alpha through the blur
-    // passes and complete that SourceOver resolve here; transparent/Mica regions therefore acrylic against fallback,
-    // not transparent black.
+    // WinUI resolves the (possibly transparent) backdrop over the OPAQUE FallbackColor before blurring
+    // (AcrylicBrush.cpp:500-517 "Blend the backdrop on top of the opaque FallbackColor"). We preserve alpha through
+    // the blur passes and complete that SourceOver resolve here; transparent/Mica regions therefore acrylic against
+    // fallback, not transparent black.
     float3 B = src.rgb + fallback.rgb * saturate(1.0 - src.a);
 
-    // WinUI 3 AcrylicBrush.cpp: luminosity blend first, then tint/color blend. The luminosity pass keeps backdrop
-    // hue/saturation but takes lightness from the luminosity/tint color; the color pass applies tint hue/saturation
-    // while preserving that luminosity result.
+    // WinUI AcrylicBrush.cpp:446-452 + CombineNoiseWithTintEffect_Luminosity: luminosity blend first (keeps backdrop
+    // hue/saturation, takes lightness from the luminosity color at LuminosityOpacity), then the tint/color blend
+    // (tint hue/saturation, preserving that luminosity result) at TintOpacity.
     float3 lumBlend = lerp(B, SetLum(B, Lum(tint.rgb)), prm.z);
     float3 colorBlend = SetLum(tint.rgb, Lum(lumBlend));
     float3 res = lerp(lumBlend, colorBlend, prm.y);
     float n = frac(sin(dot(i.pos.xy, float2(12.9898, 78.233))) * 43758.5453);
-    res += (n - 0.5) * prm.w;                                    // noise
+    res += (n - 0.5) * prm.w;                                    // 2% noise (AcrylicBrush.h:65 sc_noiseOpacity = 0.02)
     return float4(res * cov, cov);                              // premultiplied
 }
 """;
@@ -120,14 +204,14 @@ float4 PSMain(V i) : SV_Target
     {
         D3D12_DESCRIPTOR_HEAP_DESC rh = default;
         rh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-        rh.NumDescriptors = 3;
+        rh.NumDescriptors = 1 + MaxPool;
         ID3D12DescriptorHeap* rhp; Check(_device->CreateDescriptorHeap(&rh, __uuidof<ID3D12DescriptorHeap>(), (void**)&rhp), "Acrylic.RtvHeap");
         _rtvHeap = rhp;
         _rtvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
         D3D12_DESCRIPTOR_HEAP_DESC sh = default;
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        sh.NumDescriptors = 3;
+        sh.NumDescriptors = 1 + 2 * MaxPool;   // canvas + two parity banks of pool SRVs (see _srvHeap comment)
         sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ID3D12DescriptorHeap* shp; Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "Acrylic.SrvHeap");
         _srvHeap = shp;
@@ -223,48 +307,43 @@ float4 PSMain(V i) : SV_Target
 
     private void BuildCopyPipeline()
     {
-        _copyRoot = SampleRootSig(4);
+        _copyRoot = SampleRootSig(8);   // copy uses 4 floats, blur uses 8 — shared sig sized for the larger
         ID3DBlob* vs = Compile(CopyHlsl, "VSMain", "vs_5_1");
         ID3DBlob* copyPs = Compile(CopyHlsl, "CopyPS", "ps_5_1");
-        ID3DBlob* blurPs = Compile(CopyHlsl, "BlurPS", "ps_5_1");
+        string blurHlsl = BuildBlurHlsl();   // kernel constants injected from AcrylicBackdropMath (cold path, Init only)
+        ID3DBlob* blurVs = Compile(blurHlsl, "VSMain", "vs_5_1");
+        ID3DBlob* blurPs = Compile(blurHlsl, "BlurPS", "ps_5_1");
         _copyPso = MakePso(_copyRoot, vs, copyPs, blend: false);
-        _blurPso = MakePso(_copyRoot, vs, blurPs, blend: false);
-        vs->Release(); copyPs->Release(); blurPs->Release();
+        _blurPso = MakePso(_copyRoot, blurVs, blurPs, blend: false);
+        vs->Release(); copyPs->Release(); blurVs->Release(); blurPs->Release();
     }
 
     private void BuildCompositePipeline()
     {
-        _compRoot = SampleRootSig(20);
+        _compRoot = SampleRootSig(28);
         ID3DBlob* vs = Compile(CompHlsl, "VSMain", "vs_5_1");
         ID3DBlob* ps = Compile(CompHlsl, "PSMain", "ps_5_1");
         _compPso = MakePso(_compRoot, vs, ps, blend: true);
         vs->Release(); ps->Release();
     }
 
+    /// <summary>(Re)create the full-window canvas RT. Size changes only follow a swapchain Resize, which fenced the
+    /// GPU idle first — so releasing the old canvas and rewriting descriptor slot 0 here is in-flight-safe.</summary>
     public void EnsureSize(uint w, uint h)
     {
         w = Math.Max(1, w); h = Math.Max(1, h);
         if (w == _w && h == _h && _canvas != null) return;
         D3D12MemoryDiagnostics.Resize("Acrylic.Targets", w, h);
-        ReleaseTextures();
-        _w = w; _h = h; _qw = Math.Max(1, w / 4); _qh = Math.Max(1, h / 4);
+        if (_canvas != null) { D3D12MemoryDiagnostics.Release(_canvas, "Acrylic.Canvas"); _canvas->Release(); _canvas = null; }
+        _w = w; _h = h;
 
-        _canvas = CreateTarget(_w, _h, "Acrylic.Canvas"); _canvasState = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _q0 = CreateTarget(_qw, _qh, "Acrylic.Q0"); _q0State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        _q1 = CreateTarget(_qw, _qh, "Acrylic.Q1"); _q1State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-
-        var rtv = _rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        _device->CreateRenderTargetView(_canvas, null, rtv); rtv.ptr += _rtvInc;
-        _device->CreateRenderTargetView(_q0, null, rtv); rtv.ptr += _rtvInc;
-        _device->CreateRenderTargetView(_q1, null, rtv);
-
-        var srv = _srvHeap->GetCPUDescriptorHandleForHeapStart();
-        CreateSrv(_canvas, srv); srv.ptr += _srvInc;
-        CreateSrv(_q0, srv); srv.ptr += _srvInc;
-        CreateSrv(_q1, srv);
+        _canvas = CreateTarget(_w, _h, "Acrylic.Canvas", optimizedClear: true);
+        _canvasState = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        _device->CreateRenderTargetView(_canvas, null, Rtv(0));
+        CreateSrv(_canvas, SrvCpu(0));
     }
 
-    private ID3D12Resource* CreateTarget(uint w, uint h, string name)
+    private ID3D12Resource* CreateTarget(uint w, uint h, string name, bool optimizedClear)
     {
         D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd = default;
@@ -276,7 +355,8 @@ float4 PSMain(V i) : SV_Target
         D3D12_CLEAR_VALUE cv = default; cv.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
         ID3D12Resource* res;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv, __uuidof<ID3D12Resource>(), (void**)&res), "Acrylic.CreateTarget");
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, optimizedClear ? &cv : null,
+            __uuidof<ID3D12Resource>(), (void**)&res), "Acrylic.CreateTarget");
         D3D12MemoryDiagnostics.Track(res, $"{name} {w}x{h}", (ulong)w * h * 4UL);
         return res;
     }
@@ -304,8 +384,12 @@ float4 PSMain(V i) : SV_Target
         state = to;
     }
 
-    private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int i) { var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)i * _rtvInc; return h; }
-    private D3D12_GPU_DESCRIPTOR_HANDLE SrvGpu(int i) { var h = _srvHeap->GetGPUDescriptorHandleForHeapStart(); h.ptr += (ulong)i * _srvInc; return h; }
+    // Descriptor slot maps — RTV: 0 = canvas, 1+i = pool entry i. SRV: 0 = canvas, 1 + parity·MaxPool + i = pool
+    // entry i in THIS frame's bank (rewritten on every acquire; the other bank belongs to the in-flight frame).
+    private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int slot) { var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _rtvInc; return h; }
+    private D3D12_CPU_DESCRIPTOR_HANDLE SrvCpu(int slot) { var h = _srvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _srvInc; return h; }
+    private D3D12_GPU_DESCRIPTOR_HANDLE SrvGpu(int slot) { var h = _srvHeap->GetGPUDescriptorHandleForHeapStart(); h.ptr += (ulong)slot * _srvInc; return h; }
+    private int PoolSrvSlot(int i) => 1 + _parity * MaxPool + i;
 
     private void SetViewport(ID3D12GraphicsCommandList* cmd, uint w, uint h)
     {
@@ -315,9 +399,101 @@ float4 PSMain(V i) : SV_Target
         cmd->RSSetScissorRects(1, &sc);
     }
 
-    /// <summary>Bind the canvas as the render target, clear it, and set the full viewport. Call once before drawing the scene.</summary>
-    public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear)
+    // ── LayerPool acquire/release/trim ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Release retired resources whose last GPU use the fence has passed (deferred-delete convention).</summary>
+    private void DrainRetired(ulong completedFence)
     {
+        for (int i = _retired.Count - 1; i >= 0; i--)
+        {
+            if (_retired[i].Fence > completedFence) continue;
+            D3D12MemoryDiagnostics.Release(_retired[i].Res, "Acrylic.Pool");
+            _retired[i].Res->Release();
+            _retired.RemoveAt(i);
+        }
+    }
+
+    /// <summary>Age free entries; retire (fence-gated) any idle past the trim window so a closed flyout's RTs are
+    /// eventually returned to the OS instead of pinning VRAM forever.</summary>
+    private void TickPool(ulong completedFence)
+    {
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null || e.InUse) continue;
+            if (++e.IdleFrames <= TrimIdleFrames) continue;
+            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
+            e = default;
+        }
+        DrainRetired(completedFence);
+    }
+
+    /// <summary>Idle upkeep for frames with no acrylic layers (the canvas path isn't taken): age + trim the pool.</summary>
+    public void TickIdle(ulong completedFence)
+    {
+        if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
+        LayersThisFrame = 0;
+    }
+
+    /// <summary>Lease a pooled RT at least (w,h) texels (bucket-quantized). Steady state hits the free-list "fits"
+    /// path — CreateCommittedResource only runs on cold growth or a bucket-size change (eviction is fence-deferred).</summary>
+    private int Acquire(int w, int h, ulong frameFence)
+    {
+        int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
+
+        // 1) smallest free entry that fits (same-queue reuse needs no fence — execution order serializes RT access).
+        int best = -1;
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null || e.InUse || e.W < bw || e.H < bh) continue;
+            if (best < 0 || (long)e.W * e.H < (long)_pool[best].W * _pool[best].H) best = i;
+        }
+        if (best < 0)
+        {
+            // 2) empty slot → cold growth; 3) no slot → evict the LRU FREE entry (resource release deferred behind
+            // its fence; its SRV descriptor is parity-banked so the rewrite can't race the in-flight frame).
+            int slot = -1;
+            for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }
+            if (slot < 0)
+            {
+                for (int i = 0; i < MaxPool; i++)
+                {
+                    if (_pool[i].InUse) continue;   // a frame leases at most 2 of 8 slots → a free victim always exists
+                    if (slot < 0 || _pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                }
+                if (slot < 0) throw new InvalidOperationException("acrylic LayerPool exhausted (more concurrent leases than slots)");
+                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
+                _pool[slot] = default;
+            }
+            _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"Acrylic.Pool[{slot}]", optimizedClear: false);
+            _pool[slot].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            _pool[slot].W = bw; _pool[slot].H = bh;
+            // RTV descriptors are read at RECORD time (CPU), so rewriting the slot's RTV here cannot race the
+            // in-flight frame — its command list already consumed the old descriptor contents when it was recorded.
+            _device->CreateRenderTargetView(_pool[slot].Res, null, Rtv(1 + slot));
+            best = slot;
+        }
+
+        ref var entry = ref _pool[best];
+        entry.InUse = true;
+        entry.IdleFrames = 0;
+        entry.LastUseFence = frameFence;
+        CreateSrv(entry.Res, SrvCpu(PoolSrvSlot(best)));   // refresh THIS frame's bank (cheap CPU descriptor write)
+        return best;
+    }
+
+    private void Release(int idx) => _pool[idx].InUse = false;
+
+    // ── frame passes ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Bind the canvas as the render target, clear it, set the full viewport, and run pool upkeep.
+    /// Call once before drawing the scene. <paramref name="parity"/> = frameIndex &amp; 1 selects this frame's SRV bank.</summary>
+    public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity)
+    {
+        _parity = parity & 1;
+        LayersThisFrame = 0;
+        TickPool(completedFence);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(0);
         cmd->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
@@ -346,46 +522,65 @@ float4 PSMain(V i) : SV_Target
         cmd->DrawInstanced(3, 1, 0, 0);
     }
 
-    /// <summary>Downsample + separable-blur the canvas, then composite the acrylic recipe into the canvas at the layer rect.</summary>
-    public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh)
+    /// <summary>The PushLayer{Acrylic} schedule: snapshot+downsample the canvas region beneath the layer rect into a
+    /// pooled RT, two-pass separable gaussian (fixed kernel), then composite the WinUI acrylic recipe into the canvas
+    /// clipped to the rounded layer rect. Leaves the canvas bound for continued scene drawing.</summary>
+    public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence)
     {
+        if (scale <= 0f) scale = 1f;
+        int down = AcrylicBackdropMath.DownsampleFactor(L.BlurSigma, scale);
+        AcrylicBackdropMath.SnapshotRegion(L.DeviceRect, scale, down, (int)_w, (int)_h, out int rx, out int ry, out int rw, out int rh);
+        int dw = Math.Max(1, (rw + down - 1) / down), dh = Math.Max(1, (rh + down - 1) / down);
+
+        int ia = Acquire(dw, dh, frameFence);
+        int ib = Acquire(dw, dh, frameFence);
+
         SetHeap(cmd);
-        // 1) downsample canvas → q0 (quarter res)
+
+        // pass A: snapshot + downsample the backdrop region (canvas sub-rect) → pool A at 1/down resolution
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _q0, ref _q0State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rt = Rtv(1); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, _qw, _qh);
-        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { 1f / _w, 1f / _h, 0, 0 });
+        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
+        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { (float)rx / _w, (float)ry / _h, (float)rw / _w, (float)rh / _h });
 
-        // 2) blur H: q0 → q1
-        Barrier(cmd, _q0, ref _q0State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _q1, ref _q1State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        rt = Rtv(2); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, _qw, _qh);
-        FullScreen(cmd, _blurPso, 1, stackalloc float[4] { 1f / _qw, 1f / _qh, 1f, 0f });
+        // pass B: blur H, A → B (fixed σ=KernelSigma kernel in snapshot texels ⇒ effective σ = BlurSigma DIP full-res)
+        float aw = _pool[ia].W, ah = _pool[ia].H, bw = _pool[ib].W, bh = _pool[ib].H;
+        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        rt = Rtv(1 + ib); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
+        FullScreen(cmd, _blurPso, PoolSrvSlot(ia), stackalloc float[8]
+            { 1f / aw, 1f / ah, 1f, 0f, dw / aw, dh / ah, (dw - 0.5f) / aw, (dh - 0.5f) / ah });
 
-        // 3) blur V: q1 → q0
-        Barrier(cmd, _q1, ref _q1State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _q0, ref _q0State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        rt = Rtv(1); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, _qw, _qh);
-        FullScreen(cmd, _blurPso, 2, stackalloc float[4] { 1f / _qw, 1f / _qh, 0f, 1f });
+        // pass C: blur V, B → A (the final blurred snapshot lands back in A)
+        Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
+        FullScreen(cmd, _blurPso, PoolSrvSlot(ib), stackalloc float[8]
+            { 1f / bw, 1f / bh, 0f, 1f, dw / bw, dh / bh, (dw - 0.5f) / bw, (dh - 0.5f) / bh });
 
-        // 4) composite acrylic into the canvas at the layer rect (samples blurred q0 at screen UV)
-        Barrier(cmd, _q0, ref _q0State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // pass D: composite the acrylic recipe into the canvas at the rounded layer rect (samples blurred A)
+        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var crt = Rtv(0); cmd->OMSetRenderTargets(1, &crt, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
         cmd->SetGraphicsRootSignature(_compRoot);
         cmd->SetPipelineState(_compPso);
-        Span<float> cc = stackalloc float[20]
+        Span<float> cc = stackalloc float[28]
         {
             L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H,
-            lw, lh, _w, _h,             // logical viewport (VS NDC) + physical size (PS uv)
+            lw, lh, rx, ry,                                  // logical viewport (VS NDC) + region origin (PS phys px)
+            rw, rh, dw / aw, dh / ah,                        // region size (phys px) + used-uv fraction of pool A
             L.Tint.R, L.Tint.G, L.Tint.B, L.Tint.A,
             L.Fallback.R, L.Fallback.G, L.Fallback.B, L.Fallback.A,
             L.Radii.TopLeft, L.TintOpacity, L.LuminosityOpacity, L.NoiseOpacity,
+            1f / aw, 1f / ah, 0f, 0f,                        // pool-A texel size (half-texel edge clamp)
         };
-        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 20, c, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(1));   // q0 holds the final blurred image
+        fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
+        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         cmd->DrawInstanced(4, 1, 0, 0);
+
+        Release(ia); Release(ib);   // back to the free list — the NEXT layer this frame reuses the same two RTs
+        LayersThisFrame++;
 
         BindCanvas(cmd);   // leave canvas bound + full viewport for continued scene drawing
     }
@@ -397,19 +592,26 @@ float4 PSMain(V i) : SV_Target
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         cmd->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
         SetViewport(cmd, _w, _h);
-        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { 1f / _w, 1f / _h, 0, 0 });
-    }
-
-    private void ReleaseTextures()
-    {
-        if (_canvas != null) { D3D12MemoryDiagnostics.Release(_canvas, "Acrylic.Canvas"); _canvas->Release(); _canvas = null; }
-        if (_q0 != null) { D3D12MemoryDiagnostics.Release(_q0, "Acrylic.Q0"); _q0->Release(); _q0 = null; }
-        if (_q1 != null) { D3D12MemoryDiagnostics.Release(_q1, "Acrylic.Q1"); _q1->Release(); _q1 = null; }
+        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { 0f, 0f, 1f, 1f });
     }
 
     public void Dispose()
     {
-        ReleaseTextures();
+        // The device fenced the GPU idle before disposing (D3D12Device.Dispose → WaitForGpu) — immediate release is safe.
+        if (_canvas != null) { D3D12MemoryDiagnostics.Release(_canvas, "Acrylic.Canvas"); _canvas->Release(); _canvas = null; }
+        for (int i = 0; i < MaxPool; i++)
+        {
+            if (_pool[i].Res == null) continue;
+            D3D12MemoryDiagnostics.Release(_pool[i].Res, "Acrylic.Pool");
+            _pool[i].Res->Release();
+            _pool[i] = default;
+        }
+        for (int i = 0; i < _retired.Count; i++)
+        {
+            D3D12MemoryDiagnostics.Release(_retired[i].Res, "Acrylic.Pool");
+            _retired[i].Res->Release();
+        }
+        _retired.Clear();
         if (_rtvHeap != null) _rtvHeap->Release();
         if (_srvHeap != null) _srvHeap->Release();
         if (_copyPso != null) _copyPso->Release();

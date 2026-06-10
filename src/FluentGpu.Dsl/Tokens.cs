@@ -83,6 +83,15 @@ public sealed record TokenSet
     public required ColorF ScrollThumb { get; init; }
     public required ColorF AcrylicTint { get; init; }
     public required ColorF AcrylicBase { get; init; }
+    /// <summary>The ONE WinUI default transient-surface acrylic (AcrylicInAppFillColorDefaultBrush ==
+    /// AcrylicBackgroundFillColorDefaultBrush, AcrylicBrush_themeresources.xaml): every flyout-family surface carries
+    /// it — FlyoutPresenter (FlyoutPresenter_themeresources.xaml:5/15), MenuFlyoutPresenter (via the
+    /// AcrylicBackgroundFillColorDefaultBackdrop system backdrop, MenuFlyout_themeresources.xaml:264+271), the
+    /// ComboBox PopupBorder (ComboBox_themeresources.xaml:63/273), the AutoSuggestBox SuggestionsContainer
+    /// (AutoSuggestBox_themeresources.xaml:5/17) and ToolTip (ToolTipBackgroundBrush, ToolTip_themeresources.xaml:14/40).
+    /// Dark: tint #2C2C2C @ 0.15, luminosity 0.96, FALLBACK #2C2C2C; Light: tint #FCFCFC @ 0.0, luminosity 0.85,
+    /// FALLBACK #F9F9F9. The Fallback is the solid paint when blur is unavailable (AcrylicBrush FallbackColor).</summary>
+    public required AcrylicSpec AcrylicFlyout { get; init; }
 
     // Hero gradient stops
     public required ColorF HeroGradientTop { get; init; }
@@ -251,6 +260,8 @@ public static class Tok
     public static ColorF ScrollThumb => T.ScrollThumb;
     public static ColorF AcrylicTint => T.AcrylicTint;
     public static ColorF AcrylicBase => T.AcrylicBase;
+    /// <summary>Theme-aware default flyout acrylic (see <see cref="TokenSet.AcrylicFlyout"/> for the WinUI sources).</summary>
+    public static AcrylicSpec AcrylicFlyout => T.AcrylicFlyout;
     public static ColorF HeroGradientTop => _accent is { } a ? a with { A = 0.55f } : T.HeroGradientTop;
     public static ColorF HeroGradientBottom => T.HeroGradientBottom;
 
@@ -342,6 +353,9 @@ public static class Tok
         ScrollThumb = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),   // == FillControlStrong (WinUI ControlStrongFillColorDefault)
         AcrylicTint = ColorF.FromRgba(0x2C, 0x2C, 0x2C, 0xCC),
         AcrylicBase = ColorF.FromRgba(0x20, 0x20, 0x20, 0xD9),
+        // AcrylicInAppFillColorDefaultBrush dark (AcrylicBrush_themeresources.xaml "Default" dict):
+        // TintColor #2C2C2C, TintOpacity 0.15, TintLuminosityOpacity 0.96, FallbackColor #2C2C2C.
+        AcrylicFlyout = AcrylicSpec.InAppDefault,
         HeroGradientTop = ColorF.FromRgba(0x2A, 0x4A, 0x66, 0xCC),
         HeroGradientBottom = ColorF.FromRgba(0x20, 0x20, 0x20, 0x00),
         FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
@@ -427,6 +441,9 @@ public static class Tok
         ScrollThumb = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         AcrylicTint = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xD9),
         AcrylicBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0xE6),
+        // AcrylicInAppFillColorDefaultBrush light (AcrylicBrush_themeresources.xaml "Light" dict):
+        // TintColor #FCFCFC, TintOpacity 0.0, TintLuminosityOpacity 0.85, FallbackColor #F9F9F9.
+        AcrylicFlyout = AcrylicSpec.FlyoutLight,
         HeroGradientTop = ColorF.FromRgba(0x7A, 0xB6, 0xE6, 0xB3),
         HeroGradientBottom = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0x00),
         FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),

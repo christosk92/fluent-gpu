@@ -120,6 +120,7 @@ internal sealed class ToggleSwitchCore : Component
     {
         public bool Pressed;     // pointer down on the control (ToggleSwitch_Partial.cpp m_isDragging)
         public bool Moved;       // crossed the drag box (m_wasDragged, :829-836)
+        public bool Cancelled;   // pointer left mid-press: the gesture is dead — the captured outside release must NOT toggle
         public float StartX;     // press X (local)
         public float KnobStart;  // knob translation at press (GetTranslations, :421-436)
         public float LastX;      // latest clamped knob translation (m_knobTranslation)
@@ -158,7 +159,7 @@ internal sealed class ToggleSwitchCore : Component
 
         void Down(Point2 pt)
         {
-            g.Pressed = true; g.Moved = false;
+            g.Pressed = true; g.Moved = false; g.Cancelled = false;   // a fresh press supersedes any stale cancel
             g.StartX = pt.X;
             g.KnobStart = isOn ? travel : 0f;            // GetTranslations at DragStarted (cpp:803-820)
             g.LastX = g.KnobStart;
@@ -178,6 +179,10 @@ internal sealed class ToggleSwitchCore : Component
 
         void Release()
         {
+            // A release after the pointer exited mid-press: the gesture was already cancelled (the OnPointerCaptureLost
+            // cleanup-without-toggling edge, ToggleSwitch_Partial.cpp:728-746). The engine's implicit capture still
+            // routes the outside release to this click handler — consume it silently instead of treating it as a tap.
+            if (g.Cancelled) { g.Cancelled = false; Reset(); return; }
             // Fires on pointer release over the control AND on Space/Enter activation (engine focused-clickable).
             bool toggle = true;                                                      // tap / keyboard → Toggle (cpp:874-905)
             if (g.Pressed && g.Moved)
@@ -195,7 +200,9 @@ internal sealed class ToggleSwitchCore : Component
             setHovered(false);
             // Pointer left mid-press → clean up the drag without toggling (the OnPointerCaptureLost "vertical pan"
             // cleanup, cpp:728-746; the engine has no per-node release-outside callback, so exit is the cancel edge).
-            if (g.Pressed) Reset();
+            // Flag the gesture cancelled: the dispatcher's implicit capture will still deliver the outside release to
+            // OnClick (Release), which must consume it without toggling (cpp:744 "not processing the gesture anymore").
+            if (g.Pressed) { g.Cancelled = true; Reset(); }
         }
 
         void HoverMove(Point2 _)

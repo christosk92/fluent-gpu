@@ -170,7 +170,13 @@ public sealed class AutoSuggestBox : Component
                 {
                     Owner = this, Query = userTyped, Highlight = highlight, OnChoose = ChooseAndSubmit,
                 }),
-                FlyoutPlacement.BottomStretch);
+                FlyoutPlacement.BottomStretch,
+                // Chrome=Static: the WinUI SuggestionsPopup is a bare Popup with NO transitions (the AutoSuggestBox
+                // template, generic.xaml — no TransitionCollection; AutoSuggestBox_Partial.cpp attaches none): the
+                // suggestion list appears/disappears instantly. The surface still carries the SuggestionsContainer
+                // chrome (AcrylicBackgroundFillColorDefault + 1px border + OverlayCornerRadius + 0,2 padding,
+                // AutoSuggestBox_themeresources.xaml:283 + generic.xaml:119).
+                new PopupOptions(Chrome: PopupChrome.Static));
             handle.Value.ClosedAction = () =>
             {
                 handle.Value = null;

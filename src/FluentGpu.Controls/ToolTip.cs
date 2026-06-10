@@ -203,11 +203,17 @@ public sealed class ToolTip : Component
 
         // Mount the per-frame countdown ONLY while a phase is live (1 = show-delay, 2 = auto-dismiss). When idle it is
         // absent, so the tooltip costs nothing per frame (the host only ticks FrameClock while something subscribes).
+        // The clock is KEYED by phase: the reconciler reuses a same-type component without re-running its factory
+        // (constructor props are mount-time only), so the 1→2 flip must REMOUNT a fresh clock or the open bubble keeps
+        // the already-fired show-delay clock and the auto-dismiss never arms. WinUI keeps these as two separate
+        // DispatcherTimers — m_tpOpenTimer (show delay) vs m_tpCloseTimer (SPI_GETMESSAGEDURATION dwell,
+        // ToolTipService_Partial.h:54/96-99; OpenAutomaticToolTip arms it with showDurationSeconds, cpp:429-459).
         Element? clock = ph == 0 ? null : Embed.Comp(() => new ToolTipClock
         {
             DurationMs = ph == 1 ? delay : ShowDurationMs,
             OnElapsed = ph == 1 ? OpenNow : CloseNow,
-        });
+        }) with
+        { Key = ph == 1 ? "tt-open-timer" : "tt-close-timer" };
 
         return new BoxEl
         {
@@ -222,8 +228,9 @@ public sealed class ToolTip : Component
         };
     }
 
-    // WinUI ToolTip bubble (ToolTip_themeresources.xaml DefaultToolTipStyle):
-    //   Background = AcrylicInAppFillColorDefault (AcrylicSpec.Flyout — the same in-app acrylic recipe + solid fallback)
+    // WinUI ToolTip bubble (ToolTip_themeresources.xaml DefaultToolTipStyle:42-76):
+    //   Background = ToolTipBackgroundBrush = AcrylicInAppFillColorDefaultBrush (:14 dark / :40 light) —
+    //     theme-aware Tok.AcrylicFlyout (dark #2C2C2C @0.15 lum 0.96 fb #2C2C2C; light #FCFCFC @0.0 lum 0.85 fb #F9F9F9)
     //   BorderBrush = SurfaceStrokeColorFlyout (Tok.StrokeFlyoutDefault), BorderThickness = 1
     //   CornerRadius = ControlCornerRadius (4px), Padding = ToolTipBorderPadding 9,6,9,8
     //   FontSize = ToolTipContentThemeFontSize 12, Foreground = TextFillColorPrimary, MaxWidth = 320, TextWrapping = Wrap.
@@ -231,7 +238,7 @@ public sealed class ToolTip : Component
     Element BubbleContent() => new BoxEl
     {
         Fill = ColorF.Transparent,
-        Acrylic = AcrylicSpec.Flyout,
+        Acrylic = Tok.AcrylicFlyout,
         BorderColor = Tok.StrokeFlyoutDefault,
         BorderWidth = 1f,
         Corners = Radii.ControlAll,

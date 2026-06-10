@@ -1084,7 +1084,10 @@ public sealed class TreeReconciler
                 ii.Focusable = b.TabStop ?? (b.Focusable || b.OnClick is not null);
                 ii.TabIndex = b.TabIndex;
                 ii.FocusVisualMargin = b.FocusVisualMargin ?? Edges4.All(-3f);   // the WinUI template default
+                // Keep the NodeFlags mirror in sync on REUSE too: a roving tab stop (RadioButtons, RadioButtons.xaml:5-6)
+                // moves IsTabStop between reused items frame-to-frame — a set-only mark would leave stale flags behind.
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
+                else _scene.Flags(node) &= ~NodeFlags.Focusable;
                 break;
             }
             case ScrollEl s:

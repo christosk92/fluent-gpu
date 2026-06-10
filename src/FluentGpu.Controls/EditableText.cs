@@ -80,8 +80,20 @@ public sealed class EditableText : Component
     public bool Revealed;
     /// <summary>Optional right-edge affix (PasswordBox reveal "eye", NumberBox spin column). Laid out at the right of the
     /// field, stretched to the inner height; the text area grows to fill the rest. When set, it REPLACES the WinUI
-    /// DeleteButton lane (in WinUI the spin/reveal buttons take the affix slot instead of the delete button).</summary>
+    /// DeleteButton lane (in WinUI the spin/reveal buttons take the affix slot instead of the delete button).
+    /// Composers that mount/unmount the affix on a LIVE instance must go through <see cref="SetRightAffix"/> —
+    /// a bare field write does not re-render the field.</summary>
     public Element? RightAffix = null;
+
+    /// <summary>Replace the right-affix element on the LIVE instance (the PasswordBox reveal eye mounts/unmounts per
+    /// the WinUI ButtonStates rule mid-typing, when no focus flip re-renders this component). Props freeze at mount,
+    /// so this bumps a render-subscribed epoch to re-render the field with the new affix lane.</summary>
+    internal void SetRightAffix(Element? affix)
+    {
+        if (ReferenceEquals(RightAffix, affix)) return;
+        RightAffix = affix;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+    }
 
     // ── new WinUI-parity surface ──────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Maximum length in UTF-16 code units; 0 = unlimited (WinUI <c>MaxLength</c>).</summary>
@@ -161,6 +173,7 @@ public sealed class EditableText : Component
     private InputHooks? _hooks;
     private Signal<string>? _text;
     private Signal<int>? _epoch;             // display epoch: bumped on doc-only changes (IME provisional, sanitize)
+    private Signal<int>? _affixEpoch;        // affix epoch: SetRightAffix re-renders the field (affix mount/unmount)
     private Signal<bool>? _empty;            // doc-empty flag; flips re-render (delete-button mount/unmount) only
     private FluentGpu.Signals.FloatSignal? _scroll;   // caret-follow offset; TransformBind shifts the text wrapper by -value
     private Action<bool> _setFocused = static _ => { };
@@ -186,6 +199,9 @@ public sealed class EditableText : Component
         _text = text;
         var epoch = UseSignal(0);
         _epoch = epoch;
+        var affixEpoch = UseSignal(0);
+        _affixEpoch = affixEpoch;
+        _ = affixEpoch.Value;   // subscribe: SetRightAffix on the live instance re-renders the affix lane
         var scroll = UseFloatSignal(0f);
         _scroll = scroll;
         var (focused, setFocused) = UseState(false);
