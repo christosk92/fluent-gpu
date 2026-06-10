@@ -200,8 +200,12 @@ public sealed class GdiSwapchain : ISwapchain
                     pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;   // experimental GDI path: no path strokes
                 case DrawOp.DrawGradientRect:
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;     // experimental GDI path: no gradients
+                case DrawOp.DrawGradientStroke:
+                    pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;   // experimental GDI path: no gradient strokes
+                case DrawOp.DrawTabShape:
+                    pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;         // experimental GDI path: no tab shapes
                 case DrawOp.PushLayer:
-                    pos += Unsafe.SizeOf<PushLayerCmd>(); break;            // experimental GDI path: no acrylic
+                    pos += Unsafe.SizeOf<PushLayerCmd>(); break;            // experimental GDI path: no acrylic/opacity layers
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>(); break;
                 default: pos = cmds.Length; break;

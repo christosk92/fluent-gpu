@@ -346,6 +346,7 @@ public sealed class TreeReconciler
 
     private void MountProvider(NodeHandle node, ContextProviderEl cp)
     {
+        Console.Error.WriteLine($"[provider] mount node={node.Raw.Index} channel={cp.Channel}");
         _providerSig[(int)node.Raw.Index] = (cp.Channel, new Signal<object?>(cp.Value));
         var child = _scene.CreateNode(cp.Child.ElementTypeId);
         _scene.AppendChild(node, child);
@@ -701,6 +702,11 @@ public sealed class TreeReconciler
             else
             {
                 var child = _scene.CreateNode(nk.ElementTypeId);
+                // Parent BEFORE Mount (like every other mount path): a component mounting inside this realize pass
+                // renders immediately, and its UseContext resolves providers by walking UP from its anchor — an
+                // unparented anchor would silently miss every provider (and never subscribe). The ordering pass
+                // below detaches/re-appends all children anyway.
+                _scene.AppendChild(node, child);
                 Mount(child, nk);
                 newNodes[i] = child;
                 structural = true;
@@ -801,6 +807,11 @@ public sealed class TreeReconciler
             else
             {
                 var child = _scene.CreateNode(nk.ElementTypeId);
+                // Parent BEFORE Mount (like the single-child Diff path): a ComponentEl mounted here runs its first
+                // render synchronously, and UseContext resolves providers by walking UP from the component's anchor —
+                // mounting detached would silently resolve to the context DEFAULT (and never subscribe, so it stays
+                // wrong forever). The ordering pass below detaches/re-appends every child anyway.
+                _scene.AppendChild(node, child);
                 Mount(child, nk);
                 newNodes[i] = child;
                 structural = true;
@@ -933,6 +944,7 @@ public sealed class TreeReconciler
                 if (b.OpacityBind is null && b.Opacity != 1f) paint.Opacity = b.Opacity;
                 paint.HoverOpacity = b.HoverOpacity;
                 paint.PressedOpacity = b.PressedOpacity;
+                paint.OpacityGroup = b.OpacityGroup;
 
                 if (b.HoverScale != 1f || b.PressScale != 1f || !float.IsNaN(b.HoverOpacity) || !float.IsNaN(b.PressedOpacity)
                     || !float.IsNaN(b.HoverDurationMs) || !float.IsNaN(b.PressDurationMs))
@@ -1031,13 +1043,16 @@ public sealed class TreeReconciler
 
                 // Drag-reorder promotion (WinUI CanDragItems/CanReorderItems): the DragBit makes the node hit-testable
                 // and arms Input.DragController on press; the lifecycle handler columns fire past the drag threshold.
-                if (b.CanDrag)
+                // An L2 typed source (BoxEl.Draggable) IMPLIES the L1 gesture — its spec lands in the sparse
+                // drag-source column the DragDropContext resolves at promotion (payload factory runs ONCE there).
+                if (b.CanDrag || b.Draggable is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.DragBit;
                     _scene.SetDragStarted(node, b.OnDragStarted);
                     _scene.SetDragDelta(node, b.OnDragDelta);
                     _scene.SetDragCompleted(node, b.OnDragCompleted);
                     _scene.SetDragCanceled(node, b.OnDragCanceled);
+                    _scene.SetDragSource(node, b.Draggable);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
                 else
@@ -1047,7 +1062,13 @@ public sealed class TreeReconciler
                     _scene.SetDragDelta(node, null);
                     _scene.SetDragCompleted(node, null);
                     _scene.SetDragCanceled(node, null);
+                    _scene.SetDragSource(node, null);
                 }
+
+                // L2 drop target (BoxEl.DropTarget → sparse spec column). Discovery is hit-test-CHAIN based (the
+                // context walks parents for the nearest accepting spec), so no handler-mask bit is needed — any
+                // surface can receive any drag without becoming click/pointer hit-testable itself.
+                _scene.SetDropTarget(node, b.DropTarget);
 
                 if (b.OnContextRequested is not null)
                 {
@@ -1229,6 +1250,8 @@ public sealed class TreeReconciler
                 paint.TextPressedColor = t.PressedColor;
                 paint.TextDisabledColor = t.DisabledColor;
                 paint.TextFocusedColor = t.FocusedColor;
+                paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
+                                             | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);
                 if (t.TextBind is null)
                 {

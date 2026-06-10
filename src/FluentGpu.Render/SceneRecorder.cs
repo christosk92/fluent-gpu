@@ -54,7 +54,20 @@ public static class SceneRecorder
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
+
+        // E5 drag ghost: the lifted drag visual (SceneStore.DragGhost, set by Input.DragController at promotion; the
+        // node also carries NodeFlags.DragGhost) is EXCLUDED from the clipped main pass and re-walked below in an
+        // UNCLIPPED top band — it escapes every ancestor scissor (a row dragged out of a clipped list keeps drawing)
+        // and, emitted LAST, paints above everything including overlays (the Flutter/rbd ghost layer). A ghost inside
+        // a skipped popup subtree stays with its popup window (no main-window hoist).
+        var ghost = scene.DragGhost;
+        bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
+        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1];
+        skipRoots.CopyTo(skips);
+        int skipCount = skipRoots.Length;
+        if (hasGhost) skips[skipCount++] = ghost;
+
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skips[..skipCount], ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -63,6 +76,19 @@ public static class SceneRecorder
         {
             var o = scene.OrphanAt(i, out float px, out float py);
             Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
+        }
+
+        // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
+        // translations included — AbsoluteRect minus the node's own bounds offset and translate; Walk re-applies
+        // both) with an INFINITE clip. Emitted last ⇒ the painter draws it over the whole frame.
+        if (hasGhost)
+        {
+            var abs = scene.AbsoluteRect(ghost);
+            ref RectF gb = ref scene.Bounds(ghost);
+            ref NodePaint gp = ref scene.Paint(ghost);
+            Walk(scene, dl, images, ghost,
+                 Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
         }
         return stats.ToStats();
     }
@@ -100,6 +126,16 @@ public static class SceneRecorder
     {
         for (int i = 0; i < roots.Length; i++)
             if (roots[i] == node) return true;
+        return false;
+    }
+
+    /// <summary>True when <paramref name="node"/> is inside any skip-root subtree (a windowed-popup wrapper) — its
+    /// pixels belong to that popup's own pass, never the main window.</summary>
+    private static bool UnderAnySkipRoot(SceneStore scene, ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    {
+        if (roots.IsEmpty) return false;
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if (ContainsNode(roots, n)) return true;
         return false;
     }
 
@@ -155,6 +191,19 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
+        // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders
+        // at FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha — overlapping children
+        // (a fading dialog's plate + buttons, a stacked badge) don't double-blend. The cumulative opacity resets to 1
+        // for everything this node emits (self, children, border, focus ring, scrollbar — all inside the group); the
+        // PushLayer carries the would-be cumulative alpha as GroupAlpha. Skipped at alpha ≈ 1 (composite would be a
+        // no-op) and ≈ 0 (invisible — but still walked, matching the non-group path's behavior for hit/anim state). ──
+        bool isOpacityGroup = p.OpacityGroup && opacity < 0.999f && deviceBounds.Overlaps(clip);
+        if (isOpacityGroup)
+        {
+            dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key);
+            opacity = 1f;
+        }
+
         // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
         //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
@@ -186,7 +235,19 @@ public static class SceneRecorder
             childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
         if (wantClip)
         {
-            dl.PushClip(childClip, key);
+            // Tier-2 rounded clip (E9): a clipping node WITH rounded corners (an Expander/CommandBarFlyout surface
+            // running an AnimChannel.ClipL/T/R/B reveal, or a plain rounded ClipsToBounds) clips RoundRect-pipeline
+            // primitives to its rounded-box SDF as well as the scissor. The rounded box is the node's own device box;
+            // the (possibly animated) clip-rect keeps intersecting RECTANGULARLY into the scissor — so a reveal sweeps
+            // a straight edge while the surface's own corners stay round, exactly the WinUI composition-clip look.
+            // Uniform radius (TopLeft, the pipeline-wide convention — the RoundRect/acrylic shaders read one radius);
+            // scaled into device units by the axis-aligned world scale. Honest scope is documented on ClipCmd:
+            // glyphs/images/gradients/arcs/polylines still clip by scissor only.
+            float clipRadius = p.Corners.TopLeft;
+            if (clipRadius > 0f)
+                dl.PushClipRounded(childClip, deviceBounds, clipRadius * MathF.Abs(world.M11 != 0f ? world.M11 : 1f), key);
+            else
+                dl.PushClip(childClip, key);
             pushedClip = true;
         }
 
@@ -288,6 +349,34 @@ public static class SceneRecorder
                     dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
                         (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
 
+                // (b2) text decorations (TextEl.Underline/Strikethrough → NodePaint.TextDecorations, E9): bars placed
+                // by the FACE metrics the measure pass cached on TextMeasureCache (UnderlineY/UnderlineThickness/StrikeY
+                // — the DWrite underlinePosition/underlineThickness flipped top-down, TextLayoutEngine.cs:141-143;
+                // headless model documented at HeadlessFontSystem.cs:13). The bars span the measured run advance (not
+                // the stretched box) and ride the SAME resolved foreground as the glyphs (hover/press ramps +
+                // BrushTransition), like WinUI's TextDecorations underline. No new opcode — plain radius-0 fills.
+                // Scope (honest): single-line frame — a wrapped multi-line run gets the first line's bar only; per-line
+                // decoration belongs to the SpanTextEl/RichTextBlock rich-text pass (Wave 5).
+                if (p.TextDecorations != 0 && !p.Text.IsEmpty)
+                {
+                    // The measure pass get-or-created this row for every text leaf, so record never inserts (0-alloc).
+                    ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
+                    float barW = mc.Valid ? MathF.Min(mc.Size.Width, pw) : pw;
+                    // Fallbacks mirror the engine's font-metric conventions for backends that report none (GDI):
+                    // thickness max(1, size/14) = TextLayoutEngine.cs:142's own fallback; positions = the headless model.
+                    float thick = mc.Valid && mc.UnderlineThickness > 0f ? mc.UnderlineThickness : MathF.Max(1f, li.TextStyle.SizeDip / 14f);
+                    if ((p.TextDecorations & NodePaint.UnderlineBit) != 0 && barW > 0f)
+                    {
+                        float y = mc.Valid && mc.UnderlineY > 0f ? mc.UnderlineY : li.TextStyle.SizeDip * 1.1f + 1f;
+                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                    }
+                    if ((p.TextDecorations & NodePaint.StrikethroughBit) != 0 && barW > 0f)
+                    {
+                        float y = mc.Valid && mc.StrikeY > 0f ? mc.StrikeY : li.TextStyle.SizeDip * 0.8f;
+                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                    }
+                }
+
                 // (c) selected-text recolor: re-emit the SAME run scissored to each selection rect (device-space,
                 // intersected with the active clip like every PushClip the recorder emits). Glyph cost ×2 only while
                 // a selection exists — exactly WinUI's selected-text recolor, no per-glyph splitting.
@@ -385,6 +474,10 @@ public static class SceneRecorder
         if (scrollThumb.A > 0f && deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
+
+        // Close the flat opacity group LAST: everything this node emitted (shadow, fill, children, border, focus
+        // ring, scrollbar) flattens into the offscreen RT and composites once at the group alpha.
+        if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
     }
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
@@ -647,9 +740,9 @@ public static class SceneRecorder
                 return;
             }
 
-            const float bar = 12f;          // ScrollBarSize (expanded gutter width)
-            const float collapsed = 6f;     // resting thumb width — visible (a 2px hairline was effectively invisible)
-            const float thumbOffset = 2f;   // ScrollBarThumbOffset: cross-axis inset in the collapsed state
+            const float bar = 12f;          // ScrollBarSize (ScrollBar_themeresources.xaml:180)
+            const float collapsed = 2f;     // VISIBLE collapsed thumb: ThumbMinWidth 8 (:182) − transparent stroke 6 (:185)
+            const float thumbOffset = 1f;   // collapsed fill rides 1px off the edge (8px rect, +2 translate, 6px stroke → [cross−3, cross−1])
             const float minExpanded = 30f;  // ScrollBarVerticalThumbMinHeight
             const float minCollapsed = 32f; // VerticalPanningThumb.MinHeight
             const float radius = 3f;        // ScrollBarCornerRadius
@@ -686,9 +779,10 @@ public static class SceneRecorder
                 dl.FillRoundRect(gutter, CornerRadius4.All(radius), trackCol, world, opacity, key);
             }
 
-            float thick = collapsed + (bar - collapsed) * expand;
-            float collapsedCrossPos = cross - collapsed - thumbOffset;
-            float expandedCrossPos = cross - bar;
+            const float expandedVisible = 6f;                       // ScrollBarSize 12 − stroke 6, centred (3px insets)
+            float thick = collapsed + (expandedVisible - collapsed) * expand;
+            float collapsedCrossPos = cross - collapsed - thumbOffset;   // [cross−3, cross−1]
+            float expandedCrossPos = cross - bar + 3f;                   // [cross−9, cross−3]
             float crossPos = collapsedCrossPos + (expandedCrossPos - collapsedCrossPos) * expand;
             RectF thumbRect = horizontal
                 ? new RectF(pos, crossPos, thumbLen, thick)

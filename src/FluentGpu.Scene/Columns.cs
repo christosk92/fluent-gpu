@@ -7,7 +7,12 @@ public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, Polyline
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
-/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.</summary>
+/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
+/// Besides the size, the cache retains the face's DECORATION metrics from the same <c>TextMetrics</c> (top-down DIP,
+/// the line frame of <c>Baseline</c> — see FluentGpu.Text.TextMetrics): the recorder reads them at record time to
+/// place underline/strikethrough bars (NodePaint.TextDecorations) without re-touching the font seam. Filled by the
+/// layout engine's measure-miss path; 0 ⇒ the backend reported no face metrics (the recorder falls back to a
+/// size-derived approximation).</summary>
 public struct TextMeasureCache
 {
     public bool Valid;
@@ -15,6 +20,15 @@ public struct TextMeasureCache
     public TextStyle Style;
     public float MaxW;
     public Size2 Size;
+    /// <summary>Underline bar top, measured DOWN from the line top (DWrite underlinePosition flipped over the baseline
+    /// — TextLayoutEngine.cs:141; headless model: baseline + 1).</summary>
+    public float UnderlineY;
+    /// <summary>Underline bar thickness (DWrite underlineThickness; also reused for the strikethrough bar, the
+    /// DWrite/WinUI convention).</summary>
+    public float UnderlineThickness;
+    /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
+    /// headless model: SizeDip × 0.8).</summary>
+    public float StrikeY;
 }
 
 /// <summary>Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).</summary>
@@ -90,8 +104,26 @@ public struct NodePaint
     public ColorF TextDisabledColor;
     public ColorF TextFocusedColor;
     public StringId Text;
+    /// <summary>Text decoration flags for a <see cref="VisualKind.Text"/> leaf (<see cref="UnderlineBit"/> |
+    /// <see cref="StrikethroughBit"/>; 0 = none). The recorder emits the bars itself — FillRoundRect quads placed by
+    /// the face metrics cached on <see cref="TextMeasureCache"/> (no new opcode), colored with the SAME resolved
+    /// foreground (hover/press ramps + BrushTransition) as the glyph run — matching DWrite, which draws decorations
+    /// from the face's underline position/thickness rather than glyph geometry. Written by the reconciler from
+    /// <c>TextEl.Underline</c>/<c>Strikethrough</c> (WinUI <c>TextDecorations</c>; HyperlinkButton underlines only when
+    /// the HyperlinkUnderlineVisible directive is set or under HighContrast — HyperLinkButton_Partial.cpp:207-212).</summary>
+    public byte TextDecorations;
+    /// <summary>Flat opacity group opt-in (WinUI Composition LayerVisual semantics): when set and the node's resolved
+    /// opacity &lt; 1, the recorder wraps the subtree in PushLayer{Opacity}…PopLayer — children render at FULL alpha
+    /// offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
+    /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
+    public bool OpacityGroup;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
     public VisualKind VisualKind;
+
+    /// <summary><see cref="TextDecorations"/>: draw the face-metric underline bar.</summary>
+    public const byte UnderlineBit = 1;
+    /// <summary><see cref="TextDecorations"/>: draw the face-metric strikethrough bar.</summary>
+    public const byte StrikethroughBit = 2;
 
     public static NodePaint Default => new()
     {

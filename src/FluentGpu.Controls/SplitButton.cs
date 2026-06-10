@@ -64,7 +64,8 @@ public sealed class SplitButton : Component
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,
-                new PopupOptions(FocusTrap: true));
+                // WinUI menus are windowed popups (FlyoutBase SetIsWindowedPopup) — may escape the window.
+                new PopupOptions(FocusTrap: true) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => { handle.Value = null; open.Value = false; };
             open.Value = true;
         }
@@ -76,8 +77,8 @@ public sealed class SplitButton : Component
             ToggleMenu();
         }, OpenOnMount);
 
-        // Keyboard (SplitButton.cpp OnSplitButtonKeyUp): Space/Enter → invoke the primary action; Down → open the menu
-        // (WinUI also opens on Alt+Down / F4, but those virtual keys are not in the slice's Keys table — see report).
+        // Keyboard (SplitButton.cpp OnSplitButtonKeyUp): Space/Enter → invoke the primary action; Down / Alt+Down /
+        // F4 → open the menu (the ComboBox-family open chords; Alt+Down arrives as Down with the Alt modifier).
         void OnKey(KeyEventArgs e)
         {
             if (!enabled) return;
@@ -86,7 +87,7 @@ public sealed class SplitButton : Component
                 OnInvoke?.Invoke();
                 e.Handled = true;
             }
-            else if (e.KeyCode == Keys.Down)
+            else if (e.KeyCode == Keys.Down || e.KeyCode == Keys.F4)
             {
                 ToggleMenu();
                 e.Handled = true;

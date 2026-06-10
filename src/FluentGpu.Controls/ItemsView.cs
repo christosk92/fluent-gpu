@@ -16,6 +16,7 @@ public sealed class ItemsViewController
 {
     internal Action<int, float>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
+    internal Action<float>? ScrollByImpl;
 
     /// <summary>The live selection model — Select/Deselect/IsSelected/SelectAll/DeselectAll/InvertSelection
     /// (ItemsView.idl:53-58) are its methods; range-based, so they never realize items.</summary>
@@ -30,7 +31,27 @@ public sealed class ItemsViewController
     /// ItemsViewInteractions.cpp:1013-1016).</summary>
     public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN)
         => BringIntoViewImpl?.Invoke(index, alignmentRatio);
+
+    /// <summary>Nudge the virtualized viewport by <paramref name="delta"/> DIP along its scroll axis (clamped).
+    /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
+    /// the viewport edge (the plan's E5-L3 edge auto-scroll in virtualized lists). No-op for non-virtual hosts.</summary>
+    public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
 }
+
+/// <summary>Per-item visual state handed to a custom <see cref="ItemContainerFactory"/> (the L4 skin seam).</summary>
+public readonly record struct ItemChromeState(
+    bool IsSelected, bool IsEnabled, bool ShowCheckbox, bool IsChecked, bool IsCurrent);
+
+/// <summary>
+/// Custom item-container factory — the E11-L4 SKIN seam: ListView/GridView/TreeView supply their WinUI item chrome
+/// (ListViewItemPresenter / GridView dual-border / TreeViewItem row) around the engine's ONE selection + keyboard
+/// substrate. The returned BoxEl must wire <paramref name="onInteraction"/> (press/Enter/Space → the selector) and
+/// <paramref name="onFocusChanged"/> (keyboard-current tracking), and should be <c>Focusable</c> so the engine focus
+/// ring lands on items. Null ⇒ the default WinUI <see cref="ItemContainer"/> chrome.
+/// </summary>
+public delegate BoxEl ItemContainerFactory(
+    int index, Element content, ItemChromeState state,
+    Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged);
 
 /// <summary>
 /// WinUI <c>ItemsView</c> (controls\dev\ItemsView) — E11-L3: the L2 repeater substrate + <see cref="SelectionModel"/>
@@ -74,6 +95,10 @@ public sealed class ItemsView : Component
     public Func<int, string>? ItemText;
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
     public Func<int, bool>? IsItemEnabled;
+    /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (ListView/GridView/TreeView).</summary>
+    public ItemContainerFactory? ContainerFactory;
+    /// <summary>Stable per-item keys for the keyed diff (reorder projections need item-identity keys).</summary>
+    public Func<int, string>? KeyOf;
     public RepeatLayout Layout;
     public bool HasExplicitLayout;
     public ItemsSelectionMode SelectionMode = ItemsSelectionMode.Single;   // ItemsView.h s_defaultSelectionMode
@@ -100,7 +125,9 @@ public sealed class ItemsView : Component
                                  Func<int, string>? itemText = null,
                                  Func<int, bool>? isItemEnabled = null,
                                  ItemsViewController? controller = null,
-                                 int overscan = 4)
+                                 int overscan = 4,
+                                 ItemContainerFactory? containerFactory = null,
+                                 Func<int, string>? keyOf = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -116,6 +143,8 @@ public sealed class ItemsView : Component
             IsItemEnabled = isItemEnabled,
             Controller = controller,
             OverscanItems = overscan,
+            ContainerFactory = containerFactory,
+            KeyOf = keyOf,
         });
 
     public override Element Render()
@@ -178,7 +207,7 @@ public sealed class ItemsView : Component
         {
             if (sceneRef is null || layout is null || (uint)index >= (uint)count) return;
             var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp)) return;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;   // non-virtual host: no-op
             ref ScrollState sc = ref sceneRef.ScrollRef(vp);
             float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
             float cross = horizontal ? sc.ViewportH : sc.ViewportW;
@@ -217,17 +246,54 @@ public sealed class ItemsView : Component
         }
 
         // Keyboard focus the REALIZED container for an index: ord = index − FirstRealized → the ord-th window child.
+        // Non-virtual hosts (Wrap/Inline fallback) have no scroll state: every container is a direct child of the
+        // captured host box, so ord == index.
         void FocusIndex(int index, bool visual)
         {
             var focusNode = hooks.FocusNode;
             if (sceneRef is null || focusNode is null) return;
             var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return;
-            int ord = index - sc.FirstRealized;
-            if (ord < 0 || index >= sc.LastRealized) return;
-            var n = sceneRef.FirstChild(sc.ContentNode);
+            if (vp.IsNull || !sceneRef.IsLive(vp)) return;
+            NodeHandle first;
+            int ord;
+            if (sceneRef.TryGetScroll(vp, out var sc))
+            {
+                ord = index - sc.FirstRealized;
+                if (ord < 0 || index >= sc.LastRealized) return;
+                first = sceneRef.FirstChild(sc.ContentNode);
+            }
+            else
+            {
+                ord = index;
+                first = sceneRef.FirstChild(vp);
+            }
+            var n = first;
             for (int k = 0; k < ord && !n.IsNull; k++) n = sceneRef.NextSibling(n);
             if (!n.IsNull && sceneRef.IsLive(n)) focusNode(n, visual);
+        }
+
+        // Edge auto-scroll seam (drag reorder near the viewport edge): nudge Offset/Target by a clamped delta.
+        void ScrollByDelta(float delta)
+        {
+            if (sceneRef is null) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
+            float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+            float content = horizontal ? sc.ContentW : sc.ContentH;
+            float offsetNow = horizontal ? sc.OffsetX : sc.OffsetY;
+            float target = Math.Clamp(offsetNow + delta, 0f, MathF.Max(0f, content - viewport));
+            if (target == offsetNow) return;
+            if (horizontal) { sc.OffsetX = target; sc.TargetX = target; }
+            else { sc.OffsetY = target; sc.TargetY = target; }
+            var contentNode = sc.ContentNode;
+            if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
+            {
+                sceneRef.Paint(contentNode).LocalTransform = Affine2D.Translation(horizontal ? -target : 0f, horizontal ? 0f : -target);
+                sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            }
+            sceneRef.Mark(vp, NodeFlags.VirtualRangeDirty);
+            Context.RequestRerender();
         }
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
@@ -399,6 +465,7 @@ public sealed class ItemsView : Component
             ctl.BringIntoViewImpl = BringIntoView;
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
+            ctl.ScrollByImpl = ScrollByDelta;
         }
 
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it.
@@ -408,17 +475,28 @@ public sealed class ItemsView : Component
             if (target >= 0) { pendingFocus.Value = -1; FocusIndex(target, visual: true); }
         }, cur);
 
-        // ── item template: content wrapped in the WinUI ItemContainer chrome ─────────────────────────
+        // ── item template: content wrapped in the WinUI ItemContainer chrome (or the L4 skin's chrome) ──
         bool multi = SelectionMode == ItemsSelectionMode.Multiple;
         Func<int, Element> content = ItemTemplate ?? DefaultTile;
-        Func<int, Element> containerTemplate = i => ItemContainer.Build(
-            content(i),
-            isSelected: model.IsSelected(i),
-            onInteraction: (t, m) => OnItemInteraction(i, t, m),
-            isEnabled: IsItemEnabled?.Invoke(i) ?? true,
-            showSelectionCheckbox: multi,
-            isChecked: multi && model.IsSelected(i),
-            onFocusChanged: got => { if (got && current.Peek() != i) current.Value = i; });
+        ItemContainerFactory? skin = ContainerFactory;
+        Func<int, Element> containerTemplate = i =>
+        {
+            bool selected = model.IsSelected(i);
+            bool enabled = IsItemEnabled?.Invoke(i) ?? true;
+            Action<ItemContainerTrigger, KeyModifiers> interact = (t, m) => OnItemInteraction(i, t, m);
+            Action<bool> focusChanged = got => { if (got && current.Peek() != i) current.Value = i; };
+            return skin is not null
+                ? skin(i, content(i), new ItemChromeState(selected, enabled, multi, multi && selected, i == cur),
+                       interact, focusChanged)
+                : ItemContainer.Build(
+                    content(i),
+                    isSelected: selected,
+                    onInteraction: interact,
+                    isEnabled: enabled,
+                    showSelectionCheckbox: multi,
+                    isChecked: multi && selected,
+                    onFocusChanged: focusChanged);
+        };
 
         Element itemsHost = layout is not null
             ? new VirtualListEl
@@ -426,12 +504,16 @@ public sealed class ItemsView : Component
                 ItemCount = count,
                 Layout = layout,
                 RenderItem = containerTemplate,
+                KeyOf = KeyOf,
                 Overscan = OverscanItems,
                 Horizontal = horizontal,
                 Grow = 1f,
                 OnRealized = h => viewportNode.Value = h,
             }
-            : Repeater.ItemsRepeater(count, containerTemplate, in spec);   // Wrap/Inline small-collection fallback
+            // Wrap/Inline small-collection fallback (always a BoxEl) — capture the host box so FocusIndex can
+            // walk its children (ord == index; no scroll state).
+            : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf))
+                with { OnRealized = h => viewportNode.Value = h };
 
         return new BoxEl
         {

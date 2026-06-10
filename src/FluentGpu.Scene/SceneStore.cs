@@ -101,8 +101,18 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, TextEditState> _textEdits = new();
     private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditSelRects = new();
     private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditUnderlineRects = new();
+    // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
+    // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
+    private readonly Dictionary<int, DragSource> _dragSources = new();
+    private readonly Dictionary<int, DropTargetSpec> _dropTargets = new();
 
     public NodeHandle Root { get; set; }
+
+    /// <summary>The node currently lifted by an active item-drag (E5 ghost) — set/cleared by
+    /// <c>Input.DragController</c> at promotion/restore (the node also carries <see cref="NodeFlags.DragGhost"/>).
+    /// The recorder EXCLUDES it from the clipped main pass and re-walks its subtree in an UNCLIPPED top band emitted
+    /// last, so the lifted visual escapes every ancestor scissor and paints above overlays. Null = no drag.</summary>
+    public NodeHandle DragGhost { get; set; }
 
     /// <summary>Optional interner for text-id lifetime accounting: when set, freeing a node (or rewriting its dynamic
     /// text) releases its <c>paint.Text</c> / <c>TextStyle.Family</c> refs so streamed virtual-list text is reclaimed
@@ -234,6 +244,9 @@ public sealed class SceneStore : ISceneBackend
         _textEdits.Remove(idx);
         _textEditSelRects.Remove(idx);
         _textEditUnderlineRects.Remove(idx);
+        _dragSources.Remove(idx);
+        _dropTargets.Remove(idx);
+        if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -605,6 +618,42 @@ public sealed class SceneStore : ISceneBackend
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a) => _acrylics[(int)h.Raw.Index] = a;
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
+
+    // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
+    /// <summary>Set (or clear, null) the node's typed drag-source spec — the reconciler writes it from
+    /// <c>BoxEl.Draggable</c>; the L2 context resolves the nearest one up the chain at L1 promotion.</summary>
+    public void SetDragSource(NodeHandle h, DragSource? s)
+    {
+        int idx = (int)h.Raw.Index;
+        if (s is null) _dragSources.Remove(idx);
+        else _dragSources[idx] = s;
+    }
+
+    public bool TryGetDragSource(NodeHandle h, out DragSource? s)
+    {
+        bool found = _dragSources.TryGetValue((int)h.Raw.Index, out var v);
+        s = v;
+        return found;
+    }
+
+    /// <summary>Set (or clear, null) the node's drop-target spec — the reconciler writes it from
+    /// <c>BoxEl.DropTarget</c>; the L2 context walks the hit chain per move for the nearest ACCEPTING one.</summary>
+    public void SetDropTarget(NodeHandle h, DropTargetSpec? t)
+    {
+        int idx = (int)h.Raw.Index;
+        if (t is null) _dropTargets.Remove(idx);
+        else _dropTargets[idx] = t;
+    }
+
+    public bool TryGetDropTarget(NodeHandle h, out DropTargetSpec? t)
+    {
+        bool found = _dropTargets.TryGetValue((int)h.Raw.Index, out var v);
+        t = v;
+        return found;
+    }
+
+    /// <summary>Cheap per-move gate: any drop target in the scene at all (skips the chain walk for plain reorders).</summary>
+    public bool HasDropTargets => _dropTargets.Count > 0;
 
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)

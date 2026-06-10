@@ -73,11 +73,11 @@ public static class InfoBadge
     //   Success        = SymbolIcon "Accept"    (Segoe Fluent 0xE73E == Icons.Accept)
     //   Caution        = SymbolIcon "Important" (0xE171)
     //   Critical       = SymbolIcon "Cancel"    (0xE711 == Icons.Cancel)
-    public const string GlyphAttention     = "";
-    public const string GlyphInformational = "";
-    public const string GlyphSuccess       = Icons.Accept;     // 0xE73E
-    public const string GlyphCaution       = "";   // Important
-    public const string GlyphCritical      = Icons.Cancel;     // 0xE711
+    public const string GlyphAttention     = Icons.Attention;  // 0xEA38 (InfoBadge_themeresources.xaml:99)
+    public const string GlyphInformational = Icons.StatusInfo; // 0xF13F (:111)
+    public const string GlyphSuccess       = Icons.Accept;     // 0xE73E - SymbolIconSource Symbol="Accept" (:122)
+    public const string GlyphCaution       = Icons.Important;  // 0xE171 - SymbolIconSource Symbol="Important" (:133)
+    public const string GlyphCritical      = Icons.Cancel;     // 0xE711 - SymbolIconSource Symbol="Cancel" (:144)
 
     /// <summary>WinUI InfoBadge background per severity. Default/Attention follow the live OS accent
     /// (SystemFillColorAttention == SystemAccentColor); Success/Caution/Critical use the saturated SystemFillColor*.

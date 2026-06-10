@@ -177,6 +177,21 @@ public sealed class ReorderList
         return true;
     }
 
+    /// <summary>Keyboard lift-mode move (rbd a11y — E5-L3): shift the shown target directly by <paramref name="delta"/>
+    /// slots, clamped to the list, with NO dwell (a deliberate keystroke needs no stabilization timer; pending and
+    /// target stay in lockstep so <see cref="Complete"/> commits exactly what the user sees). Returns true when the
+    /// shown target changed — re-render with <see cref="ProjectOrder"/> and the FLIP pipeline animates the move.</summary>
+    public bool MoveTarget(int delta)
+    {
+        if (_dragged < 0 || _count == 0 || delta == 0) return false;
+        int next = Math.Clamp(_target + delta, 0, _count - 1);
+        if (next == _target) return false;
+        _target = next;
+        _pending = next;
+        _dwellRemainingMs = 0f;
+        return true;
+    }
+
     /// <summary>The main-axis displacement hint for sibling <paramref name="index"/> at the current shown target:
     /// items between the dragged slot and the target shift one dragged-extent (+spacing) to make room; everything
     /// else (and the dragged item itself) is 0.</summary>

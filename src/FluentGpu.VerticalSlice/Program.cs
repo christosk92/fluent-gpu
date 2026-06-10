@@ -1398,6 +1398,7 @@ static class Slice
         DrawOp.DrawGradientStroke => Unsafe.SizeOf<DrawGradientStrokeCmd>(),
         DrawOp.DrawArc => Unsafe.SizeOf<DrawArcCmd>(),
         DrawOp.DrawPolylineStroke => Unsafe.SizeOf<DrawPolylineStrokeCmd>(),
+        DrawOp.DrawTabShape => Unsafe.SizeOf<DrawTabShapeCmd>(),
         _ => 0,
     };
 
@@ -2337,7 +2338,7 @@ static class Slice
         {
             if (!LaneRect(rect, out var r)) continue;
             expandedGutter |= r.W >= 10f && r.H >= 190f;
-            expandedThumb |= r.W >= 10f && r.H >= 30f && r.H < 190f;
+            expandedThumb |= r.W >= 5f && r.W < 10f && r.H >= 30f && r.H < 190f;
         }
         bool hoverSettledIdle = !host.HasActiveWork;
 
@@ -2349,7 +2350,7 @@ static class Slice
         {
             if (!LaneRect(rect, out var r)) continue;
             collapsedGutter |= r.W >= 10f && r.H >= 190f;
-            collapsedThumb |= r.W <= 7f && r.H >= 30f;   // resting thumb is a visible 6px (was a 2px hairline)
+            collapsedThumb |= r.W <= 3f && r.H >= 30f;   // WinUI resting thumb = 2px visible (8 − 6 stroke)
         }
 
         for (int i = 0; i < 90; i++) host.RunFrame();
@@ -4290,10 +4291,14 @@ static class Slice
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60, c.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 1_300));
             var dragFrame = host.RunFrame();
             bool zero = dragFrame.HotPhaseAllocBytes == 0;
-            bool tracked = Near(root.LastTotalDx, 60f) && Near(host.Scene.Paint(item).LocalTransform.Dx, 60f)
+            // E5b spring-lag follow (the adopted Flutter/rbd ghost feel): with real timestamps the lifted visual EASES
+            // toward the pointer instead of snapping, so the transform reaches 60 only once the spring settles —
+            // assert the SETTLED position, while the 0-alloc gate stays on the immediate pointer-rate drag frame.
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            bool tracked = Near(root.LastTotalDx, 60f) && Near(host.Scene.Paint(item).LocalTransform.Dx, 60f, 1.5f)
                 && Near(host.Scene.Paint(item).Opacity, 0.80f);
             Check("e5dragdrop.8b steady drag frame is 0-alloc on phases 6–13 (transform-only repaint of the lifted visual)",
-                zero && tracked, $"{dragFrame.HotPhaseAllocBytes} bytes dx={root.LastTotalDx:0.#}");
+                zero && tracked, $"{dragFrame.HotPhaseAllocBytes} bytes dx={root.LastTotalDx:0.#} tdx={host.Scene.Paint(item).LocalTransform.Dx:0.#}");
         }
     }
 
@@ -6820,6 +6825,15 @@ static class Slice
         float anchorCx = ar.X + ar.W * 0.5f;
         float beakCx = br.X + br.W * 0.5f;
         bool aligned = !trigger.IsNull && !beakStroke.IsNull && Near(beakCx, anchorCx, 1.5f);
+
+        // TEMP-DIAG
+        for (var n = beakStroke; !n.IsNull; n = host.Scene.Parent(n))
+        {
+            var bb = host.Scene.Bounds(n);
+            var pp = host.Scene.Paint(n);
+            Console.Error.WriteLine($"[64h] node={n.Raw.Index} bounds=({bb.X:0.0},{bb.Y:0.0} {bb.W:0.0}x{bb.H:0.0}) tdx={pp.LocalTransform.Dx:0.0} tdy={pp.LocalTransform.Dy:0.0}");
+        }
+        Console.Error.WriteLine($"[64h] anchor=({ar.X:0.0},{ar.Y:0.0} {ar.W:0.0}x{ar.H:0.0})");
 
         Check("64h. TeachingTip tail aligns to resolved target center after popup placement",
             aligned, $"anchorCx={anchorCx:0.0} beakCx={beakCx:0.0} dx={beakCx - anchorCx:0.0}");

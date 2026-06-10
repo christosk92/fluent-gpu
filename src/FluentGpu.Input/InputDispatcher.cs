@@ -50,14 +50,31 @@ public sealed class InputDispatcher
     {
         _scene = scene;
         Drag = new DragController(scene, () => RequestRerender());
+        DragDrop = new DragDropContext(scene, () => RequestRerender()) { ScrollBy = AutoScrollBy };
     }
 
     public NodeHandle Focused => _focused;
 
-    /// <summary>The drag-reorder gesture engine (E5): armed by a press on a <c>CanDrag</c> chain, promoted past the
+    /// <summary>The drag-reorder gesture engine (E5-L1): armed by a press on a <c>CanDrag</c> chain, promoted past the
     /// 4px drag box, owning the pointer until release/Escape. Constructed with the dispatcher so every host gets
     /// item-drag without wiring; the host hooks <see cref="DragController.OnSettle"/> for the FLIP drop-glide.</summary>
     public DragController Drag { get; }
+
+    /// <summary>The typed drag-drop context (E5-L2, the Flutter Draggable/DragTarget + rbd model): a promoted L1 drag
+    /// whose chain carries a <c>BoxEl.Draggable</c> opens THE <see cref="DragSession"/> here; per move the nearest
+    /// accepting <c>BoxEl.DropTarget</c> under the pointer gets Enter/Over/Leave, release over it gets OnDrop, and
+    /// the engine edge auto-scroll arms when the pointer drags near an overflowing viewport's edge (host-ticked).</summary>
+    public DragDropContext DragDrop { get; }
+
+    /// <summary>Edge auto-scroll write for <see cref="DragDropContext"/>: immediate clamped offset move on a viewport
+    /// (the SetScrollOffset path — content transform + virtual re-realize + scrollbar reveal). False at the boundary.</summary>
+    private bool AutoScrollBy(NodeHandle n, float delta)
+    {
+        if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return false;
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        float old = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
+        return SetScrollOffset(n, old + delta);
+    }
 
     /// <summary>Set by the host: a virtual list crossing an item boundary on scroll requests the next render.</summary>
     public Action RequestRerender { get; set; } = static () => { };
@@ -95,6 +112,13 @@ public sealed class InputDispatcher
     /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
     public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
     public void PopFocusScope() { if (_focusScopes.Count > 0) _focusScopes.RemoveAt(_focusScopes.Count - 1); }
+    /// <summary>Remove the focus scope for <paramref name="root"/> wherever it sits in the stack (overlays can close
+    /// out of stack order - popping blindly could drop another live trap).</summary>
+    public void RemoveFocusScope(NodeHandle root)
+    {
+        for (int i = _focusScopes.Count - 1; i >= 0; i--)
+            if (_focusScopes[i] == root) { _focusScopes.RemoveAt(i); return; }
+    }
     private NodeHandle ScopeRoot
     {
         get
@@ -114,7 +138,8 @@ public sealed class InputDispatcher
         if (!_dragTarget.IsNull && !_scene.IsLive(_dragTarget)) _dragTarget = NodeHandle.Null;
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_scrollDragNode.IsNull && !_scene.IsLive(_scrollDragNode)) _scrollDragNode = NodeHandle.Null;
-        Drag.PruneDead();   // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
+        Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
+        DragDrop.PruneDead();  // a session whose source/target/viewport died: end / drop the dead reference
 
         int handled = 0;
         foreach (ref readonly var e in events)
@@ -125,6 +150,11 @@ public sealed class InputDispatcher
                     if (Drag.IsActive)   // an active item-drag owns the pointer (capture): no hover/scroll/slider routing
                     {
                         Drag.Move(e.PositionPx, e.Mods, e.TimestampMs);
+                        // L2: target Enter/Over/Leave transitions + edge auto-scroll on the chain under the pointer
+                        // (the lifted subtree is hit-test-transparent, so the chain sees THROUGH the moving visual).
+                        // Gated on a live session — a plain CanDrag reorder never pays the extra hit-test walk.
+                        if (DragDrop.IsActive)
+                            DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
                         handled++;
                         break;
                     }
@@ -137,6 +167,10 @@ public sealed class InputDispatcher
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
                         SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
                         _dragTarget = NodeHandle.Null;
+                        // L2: a chain carrying a BoxEl.Draggable opens THE session (payload resolved once at this
+                        // promotion edge) and immediately evaluates the target under the pointer.
+                        if (DragDrop.TryBegin(Drag.ActiveNode, e.PositionPx, e.Mods, e.Pointer))
+                            DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
                         handled++;
                         break;
                     }
@@ -210,10 +244,14 @@ public sealed class InputDispatcher
 
                     if (Drag.IsActive)
                     {
-                        // Release after an active item-drag: complete the lifecycle; the click is SUPPRESSED (WinUI —
-                        // a finished drag never raises the item's click/Tapped).
+                        // Release after an active item-drag: L2 drop FIRST (OnDrop reads the live session while the
+                        // visuals are still lifted), then the L1 completion; the click is SUPPRESSED (WinUI — a
+                        // finished drag never raises the item's click/Tapped). A drop on a non-reorder target
+                        // suppresses the spring-back glide (the payload was deposited there); a reorder target
+                        // (DropTargetSpec.SettleOnDrop) keeps the FLIP drop-glide into the new slot.
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
-                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs);
+                        bool dropped = DragDrop.TryDrop(e.PositionPx, e.Mods, out bool settleGlide);
+                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs, suppressSettle: dropped && !settleGlide);
                         _down = NodeHandle.Null;
                         _dragTarget = NodeHandle.Null;
                         handled++;
@@ -290,6 +328,7 @@ public sealed class InputDispatcher
     /// <summary>Clear all in-flight pointer interaction (capture lost / window deactivated).</summary>
     private void CancelPointer()
     {
+        DragDrop.Cancel();   // L2 first: OnLeave fires on a live target while the session still exists
         Drag.Cancel();   // an in-flight item-drag aborts on capture loss (restores visuals, fires OnDragCanceled)
         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
         if (!_down.IsNull && (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0))
@@ -623,6 +662,7 @@ public sealed class InputDispatcher
         // cancel). The pointer is still down — kill the click candidate so the eventual release does NOT click.
         if (key == Keys.Escape && Drag.IsActive)
         {
+            DragDrop.Cancel();   // L2 first: OnLeave fires on a live target, no drop
             Drag.Cancel();
             SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
             _down = NodeHandle.Null;

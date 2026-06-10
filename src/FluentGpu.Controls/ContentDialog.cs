@@ -4,9 +4,28 @@ using FluentGpu.Hooks;
 
 namespace FluentGpu.Controls;
 
+/// <summary>How a ContentDialog was dismissed (WinUI <c>ContentDialogResult</c>): the primary/secondary command, or
+/// None (close button / Escape / programmatic / light-of-modal never applies).</summary>
+public enum ContentDialogResult : byte { None = 0, Primary = 1, Secondary = 2 }
+
 /// <summary>
 /// WinUI-style ContentDialog: a modal, page-level smoke scrim with a centered solid card. The dialog is hosted through
 /// <see cref="OverlayHost"/> instead of being drawn inside the sample card, so it overlays the whole page.
+/// <para>1:1 with <c>ContentDialog_themeresources.xaml</c>:</para>
+/// <list type="bullet">
+/// <item>Chrome — smoke #4D000000 (SmokeFillColorDefault), background SolidBackgroundFillColorBase, 1px
+/// SurfaceStrokeColorDefault border, OverlayCornerRadius 8, dialog padding 24 (ContentDialogPadding), title margin
+/// 0,0,0,12 (ContentDialogTitleMargin), button spacing 8 (ContentDialogButtonSpacing), separator
+/// CardStrokeColorDefault 0,0,0,1, Min/Max 320×184 / 548×756 (:12-15).</item>
+/// <item>Motion — open: scale 1.05→1.0 over ControlNormal (250ms) + opacity 0→1 over ControlFaster (83ms, linear);
+/// close: scale 1.0→1.05 over ControlFast (167ms) + opacity 1→0 over 83ms; both scale legs on the
+/// ControlFastOutSlowInKeySpline (0,0,0,1) — ContentDialog_themeresources.xaml:77-117 DialogShowing/Hidden
+/// transitions, driven by the OverlayHost's Modal chrome.</item>
+/// <item>Keyboard — Enter invokes the <see cref="DefaultButton"/> (the accent-styled one); Escape closes with
+/// <see cref="ContentDialogResult.None"/> (the overlay's Escape preview); Tab/Shift-Tab CYCLE inside the dialog
+/// (DialogShowing sets BackgroundElement.TabFocusNavigation=Cycle, :123 — a REAL dispatcher focus scope via the
+/// host's PopupOptions.FocusTrap). Initial focus lands on the default button (TabIndex ranks it first).</item>
+/// </list>
 /// </summary>
 public sealed class ContentDialog : Component
 {
@@ -21,12 +40,20 @@ public sealed class ContentDialog : Component
     public bool OpenOnMount;
     public DefaultBtn DefaultButton = DefaultBtn.Primary;
 
+    /// <summary>Command callbacks (WinUI PrimaryButtonClick / SecondaryButtonClick / CloseButtonClick).</summary>
+    public Action? PrimaryClick;
+    public Action? SecondaryClick;
+    public Action? CloseClick;
+    /// <summary>Raised once per close with the WinUI <c>ContentDialogResult</c> (the ShowAsync return value):
+    /// Primary/Secondary for the commands, None for the close button, Escape, or a programmatic close.</summary>
+    public Action<ContentDialogResult>? Closed;
+
     // ContentDialog_themeresources.xaml / Common_themeresources_any.xaml.
     const float MinW = 320f, MaxW = 548f, MinH = 184f, MaxH = 756f;
     const float Pad = 24f;
     const float ContentGap = 12f;
     const float BtnGap = 8f;
-    const float TitleSize = 20f;
+    const float TitleSize = 20f;     // SubtitleTextBlockStyle (Title presenter) — 20px SemiBold
     const float ContentSize = 14f;
     const float ButtonMinW = 130f;
     const float ButtonH = 32f;
@@ -48,6 +75,7 @@ public sealed class ContentDialog : Component
     {
         var svc = UseContext(Overlay.Service);
         var opened = UseRef<OverlayHandle?>(null);
+        var result = UseRef(ContentDialogResult.None);
         var autoOpened = UseRef(false);
 
         bool primaryShown = PrimaryText.Length > 0;
@@ -61,11 +89,20 @@ public sealed class ContentDialog : Component
             bool secondaryAccent = def == DefaultBtn.Secondary && secondaryShown;
             bool closeAccent = def == DefaultBtn.Close && closeShown;
 
-            void Close() => opened.Value?.Close();
-
-            BoxEl CommandButton(string text, bool accent)
+            void CloseWith(ContentDialogResult r, Action? click)
             {
-                var b = accent ? Button.Accent(text, Close) : Button.Standard(text, Close);
+                result.Value = r;
+                click?.Invoke();
+                opened.Value?.Close();
+            }
+
+            void RunPrimary() => CloseWith(ContentDialogResult.Primary, PrimaryClick);
+            void RunSecondary() => CloseWith(ContentDialogResult.Secondary, SecondaryClick);
+            void RunClose() => CloseWith(ContentDialogResult.None, CloseClick);
+
+            BoxEl CommandButton(string text, bool accent, Action onClick)
+            {
+                var b = accent ? Button.Accent(text, onClick) : Button.Standard(text, onClick);
                 return b with
                 {
                     MinWidth = ButtonMinW,
@@ -73,13 +110,26 @@ public sealed class ContentDialog : Component
                     MinHeight = ButtonH,
                     Grow = 1f,
                     Justify = FlexJustify.Center,
+                    // The DEFAULT (accent) button ranks FIRST in tab order so the focus trap's initial focus lands on
+                    // it — WinUI focuses the default button when the dialog opens (ContentDialog_Partial SetInitialFocus).
+                    TabIndex = accent ? 1 : 2,
                 };
             }
 
+            // Enter activates the default button from ANYWHERE in the dialog (WinUI ContentDialog::ProcessEnterKey —
+            // Enter routes to the DefaultButton unless a focused control handled it). Escape is the overlay preview.
+            void OnCardKey(KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                if (primaryAccent) { RunPrimary(); e.Handled = true; }
+                else if (secondaryAccent) { RunSecondary(); e.Handled = true; }
+                else if (closeAccent) { RunClose(); e.Handled = true; }
+            }
+
             var buttons = new List<BoxEl>(3);
-            if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent));
-            if (secondaryShown) buttons.Add(CommandButton(SecondaryText, secondaryAccent));
-            if (closeShown) buttons.Add(CommandButton(CloseText, closeAccent));
+            if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent, RunPrimary));
+            if (secondaryShown) buttons.Add(CommandButton(SecondaryText, secondaryAccent, RunSecondary));
+            if (closeShown) buttons.Add(CommandButton(CloseText, closeAccent, RunClose));
             float cardW = buttons.Count >= 3 ? 480f : MinW;
 
             Element[] commandChildren;
@@ -106,7 +156,7 @@ public sealed class ContentDialog : Component
                     new TextEl(Title)
                     {
                         Size = TitleSize,
-                        Bold = true,
+                        Bold = true,       // SemiBold (600) in WinUI; TextEl exposes Bold (700) — engine-wide weight limitation
                         Color = Tok.TextPrimary,
                         Wrap = TextWrap.Wrap,
                         MaxLines = 2,
@@ -131,7 +181,7 @@ public sealed class ContentDialog : Component
                     Justify = FlexJustify.Start,
                     AlignItems = FlexAlign.Stretch,
                     Padding = Edges4.All(Pad),
-                    Fill = Tok.FillSolidBase,
+                    Fill = Tok.FillSolidBase,   // the command space fills (CommandSpace Background = ContentDialogBackground)
                     Children = commandChildren,
                 });
             }
@@ -150,6 +200,7 @@ public sealed class ContentDialog : Component
                 BorderWidth = 1f,
                 Shadow = Elevation.Dialog,
                 ClipToBounds = true,
+                OnKeyDown = OnCardKey,   // Enter → default button (bubbles from any focused child inside the trap)
                 Children = cardChildren.ToArray(),
             };
         }
@@ -157,12 +208,17 @@ public sealed class ContentDialog : Component
         void Open()
         {
             if (opened.Value is { IsOpen: true }) return;
+            result.Value = ContentDialogResult.None;
             var handle = svc.Open(
                 () => NodeHandle.Null,
                 BuildCard,
                 FlyoutPlacement.BottomCenter,
+                // Modal: no light dismiss, survives window deactivation; FocusTrap pushes a REAL dispatcher focus
+                // scope (Tab cycles inside; initial focus = first tab stop = the default button).
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
             handle.ClosedAction = () => opened.Value = null;
+            // Escape and programmatic closes report None; button closes pre-set the result before Close().
+            handle.ClosedWithCauseAction = _ => Closed?.Invoke(result.Value);
             opened.Value = handle;
         }
 

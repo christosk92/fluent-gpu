@@ -37,6 +37,9 @@ public enum NodeFlags : uint
     CounterScaled = 1u << 23,     // recorder post-applies the inverse of the nearest BoundsAnimated ancestor's animated scale
     Exiting = 1u << 24,           // removed node kept alive (orphan) until its exit animation settles, then reclaimed
     Relayouting = 1u << 25,       // SizeMode.Relayout size animation in flight → AppHost re-solves this subtree each tick
+    DragGhost = 1u << 26,         // lifted drag visual (E5): excluded from the clipped main record pass and re-walked
+                                  // in an UNCLIPPED top band emitted last (escapes ancestor scissors, paints above
+                                  // overlays); set/cleared by Input.DragController, published as SceneStore.DragGhost
 
     // lifecycle
     NewThisFrame = 1u << 29,

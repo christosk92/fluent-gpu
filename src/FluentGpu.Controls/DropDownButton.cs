@@ -54,7 +54,9 @@ public sealed class DropDownButton : Component
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss));
+                // WinUI menus are WINDOWED popups (FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup) — a tall
+                // menu may escape the window when the platform supports popup windows (constrained fallback otherwise).
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
@@ -115,6 +117,10 @@ public sealed class DropDownButton : Component
             Fill = IsEnabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
             HoverFill = Tok.FillControlSecondary,
             PressedFill = Tok.FillControlTertiary,
+            // RootGrid BackgroundTransition = BrushTransition Duration 0:0:0.083 (DropDownButton.xaml:23) — the same
+            // explicit 83ms/FastOutSlowIn pair SplitButton/ToggleSplitButton carry (audit minor: was engine-default).
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
+            HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,   // ControlFastOutSlowInKeySpline = 0,0,0,1
             // ButtonBorderBrush (elevation) rest/hover; ButtonBorderBrushPressed/Disabled = StrokeControlDefault (solid).
             BorderBrush = IsEnabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
             HoverBorderBrush = Tok.ControlElevationBorder,
@@ -125,7 +131,8 @@ public sealed class DropDownButton : Component
             Role = AutomationRole.Button,                     // WinUI ControlType = Button (+ ExpandCollapse pattern)
             OnRealized = h => anchor.Value = h,
             OnClick = Toggle,                                 // Enter/Space activation routes here via the engine
-            OnKeyDown = a => { if (a.KeyCode == Keys.Down && handle.Value is not { IsOpen: true }) { Toggle(); a.Handled = true; } },
+            // Down / Alt+Down / F4 open the flyout (WinUI DropDownButton + ComboBox-family open chords).
+            OnKeyDown = a => { if ((a.KeyCode == Keys.Down || a.KeyCode == Keys.F4) && handle.Value is not { IsOpen: true }) { Toggle(); a.Handled = true; } },
             Children = children.ToArray(),
         };
     }

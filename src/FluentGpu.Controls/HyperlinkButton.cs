@@ -41,12 +41,10 @@ public static partial class HyperlinkButton
         public float BrushTransitionMs { get; init; } = 83f;
         /// <summary>Text underline opt-in. Default FALSE = the WinUI 3 default (<c>HyperlinkUnderlineVisible</c> = False,
         /// Hyperlink_themeresources.xaml:20; underline otherwise only under HighContrast — HyperLinkButton_Partial.cpp:207-212).
-        /// When true, a thin bar matching the text advance approximates TextDecorations.Underline; the face-metric
-        /// underline (DWrite underline position/thickness via the E9 recorder text-decoration bars) is the production
-        /// path and replaces this approximation when E9 lands. The E8 HighContrast pass switches this on structurally.</summary>
+        /// When true the label sets <c>TextEl.Underline</c> — the E9 production path: the recorder emits the face-metric
+        /// underline bar (DWrite underline position/thickness cached at measure) in the label's eased foreground.
+        /// The E8 HighContrast pass switches this on structurally.</summary>
         public bool UnderlineVisible { get; init; }
-        /// <summary>Approximated underline bar thickness (DIP); the E9 path reads the face's UnderlineThickness instead.</summary>
-        public float UnderlineThickness { get; init; } = 1f;
     }
 
     public static Style? StyleOverride;
@@ -92,32 +90,11 @@ public static partial class HyperlinkButton
             Size = s.FontSize, Color = s.Foreground,
             HoverColor = s.ForegroundHover, PressedColor = s.ForegroundPressed,
             DisabledColor = s.ForegroundDisabled,
+            // Underline opt-in: the E9 face-metric decoration bar (DWrite underlinePosition/underlineThickness via
+            // TextMeasureCache), riding the same hover/press easing as the label — WinUI gates it on
+            // HyperlinkUnderlineVisible / HighContrast (HyperLinkButton_Partial.cpp:207-212).
+            Underline = s.UnderlineVisible,
         };
-        // Underline opt-in: a thin bar under the glyphs, stretched to the text advance by the content-sized column
-        // (no font query needed — flexbox gives the run width). The negative top margin pulls the bar up into the
-        // descender region (≈ the 14px-face underline position) and the bottom margin compensates, so total layout
-        // height is unchanged. Bar color rides the same hover/press easing as the label (non-interactive children
-        // resolve the nearest interactive ancestor's progress). Approximation only — E9 face-metric decoration bars
-        // (UnderlineY/UnderlineThickness from TextMetrics) are the production path.
-        Element content = !s.UnderlineVisible
-            ? label
-            : new BoxEl
-            {
-                Direction = 1,   // column auto-sizes to the text run; the bar stretches to its width
-                Children =
-                [
-                    label,
-                    new BoxEl
-                    {
-                        Height = s.UnderlineThickness,
-                        Margin = new Edges4(0f, -3f, 0f, 3f - s.UnderlineThickness),   // net zero added height
-                        Fill = isEnabled ? s.Foreground : s.ForegroundDisabled,
-                        HoverFill = s.ForegroundHover,
-                        PressedFill = s.ForegroundPressed,
-                        HitTestVisible = false,
-                    },
-                ],
-            };
         return new BoxEl
         {
             Direction = 0,
@@ -141,7 +118,7 @@ public static partial class HyperlinkButton
             Cursor = CursorId.Hand,
             IsEnabled = isEnabled,
             OnClick = onClick,
-            Children = [content],
+            Children = [label],
         };
     }
 }

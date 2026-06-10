@@ -179,7 +179,8 @@ public sealed class AppHost : IDisposable
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
         || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _caretBlinker.HasActive || _scene.HasBrushAnims
-        || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0;
+        || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0
+        || _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork;   // E5: ghost spring easing / edge auto-scroll
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -243,6 +244,9 @@ public sealed class AppHost : IDisposable
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
         _inputHooks.MoveFocusVisual = h => _dispatcher.SetFocus(h, visual: true);   // roving arrow-key focus shows the ring (RadioButtons)
+        _inputHooks.PushFocusScope = _dispatcher.PushFocusScope;     // REAL Tab trap for FocusTrap overlays (ContentDialog)
+        _inputHooks.PopFocusScope = _dispatcher.RemoveFocusScope;    // order-independent (overlays close out of stack order)
+        _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
 
@@ -414,6 +418,8 @@ public sealed class AppHost : IDisposable
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
+            _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
+            _dispatcher.Drag.Tick(dtMs);                       // 7 E5 ghost: spring-lag easing + re-pin over the scrolled origin
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
@@ -430,7 +436,7 @@ public sealed class AppHost : IDisposable
             for (int i = 0; i < _popupWindows.Count; i++)
                 if (!_popupWindows[i].Root.IsNull && _scene.IsLive(_popupWindows[i].Root))
                     _popupSkipRoots.Add(_popupWindows[i].Root);
-            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit,
+            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -545,7 +551,7 @@ public sealed class AppHost : IDisposable
         {
             var slot = _popupWindows[i];
             if (slot.Root.IsNull || !_scene.IsLive(slot.Root)) continue;
-            SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicBase, in textEdit,
+            SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 slot.Root, new Point2(slot.BoundsDip.X, slot.BoundsDip.Y));
             // needs-pixels: the popup DrawList is recorded and its swapchain presented, but NOT GPU-submitted —
             // IGpuDevice.SubmitDrawList has no present-target parameter and D3D12Device.CreateSwapchain is a one-shot

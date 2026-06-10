@@ -129,6 +129,7 @@ internal sealed class OverlayEntry
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
     public NodeHandle SavedFocus;     // focus captured at open time → restored when the close STARTS (WinUI timing)
     public bool FocusTrap;
+    public bool ScopePushed;          // a dispatcher focus scope is live for this entry (popped at close start)
     public DismissBehavior DismissBehavior;
     public PopupChrome Chrome;
     public bool ConstrainToRootBounds = true;
@@ -270,6 +271,15 @@ internal sealed class OverlayServiceImpl : IOverlayService
         e.CloseCause = cause;
         e.Phase = OverlayPhase.Closing;
         e.Handle.IsOpen = false;
+
+        // The focus trap lifts when the close STARTS (the WinUI DialogShowing → DialogHidden Tab-cycle teardown:
+        // ContentDialog_themeresources.xaml:123 sets BackgroundElement.TabFocusNavigation=Cycle only while showing),
+        // so the focus restore below can land OUTSIDE the dying overlay.
+        if (e.ScopePushed)
+        {
+            e.ScopePushed = false;
+            Hooks?.PopFocusScope?.Invoke(e.WrapperNode);
+        }
 
         // Per-level focus restore at close START. Restore only when focus still lives inside this overlay's subtree
         // (or points at a dead/null node) — a popup that never took focus must not yank it from elsewhere
@@ -556,6 +566,19 @@ public sealed class OverlayHost : Component
                     }
                 }
 
+                // REAL focus trap (PopupOptions.FocusTrap): push a dispatcher focus scope rooted at the popup subtree
+                // so Tab/Shift+Tab CYCLE inside it (WinUI ContentDialog DialogShowing sets
+                // BackgroundElement.TabFocusNavigation=Cycle, ContentDialog_themeresources.xaml:123), and move focus
+                // to the first tab-stop inside (tab order — ContentDialog ranks its DefaultButton first via TabIndex).
+                // Pushed once per entry after the subtree realizes; popped when the close starts (BeginClose).
+                if (e.FocusTrap && !e.ScopePushed && e.Phase != OverlayPhase.Closing)
+                {
+                    e.ScopePushed = true;
+                    hooks.PushFocusScope?.Invoke(e.WrapperNode);
+                    var firstStop = hooks.FirstFocusableIn?.Invoke(e.WrapperNode) ?? NodeHandle.Null;
+                    if (!firstStop.IsNull) hooks.FocusNode?.Invoke(firstStop, false);
+                }
+
                 if (e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode)) continue;
                 if (e.Phase == OverlayPhase.Closing) { svc.SeedCloseIfNeeded(e); continue; }
 
@@ -643,6 +666,10 @@ public sealed class OverlayHost : Component
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
                     float fullH = e.MeasuredH;
+                    // Root menus unfold from 50% (MenuFlyout_Partial.cpp:253 closedRatioConstant 0.5); CASCADED
+                    // MenuFlyoutSubItem popups (a parent entry in the chain) unfold from 67%
+                    // (MenuFlyoutSubItem_Partial.cpp:741 closedRatioConstant 0.67).
+                    float closedRatio = e.ParentId >= 0 ? 0.67f : ClosedRatio;
                     // WinUI MenuPopupThemeTransition load (LayoutTransition_partial.cpp:441-506): BOTH a content
                     // TranslateY (initialTranslateY = openedLength × ClosedRatio, signed by direction → 0) and a
                     // counter-translated clip animate over s_OpenDuration=250ms cubic-bezier(0,0,0,1)
@@ -652,7 +679,7 @@ public sealed class OverlayHost : Component
                     // Our clip rect is node-local (it rides the surface's translate), so the counter-translation is
                     // expressed by animating the NEAR clip edge against the slide — the anchor-side edge of the
                     // visible window stays glued in parent space while the far edge expands.
-                    float slide = fullH * ClosedRatio;
+                    float slide = fullH * closedRatio;
                     if (e.OpensUp)
                     {
                         // Opens upward (WinUI AnimationDirection_Bottom): content slides UP into place; the visible

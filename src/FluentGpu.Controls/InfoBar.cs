@@ -35,12 +35,14 @@ public sealed class InfoBarClosedEventArgs
 /// </summary>
 public static class InfoBar
 {
-    // WinUI InfoBar_themeresources.xaml standard icon glyphs (Segoe Fluent Icons / SymbolThemeFontFamily).
-    private const string IconBackgroundGlyph = ""; // InfoBarIconBackgroundGlyph - the filled status circle
-    private const string GlyphInfo    = "";        // InfoBarInformationalIconGlyph
-    private const string GlyphSuccess = "";        // InfoBarSuccessIconGlyph
-    private const string GlyphWarning = "";        // InfoBarWarningIconGlyph
-    private const string GlyphError   = "";        // InfoBarErrorIconGlyph
+    // WinUI InfoBar_themeresources.xaml:70-74 standard icon glyphs (Segoe Fluent Icons / SymbolThemeFontFamily),
+    // single-sourced from Icons.cs as VISIBLE \uXXXX escapes (raw PUA literals read as "empty" in most viewers —
+    // the audit's blocker — so the named constants are the canonical spelling).
+    private const string IconBackgroundGlyph = Icons.InfoBarBackgroundCircle; // F136 (InfoBar_themeresources.xaml:70)
+    private const string GlyphInfo    = Icons.StatusInfo;                     // F13F (:71)
+    private const string GlyphSuccess = Icons.StatusSuccess;                  // F13E (:74)
+    private const string GlyphWarning = Icons.StatusWarning;                  // F13C (:73)
+    private const string GlyphError   = Icons.StatusError;                    // F13D (:72)
 
     // WinUI sizes/margins (InfoBar_themeresources.xaml, verbatim).
     private const float MinHeight        = 48f;          // InfoBarMinHeight

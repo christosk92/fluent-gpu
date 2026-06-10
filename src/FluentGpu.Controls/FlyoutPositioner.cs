@@ -35,6 +35,12 @@ public enum FlyoutPlacement : byte
     RightEdgeAlignedTop,      // right side, top edges aligned
     RightEdgeAlignedBottom,   // right side, bottom edges aligned
     Full,                     // centered in the container, sized to it (FlyoutBase_Partial.cpp:2520-2540)
+
+    /// <summary>The non-editable ComboBox dropdown: width-matched and laid OVER the field — the popup's top-left sits
+    /// at the (caller-shifted) anchor origin so the SELECTED item lines up over the closed field (the WinUI ComboBox
+    /// positions its own popup via TemplateSettings.DropDownOffset, not FlyoutBase). Clamped into the container;
+    /// no corner join (the popup keeps OverlayCornerRadius on all corners and overlaps the field).</summary>
+    OverlapStretch,
 }
 
 /// <summary>Which popup corners abut (and so should square against) the anchor edge — WinUI <c>UpdateCornerRadius</c>
@@ -84,6 +90,20 @@ public static class FlyoutPositioner
         // ── attached stretch dropdown (ComboBox/AutoSuggest): flush, flip, clamp to the larger side, corner-join ──
         if (placement == FlyoutPlacement.BottomStretch)
             return PlaceAttached(in anchor, in popup, in container);
+
+        // ── over-field stretch dropdown (non-editable ComboBox): top-left at the anchor origin, width-matched,
+        //    clamped fully INTO the container on both axes; all corners stay rounded (no join — the popup overlaps
+        //    the field, ComboBox PopupBorder Margin 0,-0.5,0,-1). The caller pre-shifts the anchor rect up by the
+        //    selected item's offset so the selected row covers the field. ──
+        if (placement == FlyoutPlacement.OverlapStretch)
+        {
+            float ox = anchor.X, oy = anchor.Y;
+            if (ox + popup.Width > container.Right) ox = container.Right - popup.Width;
+            if (ox < container.X) ox = container.X;
+            if (oy + popup.Height > container.Bottom) oy = container.Bottom - popup.Height;
+            if (oy < container.Y) oy = container.Y;
+            return new PopupPlacementResult(ox, oy, OpensUp: false, popup.Height, FlyoutPlacement.OverlapStretch, CornerJoin.None, popup.Width);
+        }
 
         // ── Full: the presenter fills the container, centered when smaller (FlyoutBase_Partial.cpp:2520-2540) ──
         if (placement == FlyoutPlacement.Full)

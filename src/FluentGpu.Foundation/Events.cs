@@ -121,3 +121,71 @@ public static class Keys
     /// <summary>True for VK 'A'..'Z' / '0'..'9' — the access-key (Alt mnemonic) candidates.</summary>
     public static bool IsAccessKeyCandidate(int vk) => (vk >= A && vk <= Z) || (vk >= D0 && vk <= D9);
 }
+
+/// <summary>The semantic outcome of an IN-APP drop (E5-L2 — the Flutter/SwiftUI model, never OLE): advisory — the
+/// engine sets Move while over an accepting target, None otherwise; targets may refine it in OnEnter/OnOver.</summary>
+public enum DropEffect : byte { None = 0, Move = 1, Copy = 2, Link = 3 }
+
+/// <summary>
+/// E5-L2 typed drag SOURCE spec (<c>BoxEl.Draggable</c> — the Flutter Draggable / react-beautiful-dnd model; user
+/// ruling 2026-06-10: deliberately NOT WinUI's OLE DataPackage/DoDragDrop modal loop): <paramref name="Kind"/> is a
+/// string discriminator so target accept-tests are cast-free; <paramref name="PayloadFactory"/> resolves the typed
+/// payload ONCE when the L1 press promotes past the drag box (never per move). Trimming-safe: plain delegates.
+/// </summary>
+public sealed record DragSource(string Kind, Func<object?> PayloadFactory);
+
+/// <summary>
+/// E5-L2 drop TARGET spec (<c>BoxEl.DropTarget</c> — Flutter DragTarget / SwiftUI dropDestination): receives sessions
+/// whose Kind is in <see cref="AcceptKinds"/>. Discovery is hit-test-chain based — per pointer move the engine picks
+/// the NEAREST enabled accepting target under the pointer (a non-accepting target never blocks an accepting
+/// ancestor). OnEnter/OnLeave fire on hover transitions, OnOver every move while inside, OnDrop on release over it
+/// (BEFORE the L1 completion). The <see cref="DragSession"/> argument is THE one live reused instance — copy what
+/// you keep.
+/// </summary>
+public sealed record DropTargetSpec(
+    string[] AcceptKinds,
+    Action<DragSession>? OnEnter = null,
+    Action<DragSession>? OnOver = null,
+    Action<DragSession>? OnLeave = null,
+    Action<DragSession>? OnDrop = null)
+{
+    /// <summary>Keep the L1 drop-settle glide after OnDrop (reorder targets — the commit's FLIP retarget turns it
+    /// into the glide-into-the-new-slot motion). False (default) = the drop suppresses the spring-back and the
+    /// source visual snaps home: the "deposited" feel of a foreign-surface drop.</summary>
+    public bool SettleOnDrop { get; init; }
+
+    /// <summary>Ordinal accept test over <see cref="AcceptKinds"/> (cast-free, 0-alloc).</summary>
+    public bool Accepts(string kind)
+    {
+        var kinds = AcceptKinds;
+        for (int i = 0; i < kinds.Length; i++)
+            if (string.Equals(kinds[i], kind, StringComparison.Ordinal)) return true;
+        return false;
+    }
+}
+
+/// <summary>
+/// THE live drag session (E5-L2): ONE mutable instance owned by <c>Input.DragDropContext</c>, opened when an L1 drag
+/// promotes on a chain carrying a <see cref="DragSource"/> (payload resolved once), updated per pointer move, handed
+/// to every <see cref="DropTargetSpec"/> handler, and cleared (incl. the Payload GC edge) when the gesture ends.
+/// Handlers copy what they keep — never hold the reference across gestures.
+/// </summary>
+public sealed class DragSession
+{
+    /// <summary>The typed payload (resolved once at promotion from <see cref="DragSource.PayloadFactory"/>).</summary>
+    public object? Payload;
+    /// <summary>The source's kind discriminator (accept tests are string compares, never casts).</summary>
+    public string Kind = "";
+    /// <summary>Pointer position, window space.</summary>
+    public Point2 Position;
+    /// <summary>Smoothed pointer velocity (px/s, ~50ms EMA — the L1 gesture's velocity).</summary>
+    public float VelocityX, VelocityY;
+    /// <summary>The node carrying the matched <see cref="DragSource"/>.</summary>
+    public NodeHandle Source;
+    /// <summary>The accepting target currently under the pointer (Null when over nothing that accepts).</summary>
+    public NodeHandle OverTarget;
+    /// <summary>Advisory effect (engine: Move while over an accepting target, None otherwise; targets may refine).</summary>
+    public DropEffect Effect;
+    public KeyModifiers Mods;
+    public PointerKind Pointer;
+}

@@ -100,7 +100,13 @@ public sealed class FlexLayout
             {
                 var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
                 w = m.Size.Width; h = m.Size.Height;
-                mc = new TextMeasureCache { Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h) };
+                // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
+                // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
+                mc = new TextMeasureCache
+                {
+                    Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
+                    UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
+                };
             }
         }
         else

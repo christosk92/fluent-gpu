@@ -35,6 +35,18 @@ namespace FluentGpu.Input;
 /// <c>MoveItemsForLiveReorder</c> shifts the rest — ListViewBase_Partial_Reorder.cpp:2254). The drag visuals are
 /// re-asserted on every move because a mid-drag commit's patch restores the authored opacity/shadow/hit-test
 /// (Reconciler ApplyBox writes them unconditionally).
+///
+/// GHOST (E5-L2): while a drag is active the lifted node carries <see cref="NodeFlags.DragGhost"/> and is published as
+/// <see cref="SceneStore.DragGhost"/> — the recorder excludes it from the clipped main pass and re-walks its subtree
+/// in an UNCLIPPED top band emitted last (mirroring the orphan pass), so the visual escapes every ancestor scissor (a
+/// row dragged out of a clipped list keeps drawing) and paints above overlays — the Flutter/rbd ghost layer.
+///
+/// Spring-lag follow (the rbd feel): the PRESENTED translate eases toward the gesture target with a critically-damped
+/// spring (<see cref="FollowOmega"/>) instead of pinning rigidly — 0-alloc per move/tick. It engages only when the
+/// platform delivers real timestamps (consecutive non-zero <c>TimestampMs</c>); 0-stamp gestures (the headless
+/// default) snap presented == target, keeping every position assertion deterministic. <see cref="SpringFollow"/>
+/// false disables it outright. The host advances in-between-move easing (and the pointer-pin while an edge
+/// auto-scroll moves the resting origin under a still pointer) via <see cref="Tick"/>.
 /// </summary>
 public sealed class DragController
 {
@@ -50,6 +62,11 @@ public sealed class DragController
     /// ThemeShadow WinUI gives lifted drag visuals; values match <c>Dsl.Elevation.Flyout</c> — Input cannot reference Dsl).</summary>
     public static readonly ShadowSpec DragShadow =
         new(Blur: 32f, OffsetY: 8f, OffsetX: 0f, Color: ColorF.FromRgba(0, 0, 0, 0x46));
+
+    /// <summary>Critically-damped spring rate (rad/s) of the ghost's pointer-follow lag — ~150ms visual settle, the
+    /// react-beautiful-dnd "the ghost breathes behind the pointer" feel. Engine value (the WinUI OLE drag visual is an
+    /// OS layer with no published spring; the adopted model is Flutter/rbd per the E5 user ruling).</summary>
+    public const float FollowOmega = 38f;
 
     private readonly SceneStore _scene;
     private readonly Action _requestRerender;
@@ -75,7 +92,17 @@ public sealed class DragController
     // translate currently written into LocalTransform — stripping it from AbsoluteRect recovers the CURRENT resting
     // origin even after a mid-drag order projection moved the slot or an ancestor scrolled.
     private Point2 _grabVisualAbs;
-    private float _appliedTx, _appliedTy;
+    private float _appliedTx, _appliedTy;   // the PRESENTED translate currently written into LocalTransform
+
+    // Spring-lag follow (see class remarks): target translate (gesture-exact) vs presented translate (spring-eased).
+    private float _lastTx, _lastTy;         // accumulated gesture deltas of the latest move (Tick re-aims from them)
+    private float _tgtTx, _tgtTy;           // target translate the presented value eases toward
+    private float _springVx, _springVy;     // spring velocity (px/s)
+    private bool _sprung;                   // a spring step ran this gesture (a stray 0-stamp event must not teleport)
+
+    /// <summary>Enable the critically-damped pointer-follow lag (default true). It only engages on gestures whose
+    /// events carry real platform timestamps — 0-stamp (headless) gestures always track exactly.</summary>
+    public bool SpringFollow { get; set; } = true;
 
     public DragController(SceneStore scene, Action requestRerender)
     {
@@ -93,6 +120,16 @@ public sealed class DragController
     /// <summary>The node whose drag is in flight (<see cref="NodeHandle.Null"/> when idle/armed). The host's FLIP pass
     /// must SKIP this node — the pointer owns its presented transform until the drag ends.</summary>
     public NodeHandle ActiveNode => _active ? _node : NodeHandle.Null;
+
+    /// <summary>The smoothed pointer velocity (px/s, ~50ms EMA) — fed into the L2 <see cref="DragDropContext"/> session.</summary>
+    public float VelocityX => _vx;
+    public float VelocityY => _vy;
+
+    /// <summary>True while the presented (spring-lagged) translate is still easing toward the gesture target — the
+    /// host keeps frames coming and calls <see cref="Tick"/>. Always false for snap-tracking gestures.</summary>
+    public bool HasActiveWork => _active
+        && (MathF.Abs(_tgtTx - _appliedTx) > 0.05f || MathF.Abs(_tgtTy - _appliedTy) > 0.05f
+            || MathF.Abs(_springVx) > 1f || MathF.Abs(_springVy) > 1f);
 
     /// <summary>Set by the host: the drop-settle seam. Fired after <see cref="Complete"/>/<see cref="Cancel"/> restored
     /// the resting visuals, with the dragged presented rect and the resting rect — wire to
@@ -131,6 +168,7 @@ public sealed class DragController
         if (_node.IsNull) return false;
         if (!_scene.IsLive(_node)) { Reset(); return false; }
         _mods = mods;
+        uint prevMs = _lastMs;
         UpdateVelocity(abs, timestampMs);
 
         float tx = abs.X - _pressAbs.X, ty = abs.Y - _pressAbs.Y;
@@ -144,29 +182,107 @@ public sealed class DragController
 
         // Re-anchor: aim the visual at (grab origin + gesture delta) relative to the node's CURRENT resting origin —
         // identical to a plain (tx, ty) translate until a mid-drag commit moves the slot under the pointer.
-        var curAbs = _scene.AbsoluteRect(_node);
-        float effTx = _grabVisualAbs.X + tx - (curAbs.X - _appliedTx);
-        float effTy = _grabVisualAbs.Y + ty - (curAbs.Y - _appliedTy);
-        ref NodePaint p = ref _scene.Paint(_node);
-        p.LocalTransform = Affine2D.Translation(effTx, effTy).Multiply(_restingTransform);   // translate in PARENT space
-        _appliedTx = effTx;
-        _appliedTy = effTy;
-        // Re-assert the drag visuals: a mid-drag commit that re-rendered this item restored the authored
-        // opacity/shadow/hit-test (Reconciler ApplyBox patches them unconditionally). Idempotent rewrites.
-        p.Opacity = DragOpacity;
-        _scene.SetShadow(_node, DragShadow);
-        _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;
-        _scene.Mark(_node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        _lastTx = tx;
+        _lastTy = ty;
+        RetargetFromRest();
+
+        // Presented translate: spring toward the target when the gesture carries real platform timestamps
+        // (the rbd lag); snap exactly otherwise (0-stamp headless gestures stay deterministic). Once a spring step
+        // ran, an isolated invalid stamp leaves the presented value in place (Tick continues it) — never a teleport.
+        uint dt = timestampMs != 0 && prevMs != 0 && timestampMs > prevMs ? timestampMs - prevMs : 0;
+        if (SpringFollow && dt > 0 && dt < 1000) { StepSpring(dt); _sprung = true; }
+        else if (!_sprung) SnapPresented();
+        ApplyPresented();
+
         FillArgs(abs, tx, ty);
         _scene.GetDragDelta(_node)?.Invoke(_args);
         _requestRerender();
         return true;
     }
 
+    /// <summary>Phase-7 host tick: re-aim at the node's CURRENT resting origin (an edge auto-scroll moves it under a
+    /// still pointer — the ghost must stay pinned to the grab point) and advance the spring-lag easing between pointer
+    /// moves. Returns true while the presented translate moved (the host requests the next frame). 0-alloc.</summary>
+    public bool Tick(float dtMs)
+    {
+        if (!_active || !_scene.IsLive(_node)) return false;
+        RetargetFromRest();
+        float dx = _tgtTx - _appliedTx, dy = _tgtTy - _appliedTy;
+        bool settled = MathF.Abs(dx) <= 0.05f && MathF.Abs(dy) <= 0.05f
+            && MathF.Abs(_springVx) <= 1f && MathF.Abs(_springVy) <= 1f;
+        if (settled) return false;
+        // A gesture that never sprang (0-stamp headless) keeps snap-tracking here too — the ghost stays EXACTLY
+        // pinned to the grab point while an edge auto-scroll slides the resting origin (deterministic for checks).
+        if (SpringFollow && _sprung && dtMs > 0f) StepSpring((uint)MathF.Min(dtMs, 250f));
+        else SnapPresented();
+        ApplyPresented();
+        _requestRerender();
+        return true;
+    }
+
+    /// <summary>Aim the target translate at (grab origin + latest gesture delta) relative to the node's CURRENT
+    /// resting origin — stripping the PRESENTED translate from AbsoluteRect recovers that origin even after a
+    /// mid-drag order projection or an ancestor scroll moved the slot.</summary>
+    private void RetargetFromRest()
+    {
+        var curAbs = _scene.AbsoluteRect(_node);
+        _tgtTx = _grabVisualAbs.X + _lastTx - (curAbs.X - _appliedTx);
+        _tgtTy = _grabVisualAbs.Y + _lastTy - (curAbs.Y - _appliedTy);
+    }
+
+    /// <summary>Critically-damped spring step (semi-implicit Euler, ≤16ms substeps for stability at ω·dt &lt; 2).</summary>
+    private void StepSpring(uint dtMs)
+    {
+        float remaining = dtMs;
+        float px = _appliedTx, py = _appliedTy;
+        while (remaining > 0f)
+        {
+            float h = MathF.Min(remaining, 16f) / 1000f;
+            remaining -= 16f;
+            _springVx += (FollowOmega * FollowOmega * (_tgtTx - px) - 2f * FollowOmega * _springVx) * h;
+            _springVy += (FollowOmega * FollowOmega * (_tgtTy - py) - 2f * FollowOmega * _springVy) * h;
+            px += _springVx * h;
+            py += _springVy * h;
+        }
+        if (MathF.Abs(_tgtTx - px) <= 0.05f && MathF.Abs(_tgtTy - py) <= 0.05f
+            && MathF.Abs(_springVx) <= 1f && MathF.Abs(_springVy) <= 1f)
+        {
+            px = _tgtTx; py = _tgtTy;
+            _springVx = _springVy = 0f;
+        }
+        _appliedTx = px;
+        _appliedTy = py;
+    }
+
+    private void SnapPresented()
+    {
+        _appliedTx = _tgtTx;
+        _appliedTy = _tgtTy;
+        _springVx = _springVy = 0f;
+    }
+
+    /// <summary>Write the presented translate (parent space) and re-assert the drag visuals: a mid-drag commit that
+    /// re-rendered this item restored the authored opacity/shadow/hit-test/ghost flag (Reconciler ApplyBox patches
+    /// them unconditionally). Idempotent rewrites.</summary>
+    private void ApplyPresented()
+    {
+        ref NodePaint p = ref _scene.Paint(_node);
+        p.LocalTransform = Affine2D.Translation(_appliedTx, _appliedTy).Multiply(_restingTransform);
+        p.Opacity = DragOpacity;
+        _scene.SetShadow(_node, DragShadow);
+        _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;
+        _scene.Flags(_node) |= NodeFlags.DragGhost;
+        _scene.DragGhost = _node;
+        _scene.Mark(_node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
     /// <summary>Release after an active drag: restore the resting visuals, fire <c>OnDragCompleted</c> (the app commits
     /// the reorder here), then hand the (dragged → resting) rects to <see cref="OnSettle"/> for the FLIP glide.
-    /// Returns true iff a drag was active — the dispatcher suppresses the click. An armed-only candidate just disarms.</summary>
-    public bool Complete(Point2 abs, KeyModifiers mods, uint timestampMs)
+    /// Returns true iff a drag was active — the dispatcher suppresses the click. An armed-only candidate just disarms.
+    /// <paramref name="suppressSettle"/> (E5-L2): an accepted DROP on a non-reorder target skips the glide — the
+    /// payload was deposited there, so the visual snaps home instead of springing back
+    /// (<see cref="DropTargetSpec.SettleOnDrop"/> opts a reorder target back into the glide).</summary>
+    public bool Complete(Point2 abs, KeyModifiers mods, uint timestampMs, bool suppressSettle = false)
     {
         if (!_active) { Reset(); return false; }
         _mods = mods;
@@ -186,7 +302,7 @@ public sealed class DragController
         if (live)
         {
             _scene.GetDragCompleted(node)?.Invoke(_args);
-            if (draggedRect.X != restingRect.X || draggedRect.Y != restingRect.Y)
+            if (!suppressSettle && (draggedRect.X != restingRect.X || draggedRect.Y != restingRect.Y))
                 OnSettle?.Invoke(node, draggedRect, restingRect);
         }
         _requestRerender();
@@ -234,6 +350,9 @@ public sealed class DragController
         _grabVisualAbs = new Point2(grab.X, grab.Y);
         _appliedTx = 0f;
         _appliedTy = 0f;
+        _tgtTx = _tgtTy = 0f;
+        _springVx = _springVy = 0f;
+        _sprung = false;
         ref NodePaint p = ref _scene.Paint(_node);
         _restingTransform = p.LocalTransform;
         _restingOpacity = p.Opacity;
@@ -243,6 +362,8 @@ public sealed class DragController
         p.Opacity = DragOpacity;                              // ListViewItemDragThemeOpacity 0.80
         _scene.SetShadow(_node, DragShadow);                  // lifted visual (ThemeShadow-equivalent depth)
         _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;     // drop-target hit-tests see through the moving visual
+        _scene.Flags(_node) |= NodeFlags.DragGhost;           // recorder hoists the subtree into the unclipped top band
+        _scene.DragGhost = _node;
         _scene.Mark(_node, NodeFlags.PaintDirty);
 
         FillArgs(abs, tx, ty);
@@ -257,6 +378,8 @@ public sealed class DragController
         if (_hadShadow) _scene.SetShadow(node, _restingShadow);
         else _scene.ClearShadow(node);
         if (_wasHitTestVisible) _scene.Flags(node) |= NodeFlags.HitTestVisible;
+        _scene.Flags(node) &= ~NodeFlags.DragGhost;           // back into the clipped main pass
+        if (_scene.DragGhost == node) _scene.DragGhost = NodeHandle.Null;
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
@@ -309,14 +432,20 @@ public sealed class DragController
         _args.Kind = _kind;
         if (_scene.IsLive(_node))
         {
-            var r = _scene.AbsoluteRect(_node);   // current (moving) origin → Local stays ≈ the grab offset
-            _args.Local = new Point2(abs.X - r.X, abs.Y - r.Y);
+            // LOGICAL moving origin = current resting origin + the gesture-target translate. The spring-lagged
+            // PRESENTED visual may trail it; Local must stay EXACTLY the grab offset regardless (the
+            // e5dragdrop.3 contract). Identical to AbsoluteRect when presented == target (snap gestures).
+            var r = _scene.AbsoluteRect(_node);
+            _args.Local = new Point2(abs.X - (r.X - _appliedTx + _tgtTx), abs.Y - (r.Y - _appliedTy + _tgtTy));
         }
     }
 
     private void Reset()
     {
+        if (!_node.IsNull && _scene.DragGhost == _node) _scene.DragGhost = NodeHandle.Null;   // PruneDead path safety
         _node = NodeHandle.Null;
         _active = false;
+        _sprung = false;
+        _springVx = _springVy = 0f;
     }
 }

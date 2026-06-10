@@ -90,6 +90,18 @@ public sealed record BoxEl : Element
     public Action<DragEventArgs>? OnDragCompleted { get; init; }
     /// <summary>The drag aborted (Escape / pointer-capture loss / window blur): drop hints without committing.</summary>
     public Action? OnDragCanceled { get; init; }
+    /// <summary>E5-L2 typed drag SOURCE (the Flutter Draggable / react-beautiful-dnd model — deliberately NOT WinUI
+    /// OLE, per the 2026-06-10 user ruling): marks this box draggable (implies <see cref="CanDrag"/> — the L1 gesture
+    /// armer) with a string Kind discriminator + a payload factory the engine resolves ONCE when the press promotes
+    /// past the drag box. The live <see cref="DragSession"/> then routes to the nearest accepting
+    /// <see cref="DropTarget"/> under the pointer on every move.</summary>
+    public DragSource? Draggable { get; init; }
+    /// <summary>E5-L2 drop TARGET (Flutter DragTarget / SwiftUI dropDestination): accepts sessions whose Kind is in
+    /// <c>AcceptKinds</c> — OnEnter/OnOver/OnLeave fire on hover transitions, OnDrop on release over it (before the
+    /// L1 completion; <c>SettleOnDrop</c> keeps the drop-glide for reorder targets). Discovery is hit-test-CHAIN
+    /// based (nearest accepting ancestor of the node under the pointer) — the spec alone does NOT make this box
+    /// click/pointer hit-testable.</summary>
+    public DropTargetSpec? DropTarget { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
     /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
     public bool Repeats { get; init; }
@@ -119,6 +131,11 @@ public sealed record BoxEl : Element
     public float Opacity { get; init; } = 1f;
     public float HoverOpacity { get; init; } = float.NaN;
     public float PressedOpacity { get; init; } = float.NaN;
+    /// <summary>Flat opacity group (WinUI Composition LayerVisual semantics): when set and the resolved opacity is
+    /// &lt; 1, the subtree renders at FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha —
+    /// overlapping children don't double-blend (a fading dialog plate + its buttons). Default false = per-node
+    /// multiplied opacity (WinUI's plain Visual.Opacity behavior). Engine primitive: PushLayer{Opacity} (E9).</summary>
+    public bool OpacityGroup { get; init; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;
@@ -278,6 +295,15 @@ public sealed record TextEl(string Text) : Element
     public ColorF PressedColor { get; init; }
     public ColorF DisabledColor { get; init; }
     public ColorF FocusedColor { get; init; }
+    /// <summary>WinUI <c>TextDecorations.Underline</c>: the recorder draws the face-metric underline bar (DWrite
+    /// underlinePosition/underlineThickness, cached at measure on the scene's TextMeasureCache) under the run, in the
+    /// SAME resolved foreground as the glyphs (hover/press ramps + BrushTransition). Single-line frame — per-line
+    /// decoration of wrapped runs is the rich-text (SpanTextEl/RichTextBlock) pass. HyperlinkButton drives this from
+    /// its HyperlinkUnderlineVisible/HighContrast gate (HyperLinkButton_Partial.cpp:207-212).</summary>
+    public bool Underline { get; init; }
+    /// <summary>WinUI <c>TextDecorations.Strikethrough</c>: the face-metric strikethrough bar (reuses the underline
+    /// thickness, the DWrite convention) — e.g. CalendarView blackout dates.</summary>
+    public bool Strikethrough { get; init; }
     /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
     /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
     public float BrushTransitionMs { get; init; } = float.NaN;

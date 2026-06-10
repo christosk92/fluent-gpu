@@ -60,6 +60,17 @@ public sealed class InputHooks
     /// Contrast <see cref="RestoreFocus"/>, which restores silently (overlay close).</summary>
     public Action<NodeHandle>? MoveFocusVisual;
 
+    /// <summary>Push a dispatcher FOCUS SCOPE rooted at a node: Tab/Shift-Tab cycle inside its subtree until popped
+    /// (WinUI TabFocusNavigation=Cycle - the ContentDialog/flyout focus trap). Host-wired to
+    /// <c>InputDispatcher.PushFocusScope</c>.</summary>
+    public Action<NodeHandle>? PushFocusScope;
+    /// <summary>Remove the focus scope previously pushed for this root (order-independent - overlays can close out of
+    /// stack order). Host-wired to <c>InputDispatcher.RemoveFocusScope</c>.</summary>
+    public Action<NodeHandle>? PopFocusScope;
+    /// <summary>First focusable node (tab order) within a subtree - the focus trap's initial-focus query.
+    /// Host-wired to <c>InputDispatcher.FirstFocusableIn</c>.</summary>
+    public Func<NodeHandle, NodeHandle>? FirstFocusableIn;
+
     /// <summary>Set by the overlay host: the window lost activation → close every light-dismiss overlay
     /// (WinUI window-deactivation dismiss). Invoked from the dispatcher's WindowBlur via the host wiring.</summary>
     public Action? WindowBlurred;

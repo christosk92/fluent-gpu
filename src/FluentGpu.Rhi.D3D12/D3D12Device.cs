@@ -57,7 +57,17 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private GradientPipeline? _gradPipe;
     private readonly List<GradientInstance> _gradInsts = new();
     private readonly List<RectF> _clipStack = new(16);
+    // Tier-2 rounded clip (E9), parallel to _clipStack: the innermost rounded-box clip in effect (W <= 0 = none).
+    // A rounded PushClip replaces it; a plain (rectangular) PushClip inherits the enclosing rounded clip — a reveal
+    // rect nested inside a rounded surface keeps clipping the surface's corners. RoundRect-pipeline instances carry
+    // the current entry; other pipelines stay scissor-only (the honest scope documented on ClipCmd).
+    private readonly List<(RectF Rect, float Radius)> _roundedClipStack = new(16);
     private AcrylicCompositor? _acrylic;
+    private OpacityLayerCompositor? _opacity;
+    // Open PushLayer kinds in stream order (acrylic pops are no-ops; opacity pops composite their leased RT), and the
+    // leased (slot, alpha) per open OPACITY group — both reused across frames (0 steady alloc).
+    private readonly List<int> _layerKinds = new(8);
+    private readonly List<(int Slot, float Alpha)> _opacityGroups = new(4);
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -111,6 +121,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _gradPipe.Init(_device);
         _acrylic = new AcrylicCompositor();
         _acrylic.Init(_device);
+        _opacity = new OpacityLayerCompositor();
+        _opacity.Init(_device);
         _glyphs = new GlyphRenderer();
         _glyphs.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
         _glyphs.Init(_device);
@@ -304,13 +316,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
         if (StreamHasLayer(drawList))
         {
-            // Acrylic path: render the scene into an engine-owned canvas, blur+composite at each layer, blit to the back buffer.
+            // Layered path (acrylic AND/OR opacity groups): render the scene into an engine-owned canvas, run each
+            // layer's passes in stream order, blit to the back buffer.
             _acrylic!.EnsureSize(_w, _h);
+            _opacity!.EnsureSize(_w, _h);
             SubmitWithLayers(drawList, ctx, lw, lh, rtv);
         }
         else
         {
-            _acrylic?.TickIdle(_fence->GetCompletedValue());   // age/trim the layer RT pool while no acrylic is on screen
+            _acrylic?.TickIdle(_fence->GetCompletedValue());   // age/trim the layer RT pools while no layer is on screen
+            _opacity?.TickIdle(_fence->GetCompletedValue());
             _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
             float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
             _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
@@ -319,6 +334,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         Diag.Set("d3d12", "acrylicLayers", _acrylic?.LayersThisFrame ?? 0);   // PushLayer composites this frame
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
+        Diag.Set("d3d12", "opacityGroups", _opacity?.GroupsThisFrame ?? 0);   // flat opacity groups composited this frame
+        Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("d3d12", "images", _frameImageCount);
@@ -374,14 +391,18 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
-                    _rectInsts.Add(new RectInstance
+                    var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
                         RTL = c.Radii.TopLeft, RTR = c.Radii.TopRight, RBR = c.Radii.BottomRight, RBL = c.Radii.BottomLeft,
                         R = c.Fill.R, G = c.Fill.G, B = c.Fill.B, A = c.Fill.A,
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
-                    });
+                        Kind = c.FillKind, CellPx = c.CellPx,
+                        BR = c.ColorB.R, BG = c.ColorB.G, BB = c.ColorB.B, BA = c.ColorB.A,
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _rectInsts.Add(inst);
                     _frameRectCount++;
                     PushRun(PrimKind.Rect);
                     break;
@@ -423,14 +444,38 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawRoundRectStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
-                    _rectInsts.Add(new RectInstance
+                    var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
                         RTL = c.Radii.TopLeft, RTR = c.Radii.TopRight, RBR = c.Radii.BottomRight, RBL = c.Radii.BottomLeft,
                         R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, StrokeWidth = c.StrokeWidth,
-                    });
+                        DashOn = c.DashOn, DashOff = c.DashOff,   // 0/0 = solid (the shader gates on BOTH > 0)
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _rectInsts.Add(inst);
+                    _frameRectCount++;
+                    PushRun(PrimKind.Rect);
+                    break;
+                }
+                case DrawOp.DrawTabShape:
+                {
+                    // WinUI selected-tab shape (TabViewItem.cpp:98-123) — a RoundRect-pipeline SDF variant:
+                    // radii.x carries the top radius, radii.w (RBL) the bottom flare radius (see RectInstance docs).
+                    var c = MemoryMarshal.Read<DrawTabShapeCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawTabShapeCmd>();
+                    var inst = new RectInstance
+                    {
+                        PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
+                        RTL = c.TopRadius, RBL = c.FlareRadius,
+                        R = c.Fill.R, G = c.Fill.G, B = c.Fill.B, A = c.Fill.A,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
+                        Kind = 2f,
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _rectInsts.Add(inst);
                     _frameRectCount++;
                     PushRun(PrimKind.Rect);
                     break;
@@ -603,16 +648,33 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _cmdList->RSSetScissorRects(1, &sc);
     }
 
-    private void PushScissor(in RectF r)
+    private void PushScissor(in ClipCmd clip)
     {
-        _clipStack.Add(r);
-        SetScissor(r);
+        _clipStack.Add(clip.DeviceRect);
+        // Rounded entry rides a parallel stack: a tier-2 rounded PushClip replaces the active rounded clip; a plain
+        // rectangular PushClip INHERITS the enclosing one, so content nested under a rounded surface keeps the
+        // surface's corner clamp while the scissor narrows.
+        if (clip.CornerRadius > 0f) _roundedClipStack.Add((clip.RoundedRect, clip.CornerRadius));
+        else if (_roundedClipStack.Count > 0) _roundedClipStack.Add(_roundedClipStack[^1]);
+        else _roundedClipStack.Add((default, 0f));
+        SetScissor(clip.DeviceRect);
     }
 
     private void PopScissor()
     {
         if (_clipStack.Count > 0) _clipStack.RemoveAt(_clipStack.Count - 1);
+        if (_roundedClipStack.Count > 0) _roundedClipStack.RemoveAt(_roundedClipStack.Count - 1);
         ApplyCurrentScissor();
+    }
+
+    /// <summary>Stamp the innermost rounded clip (if any) onto a RoundRect-pipeline instance (the PS multiplies its
+    /// coverage by the rounded-box SDF — the tier-2 path for animated clips on rounded surfaces).</summary>
+    private void ApplyRoundedClip(ref RectInstance inst)
+    {
+        if (_roundedClipStack.Count == 0) return;
+        var (rect, radius) = _roundedClipStack[^1];
+        if (rect.W <= 0f) return;
+        inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
     }
 
     private void ApplyCurrentScissor()
@@ -675,6 +737,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     {
         ClearInsts();
         _clipStack.Clear();
+        _roundedClipStack.Clear();
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
         {
@@ -685,7 +748,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
                 FlushSegment(lw, lh);
-                PushScissor(clip.DeviceRect);
+                PushScissor(in clip);
                 continue;
             }
             if (op == DrawOp.PopClip)
@@ -699,17 +762,24 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         FlushSegment(lw, lh);
         _clipStack.Clear();
+        _roundedClipStack.Clear();
         SetFullScissor();
     }
 
-    // Acrylic path: render the scene into the canvas, processing the stream in order so each PushLayer blurs the
-    // backdrop drawn so far, then composites the acrylic and lets the layer's content draw on top.
+    // Layered path: render the scene into the canvas, processing the stream in order. An Acrylic PushLayer blurs the
+    // backdrop drawn so far then composites the frosted surface (content draws on top; its PopLayer is a no-op). An
+    // Opacity PushLayer redirects drawing into a leased transparent canvas-sized RT; its PopLayer composites that RT
+    // once over the underlying target at GroupAlpha (flat group — no double-blend). Kinds nest via _layerKinds.
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
         // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
         _acrylic!.BeginCanvas(_cmdList, ctx.Clear, _fence->GetCompletedValue(), (int)(_frameIndex & 1));
+        _opacity!.BeginFrame(_fence->GetCompletedValue(), (int)(_frameIndex & 1));
         ClearInsts();
         _clipStack.Clear();
+        _roundedClipStack.Clear();
+        _layerKinds.Clear();
+        _opacityGroups.Clear();
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
         {
@@ -720,7 +790,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
                 FlushSegment(lw, lh);
-                PushScissor(clip.DeviceRect);
+                PushScissor(in clip);
                 continue;
             }
             if (op == DrawOp.PopClip)
@@ -735,18 +805,64 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 int p2 = pos + sizeof(int);
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
-                FlushSegment(lw, lh);                       // draw the backdrop-so-far into the canvas
-                // region snapshot → pooled-RT separable blur → acrylic composite (re-binds canvas + full viewport).
-                // _fenceValue + 1 is the fence value SignalFrame will signal for THIS frame (gates pooled-RT retire).
-                _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1);
-                ApplyCurrentScissor();
+                FlushSegment(lw, lh);                       // draw the backdrop-so-far into the current target
+                if (L.Kind == (int)LayerKind.Opacity)
+                {
+                    // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically.
+                    int slot = _opacity.Acquire(_cmdList, _fenceValue + 1);
+                    _opacityGroups.Add((slot, L.GroupAlpha));
+                    _layerKinds.Add((int)LayerKind.Opacity);
+                }
+                else
+                {
+                    // region snapshot → pooled-RT separable blur → acrylic composite (re-binds canvas + full viewport).
+                    // _fenceValue + 1 is the fence value SignalFrame will signal for THIS frame (gates pooled-RT retire).
+                    // Documented limitation: nested inside an open opacity group, the acrylic composites into the
+                    // CANVAS (the acrylic leaf owns its canvas binding) — combine acrylic + group on one node instead.
+                    _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1);
+                    if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
+                    ApplyCurrentScissor();
+                    _layerKinds.Add((int)LayerKind.Acrylic);
+                }
                 continue;
             }
-            if (op == DrawOp.PopLayer) { pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>(); continue; }
+            if (op == DrawOp.PopLayer)
+            {
+                pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>();
+                int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
+                if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
+                if (kind == (int)LayerKind.Opacity && _opacityGroups.Count > 0)
+                {
+                    FlushSegment(lw, lh);                   // finish the subtree into the group RT
+                    var (slot, alpha) = _opacityGroups[^1];
+                    _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
+                    _opacity.BeginRead(_cmdList, slot);
+                    // Composite over the UNDERLYING target: the enclosing group's RT, or the canvas.
+                    if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+                    else _acrylic.BindCanvas(_cmdList);
+                    _opacity.Composite(_cmdList, slot, alpha);
+                    _opacity.Release(slot);
+                    ApplyCurrentScissor();
+                }
+                continue;
+            }
             pos = DecodeOne(drawList, pos);
         }
         FlushSegment(lw, lh);
+        // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
+        while (_opacityGroups.Count > 0)
+        {
+            var (slot, alpha) = _opacityGroups[^1];
+            _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
+            _opacity.BeginRead(_cmdList, slot);
+            if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+            else _acrylic.BindCanvas(_cmdList);
+            _opacity.Composite(_cmdList, slot, alpha);
+            _opacity.Release(slot);
+        }
+        _layerKinds.Clear();
         _clipStack.Clear();
+        _roundedClipStack.Clear();
         _acrylic.BlitToBackBuffer(_cmdList, backRtv);
     }
 
@@ -770,6 +886,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 case DrawOp.DrawPolylineStroke: pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
+                case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.PushLayer: return true;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); break;
                 default: return false;
@@ -948,6 +1065,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _polylinePipe?.Dispose();
         _gradPipe?.Dispose();
         _acrylic?.Dispose();
+        _opacity?.Dispose();
         _rectPipe?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
