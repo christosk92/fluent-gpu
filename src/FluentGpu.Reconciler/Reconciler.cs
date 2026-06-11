@@ -1007,7 +1007,9 @@ public sealed class TreeReconciler
                     if (b.ScaleX != 1f || b.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(b.ScaleX, b.ScaleY));
                     paint.LocalTransform = tf;
                 }
-                if (b.OpacityBind is null && b.Opacity != 1f) paint.Opacity = b.Opacity;
+                // Re-assert unconditionally (like Width/Fill): gating on != 1f made an Opacity 0→1 update a no-op,
+                // so a node hidden by a prior render could never be shown again (the ProgressRing IsActive flip).
+                if (b.OpacityBind is null) paint.Opacity = b.Opacity;
                 paint.HoverOpacity = b.HoverOpacity;
                 paint.PressedOpacity = b.PressedOpacity;
                 paint.OpacityGroup = b.OpacityGroup;

@@ -10220,7 +10220,8 @@ static class Slice
 
             Check("progress.1 ProgressRing isActive flows through context: active spins, inactive stops, reactivation restarts without remount",
                 activeMount && stopped && restarted,
-                $"active={activeMount} stopped={stopped} restarted={restarted} same={ring == ring0 && arc == arc0}");
+                $"active={activeMount} stopped={stopped} restarted={restarted} same={ring == ring0 && arc == arc0}"
+                + $" reOpacity={host.Scene.Paint(ring).Opacity:0.###} reRingTracks={host.Animation.HasTracks(ring)} reArcTracks={host.Animation.HasTracks(arc)}");
         }
 
         // Fresh inactive mount: no hidden compositor work should be seeded under opacity 0.
