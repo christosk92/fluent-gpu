@@ -2431,13 +2431,13 @@ static class Slice
             CornerRadius = 8f,
         };
         var btn = Button.Accent("x", () => { }, s);
-        bool styled = btn.Fill == s.Background
+        bool styled = btn.Fill.Value == s.Background
             && btn.HoverFill == s.HoverBackground
             && Near(btn.Corners.TopLeft, 8f)
-            && btn.Children[0] is TextEl t && t.Color == s.Foreground;
+            && btn.Children[0] is TextEl t && t.Color.Value == s.Foreground;
 
         var modded = Button.Accent("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
-        bool overridden = modded.Fill == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
+        bool overridden = modded.Fill.Value == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
 
         // Wave-1 parity: WinUI Button storyboards swap brushes ONLY (Button_themeresources.xaml:176-229 — no scale),
         // so the default Button must have NO press scale; IconButton (engine media-transport control) keeps its
@@ -3606,7 +3606,7 @@ static class Slice
             if (t == "plain") plainEmpty = fam.Length == 0;
         }
         var icon = Ui.Icon(Icons.Play, 20f);
-        bool iconFactory = icon.FontFamily == Theme.IconFont && icon.Text == Icons.Play && icon.Size == 20f;
+        bool iconFactory = icon.FontFamily == Theme.IconFont && icon.Text.Value == Icons.Play && icon.Size == 20f;
         Check("56. per-run font family threads to the glyph cmd; Ui.Icon uses the icon font", hiFam && plainEmpty && iconFactory,
             $"hiFam={hiFam} plainEmpty={plainEmpty} iconFont='{icon.FontFamily}'");
     }
@@ -4613,8 +4613,8 @@ static class Slice
             Tok.Use(ThemeKind.Light);
             var lightDefault = new TextEl("x").Color;
             Tok.Use(ThemeKind.Dark);
-            bool dark = darkDefault == Tok.TextPrimary && darkDefault == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
-            bool light = lightDefault == ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4);
+            bool dark = darkDefault.Value == Tok.TextPrimary && darkDefault.Value == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+            bool light = lightDefault.Value == ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4);
             Check("B.9 TextEl default color = theme TextFillColorPrimary (dark #FFFFFF / light #E4000000)",
                 dark && light, $"dark={dark} light={light}");
         }
@@ -8858,7 +8858,7 @@ static class Slice
             var el = Repeater.ItemsRepeater(data, (i, s) => new BoxEl { Children = [new TextEl(s) { Size = 12f }] },
                 RepeatLayout.Inline(), transition: ItemCollectionTransition.Default);
             bool typed = el is BoxEl row && row.Children.Length == 3
-                && row.Children[1] is BoxEl b1 && b1.Children[0] is TextEl t1 && t1.Text == "beta";
+                && row.Children[1] is BoxEl b1 && b1.Children[0] is TextEl t1 && t1.Text.Value == "beta";
             var spec = el is BoxEl row2 && row2.Children[0] is BoxEl item0 ? item0.Animate : null;
             bool stamped = spec is { } sp
                 && (sp.Channels & TransitionChannels.Position) != 0 && (sp.Channels & TransitionChannels.Opacity) != 0
@@ -10286,6 +10286,78 @@ static class Slice
             host.Scene.Paint(nCan).TextColor == canCol.Peek(), $"paint={host.Scene.Paint(nCan).TextColor} want={canCol.Peek()}");
     }
 
+    // ── prop.signal-direct + bind.mount-only: the Prop<T> union's two bind kinds (W1) ───────────────────────────
+    static void PropUnionChecks(StringTable strings)
+    {
+        // Signal-direct: a concrete Signal<T>/FloatSignal assigned straight to the channel property — no user
+        // closure; the engine effect reads sig.Value. Paint-only writes must stay compositor-only (Rendered=false).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("prop-signal-direct", new Size2(300, 300), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var op = new Signal<float>(0.6f);
+            var col = new Signal<ColorF>(ColorF.FromRgba(0xE8, 0x3C, 0x3C, 0xFF));
+            var wf = new FloatSignal(40f);
+            var txt = new Signal<string>("sd1");
+            NodeHandle box = default, wBox = default, wTxt = default;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1, Width = 280, Height = 280,
+                    Children = new Element[]
+                    {
+                        new BoxEl { Width = 40, Height = 10, Opacity = op, Fill = col, OnRealized = h => box = h },
+                        new BoxEl { Height = 10, Width = wf, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), OnRealized = h => wBox = h },
+                        new BoxEl { OnRealized = h => wTxt = h, Children = [ new TextEl("") { Text = txt } ] },
+                    },
+                },
+            });
+            host.RunFrame();
+            var nTxt = host.Scene.FirstChild(wTxt);
+            bool initial = Near(host.Scene.Paint(box).Opacity, 0.6f, 0.001f)
+                && host.Scene.Paint(box).Fill == col.Peek()
+                && Near(host.Scene.Layout(wBox).Width, 40f, 0.001f)
+                && host.Scene.Paint(nTxt).Text == strings.Intern("sd1");
+            op.Value = 0.25f; col.Value = ColorF.FromRgba(0x18, 0xA0, 0x57, 0xFF);
+            var st = host.RunFrame();
+            bool paintOnly = !st.Rendered;                       // opacity/fill bind fires are compositor-only
+            wf.Value = 90f; txt.Value = "sd2";
+            host.RunFrame();
+            Check("prop.signal-direct Signal/FloatSignal assigned straight to Opacity/Fill/Width/Text drive their channels (no closure)",
+                initial && Near(host.Scene.Paint(box).Opacity, 0.25f, 0.001f) && host.Scene.Paint(box).Fill == col.Peek()
+                && Near(host.Scene.Layout(wBox).Width, 90f, 0.001f) && host.Scene.Paint(nTxt).Text == strings.Intern("sd2"),
+                $"initial={initial} op={host.Scene.Paint(box).Opacity} w={host.Scene.Layout(wBox).Width}");
+            Check("prop.signal-direct paint-channel signal writes stay compositor-only (Rendered=false)",
+                paintOnly, $"rendered={st.Rendered}");
+        }
+
+        // Mount-only wiring contract (locked, deliberate): a NEW thunk supplied on a re-render is IGNORED — the
+        // mount-captured bind is immortal until unmount. Change the signal's VALUE, not the bind.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-mount-only", new Size2(200, 200), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var rr = new Signal<int>(0);
+            NodeHandle box = default;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () =>
+                {
+                    int r = rr.Value;                            // each render captures a FRESH r in a FRESH thunk
+                    return new BoxEl { Width = 40, Height = 10, Opacity = (Func<float>)(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
+                },
+            });
+            host.RunFrame();
+            rr.Value = 1;                                        // re-render: new thunk (r=1) — must be IGNORED
+            host.RunFrame();
+            Check("bind.mount-only.stale a fresh thunk on re-render is ignored (mount-captured bind is immortal)",
+                Near(host.Scene.Paint(box).Opacity, 0.1f, 0.001f), $"op={host.Scene.Paint(box).Opacity} (0.3 would mean re-wiring happened)");
+        }
+    }
+
     // ── anim.rest.*: settled/canceled-track resting values vs static re-asserts (Prop<T> B-waves) ────────────────
     static void AnimRestChecks(StringTable strings)
     {
@@ -11635,6 +11707,7 @@ static class Slice
         ProgressIndeterminateLifecycleChecks(strings);
         PropNetClobberChecks(strings);     // Prop<T> W0: bound-channel ownership net (clobber guards + contract locks)
         AnimRestChecks(strings);           // Prop<T> B1-B3: canceled/settled-track resting values vs static re-asserts
+        PropUnionChecks(strings);          // Prop<T> W1: signal-direct bind kind + the locked mount-only wiring contract
         D3ExpanderChecks(strings);
         D4ScrollBarChecks(strings);
 

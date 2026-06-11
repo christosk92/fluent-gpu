@@ -429,44 +429,71 @@ public sealed class TreeReconciler
         list.Add(c);
     }
 
+    // A bound Prop<T> is either a thunk or a signal-direct payload — the effect body reads whichever the channel
+    // carries (one null test per fire; signal-direct means the CALLER allocated no closure). Wiring stays MOUNT-ONLY:
+    // a new thunk/signal supplied on a re-render is ignored (the signals-first contract — change the signal's value,
+    // not the bind; locked by bind.mount-only.stale).
     private void BindNode(NodeHandle node, Element el)
     {
         if (el is BoxEl b)
         {
-            if (b.TransformBind is { } tb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).LocalTransform = tb(); _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty); } }, owner: null, runNow: true));
-            if (b.OpacityBind is { } ob)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Opacity = ob(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
-            if (b.FillBind is { } fb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
-            if (b.WidthBind is { } wb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Width = wb(); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
-            if (b.HeightBind is { } hb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Height = hb(); _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            if (b.Transform.IsBound)
+            {
+                var tb = b.Transform.Thunk; var ts = b.Transform.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).LocalTransform = tb is not null ? tb() : ts!.Value; _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.Opacity.IsBound)
+            {
+                var ob = b.Opacity.Thunk; var os = b.Opacity.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Opacity = ob is not null ? ob() : os!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.Fill.IsBound)
+            {
+                var fb = b.Fill.Thunk; var fs = b.Fill.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb is not null ? fb() : fs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.Width.IsBound)
+            {
+                var wb = b.Width.Thunk; var ws = b.Width.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Width = wb is not null ? wb() : ws!.Value; _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            }
+            if (b.Height.IsBound)
+            {
+                var hb = b.Height.Thunk; var hs = b.Height.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Height = hb is not null ? hb() : hs!.Value; _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+            }
             b.OnRealized?.Invoke(node);
         }
         else if (el is TextEl t)
         {
-            if (t.TextBind is { } txb)
+            if (t.Text.IsBound)
+            {
+                var txb = t.Text.Thunk; var txs = t.Text.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
                     if (!_scene.IsLive(node)) return;
-                    var next = _strings.Intern(txb());
+                    var next = _strings.Intern(txb is not null ? txb() : txs!.Value);
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Text == next) return;
                     SetPaintText(ref paint, next);
                     _scene.Mark(node, NodeFlags.LayoutDirty);
                 }, owner: null, runNow: true));
-            if (t.ColorBind is { } cb)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (t.Color.IsBound)
+            {
+                var cb = t.Color.Thunk; var cs = t.Color.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb is not null ? cb() : cs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
         }
         else if (el is ImageEl ime)
         {
-            if (ime.SourceBind is { } sbind)
+            if (ime.Source.IsBound)
+            {
+                var sbind = ime.Source.Thunk; var ssig = ime.Source.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
                     if (!_scene.IsLive(node)) return;
-                    string src = sbind();
+                    string src = sbind is not null ? sbind() : ssig!.Value;
                     int newId = Images is not null && src.Length > 0
                         ? Images.Request(src, (int)ime.Width, (int)ime.Height, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
@@ -479,8 +506,12 @@ public sealed class TreeReconciler
                     paint.ImageId = newId;
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
-            if (ime.PlaceholderBind is { } pbind)
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind(); _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (ime.Placeholder.IsBound)
+            {
+                var pbind = ime.Placeholder.Thunk; var psig = ime.Placeholder.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind is not null ? pbind() : psig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
         }
     }
 
@@ -738,16 +769,16 @@ public sealed class TreeReconciler
         switch (el)
         {
             case TextEl t:
-                return t.TextBind is null && t.ColorBind is null;
+                return !t.Text.IsBound && !t.Color.IsBound;
             case SpanTextEl:
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
-                return im.SourceBind is null && im.PlaceholderBind is null;
+                return !im.Source.IsBound && !im.Placeholder.IsBound;
             case PolylineStrokeEl:
                 return true;
             case BoxEl b:
-                if (b.TransformBind is not null || b.OpacityBind is not null || b.FillBind is not null
-                    || b.WidthBind is not null || b.HeightBind is not null || b.OnRealized is not null) return false;
+                if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound
+                    || b.Width.IsBound || b.Height.IsBound || b.OnRealized is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
             case GridEl g:
@@ -944,22 +975,21 @@ public sealed class TreeReconciler
             case BoxEl b:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
-                bool hasSurface = b.Fill.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
-                                  || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null
-                                  || b.FillBind is not null;
+                bool hasSurface = b.Fill.IsBound || b.Fill.Value.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
+                                  || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null;
                 paint.VisualKind = hasSurface ? VisualKind.Box : VisualKind.None;
 
                 // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
                 // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.
                 // A BOUND fill is excluded per-channel: its effect owns paint.Fill, so diffing against the static would
                 // arm a phantom fade toward a color the channel doesn't own (the border sub-block is unaffected).
-                bool fillOwned = b.FillBind is null;
+                bool fillOwned = !b.Fill.IsBound;
                 if (!isMount && !float.IsNaN(b.BrushTransitionMs) && b.BrushTransitionMs > 0f
-                    && ((fillOwned && paint.Fill != b.Fill) || paint.BorderColor != b.BorderColor))
+                    && ((fillOwned && paint.Fill != b.Fill.Value) || paint.BorderColor != b.BorderColor))
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
                     var ba = new BrushAnim { DurationMs = b.BrushTransitionMs };
-                    if (fillOwned && paint.Fill != b.Fill)
+                    if (fillOwned && paint.Fill != b.Fill.Value)
                     {
                         ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
                             ? ColorF.LerpLinear(prev.FillFrom, paint.Fill, prev.T)   // continue from the displayed color
@@ -979,7 +1009,7 @@ public sealed class TreeReconciler
 
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
                 // clobber it on an update between signal fires (mount was safe only because the bind fires after this).
-                if (fillOwned) paint.Fill = b.Fill;
+                if (fillOwned) paint.Fill = b.Fill.Value;
                 paint.HoverFill = b.HoverFill;
                 paint.PressedFill = b.PressedFill;
                 paint.BorderColor = b.BorderColor;
@@ -1005,7 +1035,7 @@ public sealed class TreeReconciler
 
                 // Static transform/opacity ONLY when the element declares one AND there's no transform binding/animation
                 // owning the channel (else a re-render would reset the bound/animated value to identity each frame).
-                if (b.TransformBind is null && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f))
+                if (!b.Transform.IsBound && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f))
                 {
                     var tf = Affine2D.Translation(b.OffsetX, b.OffsetY);
                     if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
@@ -1014,7 +1044,7 @@ public sealed class TreeReconciler
                 }
                 // Re-assert unconditionally (like Width/Fill): gating on != 1f made an Opacity 0→1 update a no-op,
                 // so a node hidden by a prior render could never be shown again (the ProgressRing IsActive flip).
-                if (b.OpacityBind is null) paint.Opacity = b.Opacity;
+                if (!b.Opacity.IsBound) paint.Opacity = b.Opacity.Value;
                 paint.HoverOpacity = b.HoverOpacity;
                 paint.PressedOpacity = b.PressedOpacity;
                 paint.OpacityGroup = b.OpacityGroup;
@@ -1038,8 +1068,8 @@ public sealed class TreeReconciler
                 li.Margin = b.Margin;
                 // Like the TransformBind/OpacityBind guards above: a bound dimension is owned by its bind effect — a
                 // re-render must not clobber it back to the static prop (the bind re-fires only when its signal changes).
-                if (b.WidthBind is null) li.Width = b.Width;
-                if (b.HeightBind is null) li.Height = b.Height;
+                if (!b.Width.IsBound) li.Width = b.Width.Value;
+                if (!b.Height.IsBound) li.Height = b.Height.Value;
                 li.MinW = b.MinWidth; li.MinH = b.MinHeight; li.MaxW = b.MaxWidth; li.MaxH = b.MaxHeight;
                 li.FlexGrow = b.Grow;
                 li.FlexShrink = b.Shrink;
@@ -1306,14 +1336,14 @@ public sealed class TreeReconciler
             {
                 ref NodePaint paint = ref _scene.Paint(node);
                 paint.VisualKind = VisualKind.Image;
-                if (im.PlaceholderBind is null) paint.Fill = im.Placeholder;   // bound rows tint via the binding
+                if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
                 paint.Corners = im.Corners;
 
                 int oldId = paint.ImageId;
-                if (im.SourceBind is null)   // bound rows request via the binding (the effect owns pin/unpin)
+                if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
-                    int newId = (Images is not null && im.Source.Length > 0)
-                        ? Images.Request(im.Source, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
+                    int newId = (Images is not null && im.Source.Value.Length > 0)
+                        ? Images.Request(im.Source.Value, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
                     if (newId != oldId)
                     {
                         if (Images is not null)
@@ -1337,8 +1367,8 @@ public sealed class TreeReconciler
 
                 // Implicit BrushTransition on the resting foreground (WinUI BrushTransition on a logical state flip).
                 // Skipped when ColorBind owns the channel (same per-channel rule as the BoxEl fill block above).
-                bool colorOwned = t.ColorBind is null;
-                if (!isMount && colorOwned && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color)
+                bool colorOwned = !t.Color.IsBound;
+                if (!isMount && colorOwned && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color.Value)
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
                     var ba = new BrushAnim
@@ -1355,7 +1385,7 @@ public sealed class TreeReconciler
 
                 // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder
                 // ColorBind was clobbered back to the static by any re-render between signal fires).
-                if (colorOwned) paint.TextColor = t.Color;
+                if (colorOwned) paint.TextColor = t.Color.Value;
                 paint.TextHoverColor = t.HoverColor;
                 paint.TextPressedColor = t.PressedColor;
                 paint.TextDisabledColor = t.DisabledColor;
@@ -1363,9 +1393,9 @@ public sealed class TreeReconciler
                 paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
                                              | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);
-                if (t.TextBind is null)
+                if (!t.Text.IsBound)
                 {
-                    var newText = _strings.Intern(t.Text);
+                    var newText = _strings.Intern(t.Text.Value);
                     if (paint.Text != newText) { SetPaintText(ref paint, newText); _scene.Mark(node, NodeFlags.LayoutDirty); }
                 }
 

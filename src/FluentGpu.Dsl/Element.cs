@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Dsl;
 
@@ -20,7 +21,8 @@ public sealed record BoxEl : Element
     public float Gap { get; init; }
     public Edges4 Padding { get; init; }
     public Edges4 Margin { get; init; }
-    public ColorF Fill { get; init; }
+    /// <summary>Unified channel (Prop&lt;T&gt;): a static color, a <c>Func&lt;ColorF&gt;</c> thunk, or a concrete signal.</summary>
+    public Prop<ColorF> Fill { get; init; }
     public ColorF HoverFill { get; init; }
     public ColorF PressedFill { get; init; }
     public ColorF BorderColor { get; init; }
@@ -147,7 +149,8 @@ public sealed record BoxEl : Element
     public float ScaleX { get; init; } = 1f;
     public float ScaleY { get; init; } = 1f;
     public float Rotation { get; init; }   // degrees
-    public float Opacity { get; init; } = 1f;
+    /// <summary>Unified channel (Prop&lt;T&gt;): a static opacity, a thunk, or a concrete signal.</summary>
+    public Prop<float> Opacity { get; init; } = 1f;
     public float HoverOpacity { get; init; } = float.NaN;
     public float PressedOpacity { get; init; } = float.NaN;
     /// <summary>Flat opacity group (WinUI Composition LayerVisual semantics): when set and the resolved opacity is
@@ -175,15 +178,24 @@ public sealed record BoxEl : Element
     /// instead of snapping. NaN = snap (the default); WinUI control templates use 83ms.</summary>
     public float BrushTransitionMs { get; init; } = float.NaN;
 
-    // ── Fine-grained reactive bindings (signals-first). A bind is a thunk that READS signals; the reconciler turns it
-    // into an effect at mount that writes only this node's channel + marks the matching dirty axis, so a signal change
-    // updates exactly this node with no component re-render / no reconcile. Transform/Opacity/Fill are compositor-only
-    // (no relayout); Width/Height bind layout and trigger a scoped relayout. Null = static (the default).
-    public Func<Affine2D>? TransformBind { get; init; }   // → LocalTransform (TransformDirty | PaintDirty)
-    public Func<float>? OpacityBind { get; init; }        // → Opacity      (PaintDirty)
-    public Func<ColorF>? FillBind { get; init; }          // → Fill         (PaintDirty)
-    public Func<float>? WidthBind { get; init; }          // → LayoutInput.Width  (LayoutDirty → scoped relayout)
-    public Func<float>? HeightBind { get; init; }         // → LayoutInput.Height (LayoutDirty → scoped relayout)
+    // ── Fine-grained reactive bindings (signals-first). Every bindable channel is ONE Prop<T> property: a static
+    // value (re-asserted each reconcile iff not bound), a Func<T> thunk reading signals, or a concrete signal — the
+    // reconciler wires a bound channel into a mount-time effect that writes only this node's column + marks the
+    // matching dirty axis (no component re-render, no reconcile). Transform/Opacity/Fill are compositor-only;
+    // Width/Height bind layout and trigger a scoped relayout.
+    /// <summary>The whole-matrix transform channel — bind-only in v1 (a thunk/signal producing the full Affine2D;
+    /// the STATIC path composes from the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above). When bound, the
+    /// decomposed statics are ignored: one transform owner per node — never combine with StickyTop or
+    /// transform-channel animations. An unbound Transform's Value is never read.</summary>
+    public Prop<Affine2D> Transform { get; init; }
+
+    // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
+    // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).
+    public Func<Affine2D>? TransformBind { init { if (value is not null) Transform = value; } }   // → LocalTransform (TransformDirty | PaintDirty)
+    public Func<float>? OpacityBind { init { if (value is not null) Opacity = value; } }          // → Opacity (PaintDirty)
+    public Func<ColorF>? FillBind { init { if (value is not null) Fill = value; } }               // → Fill (PaintDirty)
+    public Func<float>? WidthBind { init { if (value is not null) Width = value; } }              // → LayoutInput.Width (LayoutDirty → scoped relayout)
+    public Func<float>? HeightBind { init { if (value is not null) Height = value; } }            // → LayoutInput.Height (LayoutDirty → scoped relayout)
 
     /// <summary>Called once when this box is realized into the scene, with its node handle — for a control factory to
     /// capture the handle (e.g. to wire a signal binding that needs the live node). Fires at mount only.</summary>
@@ -224,8 +236,9 @@ public sealed record BoxEl : Element
     public bool CounterScale { get; init; }
 
     // Flexbox
-    public float Width { get; init; } = float.NaN;
-    public float Height { get; init; } = float.NaN;
+    /// <summary>Unified channels (Prop&lt;T&gt;): static size, thunk, or concrete signal (bound ⇒ scoped relayout).</summary>
+    public Prop<float> Width { get; init; } = float.NaN;
+    public Prop<float> Height { get; init; } = float.NaN;
     public float MinWidth { get; init; } = float.NaN;
     public float MinHeight { get; init; } = float.NaN;
     public float MaxWidth { get; init; } = float.NaN;
@@ -309,13 +322,15 @@ public sealed record PolylineStrokeEl : Element
     public Edges4 Margin { get; init; }
 }
 
-public sealed record TextEl(string Text) : Element
+public sealed record TextEl(Prop<string> Text) : Element
 {
     public override ushort ElementTypeId => 2;
 
-    // Fine-grained reactive bindings: a thunk reading signals → updates just this text node when the signal changes.
-    public Func<string>? TextBind { get; init; }   // → text content (LayoutDirty → scoped relayout if metrics change)
-    public Func<ColorF>? ColorBind { get; init; }  // → text color  (PaintDirty)
+    // Unified channels: Text/Color each take a static value, a Func<T> thunk, or a concrete signal (the positional
+    // ctor keeps `new TextEl("hi")` compiling via the string → Prop<string> conversion). Legacy *Bind init-aliases
+    // below are deleted by the migration waves.
+    public Func<string>? TextBind { init { if (value is not null) Text = value; } }   // → text content (LayoutDirty → scoped relayout if metrics change)
+    public Func<ColorF>? ColorBind { init { if (value is not null) Color = value; } } // → text color  (PaintDirty)
 
     public float Size { get; init; } = 14f;
     /// <summary>Bold sugar — kept for the many existing call sites; equivalent to <see cref="Weight"/> = 700.
@@ -342,7 +357,7 @@ public sealed record TextEl(string Text) : Element
     /// dark #FFFFFF / light #E4000000), resolved at element CONSTRUCTION. NOTE: a runtime <c>Tok.Use</c> switch does
     /// not itself re-render — the theme is set at startup today; a live theme switcher must force a full re-render
     /// or every construction-resolved color (this default, control Style records) goes stale.</summary>
-    public ColorF Color { get; init; } = Tok.TextPrimary;
+    public Prop<ColorF> Color { get; init; } = Tok.TextPrimary;
     // Stateful foreground ramps (WinUI dims/recolors label & glyph foreground on hover/press/disabled/focus). A==0 ⇒
     // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
     // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).
@@ -458,16 +473,17 @@ public sealed record ImageEl : Element
 {
     public override ushort ElementTypeId => 8;
 
-    public string Source { get; init; } = "";
+    /// <summary>Unified channel: a static path/URL, a thunk (bound virtual rows re-request art when the thunk's
+    /// signals change — the recycled slot swaps without an element rebuild), or a concrete signal.</summary>
+    public Prop<string> Source { get; init; } = "";
     public float Width { get; init; } = float.NaN;
     public float Height { get; init; } = float.NaN;
     public CornerRadius4 Corners { get; init; }
-    public ColorF Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);
-    /// <summary>Reactive source binding (bound virtual rows): re-requests the image when the thunk's signals change —
-    /// the recycled slot swaps art without an element rebuild. Overrides <see cref="Source"/> when set.</summary>
-    public Func<string>? SourceBind { get; init; }
-    /// <summary>Reactive placeholder-tint binding (pairs with <see cref="SourceBind"/>). Overrides <see cref="Placeholder"/>.</summary>
-    public Func<ColorF>? PlaceholderBind { get; init; }
+    /// <summary>Unified channel: static tint, thunk, or signal (pairs with a bound <see cref="Source"/>).</summary>
+    public Prop<ColorF> Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);
+    // Legacy *Bind spellings — write-only init-aliases, deleted by the migration waves.
+    public Func<string>? SourceBind { init { if (value is not null) Source = value; } }
+    public Func<ColorF>? PlaceholderBind { init { if (value is not null) Placeholder = value; } }
     /// <summary>Optional BlurHash string — a tiny blurred LQIP preview shown instantly (decoded to a small texture)
     /// until the full-res art lands. Falls back to the flat <see cref="Placeholder"/> tint when null.</summary>
     public string? BlurHash { get; init; }

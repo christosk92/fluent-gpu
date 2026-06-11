@@ -277,7 +277,9 @@ public static partial class Slider
             ring = m with
             {
                 OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
-                TransformBind = transformBind ?? m.TransformBind,   // the value-position bind (Bind path) always wins
+                // The value-position bind (Bind path) always wins; a modifier's bound Transform survives otherwise
+                // (m's Transform carries through the `with` clone — *Bind aliases are write-only).
+                Transform = transformBind is not null ? transformBind : m.Transform,
                 Children = thumbKids,
             };
         }

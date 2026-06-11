@@ -74,6 +74,10 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
 
     public FloatSignal(float initial = 0f) => _value = initial;
 
+    // Declared here, not on Prop<float>: a user conversion on Prop<T> may only involve types spelled in terms of T
+    // (FloatSignal is concrete, and conversions from the IReadSignal<T> interface are illegal — CS0552).
+    public static implicit operator Prop<float>(FloatSignal s) => Prop<float>.FromSignal(s);
+
     public float Value
     {
         get { Subscribe(); return _value; }
