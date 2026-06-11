@@ -168,9 +168,17 @@ public sealed class ComboBox : Component
         void Commit(int i)
         {
             if (i < 0 || i >= Items.Count) return;
+            // Selector semantics: writing the SAME index is a no-op — no SelectionChanged, no text rewrite (WinUI
+            // put_SelectedIndex short-circuits unchanged values), so the popup-close CommitSearch never double-fires
+            // after a row click already committed the index.
+            if (SelectedIndex.Peek() == i) return;
             SelectedIndex.Value = i;
             if (Editable)
             {
+                // Selector_SelectedItem change → SetSearchResultIndex(selectedIndex) (ComboBox_Partial.cpp:1328–1336):
+                // sync the search state so a row click after typing can never re-commit a stale search index.
+                searchSet.Value = true;
+                searchIdx.Value = i;
                 // Commit updates the field SYNCHRONOUSLY with the item text selected-all (UpdateEditableTextBox
                 // selectAll:true, ComboBox_Partial.cpp:2585); a bare signal write defers the document fold.
                 if (_edit is { } e) e.ReplaceText(Items[i], 0, Items[i].Length);

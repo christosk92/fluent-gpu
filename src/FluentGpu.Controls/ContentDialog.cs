@@ -178,7 +178,7 @@ public sealed class ContentDialog : Component
                     Parts.Apply(PartTitle, new TextEl(Title)
                     {
                         Size = TitleSize,
-                        Bold = true,       // SemiBold (600) in WinUI; TextEl exposes Bold (700) — engine-wide weight limitation
+                        Weight = 600,      // FontWeight="SemiBold" on the Title presenter (ContentDialog_themeresources.xaml:238)
                         Color = Tok.TextPrimary,
                         Wrap = TextWrap.Wrap,
                         MaxLines = 2,

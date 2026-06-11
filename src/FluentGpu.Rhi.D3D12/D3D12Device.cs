@@ -416,7 +416,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     {
                         int before = _glyphInsts.Count;
                         _glyphs!.LayoutRun(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
-                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts);
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
+                            g.SpanRunId, g.ForceColor != 0);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                     }
                     break;

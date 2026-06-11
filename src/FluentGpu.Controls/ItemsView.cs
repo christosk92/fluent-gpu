@@ -69,9 +69,13 @@ public delegate BoxEl ItemContainerFactory(
 /// • Ctrl+A selects all in Multiple/Extended only (ItemsViewInteractions.cpp:35-50).
 /// • Arrows move the current item per the layout's index orientation (ItemsViewInteractions.cpp:923-1102): a vertical
 ///   stack maps Up/Down to ±1 (Left/Right no-op), a grid maps Left/Right ±1 and Up/Down ±columns, custom layouts get
-///   geometric nearest-in-direction. Home/End bring item 0 / count−1 into view edge-aligned (cpp:990-1044);
-///   PageUp/Down jump a viewport (cpp:1103+). Keyboard moves run the selector's OnFocusedAction and focus the realized
-///   container (engine focus ring).
+///   geometric nearest-in-direction. Every walk skips disabled items (the SharedHelpers::IsFocusableElement gate,
+///   cpp:203/:321). Home/End bring item 0 / count−1 into view edge-aligned, then focus the first/last FOCUSABLE
+///   element (cpp:990-1044); PageUp/Down run the railed three-phase page navigation (cpp:1103-1242). Keyboard moves
+///   run the selector's OnFocusedAction and focus the realized container (engine focus ring).
+/// • TabNavigation="Once" (ItemsView.xaml:7): ONE roving tab stop — the keyboard-current container; tab-in with no
+///   current lands on the selected item (Single mode) else the first focusable item (the GettingFocus redirect,
+///   ItemsViewInteractions.cpp:645-721).
 /// • Typeahead: printable chars accumulate (1s reset) and jump to the next prefix-matching item from current+1,
 ///   wrapping (the ListView typeahead shape; the plan's L3 requirement).
 /// • Selection is DECOUPLED from realization: SelectAll over 50k items stores one range; only the realized window
@@ -110,6 +114,10 @@ public sealed class ItemsView : Component
     public Action<int>? ItemInvoked;
     public Action? SelectionChanged;
     public ItemsViewController? Controller;
+    /// <summary>WinUI <c>ItemTransitionProvider</c> (ItemsView.idl:45, template-bound onto the inner repeater,
+    /// ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
+    /// fade, Moves FLIP, 167ms decelerate (<see cref="ItemCollectionTransition"/>).</summary>
+    public ItemCollectionTransition? Transition;
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
     /// hard-viewport path every big list wants (a Grow viewport never measures its content extent, so 10k rows stay
@@ -136,7 +144,8 @@ public sealed class ItemsView : Component
                                  int overscan = 4,
                                  ItemContainerFactory? containerFactory = null,
                                  Func<int, string>? keyOf = null,
-                                 float grow = 1f)
+                                 float grow = 1f,
+                                 ItemCollectionTransition? transition = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -155,6 +164,7 @@ public sealed class ItemsView : Component
             ContainerFactory = containerFactory,
             KeyOf = keyOf,
             Grow = grow,
+            Transition = transition,
         });
 
     public override Element Render()
@@ -209,6 +219,28 @@ public sealed class ItemsView : Component
         {
             if (sceneRef is null || viewportNode.Value.IsNull || !sceneRef.IsLive(viewportNode.Value)) return 0f;
             return sceneRef.TryGetScroll(viewportNode.Value, out var sc) ? (horizontal ? sc.ViewportH : sc.ViewportW) : 0f;
+        }
+
+        // The IsFocusableElement gate (SharedHelpers::IsFocusableElement; every WinUI adjacent/corner walk consults
+        // it, ItemsViewInteractions.cpp:203/:321) — disabled items are skipped by keyboard navigation and typeahead.
+        bool ItemEnabled(int i) => IsItemEnabled?.Invoke(i) != false;
+
+        // First enabled item walking from <paramref name="start"/> by <paramref name="step"/> (±1); −1 = none.
+        int FirstEnabled(int start, int step)
+        {
+            for (int i = start; (uint)i < (uint)count; i += step)
+                if (ItemEnabled(i)) return i;
+            return -1;
+        }
+
+        // Adjacent index walk that skips disabled items (the cpp GetAdjacentFocusableElementByIndex shape,
+        // ItemsViewInteractions.cpp:296-330): step until an enabled item; hitting the edge stays put.
+        int StepEnabled(int from, int step)
+        {
+            if (step == 0) return from;
+            for (int i = from + step; (uint)i < (uint)count; i += step)
+                if (ItemEnabled(i)) return i;
+            return from;
         }
 
         // The dispatcher's SetScrollOffset idiom (InputDispatcher.cs:388-433): write Offset+Target, apply the
@@ -308,38 +340,45 @@ public sealed class ItemsView : Component
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
         {
-            if ((uint)next >= (uint)count) return;
+            if ((uint)next >= (uint)count || !ItemEnabled(next)) return;   // disabled = not focusable (cpp:203/:321)
             BringIntoView(next, alignmentRatio);
             model.OnFocusedAction(next, ctrl, shift);      // selection follows keyboard per mode (SelectorBase trio)
-            pendingFocus.Value = next;
-            if (current.Peek() != next) current.Value = next;
-            else FocusIndex(next, visual: true);           // no re-render coming — focus the realized node now
+            if (current.Peek() != next)
+            {
+                pendingFocus.Value = next;                 // focus the (re-realized) container post-render/layout
+                current.Value = next;
+            }
+            else
+            {
+                // No re-render coming — focus the realized node now. The latch MUST be cleared here: a stale
+                // pendingFocus would re-fire on the NEXT current change (e.g. a click on another item) and yank
+                // keyboard-visual focus back to this index (WinUI focuses synchronously and keeps no latch,
+                // SetFocusElementIndex, ItemsViewInteractions.cpp:1313-1354).
+                pendingFocus.Value = -1;
+                FocusIndex(next, visual: true);
+            }
         }
 
         int NavigateIndex(int from, int dx, int dy)
         {
             if (count == 0) return -1;
-            if (from < 0) return 0;   // first arrow with no current → item 0 (focus enters the view)
+            if (from < 0) return FirstEnabled(0, +1);   // first arrow with no current → first focusable item
             switch (spec.Kind)
             {
                 case RepeatKind.Stack:
-                    // Index-based on the layout's scroll orientation only (ItemsViewInteractions.cpp:1051-1067).
+                    // Index-based on the layout's scroll orientation only (ItemsViewInteractions.cpp:1051-1067);
+                    // the walk skips disabled items (IsFocusableElement gate).
                     int dStack = spec.Horizontal ? dx : dy;
-                    if (dStack == 0) return from;
-                    int nextS = from + dStack;
-                    return (uint)nextS < (uint)count ? nextS : from;
+                    return dStack == 0 ? from : StepEnabled(from, dStack);
                 case RepeatKind.Grid:
-                {
-                    // Left/Right = index ±1 (may wrap rows — the cpp index-based path); Up/Down = ±columns, clamped.
-                    int nextG = dx != 0 ? from + dx : from + dy * spec.Columns;
-                    return (uint)nextG < (uint)count ? nextG : from;
-                }
+                    // Left/Right = index ±1 (may wrap rows — the cpp index-based path); Up/Down = ±columns
+                    // (column-railed), both walking past disabled items.
+                    return StepEnabled(from, dx != 0 ? dx : dy * spec.Columns);
                 case RepeatKind.Custom:
                     return NavigateGeometric(from, dx, dy);
                 default:
-                    // Wrap/Inline (non-virtual) — linear index step on any arrow.
-                    int nextI = from + dx + dy;
-                    return (uint)nextI < (uint)count ? nextI : from;
+                    // Wrap/Inline (non-virtual) — linear index step on any arrow, skipping disabled.
+                    return StepEnabled(from, dx + dy);
             }
         }
 
@@ -348,11 +387,8 @@ public sealed class ItemsView : Component
         int NavigateGeometric(int from, int dx, int dy)
         {
             float cross = CrossExtent();
-            if (cross <= 0f || layout is null)   // pre-layout fallback: index step
-            {
-                int next = from + dx + dy;
-                return (uint)next < (uint)count ? next : from;
-            }
+            if (cross <= 0f || layout is null)   // pre-layout fallback: index step (skipping disabled)
+                return StepEnabled(from, dx + dy);
             var r = layout.ItemRect(from, cross);
             float cx = r.X + r.W * 0.5f, cy = r.Y + r.H * 0.5f;
             int best = from;
@@ -360,7 +396,7 @@ public sealed class ItemsView : Component
             int lo = Math.Max(0, from - GeometricScan), hi = Math.Min(count, from + GeometricScan + 1);
             for (int i = lo; i < hi; i++)
             {
-                if (i == from) continue;
+                if (i == from || !ItemEnabled(i)) continue;   // IsFocusableElement gate (cpp:203)
                 var c = layout.ItemRect(i, cross);
                 float ix = c.X + c.W * 0.5f, iy = c.Y + c.H * 0.5f;
                 bool inDirection =
@@ -391,39 +427,73 @@ public sealed class ItemsView : Component
                         e.Handled = true;
                     }
                     return;
-                case Keys.Home:
-                    MoveCurrent(0, ctrl, shift, alignmentRatio: 0f);            // cpp:1009-1016
+                case Keys.Home or Keys.End:
+                {
+                    // Scroll the list end into view corner-aligned (item 0 / count−1, alignment ratios 0/1,
+                    // cpp:1009-1016), then make the first/last FOCUSABLE element current — WinUI focuses
+                    // FindFirst/LastFocusableElement, not blindly index 0/count−1 (cpp:1028-1040).
+                    bool home = e.KeyCode == Keys.Home;
+                    BringIntoView(home ? 0 : count - 1, home ? 0f : 1f);
+                    int t = home ? FirstEnabled(0, +1) : FirstEnabled(count - 1, -1);
+                    if (t >= 0) MoveCurrent(t, ctrl, shift);   // minimal scroll keeps the edge alignment above
                     e.Handled = true;
                     return;
-                case Keys.End:
-                    MoveCurrent(count - 1, ctrl, shift, alignmentRatio: 1f);    // cpp:1009-1016
-                    e.Handled = true;
-                    return;
+                }
                 case Keys.Left or Keys.Right or Keys.Up or Keys.Down:
                 {
                     int dx = e.KeyCode == Keys.Left ? -1 : e.KeyCode == Keys.Right ? 1 : 0;
                     int dy = e.KeyCode == Keys.Up ? -1 : e.KeyCode == Keys.Down ? 1 : 0;
                     int next = NavigateIndex(from, dx, dy);
-                    if (next != from && next >= 0) MoveCurrent(next, ctrl, shift);
-                    else if (from < 0 && next == 0) MoveCurrent(0, ctrl, shift);
+                    if (next >= 0 && next != from) MoveCurrent(next, ctrl, shift);
                     e.Handled = true;   // nav keys never fall through to an outer scroller (cpp:806-807)
                     return;
                 }
                 case Keys.PageUp or Keys.PageDown:
                 {
-                    // Jump a viewport along the scroll axis, railed to the current column (cpp:1103-1152 approximation).
+                    // Railed page navigation (ItemsViewInteractions.cpp:1103-1242): move one viewport from the
+                    // current item's main-axis position while keeping the current cross-axis rail. If the jump
+                    // falls past the realized/content edge, unrail to the first/last focusable element.
                     if (layout is null) return;
                     float cross = CrossExtent(); float page = ViewportExtent();
                     if (cross <= 0f || page <= 0f) return;
-                    var rect = layout.ItemRect(Math.Max(0, from), cross);
-                    float start = (horizontal ? rect.X : rect.Y) + (e.KeyCode == Keys.PageUp ? -page : page);
-                    layout.Window(count, cross, 1f, MathF.Max(0f, start), 0, out int f, out _);
-                    int target = Math.Clamp(f, 0, count - 1);
-                    if (target != from) MoveCurrent(target, ctrl, shift);
+                    bool pageUp = e.KeyCode == Keys.PageUp;
+                    int fromIdx = Math.Max(0, from);
+                    var rect = layout.ItemRect(fromIdx, cross);
+                    float rail = horizontal ? rect.Y + rect.H * 0.5f : rect.X + rect.W * 0.5f;
+                    float main = horizontal ? rect.X : rect.Y;
+                    int target = PageTargetNear(main + (pageUp ? -page : page), page, rail, cross);
+                    if (target == from || target < 0)
+                        target = pageUp ? FirstEnabled(0, +1) : FirstEnabled(count - 1, -1);
+                    if (target >= 0 && target != from) MoveCurrent(target, ctrl, shift);
                     e.Handled = true;
                     return;
                 }
             }
+        }
+
+        // The GetItemInternal shape (cpp:1146-1155) bounded to the control side: the nearest focusable item to a
+        // one-page target main-axis position, preserving the keyboardNavigationReference cross-axis rail.
+        int PageTargetNear(float targetMain, float windowExtent, float rail, float cross)
+        {
+            if (layout is null) return -1;
+            float windowStart = MathF.Max(0f, targetMain - windowExtent * 0.5f);
+            layout.Window(count, cross, windowExtent, MathF.Max(0f, windowStart), 0, out int f, out int l);
+            int best = -1;
+            float bestCross = float.MaxValue, bestMain = float.MaxValue;
+            for (int i = Math.Max(0, f); i < Math.Min(count, l); i++)
+            {
+                if (!ItemEnabled(i)) continue;                 // forFocusableItemsOnly (cpp:1154)
+                var r = layout.ItemRect(i, cross);
+                float s = horizontal ? r.X : r.Y, ext = horizontal ? r.W : r.H;
+                if (s < windowStart - 0.5f || s + ext > windowStart + windowExtent + 0.5f) continue;
+                float cc = horizontal ? r.Y + r.H * 0.5f : r.X + r.W * 0.5f;
+                float cd = MathF.Abs(cc - rail), md = MathF.Abs(s - targetMain);
+                if (cd < bestCross - 0.5f || (cd < bestCross + 0.5f && md < bestMain))
+                {
+                    bestCross = cd; bestMain = md; best = i;
+                }
+            }
+            return best;
         }
 
         void OnRootChar(CharEventArgs e)
@@ -435,6 +505,10 @@ public sealed class ItemsView : Component
             long now = Environment.TickCount64;
             var buf = typeBuffer.Value;
             if (now - typeLastMs.Value > (long)TypeaheadResetMs) buf.Clear();
+            // Space never STARTS a search — it is selection-only in WinUI (the SpaceKey trigger,
+            // ItemContainer.cpp:548-551; the engine routes chars independently of KeyDown.Handled) and the Win32
+            // list rule keeps it out of an empty typeahead buffer. Mid-prefix spaces still match ("Bell La…").
+            if (e.Codepoint == 32 && buf.Length == 0) return;
             typeLastMs.Value = now;
             buf.Append(char.ConvertFromUtf32(e.Codepoint));
             string prefix = buf.ToString();
@@ -442,6 +516,7 @@ public sealed class ItemsView : Component
             for (int k = 1; k <= count; k++)
             {
                 int i = (start + k) % count;
+                if (!ItemEnabled(i)) continue;   // disabled items can't take current/selection
                 if (textOf(i).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
                     MoveCurrent(i, ctrl: false, shift: false);
@@ -456,9 +531,21 @@ public sealed class ItemsView : Component
         void OnItemInteraction(int i, ItemContainerTrigger trigger, KeyModifiers mods)
         {
             bool ctrl = (mods & KeyModifiers.Ctrl) != 0, shift = (mods & KeyModifiers.Shift) != 0;
+            bool pointer = trigger is ItemContainerTrigger.Tap or ItemContainerTrigger.DoubleTap;
+            // Pointer interactions bring a partially-visible item fully into view: ProcessInteraction passes
+            // startBringIntoView = (focusState == FocusState::Pointer) into SetCurrentElementIndex →
+            // element.StartBringIntoView() with default (minimal-scroll) options (ItemsViewInteractions.cpp:894-895,
+            // :1340-1345). Keyboard triggers don't (the nav keys handle their own scrolling).
+            if (pointer) BringIntoView(i, float.NaN);
             if (current.Peek() != i) current.Value = i;
-            if (trigger != ItemContainerTrigger.DoubleTap)            // the pair's first press already selected
-                model.OnInteractedAction(i, ctrl, shift);
+            // Roving tab stop: a press on a non-current container can't take pointer focus at the dispatch edge
+            // (only the current container is in the tab order), so land focus here — FocusState::Pointer shows no
+            // focus ring (visual: false). Key triggers arrive with the container already focused.
+            if (pointer) FocusIndex(i, visual: false);
+            // Every interaction runs the selector — WinUI raises ProcessInteraction per PointerReleased
+            // (ItemsViewInteractions.cpp:831-834), so a double-click's SECOND release toggles AGAIN in Multiple
+            // mode (net unchanged, MultipleSelector.cpp:55-62) and re-selects idempotently in Single/Extended.
+            model.OnInteractedAction(i, ctrl, shift);
             if (IsItemInvokedEnabled && ItemInvoked is not null)
             {
                 bool cannotInvoke =
@@ -489,6 +576,19 @@ public sealed class ItemsView : Component
         bool multi = SelectionMode == ItemsSelectionMode.Multiple;
         Func<int, Element> content = ItemTemplate ?? DefaultTile;
         ItemContainerFactory? skin = ContainerFactory;
+
+        // TabNavigation="Once" (ItemsView.xaml:7): the view exposes ONE tab stop — the keyboard-current container.
+        // Tab-in with no current lands on the selected item when SelectionMode is Single (the GettingFocus redirect
+        // conditions, ItemsViewInteractions.cpp:662-684), else on the first focusable item (GetCornerFocusableItem,
+        // cpp:705-710). Implemented as a roving TabStop (the RadioButtons IsTabStop pattern).
+        int tabStop = cur;
+        if (tabStop < 0 && SelectionMode == ItemsSelectionMode.Single)
+        {
+            int sel = model.FirstSelectedIndex;
+            if (sel >= 0 && sel < count && ItemEnabled(sel)) tabStop = sel;
+        }
+        if (tabStop < 0) tabStop = FirstEnabled(0, +1);
+
         Func<int, Element> containerTemplate = i =>
         {
             bool selected = model.IsSelected(i);
@@ -505,15 +605,22 @@ public sealed class ItemsView : Component
                     isEnabled: enabled,
                     showSelectionCheckbox: multi,
                     isChecked: multi && selected,
-                    onFocusChanged: focusChanged);
+                    onFocusChanged: focusChanged,
+                    isTabStop: i == tabStop);
         };
+
+        // ItemTransitionProvider (ItemsView.idl:45 → the inner repeater, ItemsView.xaml:30): stamp the collection
+        // transition onto each realized container root. The non-virtual fallback passes it to ItemsRepeater instead.
+        Func<int, Element> realizeTemplate = Transition is { } tr
+            ? Repeater.WrapTransition(containerTemplate, tr.ToSpec())
+            : containerTemplate;
 
         Element itemsHost = layout is not null
             ? new VirtualListEl
             {
                 ItemCount = count,
                 Layout = layout,
-                RenderItem = containerTemplate,
+                RenderItem = realizeTemplate,
                 KeyOf = KeyOf,
                 Overscan = OverscanItems,
                 Horizontal = horizontal,
@@ -525,7 +632,7 @@ public sealed class ItemsView : Component
             }
             // Wrap/Inline small-collection fallback (always a BoxEl) — capture the host box so FocusIndex can
             // walk its children (ord == index; no scroll state).
-            : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf))
+            : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf, transition: Transition))
                 with { OnRealized = h => viewportNode.Value = h };
 
         return new BoxEl

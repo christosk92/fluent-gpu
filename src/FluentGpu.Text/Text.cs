@@ -8,11 +8,18 @@ namespace FluentGpu.Text;
 /// 1/1000 em, applied per glyph after shaping. <see cref="LineHeight"/> (DIP; NaN/≤0 = font-natural) resolves per
 /// <see cref="Stacking"/> (WinUI LineStackingStrategy), and <see cref="LineBounds"/> (WinUI TextLineBounds) selects
 /// the reported line box (Full = ascent..descent, Tight = cap-height..baseline). Record equality over ALL fields is
-/// load-bearing: TextStyle is the TextMeasureCache key, so every layout-affecting input must live here.</summary>
+/// load-bearing: TextStyle is the TextMeasureCache key, so every layout-affecting input must live here.
+/// <para><see cref="SpanRunId"/> (0 = plain single-style run) keys a <see cref="SpanRunTable.Shared"/> run whose
+/// per-range <see cref="SpanStyle"/> overlays (weight/size/family/color/decorations) apply over this base style — the
+/// rtb-01 inline-run model: the WHOLE text still shapes as ONE flow (one wrap pass), exactly like a WinUI paragraph's
+/// inline collection. Carried here (not as a separate seam argument) so every existing layout/measure/query path —
+/// and every cache keyed on TextStyle — is span-aware without signature churn; a span-content change mints a fresh
+/// id, so the measure cache and the shaped-run cache self-invalidate.</para></summary>
 public readonly record struct TextStyle(StringId FontFamily, float SizeDip, ushort Weight,
     TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0,
     float CharSpacing = 0f, float LineHeight = float.NaN,
-    LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full);
+    LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full,
+    int SpanRunId = 0);
 
 /// <summary>Result of measuring a run: the box the shaped glyphs occupy + the baseline offset from the top, plus the
 /// face's decoration metrics — all vertical values measured DOWN from the line top, the same frame as
@@ -21,6 +28,16 @@ public readonly record struct TextStyle(StringId FontFamily, float SizeDip, usho
 /// backends without face metrics (the experimental GDI path) leave them 0.</summary>
 public readonly record struct TextMetrics(Size2 Size, float Baseline,
     float UnderlineY = 0f, float UnderlineThickness = 0f, float StrikeY = 0f);
+
+/// <summary>Process-default <see cref="IFontSystem"/> for engine layers that have no host seam to receive an instance
+/// through — concretely the input dispatcher's read-only text-selection/hyperlink gestures (rtb-02), which need the
+/// editor queries but are constructed by hosts (AppHost) that predate them. Set by each backend's constructor;
+/// last-constructed wins (the established <c>InputHooks.Current</c> channel-default convention). Consumers prefer an
+/// explicitly-wired instance and fall back here.</summary>
+public static class TextSeam
+{
+    public static IFontSystem? Default;
+}
 
 /// <summary>
 /// Text seam. DirectWrite implements it on Windows; <c>Text.Headless</c> provides a deterministic stub for tests.

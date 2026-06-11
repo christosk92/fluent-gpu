@@ -3,6 +3,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Animation;
 using FluentGpu.Signals;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
@@ -177,6 +178,15 @@ public sealed class ListView : Component
         else lastDwellTick.Value = 0;
 
         var ctx = Context;   // for edge auto-scroll (host-node rect)
+        float ViewportScrollOffset()
+        {
+            var scene = ctx.Scene;
+            if (scene is null || ctx.HostNode.IsNull || !scene.IsLive(ctx.HostNode)) return 0f;
+            var vp = FindScrollableWithin(scene, ctx.HostNode);
+            if (vp.IsNull || !scene.TryGetScroll(vp, out var sc)) return 0f;
+            return sc.OffsetY;
+        }
+
         void OnDragStarted(int slot, DragEventArgs e)
         {
             reorder.Begin(slot, count, ItemExtent, spacing: 0f);
@@ -186,11 +196,16 @@ public sealed class ListView : Component
                 OnReorder?.Invoke(from, to);
             };
             orderVersion.Value = orderVersion.Peek() + 1;    // re-render → arms the dwell frame ticks
+            ctx.RequestRerender();
         }
 
         void OnDragDelta(DragEventArgs e)
         {
-            if (reorder.Update(e.TotalDy)) orderVersion.Value = orderVersion.Peek() + 1;
+            if (reorder.Update(e.TotalDy))
+            {
+                orderVersion.Value = orderVersion.Peek() + 1;
+                ctx.RequestRerender();
+            }
             // Edge auto-scroll (E5-L3): pointer within 24dip of the viewport edge nudges the scroll.
             var scene = ctx.Scene;
             if (scene is not null && !ctx.HostNode.IsNull && scene.IsLive(ctx.HostNode))
@@ -206,12 +221,14 @@ public sealed class ListView : Component
         {
             reorder.Complete();                              // fires OnCommit when the slot changed
             orderVersion.Value = orderVersion.Peek() + 1;
+            ctx.RequestRerender();
         }
 
         void OnDragCanceled()
         {
             reorder.Cancel();
             orderVersion.Value = orderVersion.Peek() + 1;
+            ctx.RequestRerender();
         }
 
         Func<int, Element> contentOf = ItemTemplate ?? DefaultRowContent;
@@ -257,33 +274,61 @@ public sealed class ListView : Component
         bool natural = float.IsNaN(height) && Grow == 0f;
         if (natural) height = count * ItemExtent;
 
+        var list = ItemsView.Create(count,
+            itemTemplate: i => contentOf(slotsLocal[i]),
+            layout: RepeatLayout.Stack(ItemExtent),
+            selectionMode: SelectionMode,
+            selection: model,
+            isItemInvokedEnabled: OnItemInvoked is not null,
+            itemInvoked: OnItemInvoked is null ? null : i => OnItemInvoked(slotsLocal[i]),
+            selectionChanged: SelectionToSignal,
+            itemText: textFn is null ? null : i => textFn(slotsLocal[i]),
+            isItemEnabled: IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
+            controller: controller,
+            containerFactory: Chrome,
+            keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i]),
+            // Natural (unconstrained) lists size the viewport to its content extent — the auto-WIDTH chain
+            // also needs the non-flexing viewport's availW fallback (the 280-card gallery shape, D1).
+            // Constrained lists (explicit Height or Grow) keep the hard-viewport fill path.
+            grow: natural ? 0f : 1f);
+
+        bool showDropLine = canReorder && reorder.IsActive && reorder.PendingIndex != reorder.DraggedIndex;
+        Element[] rootChildren = showDropLine
+            ?
+            [
+                list,
+                new BoxEl
+                {
+                    Key = "listview-reorder-line",
+                    Height = 2f,
+                    Fill = Tok.AccentDefault,
+                    OffsetY = reorder.PendingInsertionLineOffset - ViewportScrollOffset() - 1f,
+                    HitTestVisible = false,
+                },
+            ]
+            : [list];
+
         return new BoxEl
         {
             Width = Width,
             Height = height,
             Grow = Grow,
             Direction = 1,   // the list axis is vertical (D1 hygiene): the inner ItemsView grows the HEIGHT axis
-            Children =
-            [
-                ItemsView.Create(count,
-                    itemTemplate: i => contentOf(slotsLocal[i]),
-                    layout: RepeatLayout.Stack(ItemExtent),
-                    selectionMode: SelectionMode,
-                    selection: model,
-                    isItemInvokedEnabled: OnItemInvoked is not null,
-                    itemInvoked: OnItemInvoked,
-                    selectionChanged: SelectionToSignal,
-                    itemText: textFn is null ? null : i => textFn(slotsLocal[i]),
-                    isItemEnabled: IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
-                    controller: controller,
-                    containerFactory: Chrome,
-                    keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i]),
-                    // Natural (unconstrained) lists size the viewport to its content extent — the auto-WIDTH chain
-                    // also needs the non-flexing viewport's availW fallback (the 280-card gallery shape, D1).
-                    // Constrained lists (explicit Height or Grow) keep the hard-viewport fill path.
-                    grow: natural ? 0f : 1f),
-            ],
+            ZStack = showDropLine,
+            Children = rootChildren,
         };
+    }
+
+    private static NodeHandle FindScrollableWithin(SceneStore scene, NodeHandle root)
+    {
+        if ((scene.Flags(root) & NodeFlags.Scrollable) != 0) return root;
+        for (var c = scene.FirstChild(root); !c.IsNull; c = scene.NextSibling(c))
+        {
+            if ((scene.Flags(c) & NodeFlags.Scrollable) != 0) return c;
+            for (var g = scene.FirstChild(c); !g.IsNull; g = scene.NextSibling(g))
+                if ((scene.Flags(g) & NodeFlags.Scrollable) != 0) return g;
+        }
+        return NodeHandle.Null;
     }
 
     private Element DefaultRowContent(int i)

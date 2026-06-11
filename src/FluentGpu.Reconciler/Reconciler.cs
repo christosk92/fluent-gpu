@@ -738,6 +738,8 @@ public sealed class TreeReconciler
         {
             case TextEl t:
                 return t.TextBind is null && t.ColorBind is null;
+            case SpanTextEl:
+                return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
                 return im.SourceBind is null && im.PlaceholderBind is null;
             case PolylineStrokeEl:
@@ -1299,10 +1301,140 @@ public sealed class TreeReconciler
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
                 li.FlexGrow = t.Grow; li.FlexShrink = t.Shrink; li.FlexBasis = t.Basis;
                 li.AlignSelf = t.AlignSelf;
+
+                WriteTextSelection(node, t.IsTextSelectionEnabled, t.SelectionHighlightColor);
+                break;
+            }
+            case SpanTextEl st:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.Text;
+                paint.TextColor = st.Color;
+                paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
+
+                ref LayoutInput li = ref _scene.Layout(node);
+                var spans = st.Spans;
+                // Re-register the POD shaping overlay ONLY when a shaping input changed: the run id is the key of the
+                // measure cache AND the renderer's shaped-run cache, so minting a fresh id IS the invalidation; an
+                // identical re-render keeps the id (steady reconciles never churn the caches).
+                int runId = li.TextStyle.SpanRunId;
+                bool same = runId != 0 && _scene.TryGetSpanText(node, out var oldSpans) && SameSpanShaping(oldSpans, spans);
+                if (!same)
+                {
+                    int total = 0;
+                    for (int i = 0; i < spans.Length; i++) total += spans[i].Text?.Length ?? 0;
+                    var concat = string.Create(total, spans, static (dst, src) =>
+                    {
+                        int at = 0;
+                        for (int i = 0; i < src.Length; i++)
+                        {
+                            var s = src[i].Text;
+                            if (string.IsNullOrEmpty(s)) continue;
+                            s.AsSpan().CopyTo(dst[at..]);
+                            at += s.Length;
+                        }
+                    });
+                    var styles = new SpanStyle[spans.Length];
+                    int pos = 0;
+                    for (int i = 0; i < spans.Length; i++)
+                    {
+                        ref readonly var sp = ref spans[i];
+                        int len = sp.Text?.Length ?? 0;
+                        byte flags = (byte)((sp.Underline ? SpanStyle.UnderlineBit : 0)
+                                          | (sp.Strikethrough ? SpanStyle.StrikethroughBit : 0)
+                                          | (sp.OnClick is not null ? SpanStyle.LinkBit : 0));
+                        var spanFam = _strings.Intern(sp.FontFamily);
+                        _strings.AddRef(spanFam);   // released by SceneStore.ReleaseSpanRun with the run
+                        styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
+                        pos += len;
+                    }
+                    int newRunId = SpanRunTable.Shared.Create(styles);
+                    SpanRunTable.Shared.AddRef(newRunId);
+                    _scene.ReleaseSpanRun(runId);
+                    runId = newRunId;
+
+                    var newText = _strings.Intern(concat);
+                    if (paint.Text != newText) SetPaintText(ref paint, newText);
+                    _scene.Mark(node, NodeFlags.LayoutDirty);
+                }
+                _scene.SetSpanText(node, spans);   // always — hyperlink actions may change without a shaping change
+
+                var famId = _strings.Intern(st.FontFamily);
+                if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
+                li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
+                    st.Wrap, st.Trim, st.MaxLines, st.CharSpacing, st.LineHeight, st.LineStacking, st.LineBounds, runId);
+                li.Margin = st.Margin;
+                li.Width = st.Width; li.Height = st.Height;
+                li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;
+                li.FlexGrow = st.Grow; li.FlexShrink = st.Shrink; li.FlexBasis = st.Basis;
+                li.AlignSelf = st.AlignSelf;
+
+                // Hyperlink spans: hit-testable so the dispatcher can resolve Hand over the span rects and fire the
+                // span's OnClick (WinUI inline Hyperlink — RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)).
+                ref InteractionInfo ii = ref _scene.Interaction(node);
+                bool hasLinks = false;
+                for (int i = 0; i < spans.Length && !hasLinks; i++) hasLinks = spans[i].OnClick is not null;
+                if (hasLinks)
+                {
+                    ii.HandlerMask |= InteractionInfo.SpanLinksBit;
+                    _scene.Mark(node, NodeFlags.WantsPointer);
+                }
+                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.SpanLinksBit);
+
+                WriteTextSelection(node, st.IsTextSelectionEnabled, st.SelectionHighlightColor);
                 break;
             }
         }
 
         if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
+    }
+
+    /// <summary>Wire (or clear) read-only text selection on a text leaf (rtb-02): the SelectableTextBit makes it
+    /// hit-testable for the dispatcher's drag-select gestures, focusable so Ctrl+C routes to it, and I-beam-cursored —
+    /// WinUI's selection-enabled text behavior (RichTextBlock.cpp:1730 creates the TextSelectionManager;
+    /// TextBlock.cpp:583 does so on the opt-in flip). Also publishes the api-04 per-control highlight override.</summary>
+    private void WriteTextSelection(NodeHandle node, bool selectable, ColorF highlight)
+    {
+        ref InteractionInfo ii = ref _scene.Interaction(node);
+        if (selectable)
+        {
+            ii.HandlerMask |= InteractionInfo.SelectableTextBit;
+            ii.Focusable = true;
+            // Text leaves declare no element Cursor of their own, so the CursorBit here is selection's (an I-beam
+            // while selectable — the WinUI selectable-text cursor).
+            ii.Cursor = CursorId.IBeam;
+            ii.HandlerMask |= InteractionInfo.CursorBit;
+            _scene.Mark(node, NodeFlags.WantsPointer | NodeFlags.Focusable);
+        }
+        else if ((ii.HandlerMask & InteractionInfo.SelectableTextBit) != 0)
+        {
+            // A recycled/re-rendered leaf that LOST selection: clear exactly what selection set (text leaves carry no
+            // other focus/cursor source), including any live selection state.
+            ii.HandlerMask &= unchecked((ushort)~(InteractionInfo.SelectableTextBit | InteractionInfo.CursorBit));
+            ii.Cursor = CursorId.Arrow;
+            ii.Focusable = false;
+            _scene.Flags(node) &= ~NodeFlags.Focusable;
+            _scene.ClearTextSelection(node);
+        }
+        _scene.SetSelectionHighlight(node, highlight);
+    }
+
+    /// <summary>True when two span arrays are SHAPING-identical (text, weight, size, family, color, decorations,
+    /// link-ness) — everything the span-run id keys downstream caches on. OnClick identity is deliberately excluded:
+    /// re-rendered lambdas must not churn run ids (the scene's TextSpan[] side-table carries the fresh actions).</summary>
+    private static bool SameSpanShaping(TextSpan[] a, TextSpan[] b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            ref readonly var x = ref a[i];
+            ref readonly var y = ref b[i];
+            if (!string.Equals(x.Text, y.Text, StringComparison.Ordinal) || x.Weight != y.Weight
+                || x.Color != y.Color || x.Underline != y.Underline || x.Strikethrough != y.Strikethrough
+                || !Nullable.Equals(x.Size, y.Size) || !string.Equals(x.FontFamily, y.FontFamily, StringComparison.Ordinal)
+                || (x.OnClick is null) != (y.OnClick is null)) return false;
+        }
+        return true;
     }
 }

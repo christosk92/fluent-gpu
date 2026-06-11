@@ -102,6 +102,12 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, TextEditState> _textEdits = new();
     private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditSelRects = new();
     private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditUnderlineRects = new();
+    // Span-text side-tables (sparse, O(span paragraphs) — rtb-01/rtb-02/api-04):
+    // the element's TextSpan array (hyperlink actions; the POD shaping overlay lives in SpanRunTable.Shared keyed by
+    // TextStyle.SpanRunId); the dispatcher-owned read-only selection range; the per-control selection highlight color.
+    private readonly Dictionary<int, TextSpan[]> _spanText = new();
+    private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
+    private readonly Dictionary<int, ColorF> _selectionHighlight = new();
     // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
@@ -213,6 +219,7 @@ public sealed class SceneStore : ISceneBackend
             st.Release(_paint[idx].Text);
             st.Release(_layout[idx].TextStyle.FontFamily);
         }
+        ReleaseSpanRun(_layout[idx].TextStyle.SpanRunId);   // span-run + per-span family lifetime (rtb-01)
         _click[idx] = null;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
@@ -249,6 +256,9 @@ public sealed class SceneStore : ISceneBackend
         _textEdits.Remove(idx);
         _textEditSelRects.Remove(idx);
         _textEditUnderlineRects.Remove(idx);
+        _spanText.Remove(idx);
+        _textSelection.Remove(idx);
+        _selectionHighlight.Remove(idx);
         _dragSources.Remove(idx);
         _dropTargets.Remove(idx);
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
@@ -465,6 +475,58 @@ public sealed class SceneStore : ISceneBackend
     public ReadOnlySpan<RectF> GetTextEditUnderlineRects(NodeHandle h)
         => _textEditUnderlineRects.TryGetValue((int)h.Raw.Index, out var s) && s.Arr is not null
             ? s.Arr.AsSpan(0, s.Count) : default;
+
+    // ── span-text side-tables (rtb-01 inline runs / rtb-02 read-only selection / api-04 highlight color) ────────────
+
+    /// <summary>Attach a span paragraph's element spans (hyperlink OnClick lookup; written by the reconciler from
+    /// <c>SpanTextEl.Spans</c> — the POD shaping overlay rides <c>TextStyle.SpanRunId</c> instead). Null clears.</summary>
+    public void SetSpanText(NodeHandle node, TextSpan[]? spans)
+    {
+        int idx = (int)node.Raw.Index;
+        if (spans is null) _spanText.Remove(idx);
+        else _spanText[idx] = spans;
+    }
+
+    public bool TryGetSpanText(NodeHandle h, out TextSpan[] spans)
+        => _spanText.TryGetValue((int)h.Raw.Index, out spans!);
+
+    /// <summary>Swap a text node's span-run id with ownership accounting (the scene row owns one table ref plus one
+    /// StringTable ref per span family — mirroring the <c>paint.Text</c> discipline). Reconciler rewrite path; the
+    /// free path releases via <see cref="ReleaseSpanRun"/>.</summary>
+    public void ReleaseSpanRun(int id)
+    {
+        if (id == 0) return;
+        if (Strings is { } st && SpanRunTable.Shared.Resolve(id) is { } run)
+            for (int i = 0; i < run.Spans.Length; i++) st.Release(run.Spans[i].FontFamily);
+        SpanRunTable.Shared.Release(id);
+    }
+
+    /// <summary>The dispatcher-owned read-only selection range on a selectable text node (UTF-16 [start, end) of the
+    /// node's paint text). Mirrors what the published selection rects show; consumers (Ctrl+C copy) read it back.</summary>
+    public void SetTextSelection(NodeHandle node, int start, int end)
+        => _textSelection[(int)node.Raw.Index] = (start, end);
+
+    public bool TryGetTextSelection(NodeHandle h, out int start, out int end)
+    {
+        if (_textSelection.TryGetValue((int)h.Raw.Index, out var r)) { start = r.Start; end = r.End; return true; }
+        start = end = 0;
+        return false;
+    }
+
+    public void ClearTextSelection(NodeHandle h) => _textSelection.Remove((int)h.Raw.Index);
+
+    /// <summary>Per-node selection-highlight override (api-04, WinUI TextBlock.SelectionHighlightColor —
+    /// TextBlock.cpp:266/330). A==0 clears back to the host theme brush (TextEditStyle.SelectionFill — the system
+    /// accent, TextSelectionManager.cpp:52-56).</summary>
+    public void SetSelectionHighlight(NodeHandle node, ColorF color)
+    {
+        int idx = (int)node.Raw.Index;
+        if (color.A <= 0f) _selectionHighlight.Remove(idx);
+        else _selectionHighlight[idx] = color;
+    }
+
+    public bool TryGetSelectionHighlight(NodeHandle h, out ColorF color)
+        => _selectionHighlight.TryGetValue((int)h.Raw.Index, out color);
 
     private static void StoreRects(Dictionary<int, (RectF[]? Arr, int Count)> table, int idx, ReadOnlySpan<RectF> rects)
     {

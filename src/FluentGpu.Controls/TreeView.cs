@@ -319,6 +319,7 @@ public sealed class TreeView : Component
             reorder.OnCommit = (from, to) => CommitSiblingMove(parent, from, to);
             dragParentId.Value = parent is null ? "" : IdOf(parent);
             orderVersion.Value = orderVersion.Peek() + 1;
+            Context.RequestRerender();
         }
 
         // ── rows ─────────────────────────────────────────────────────────────────────────────────────
@@ -356,15 +357,75 @@ public sealed class TreeView : Component
                 {
                     CanDrag = true,
                     OnDragStarted = _ => StartDrag(rowCopy),
-                    OnDragDelta = e => { if (reorder.Update(e.TotalDy)) orderVersion.Value = orderVersion.Peek() + 1; },
-                    OnDragCompleted = _ => { reorder.Complete(); dragParentId.Value = null; orderVersion.Value = orderVersion.Peek() + 1; },
-                    OnDragCanceled = () => { reorder.Cancel(); dragParentId.Value = null; orderVersion.Value = orderVersion.Peek() + 1; },
+                    OnDragDelta = e =>
+                    {
+                        if (reorder.Update(e.TotalDy))
+                        {
+                            orderVersion.Value = orderVersion.Peek() + 1;
+                            Context.RequestRerender();
+                        }
+                    },
+                    OnDragCompleted = _ =>
+                    {
+                        reorder.Complete();
+                        dragParentId.Value = null;
+                        orderVersion.Value = orderVersion.Peek() + 1;
+                        Context.RequestRerender();
+                    },
+                    OnDragCanceled = () =>
+                    {
+                        reorder.Cancel();
+                        dragParentId.Value = null;
+                        orderVersion.Value = orderVersion.Peek() + 1;
+                        Context.RequestRerender();
+                    },
                 };
             }
             children[i] = el;
         }
 
-        return new BoxEl { Direction = 1, OnKeyDown = HandleKey, Children = children };
+        float RowExtentForLine(in FlatRow row)
+        {
+            if (handles.TryGetValue(row.Id, out var h) && Context.Scene is { } s && s.IsLive(h))
+                return s.AbsoluteRect(h).H + 4f;
+            return RowStrideFallback;
+        }
+
+        float DragGroupTop()
+        {
+            string? pid = dragParentId.Value;
+            float y = 0f;
+            for (int i = 0; i < rows.Count; i++)
+            {
+                var parent = rows[i].Parent;
+                string rowPid = parent is null ? "" : IdOf(parent);
+                if (rowPid == pid) return y;
+                y += RowExtentForLine(rows[i]);
+            }
+            return 0f;
+        }
+
+        bool showDropLine = CanReorderItems && reorder.IsActive && reorder.PendingIndex != reorder.DraggedIndex;
+        var rowColumn = new BoxEl { Key = "treeview-rows", Direction = 1, Children = children };
+        return showDropLine
+            ? new BoxEl
+            {
+                ZStack = true,
+                OnKeyDown = HandleKey,
+                Children =
+                [
+                    rowColumn,
+                    new BoxEl
+                    {
+                        Key = "treeview-reorder-line",
+                        Height = 2f,
+                        Fill = Tok.AccentDefault,
+                        OffsetY = DragGroupTop() + reorder.PendingInsertionLineOffset - 1f,
+                        HitTestVisible = false,
+                    },
+                ],
+            }
+            : rowColumn with { OnKeyDown = HandleKey };
     }
 
     private static void MoveInArray(TreeNode[] arr, int from, int to)
@@ -466,7 +527,7 @@ public sealed class TreeView : Component
             Focusable = true,
             FocusVisualMargin = new Edges4(0f, -1f, 0f, -1f),      // FocusVisualMargin 0,-1,0,-1 (TreeViewItem.xaml:11)
             Role = AutomationRole.Button,
-            OnPointerPressed = _ => onInvoke(),
+            OnClick = onInvoke,
             OnKeyDown = args =>
             {
                 if (args.KeyCode == Keys.Enter) { onInvoke(); args.Handled = true; }

@@ -300,6 +300,13 @@ public struct InteractionInfo
                                                     // to (or past) this focusable — Tab still reaches it
     public const ushort WheelBit = 4096;            // element-level OnPointerWheel handler (NumberBox value stepping):
                                                     // consulted before the viewport scroll; Handled stops the scroll
+    public const ushort SelectableTextBit = 8192;   // read-only text selection (rtb-02, TextEl/SpanTextEl
+                                                    // IsTextSelectionEnabled): hit-testable; the dispatcher runs the
+                                                    // drag-select/word-select/Ctrl+C gestures against the text seam
+                                                    // (WinUI TextSelectionManager — RichTextBlock.cpp:1730 default-on)
+    public const ushort SpanLinksBit = 16384;       // the node's span run carries hyperlink spans (TextSpan.OnClick):
+                                                    // hit-testable; the dispatcher resolves Hand over the span's laid
+                                                    // rects and fires the span action on click (RichTextBlock.cpp:2995)
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>

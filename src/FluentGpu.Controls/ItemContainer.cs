@@ -18,21 +18,21 @@ public enum ItemContainerTrigger : byte { Tap, DoubleTap, EnterKey, SpaceKey }
 /// Template mapping (ItemContainer.xaml:11-145, values verified in ItemContainer_themeresources.xaml):
 /// • PART_ContainerRoot — the root box: Background = ItemContainerBackground = SubtleFillColorTransparent (:5/:37,
 ///   transparent both themes); Disabled → Opacity 0.3 (ItemContainerDisabledOpacity, :54).
-/// • Pointer states — WinUI paints them on PART_CommonVisual.Fill (xaml:17-33); the engine carries them as the root's
-///   Hover/Pressed fills (the hover flag lives on the hit-tested node): PointerOver = ItemContainerPointerOverBackground
-///   = SubtleFillColorSecondary (#0FFFFFFF dark :6 / #09000000 light :38); Pressed = ItemContainerPressedBackground
-///   = SubtleFillColorTertiary (#0AFFFFFF dark :7 / #06000000 light :39). The Selected* ramp resolves to the SAME
-///   brushes (:11-13/:43-45), so one ramp serves both.
 /// • PART_SelectionVisual (xaml:116-126) — 3px border, BorderBrush = ItemContainerSelectionVisualBackground =
 ///   AccentFillColorDefault (:14/:46 → Tok.AccentDefault, #60CDFF dark / #005FB8 light), deferred
 ///   (x:DeferLoadStrategy="Lazy") → mounted only while selected; SelectedPointerOver/Pressed fade it in over
 ///   ControlFastAnimationDuration with KeySpline 0,0,0,1 (xaml:54-56) → enter-fade 167ms decelerate.
 ///   Disabled collapses it (xaml:108-110).
-/// • PART_CommonVisual (xaml:127-135) — the 1px inner stroke: selected Stroke = ItemContainerSelectedInnerBorderBrush
-///   = ControlSolidFillColorDefault (:17/:49 → Tok.FillControlSolid, #FF454545 dark / #FFFFFFFF light;
-///   Common_themeresources_any.xaml:24/:228), StrokeThickness = ItemContainerSelectedInnerThickness = 1 (:58),
-///   selected Margin = ItemContainerSelectedInnerMargin = 2 (:57). At rest its stroke is transparent
-///   (ItemContainerBorderBrush, :8) → mounted only while selected.
+/// • PART_CommonVisual (xaml:127-135) — ONE full-stretch rectangle declared AFTER the child placeholder (the child
+///   is inserted at index 0, ItemContainer.cpp:66), so it overlays the item content. It carries BOTH faces:
+///   – the pointer-state fill (xaml:17-33): PointerOver = ItemContainerPointerOverBackground =
+///     SubtleFillColorSecondary (#0FFFFFFF dark :6 / #09000000 light :38); Pressed = ItemContainerPressedBackground
+///     = SubtleFillColorTertiary (#0AFFFFFF dark :7 / #06000000 light :39); the Selected* ramp resolves to the SAME
+///     brushes (:12-13/:44-45). Drawn ABOVE the content so the tint reads over opaque photo-wall tiles.
+///   – the 1px selected inner stroke: Stroke = ItemContainerSelectedInnerBorderBrush = ControlSolidFillColorDefault
+///     (:17/:49 → Tok.FillControlSolid, #FF454545 dark / #FFFFFFFF light; Common_themeresources_any.xaml:24/:228),
+///     StrokeThickness = ItemContainerSelectedInnerThickness = 1 (:58), selected Margin =
+///     ItemContainerSelectedInnerMargin = 2 (:57). At rest the stroke is transparent (ItemContainerBorderBrush, :8).
 /// • PART_SelectionCheckbox (xaml:136-144, style :63-139) — top-right (:59-60), Margin 4,−2 (:56), 20px box,
 ///   unchecked plate = ItemContainerCheckboxBackgroundUnchecked = ControlOnImageFillColorDefault (:18 →
 ///   Tok.FillControlOnImage, #B31C1C1C dark / #C9FFFFFF light), stroke = CheckBoxCheckBackgroundStrokeUnchecked
@@ -69,7 +69,8 @@ public static class ItemContainer
     /// <summary>
     /// The full container. <paramref name="onInteraction"/> receives the WinUI interaction trigger + the live modifier
     /// chord — a composing control (ItemsView) routes it through its selector. The returned tree is plain (recyclable);
-    /// realize-time closures are the only managed cost.
+    /// realize-time closures are the only managed cost. <paramref name="isTabStop"/> is the roving-tab-stop seam:
+    /// ItemsView keeps it true on the keyboard-current container ONLY (TabNavigation="Once", ItemsView.xaml:7).
     /// </summary>
     // Per-item chrome customization goes through the composing control's ContainerFactory seam, NOT TemplateParts —
     // per-item part modifiers in recycled scroll paths are an allocation/recycling hazard
@@ -84,14 +85,15 @@ public static class ItemContainer
         CornerRadius4? corners = null,
         Action<bool>? onFocusChanged = null,
         float width = float.NaN,
-        float height = float.NaN)
+        float height = float.NaN,
+        bool isTabStop = true)
     {
         CornerRadius4 outer = corners ?? Radii.ControlAll;   // ControlCornerRadius default (ItemContainer.xaml:7)
         bool selectedVisible = isSelected && isEnabled;       // Disabled collapses PART_SelectionVisual (xaml:108-110)
 
-        // Child count is shape-stable per (selected, checkbox) state; stable keys keep identity across state flips
-        // so the keyed diff inserts/removes exactly the ring/checkbox nodes (never morphs the content layer).
-        int n = 1 + (selectedVisible ? 2 : 0) + (showSelectionCheckbox ? 1 : 0);
+        // Child count is shape-stable per (selected, enabled, checkbox) state; stable keys keep identity across state
+        // flips so the keyed diff inserts/removes exactly the ring/common/checkbox nodes (never morphs the content layer).
+        int n = 1 + (selectedVisible ? 1 : 0) + (isEnabled ? 1 : 0) + (showSelectionCheckbox ? 1 : 0);
         var children = new Element[n];
         int w = 0;
 
@@ -115,16 +117,31 @@ public static class ItemContainer
                     TransitionDynamics.Tween(FadeMs, Easing.FluentDecelerate),
                     Enter: new EnterExit(Opacity: 0f, Active: true)),
             };
+        }
 
-            // PART_CommonVisual selected: 1px ControlSolid stroke inset 2px (xaml:127-135 + :47-49 margin keyframe).
+        if (isEnabled)
+        {
+            // PART_CommonVisual (xaml:127-135): the state plane ABOVE the content. The pointer-state fills are
+            // DISCRETE keyframes (DiscreteObjectKeyFrame KeyTime=0, xaml:17-33) — duration 0 here both matches that
+            // and seeds the interaction-anim row the container's hover/press retargets into this non-hit-test child
+            // (the recorder eases the child's own row; the dispatcher propagates the hovered root's state down).
+            // Disabled containers never hover/press and collapse their selection chrome, so the plane is
+            // enabled-gated (keeps the disabled subtree at the bare content layer).
             children[w++] = new BoxEl
             {
-                Key = "ic-inner",
-                Margin = Edges4.All(SelectedInnerMargin),
-                BorderColor = Tok.FillControlSolid,               // ItemContainerSelectedInnerBorderBrush (:17/:49)
-                BorderWidth = SelectedInnerThickness,
-                Corners = InsetCorners(outer, SelectedInnerMargin),
-                HitTestVisible = false,
+                Key = "ic-common",
+                HitTestVisible = false,                           // IsHitTestVisible="False" (xaml:133)
+                HoverFill = Tok.FillSubtleSecondary,              // ItemContainerPointerOverBackground (:6/:38) — selected ramp identical (:12/:44)
+                PressedFill = Tok.FillSubtleTertiary,             // ItemContainerPressedBackground (:7/:39) — selected ramp identical (:13/:45)
+                HoverDurationMs = 0f,                             // DiscreteObjectKeyFrame KeyTime="0" (xaml:18/:28)
+                PressDurationMs = 0f,
+                // Selected adds the 1px ControlSolid stroke inset 2px (Margin/Stroke keyframes, xaml:47-52;
+                // themeresources:57-58). RadiusX/RadiusY bind the TemplatedParent CornerRadius via the corner
+                // converters with NO inset shrink (xaml:134-135) — the OUTER radius, unshrunk.
+                Margin = selectedVisible ? Edges4.All(SelectedInnerMargin) : default,
+                BorderColor = selectedVisible ? Tok.FillControlSolid : default,   // ItemContainerSelectedInnerBorderBrush (:17/:49); rest transparent (:8)
+                BorderWidth = selectedVisible ? SelectedInnerThickness : 0f,
+                Corners = outer,
             };
         }
 
@@ -153,12 +170,13 @@ public static class ItemContainer
             Width = width,
             Height = height,
             Corners = outer,
-            Fill = Tok.FillSubtleTransparent,        // ItemContainerBackground (:5/:37)
-            HoverFill = Tok.FillSubtleSecondary,     // ItemContainerPointerOverBackground (:6/:38) — selected ramp identical (:12/:44)
-            PressedFill = Tok.FillSubtleTertiary,    // ItemContainerPressedBackground (:7/:39) — selected ramp identical (:13/:45)
+            Fill = Tok.FillSubtleTransparent,        // ItemContainerBackground (:5/:37) — pointer states live on ic-common above
             Opacity = isEnabled ? 1f : DisabledOpacity,   // Disabled storyboard (xaml:104-107)
             IsEnabled = isEnabled,
-            Focusable = true,                        // ItemContainer is a tab stop with system focus visuals (xaml:5-6)
+            // Roving single tab stop (ItemsView.xaml:7 TabNavigation="Once"; the RadioButtons IsTabStop pattern):
+            // an explicit TabStop — NOT Focusable — so only the keyboard-current container sits in the tab order;
+            // programmatic/keyboard-driven focus (ItemsView.FocusIndex) still lands on any container.
+            TabStop = isTabStop && isEnabled,
             FocusVisualMargin = Edges4.All(0f),      // template default margin (no FocusVisualMargin setter in the style)
             Role = AutomationRole.Button,            // ItemContainerAutomationPeer: SelectionItem + Invoke provider
             ClipToBounds = false,
@@ -214,10 +232,4 @@ public static class ItemContainer
                 ]
                 : [],
         };
-
-    /// <summary>Inner radius for a stroke inset by <paramref name="inset"/> (the TemplatedParent CornerRadius
-    /// converter on PART_CommonVisual, xaml:134-135): each corner shrinks by the inset, clamped at 0.</summary>
-    private static CornerRadius4 InsetCorners(in CornerRadius4 outer, float inset)
-        => new(MathF.Max(0f, outer.TopLeft - inset), MathF.Max(0f, outer.TopRight - inset),
-               MathF.Max(0f, outer.BottomRight - inset), MathF.Max(0f, outer.BottomLeft - inset));
 }

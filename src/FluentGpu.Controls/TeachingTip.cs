@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -74,7 +75,10 @@ public sealed class TeachingTip : Component
     public const string PartHero = "Hero";
 
     // ── Content model (TeachingTip.idl) ─────────────────────────────────────────────────────────────────────
-    public string TriggerLabel = "Show tip";
+    /// <summary>Optional convenience trigger button label — WinUI's TeachingTip has NO trigger UI of its own (it is
+    /// opened via <c>IsOpen</c> only, TeachingTip.idl); empty (the default) renders no trigger. Set it for the
+    /// gallery-style "button that shows the tip" composition (the wrapper then doubles as the anchor).</summary>
+    public string TriggerLabel = "";
     public string Title = "";
     public string Subtitle = "";
     /// <summary>Body content (WinUI <c>Content</c>). When empty, the MainContentPresenter collapses (NoContent VSM).</summary>
@@ -101,9 +105,21 @@ public sealed class TeachingTip : Component
     public Action? CloseButtonClick;
 
     // ── Behavior (TeachingTip.idl) ───────────────────────────────────────────────────────────────────────────
-    /// <summary>WinUI <c>IsLightDismissEnabled</c> (default false). When true, clicking outside dismisses the tip.</summary>
+    /// <summary>WinUI <c>IsLightDismissEnabled</c> (default false). When true, clicking outside dismisses the tip
+    /// (and the surface swaps to the transient acrylic background — the LightDismiss VSM, TeachingTip.xaml:19-26).</summary>
     public bool IsLightDismissEnabled = false;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real tip after first mount
+    /// <summary>WinUI <c>Boolean IsOpen</c> (TeachingTip.idl, MUX_DEFAULT_VALUE false) as a CONTROLLED two-way signal:
+    /// when set, writes from anywhere open/close the tip with the full expand/contract motion, and EVERY close path
+    /// (close button, light dismiss, Escape, programmatic) writes false back — WinUI's OnCloseButtonClicked and its
+    /// light-dismiss handler both end in <c>IsOpen(false)</c> (TeachingTip.cpp:1271-1276, :1382-1388). A cancelled
+    /// Closing restores true (the WinUI deferral revert). Null = open via the trigger/<see cref="OpenOnMount"/> only.</summary>
+    public Signal<bool>? IsOpen;
+    /// <summary>WinUI <c>FrameworkElement Target</c> (TeachingTip.idl) as the engine's anchor-thunk seam: the node the
+    /// targeted tip points at (capture it via <see cref="BoxEl.OnRealized"/> on the target element). Null with
+    /// <see cref="HasTarget"/>=true anchors to this component's own wrapper/trigger (the pre-Target compat behavior);
+    /// <see cref="HasTarget"/>=false ignores it (untargeted window-edge placement).</summary>
+    public Func<NodeHandle>? Target;
     /// <summary>WinUI <c>PreferredPlacement</c> (default Auto = Top for a targeted tip).</summary>
     public PlacementMode PreferredPlacement = PlacementMode.Auto;
     public TailVisibilityMode TailVisibility = TailVisibilityMode.Auto;
@@ -113,8 +129,10 @@ public sealed class TeachingTip : Component
     /// <summary>WinUI <c>ShouldConstrainToRootBounds</c> (default TRUE — the tip stays inside the window). False →
     /// the popup goes windowed via the E4 seam and may escape the window.</summary>
     public bool ShouldConstrainToRootBounds = true;
-    /// <summary>WinUI <c>Target</c> presence. When false the tip is untargeted (no beak; anchored to the trigger as
-    /// the engine has no free-floating xaml-root placement).</summary>
+    /// <summary>WinUI <c>Target</c> presence. When false the tip is untargeted (no beak unless
+    /// <see cref="TailVisibility"/> forces one) and is placed against the WINDOW edge — WinUI
+    /// PositionUntargetedPopup: default Bottom of the window, <see cref="UntargetedEdgeMargin"/> = 24px from the
+    /// edges, <see cref="PreferredPlacement"/> picking the corner/edge (TeachingTip.cpp:571-668, :2074-2090).</summary>
     public bool HasTarget = true;
 
     // ── Events (TeachingTip.idl: Opened / Closing(+Cancel,+Deferral) / Closed) ───────────────────────────────

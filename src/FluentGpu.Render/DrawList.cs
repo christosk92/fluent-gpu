@@ -57,8 +57,12 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // Weight is the NUMERIC font weight (the int IS the DWRITE_FONT_WEIGHT; sugar like Bold resolves to 700/400 upstream).
 // CharSpacing is WinUI CharacterSpacing (1/1000 em, per-glyph trailing advance); LineHeight (DIP; NaN/<=0 = natural)
 // resolves per LineStacking (enum int) and TextLineBounds (enum int) — see FluentGpu.Text.TextStyle, the style source.
+// SpanRunId (0 = plain) keys the SpanRunTable.Shared inline-run overlay (rtb-01): the renderer shapes the SAME single
+// flow with per-range weight/size/family and tints per-span colors; ForceColor != 0 makes Color override the span
+// colors too (the selected-text recolor re-emit — WinUI repaints selected glyphs uniformly).
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
-    float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity);
+    float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
+    int SpanRunId = 0, int ForceColor = 0);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -152,11 +156,12 @@ public sealed class DrawList
     }
 
     public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
-        float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0)
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0,
+        int spanRunId = 0, bool forceColor = false)
     {
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0));
         PushSort(sortKey);
     }
 

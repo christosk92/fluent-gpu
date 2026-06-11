@@ -1,6 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Scene;
+using FluentGpu.Text;
 
 namespace FluentGpu.Input;
 
@@ -40,6 +41,11 @@ public sealed class InputDispatcher
     private int _lastDownButton = -1;
     private byte _clickCount = 1;
     private CursorId _lastCursor = CursorId.Arrow;
+    // Read-only text selection (rtb-02 — WinUI TextSelectionManager, default-on for RichTextBlock,
+    // RichTextBlock.cpp:1730): the SelectableTextBit node owning the current selection + the drag anchor index.
+    private NodeHandle _selText;
+    private int _selAnchor;
+    private bool _selDragging;
 
     public const float ClickSlopPx = 4f;
     public const uint DoubleClickMs = 500;
@@ -116,6 +122,15 @@ public sealed class InputDispatcher
     /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
     public Action<CursorId>? OnCursorChanged;
 
+    /// <summary>Text seam for the read-only selection/hyperlink gestures (point↔index hit-testing + selection rects —
+    /// the SAME editor queries EditableText drives). Null falls back to <see cref="TextSeam.Default"/> (set by the
+    /// font-system constructors), so hosts that predate this seam still get selection without wiring.</summary>
+    public IFontSystem? Fonts { get; set; }
+
+    /// <summary>Clipboard seam for Ctrl+C over a read-only selection (WinUI TextSelectionManager::CopySelectionToClipboard,
+    /// TextSelectionManager.cpp:30-41). Set by the host; null = copy is a no-op.</summary>
+    public IClipboard? Clipboard { get; set; }
+
     // ── focus scopes (modal focus trap: ContentDialog / flyout) ───────────────────────────────────
     /// <summary>Push a focus scope: Tab/Shift+Tab and arrow focus stay within <paramref name="root"/>'s subtree until popped.</summary>
     public void PushFocusScope(NodeHandle root) => _focusScopes.Add(root);
@@ -147,6 +162,7 @@ public sealed class InputDispatcher
         if (!_dragTarget.IsNull && !_scene.IsLive(_dragTarget)) _dragTarget = NodeHandle.Null;
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_scrollDragNode.IsNull && !_scene.IsLive(_scrollDragNode)) _scrollDragNode = NodeHandle.Null;
+        if (!_selText.IsNull && !_scene.IsLive(_selText)) { _selText = NodeHandle.Null; _selDragging = false; }
         Drag.PruneDead();      // an armed/active drag node freed by a reconcile is abandoned (its columns are dead)
         DragDrop.PruneDead();  // a session whose source/target/viewport died: end / drop the dead reference
 
@@ -184,6 +200,12 @@ public sealed class InputDispatcher
                         break;
                     }
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
+                    // Hyperlink spans re-resolve the cursor on EVERY move over the same text node — the span boundary
+                    // crossings happen inside one node, which the on-hover-change walk alone can't see (WinUI flips to
+                    // the hand per pointer-move over an inline Hyperlink, RichTextBlock.cpp:2995 / TextBlock.cpp:3488).
+                    if (!_hovered.IsNull && _scene.IsLive(_hovered)
+                        && (_scene.Interaction(_hovered).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                        UpdateSpanCursor(_hovered, e.PositionPx);
                     // While a press is held WITHOUT a capture-drag (no OnDrag target / scrollbar drag), the pressed
                     // visual tracks whether the pointer is still over the pressed node — drag-off un-presses,
                     // drag-back re-presses (ButtonBase_Partial.cpp:629-638 IsPressed = IsValidPointerPosition). A
@@ -201,6 +223,15 @@ public sealed class InputDispatcher
                             if (overDown) OnRepeatResumed?.Invoke(_down);
                             else OnRepeatPaused?.Invoke(_down);
                         }
+                    }
+                    // Read-only selection drag (rtb-02): the press anchored on a selectable text node — every move
+                    // extends the selection at pointer rate (the seam clamps out-of-bounds points, so the drag keeps
+                    // tracking past the box exactly like the editor's drag-select).
+                    if (_selDragging && !_selText.IsNull && _down == _selText && _scene.IsLive(_selText))
+                    {
+                        ExtendTextSelection(PointToLocal(_selText, e.PositionPx));
+                        handled++;
+                        break;
                     }
                     UpdateScrollHover(e.PositionPx);
                     if (DragScrollbar(e.PositionPx))
@@ -244,6 +275,9 @@ public sealed class InputDispatcher
                     TrackClickCount(in e);
                     _down = HitTest(e.PositionPx);
                     SetState(ref _pressed, _down, NodeFlags.Pressed);
+                    // A press anywhere OUTSIDE the selection's node dismisses it (WinUI: pointer-down resets the
+                    // text selection unless it lands back in the selectable control).
+                    if (!_selText.IsNull && _selText != _down) ClearTextSelection();
                     if (!_down.IsNull)
                     {
                         // Pointer focus moves on the PRESS edge (WinUI Focus(FocusState_Pointer) + CapturePointer in
@@ -270,7 +304,11 @@ public sealed class InputDispatcher
                             Drag.TryArm(_down, e.PositionPx, e.Pointer, e.Mods, e.TimestampMs);
                         if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
                             OnRepeatArmed?.Invoke(_down);   // RepeatButton: fire click now, then repeat while held
-                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit | InteractionInfo.DragBit)) != 0) handled++;
+                        // Read-only selection press (rtb-02): anchor / word-select / select-all per click count
+                        // (single = caret anchor for the drag; double = word; triple = all — the RichEdit/WinUI shape).
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.SelectableTextBit) != 0)
+                            BeginTextSelection(_down, PointToLocal(_down, e.PositionPx), _clickCount);
+                        if ((_scene.Interaction(_down).HandlerMask & (InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.RepeatBit | InteractionInfo.DragBit | InteractionInfo.SelectableTextBit | InteractionInfo.SpanLinksBit)) != 0) handled++;
                     }
                     break;
 
@@ -319,11 +357,20 @@ public sealed class InputDispatcher
                     bool wasRepeat = !_down.IsNull && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0;
                     if (wasRepeat) OnRepeatReleased?.Invoke(_down);   // stop the auto-repeat
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
+                    _selDragging = false;   // the selection (if any) stays; the drag gesture ends with the press
                     if (!up.IsNull && up == _down)
                     {
                         // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
                         // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
                         if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
+                        // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
+                        // Hyperlink commits on the release over the pressed hyperlink, RichTextBlock.cpp:2996-3001).
+                        if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                        {
+                            int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
+                            if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
+                                linkSpans[si].OnClick?.Invoke();
+                        }
                         handled++;
                     }
                     else if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget) &&
@@ -397,6 +444,7 @@ public sealed class InputDispatcher
         _scrollDragNode = NodeHandle.Null;
         _contextDown = NodeHandle.Null;
         _middleDown = NodeHandle.Null;
+        _selDragging = false;   // capture lost mid-drag-select: keep the selection, end the gesture
     }
 
     /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
@@ -726,18 +774,156 @@ public sealed class InputDispatcher
     /// (CursorBit) wins and stops the walk, so a child's Arrow masks an ancestor I-beam/hand (WinUI's forced
     /// SetCursor(MouseCursorArrow) on TextBox's delete button, TextBox_Partial.cpp:884). No explicit cursor anywhere
     /// in the chain ⇒ system arrow — clickability does NOT imply the hand (WinUI: only HyperlinkButton shows it).</summary>
-    private void UpdateCursor(NodeHandle hover)
+    private void UpdateCursor(NodeHandle hover) => PublishCursor(ResolveCursorWalk(hover));
+
+    private CursorId ResolveCursorWalk(NodeHandle hover)
     {
-        CursorId resolved = CursorId.Arrow;
         for (var n = hover; !n.IsNull; n = _scene.Parent(n))
         {
             if (!_scene.IsLive(n)) break;
             ref InteractionInfo ii = ref _scene.Interaction(n);
-            if ((ii.HandlerMask & InteractionInfo.CursorBit) != 0 && (_scene.Flags(n) & NodeFlags.Disabled) == 0) { resolved = ii.Cursor; break; }
+            if ((ii.HandlerMask & InteractionInfo.CursorBit) != 0 && (_scene.Flags(n) & NodeFlags.Disabled) == 0) return ii.Cursor;
         }
+        return CursorId.Arrow;
+    }
+
+    private void PublishCursor(CursorId resolved)
+    {
         if (resolved == _lastCursor) return;
         _lastCursor = resolved;
         OnCursorChanged?.Invoke(resolved);
+    }
+
+    // ── read-only text selection + hyperlink spans (rtb-01/rtb-02) ───────────────────────────────
+    // The dispatcher OWNS the gestures for SelectableTextBit / SpanLinksBit text leaves: it queries the text seam
+    // (the SAME editor queries EditableText drives — point↔index, range rects) and publishes the visuals through the
+    // EXISTING TextEditState/SetTextEditRects machinery, so the recorder paints read-only selection with the editor's
+    // brushes unchanged. WinUI equivalent: TextSelectionManager on CRichTextBlock/CTextBlock (RichTextBlock.cpp:1730).
+
+    private IFontSystem? ResolveFonts() => Fonts ?? TextSeam.Default;
+
+    private string SelectableTextOf(NodeHandle node) => _scene.Strings?.Resolve(_scene.Paint(node).Text) ?? "";
+
+    /// <summary>The seam wrap width for a text leaf's queries — the node's laid width when the style wraps, else
+    /// unbounded (the EditableText.QueryMaxWidth convention; matches the recorder's DrawGlyphRun Bounds.W).</summary>
+    private float QueryMaxWidth(NodeHandle node)
+    {
+        ref LayoutInput li = ref _scene.Layout(node);
+        return li.TextStyle.Wrap != TextWrap.NoWrap ? MathF.Max(1f, _scene.Bounds(node).W) : float.PositiveInfinity;
+    }
+
+    /// <summary>Press on a selectable text leaf: single click anchors the drag (no selection yet — unless it lands on
+    /// a hyperlink span, which keeps the press a clean link click); double-click selects the word under the press;
+    /// triple selects all (the RichEdit/WinUI TextSelectionManager click ladder).</summary>
+    private void BeginTextSelection(NodeHandle node, Point2 local, int clickCount)
+    {
+        if (ResolveFonts() is not { } fonts) return;
+        if (!_selText.IsNull && _selText != node) ClearTextSelection();
+        string text = SelectableTextOf(node);
+        if (text.Length == 0) return;
+        if (clickCount == 1 && HitLinkSpan(node, local) >= 0) return;   // a link press never starts a selection
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        _selText = node;
+        switch (clickCount)
+        {
+            case 1:
+                _selAnchor = idx;
+                _selDragging = true;
+                ApplyTextSelection(node, idx, idx);   // empty until the drag extends it
+                break;
+            case 2:
+            {
+                int ws = idx, we = idx;
+                while (ws > 0 && !char.IsWhiteSpace(text[ws - 1])) ws--;
+                while (we < text.Length && !char.IsWhiteSpace(text[we])) we++;
+                _selAnchor = ws;
+                _selDragging = true;   // WinUI keeps extending by drag after a double-click
+                ApplyTextSelection(node, ws, we);
+                break;
+            }
+            default:
+                _selAnchor = 0;
+                _selDragging = false;
+                ApplyTextSelection(node, 0, text.Length);
+                break;
+        }
+    }
+
+    private void ExtendTextSelection(Point2 local)
+    {
+        if (ResolveFonts() is not { } fonts) return;
+        var node = _selText;
+        string text = SelectableTextOf(node);
+        if (text.Length == 0) return;
+        int idx = fonts.HitTestText(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), local, out _);
+        ApplyTextSelection(node, Math.Min(_selAnchor, idx), Math.Max(_selAnchor, idx));
+    }
+
+    /// <summary>Commit a selection range: store it (Ctrl+C reads it back), flag the node's text-edit row
+    /// SelectionActive, and publish the seam's range rects through the pooled slab the recorder already draws
+    /// (selection highlight under the run + on-accent recolor — SceneRecorder's editor path, reused verbatim).</summary>
+    private void ApplyTextSelection(NodeHandle node, int start, int end)
+    {
+        _scene.SetTextSelection(node, start, end);
+        ref TextEditState tes = ref _scene.TextEditRef(node);
+        if (end > start) tes.Flags |= TextEditState.SelectionActive;
+        else tes.Flags &= unchecked((byte)~TextEditState.SelectionActive);
+
+        Span<RectF> rects = stackalloc RectF[32];
+        int n = 0;
+        if (end > start && ResolveFonts() is { } fonts)
+        {
+            string text = SelectableTextOf(node);
+            n = fonts.GetRangeRects(text, _scene.Layout(node).TextStyle, QueryMaxWidth(node), start, end, rects);
+        }
+        _scene.SetTextEditRects(node, rects[..n], default);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        RequestRerender();
+    }
+
+    private void ClearTextSelection()
+    {
+        var node = _selText;
+        _selText = NodeHandle.Null;
+        _selDragging = false;
+        if (node.IsNull || !_scene.IsLive(node)) return;
+        _scene.ClearTextSelection(node);
+        ref TextEditState tes = ref _scene.TextEditRef(node);
+        tes.Flags &= unchecked((byte)~TextEditState.SelectionActive);
+        _scene.SetTextEditRects(node, default, default);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        RequestRerender();
+    }
+
+    /// <summary>The hyperlink span index under a node-local point, or −1. Hit-tests the seam-published span LINK
+    /// rects (SpanRunRects on the node's span run — laid at measure, no font-seam touch here), then verifies the
+    /// span actually carries an action.</summary>
+    private int HitLinkSpan(NodeHandle node, Point2 local)
+    {
+        int runId = _scene.Layout(node).TextStyle.SpanRunId;
+        if (runId == 0 || SpanRunTable.Shared.Resolve(runId) is not { } run || run.Rects is not { } rects) return -1;
+        if (!_scene.TryGetSpanText(node, out var spans)) return -1;
+        var arts = rects.Rects;
+        for (int i = 0; i < arts.Length; i++)
+        {
+            if (arts[i].Kind != SpanStyle.LinkBit) continue;
+            var rr = arts[i].Rect;
+            if (local.X >= rr.X && local.X < rr.X + rr.W && local.Y >= rr.Y && local.Y < rr.Y + rr.H)
+            {
+                int si = arts[i].Span;
+                if ((uint)si < (uint)spans.Length && spans[si].OnClick is not null) return si;
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>Per-move cursor over a span-text node: Hand over a hyperlink span's laid rect (WinUI
+    /// RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)), else whatever the normal explicit-cursor walk resolves
+    /// (I-beam when selectable, arrow otherwise).</summary>
+    private void UpdateSpanCursor(NodeHandle node, Point2 abs)
+    {
+        var local = PointToLocal(node, abs);
+        PublishCursor(HitLinkSpan(node, local) >= 0 ? CursorId.Hand : ResolveCursorWalk(node));
     }
 
     private void OnKey(in InputEvent e)
@@ -839,6 +1025,18 @@ public sealed class InputDispatcher
                 if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(args);
                 if (args.Handled) return;
             }
+        }
+
+        // Ctrl+C over a read-only selection (rtb-02): copy the focused selectable node's selected text through the
+        // clipboard seam (WinUI TextSelectionManager::CopySelectionToClipboard — TextSelectionManager.cpp:30-41).
+        // After focused routing: an editor's own Ctrl+C (EditableText) already consumed the chord above.
+        if (key == 'C' && (e.Mods & KeyModifiers.Ctrl) != 0 && !_focused.IsNull && _scene.IsLive(_focused)
+            && (_scene.Interaction(_focused).HandlerMask & InteractionInfo.SelectableTextBit) != 0
+            && _scene.TryGetTextSelection(_focused, out int selS, out int selE) && selE > selS)
+        {
+            string selDoc = SelectableTextOf(_focused);
+            if (selE <= selDoc.Length) Clipboard?.SetText(selDoc.Substring(selS, selE - selS));
+            return;
         }
 
         // Keyboard accelerators (WinUI ProcessKeyboardAccelerators order: after focused routing leaves it unhandled).
@@ -1242,8 +1440,10 @@ public sealed class InputDispatcher
             // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
             // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
             // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
+            // SelectableText/SpanLinks text leaves hit-test too (drag-select anchoring; hyperlink hover/click —
+            // WinUI's selectable/hyperlink text is hit-testable, RichTextBlock.cpp:2988-3001).
             if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit)) != 0 &&
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.SpanLinksBit)) != 0 &&
                 inside && !YieldsToPassThrough(node))
             {
                 result = node;

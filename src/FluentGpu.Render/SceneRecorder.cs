@@ -339,17 +339,38 @@ public static class SceneRecorder
                 bool hasEdit = textEdit.Enabled && scene.TryGetTextEdit(node, out tes);
                 ReadOnlySpan<RectF> selRects = hasEdit ? scene.GetTextEditSelectionRects(node) : default;
 
-                // (a) selection highlight (TextControlSelectionHighlightColor): plain rects (radius 0) under the run.
-                if (textEdit.SelectionFill.A > 0f)
+                // (a) selection highlight: the per-node SelectionHighlightColor override (api-04, WinUI
+                // TextBlock.SelectionHighlightColor — TextBlock.cpp:266/330) wins over the host theme brush
+                // (TextControlSelectionHighlightColor ≡ the system accent, TextSelectionManager.cpp:52-56).
+                ColorF selFill = scene.TryGetSelectionHighlight(node, out var selOverride) ? selOverride : textEdit.SelectionFill;
+                if (selFill.A > 0f)
                     for (int i = 0; i < selRects.Length; i++)
-                        dl.FillRoundRect(selRects[i], default, textEdit.SelectionFill, world, opacity, key);
+                        dl.FillRoundRect(selRects[i], default, selFill, world, opacity, key);
 
-                // (b) the base glyph run — the existing path, unchanged.
+                // (b) the base glyph run. A span run (TextStyle.SpanRunId, rtb-01) rides the SAME op — the renderer
+                // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
+                int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
                     dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
                         (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                         li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                        world, opacity, key);
+                        world, opacity, key, spanRunId);
+
+                // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
+                // text seam published the laid bar rects on the run at measure (SpanRunRects — link bands are input's;
+                // Underline/Strikethrough entries are ready-positioned bars), so record stays 0-touch on the font
+                // seam. Bar color = the span's color when set, else the node's resolved foreground — the same
+                // same-brush-as-glyphs rule WinUI's TextDecorations follow.
+                if (spanRunId != 0 && SpanRunTable.Shared.Resolve(spanRunId) is { } spanRun && spanRun.Rects is { } spanRects)
+                {
+                    var arts = spanRects.Rects;
+                    for (int i = 0; i < arts.Length; i++)
+                    {
+                        if (arts[i].Kind == SpanStyle.LinkBit) continue;   // hit-test bands, not painted
+                        ColorF spanColor = spanRun.Spans[arts[i].Span].Color;
+                        dl.FillRoundRect(arts[i].Rect, default, spanColor.A > 0f ? spanColor : textColor, world, opacity, key | 0x8);
+                    }
+                }
 
                 // (b2) text decorations (TextEl.Underline/Strikethrough → NodePaint.TextDecorations, E9): bars placed
                 // by the FACE metrics the measure pass cached on TextMeasureCache (UnderlineY/UnderlineThickness/StrikeY
@@ -388,10 +409,12 @@ public static class SceneRecorder
                         RectF selDevice = world.TransformBounds(selRects[i]).Intersect(childClip);
                         if (selDevice.IsEmpty) continue;
                         dl.PushClip(selDevice, key | 0x1);
+                        // forceColor: selected glyphs repaint UNIFORMLY in the on-accent color — span colors must not
+                        // bleed through the selection (WinUI's selected-text recolor).
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, key | 0x1);
+                            world, opacity, key | 0x1, spanRunId, forceColor: true);
                         dl.PopClip(key | 0x1);
                     }
 

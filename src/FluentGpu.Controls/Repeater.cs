@@ -166,8 +166,9 @@ public static class Repeater
             : el with { OnItemPrepared = prepared, OnItemClearing = clearing, OnItemIndexChanged = indexChanged, OnVisibleRange = visibleRange };
 
     /// <summary>Stamp the collection-transition spec onto each item ROOT (only a <see cref="BoxEl"/> can carry
-    /// <c>Animate</c>; an explicit author spec wins).</summary>
-    private static Func<int, Element> WrapTransition(Func<int, Element> template, LayoutTransition spec)
+    /// <c>Animate</c>; an explicit author spec wins). Internal: ItemsView reuses it for its ItemTransitionProvider
+    /// seam (ItemsView.idl:45) on the directly-built virtual viewport.</summary>
+    internal static Func<int, Element> WrapTransition(Func<int, Element> template, LayoutTransition spec)
         => i =>
         {
             var el = template(i);

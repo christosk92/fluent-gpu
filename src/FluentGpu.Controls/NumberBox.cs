@@ -34,14 +34,10 @@ public enum NumberBoxValidationMode : byte
 /// OnNumberBoxKeyDown (NumberBox.cpp:533–558): Up/Down = ±SmallChange, PageUp/PageDown = ±LargeChange, handled on key
 /// DOWN so OS auto-repeat repeats the step. Validation (clamp / revert) runs on Enter and on blur per
 /// <see cref="ValidationMode"/>; with <see cref="AcceptsExpression"/> a typed arithmetic expression is evaluated on
-/// commit (shunting-yard over + - * / ^ and parentheses — NumberBoxParser port).
+/// commit (shunting-yard over + - * / ^ and parentheses — NumberBoxParser port). Mouse-wheel over the field while it
+/// is focused also steps ±SmallChange and consumes the event before any enclosing viewport scrolls (PointerWheelChanged
+/// → OnNumberBoxScroll, NumberBox.cpp:40 + :578–597).
 /// </summary>
-/// <remarks>
-/// Engine routing gap (reported, not hacked around): WinUI also steps SmallChange on mouse-wheel while the inner
-/// TextBox is focused (PointerWheelChanged → OnNumberBoxScroll, NumberBox.cpp:40 + :578–597). The engine routes wheel
-/// events to <c>NodeFlags.Scrollable</c> ancestors only (InputDispatcher.ScrollAt) — there is no element-level wheel
-/// hook yet, so wheel stepping lands with the popup-windowing/input wave.
-/// </remarks>
 public sealed class NumberBox : Component
 {
     // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control

@@ -363,6 +363,17 @@ public sealed record TextEl(string Text) : Element
     /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
     /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
     public float BrushTransitionMs { get; init; } = float.NaN;
+    /// <summary>Read-only text selection (rtb-02): mouse drag selects, double-click selects the word, triple-click all,
+    /// Ctrl+C copies via the clipboard seam; the highlight reuses the editor's selection-rect path. Default FALSE —
+    /// WinUI TextBlock selection is opt-in (TextBlock.cpp:583 IsTextSelectionEnabled property change creates the
+    /// selection manager on demand); RichTextBlock turns it on by default (RichTextBlock.cpp:1730). A selectable run
+    /// is focusable (Ctrl+C routes to it) and shows the I-beam cursor.</summary>
+    public bool IsTextSelectionEnabled { get; init; }
+    /// <summary>Per-control selection highlight (api-04, WinUI <c>TextBlock.SelectionHighlightColor</c> —
+    /// TextBlock.cpp:266/330). A==0 (default) = the engine/theme brush (the system accent,
+    /// TextSelectionManager.cpp:52-56 GetDefaultSelectionHighlightColor → GetSystemAccentColor ≡ the host's
+    /// TextEditStyle.SelectionFill).</summary>
+    public ColorF SelectionHighlightColor { get; init; }
     public string? FontFamily { get; init; }
     public DynamicTextKind DynamicText { get; init; }
     /// <summary>Line-break behavior (WinUI TextWrapping): NoWrap / Wrap / WrapWholeWords.</summary>
@@ -374,6 +385,58 @@ public sealed record TextEl(string Text) : Element
 
     // Leaf layout participation. Text needs the same sizing/flex knobs as other leaves so wrapped runs can be
     // constrained by their container instead of contributing their full single-line width to parent measure.
+    public float Width { get; init; } = float.NaN;
+    public float Height { get; init; } = float.NaN;
+    public float MinWidth { get; init; } = float.NaN;
+    public float MinHeight { get; init; } = float.NaN;
+    public float MaxWidth { get; init; } = float.NaN;
+    public float MaxHeight { get; init; } = float.NaN;
+    public float Grow { get; init; }
+    public float Shrink { get; init; }
+    public float Basis { get; init; } = float.NaN;
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    public Edges4 Margin { get; init; }
+}
+
+/// <summary>
+/// A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <c>TextBlock.Inlines</c>/RichTextBlock paragraph
+/// model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+/// re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+/// base style here; a span with <c>OnClick</c> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+/// rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+/// accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+/// No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
+/// </summary>
+public sealed record SpanTextEl(TextSpan[] Spans) : Element
+{
+    public override ushort ElementTypeId => 12;
+
+    // ── base (paragraph) style — every TextSpan field that is unset inherits these ──
+    public float Size { get; init; } = 14f;
+    /// <summary>Base numeric font weight (0 = Normal 400); spans override per range.</summary>
+    public ushort Weight { get; init; }
+    /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (the TextEl default), resolved at construction.</summary>
+    public ColorF Color { get; init; } = Tok.TextPrimary;
+    public string? FontFamily { get; init; }
+    public float CharSpacing { get; init; }
+    public float LineHeight { get; init; } = float.NaN;
+    public LineStacking LineStacking { get; init; } = LineStacking.MaxHeight;
+    public TextLineBounds LineBounds { get; init; } = TextLineBounds.Full;
+    /// <summary>Paragraphs WRAP by default — the WinUI BaseRichTextBlockStyle sets TextWrapping=Wrap
+    /// (generic.xaml:13286-13295); pass NoWrap explicitly for a single-line run of spans.</summary>
+    public TextWrap Wrap { get; init; } = TextWrap.Wrap;
+    public TextTrim Trim { get; init; } = TextTrim.None;
+    public int MaxLines { get; init; }
+
+    /// <summary>Read-only selection (rtb-02): drag selects across the whole paragraph flow, Ctrl+C copies. OPT-IN here
+    /// (like WinUI TextBlock, TextBlock.cpp:583); the RichTextBlock control turns it on by default
+    /// (IsTextSelectionEnabled=TRUE by default on CRichTextBlock, RichTextBlock.cpp:1730).</summary>
+    public bool IsTextSelectionEnabled { get; init; }
+    /// <summary>Per-control selection highlight (api-04). A==0 = the engine/theme accent brush
+    /// (TextSelectionManager.cpp:52-56).</summary>
+    public ColorF SelectionHighlightColor { get; init; }
+
+    // Leaf layout participation (same knobs as TextEl so paragraphs are container-constrained).
     public float Width { get; init; } = float.NaN;
     public float Height { get; init; } = float.NaN;
     public float MinWidth { get; init; } = float.NaN;

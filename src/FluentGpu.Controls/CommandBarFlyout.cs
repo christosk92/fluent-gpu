@@ -9,8 +9,16 @@ using FluentGpu.Signals;
 namespace FluentGpu.Controls;
 
 /// <summary>The kind of a <see cref="AppBarCommand"/> in a <see cref="CommandBarFlyout"/>/<see cref="CommandBar"/>:
-/// a plain push button, a checkable toggle (shows a check column + accent pill in the overflow), or a divider row.</summary>
+/// a plain push button, a checkable toggle (PRIMARY toggles paint the accent pill when checked; OVERFLOW toggles show
+/// only the E73E check glyph — V2 OverflowChecked, CommandBarFlyout_themeresources.xaml:434-438), or a divider row.</summary>
 public enum AppBarCommandKind : byte { Button, ToggleButton, Separator }
+
+/// <summary>WinUI FlyoutShowMode subset for <see cref="CommandBarFlyout"/> (CommandBarFlyout.cpp:162-201):
+/// <see cref="Standard"/> opens with the overflow ALREADY expanded — transitions suppressed while opening
+/// (m_commandBarFlyoutIsOpening → UpdateUI(false), CommandBarFlyoutCommandBar.cpp:25/:121/:189-197) — and focuses the
+/// first command (cpp:29-71). <see cref="Transient"/> (the default) opens collapsed and never steals focus.
+/// AlwaysExpanded forces Standard (CommandBarFlyout.cpp:173-177).</summary>
+public enum CommandBarFlyoutShowMode : byte { Transient, Standard }
 
 /// <summary>A single command in a <see cref="CommandBarFlyout"/>/<see cref="CommandBar"/> — the engine analog of
 /// WinUI's <c>ICommandBarElement</c> (AppBarButton / AppBarToggleButton / AppBarSeparator). A <see cref="Glyph"/> +
@@ -41,26 +49,33 @@ public sealed record AppBarCommand(
 
 /// <summary>A WinUI CommandBarFlyout: a trigger button that opens a contextual command toolbar anchored below it.
 /// The popup has a horizontal PRIMARY row of icon AppBarButtons plus a trailing "…" More ellipsis toggle, and a
-/// vertical SECONDARY overflow menu of labeled rows that the … toggle expands. 1:1 with
-/// <c>CommandBarFlyout_themeresources.xaml</c> + <c>CommandBarFlyoutCommandBar.cpp</c>:
+/// vertical SECONDARY overflow menu of labeled rows that the … toggle expands. 1:1 with the V2 sources
+/// <c>controls/dev/CommandBarFlyout/CommandBarFlyout_themeresources.xaml</c> + <c>CommandBarFlyoutCommandBar.cpp</c>:
 /// <list type="bullet">
-/// <item>Primary buttons: MinWidth 40 ContentRoot, InnerBorderMargin 2 (:107), 16px icon, subtle fill ramp with the
-/// 83ms BrushTransition (:282) on every state swap.</item>
-/// <item>Overflow rows: check glyph E73E @12 Margin 15,4,14,4 (:505); 16×16 icon at left Margin 12,0,12,0 (39,0,12,0
-/// with toggles); OverflowTextLabel Body 14 Margin 12/39/67,0,12,0 + Padding 0,6,0,7 (:301; TouchInputMode →
-/// 0,9,0,11 :464); KeyboardAcceleratorTextLabel Caption 12 Margin 24,0,12,0 TextSecondary ramp (:302); SubItemChevron
-/// E76C @12 (:303). CHECKED toggles paint the accent pill (CommandBarFlyoutAppBarButtonBackgroundChecked =
-/// AccentFillColorDefault :24, hover Secondary, pressed Tertiary, disabled AccentFillColorDisabled — a disabled
-/// checked row keeps the disabled-accent pill and suppresses hover/press feedback).</item>
-/// <item>Expand/collapse: the overflow region reveals through a synced clip + translate (OverflowContentRootClipTransform
-/// + OverflowContentTransform, generic.xaml:17009/17018; PlayOpenAnimation/PlayCloseAnimation
-/// CommandBarFlyoutCommandBar.cpp) — 250ms open / 167ms close on the FastOutSlowIn spline, driven on the region node
-/// through the AnimEngine clip channels. The host FlyoutSurface owns the drop shadow for the whole popup (WinUI
-/// AddDropShadow/RemoveDropShadow manage the same single overflow shadow, cpp:205/:236).</item>
+/// <item>Primary buttons: MinWidth 40 ContentRoot (:285), InnerBorderMargin 2 (:107), 16px icon, subtle fill ramp
+/// with the 83ms BrushTransition (:282) on every state swap. CHECKED primary toggles paint the accent pill
+/// (Checked/CheckedPointerOver/CheckedPressed, :386-406; brushes :24-:30) with on-accent foreground; CheckedDisabled
+/// drops the pill (:407-416). Primary clicks do NOT auto-close (closeFlyoutFunc is hooked only on SecondaryCommands,
+/// CommandBarFlyout.cpp:67-74).</item>
+/// <item>Overflow rows: plate inset 2 (InnerBorderMargin :107) inside the presenter's 3px ItemsPresenter margin
+/// (:556); check glyph E73E @12 (:505); 16×16 menu icon; OverflowTextLabel Body 14 Padding 0,6,0,7 at the 12/39/67
+/// lead ladder (:301/:152/:180); KeyboardAcceleratorTextLabel Caption 12 Margin 24,0,12,0 (:302); SubItemChevron
+/// E76C @12 (:303). CHECKED overflow toggles show ONLY the check glyph — no accent pill (OverflowChecked sets just
+/// OverflowCheckGlyph.Opacity=1, :434-438; hover/press stay the Subtle ramp, :439-458). Every secondary command —
+/// toggles included — closes the flyout on invoke (Click/Checked/Unchecked → Hide(), CommandBarFlyout.cpp:97-105).</item>
+/// <item>Expand/collapse: the V2 ExpansionStates transitions (themeresources:697-857) — the overflow reveals through
+/// a HALF-HEIGHT CLIP slide with static content (ExpandDownAnimationStartPosition = −h/2,
+/// CommandBarFlyoutCommandBar.cpp:891; ExpandedUp from +h/2, :888), synced with the WIDTH expansion (content clip
+/// right edge from the midpoint, WidthExpansionAnimationStartPosition = −delta/2, :922; MoreButton glide delta/2→0,
+/// :973) — 250ms open / 167ms close on ControlFastOutSlowInKeySpline 0,0,0,1. ExpandedUp places the overflow ABOVE
+/// the primary row with flipped seam/corners (:966-973) when the popup is bottom-anchored (shouldExpandUp,
+/// :609-657).</item>
+/// <item>Flyout open/close: an 83ms opacity fade (Opening/ClosingOpacityStoryboard, themeresources:655-662) — the
+/// menu clip-unfold is explicitly disabled (AreOpenCloseAnimationsEnabled(false), CommandBarFlyout.cpp:44).</item>
 /// </list>
 /// The flyout body returns INNER content only — <see cref="OverlayHost"/>'s FlyoutSurface supplies the acrylic
 /// backdrop, 1px stroke, shadow and rounded corners. The popup is WINDOWED (ShouldConstrainToRootBounds=False,
-/// generic.xaml:16987).</summary>
+/// CommandBarFlyout.cpp:43).</summary>
 public sealed class CommandBarFlyout : Component
 {
     // Template parts (the WinUI x:Name vocabulary where one exists; see TemplateParts). Each part's doc lists the
@@ -69,22 +84,27 @@ public sealed class CommandBarFlyout : Component
     /// <summary>The trigger button that opens the flyout (engine-local — WinUI flyouts have no built-in trigger).
     /// Owned: OnClick (the open toggle), Role, OnRealized (the popup anchor capture, chained).</summary>
     public const string PartTrigger = "Trigger";
-    /// <summary>The popup body root. Owned: ClipToBounds (the expand clip+translate must never paint past the
-    /// popup's rounded corners), Children.</summary>
+    /// <summary>The popup body root. Owned: ClipToBounds (the expand clips must never paint past the popup's rounded
+    /// corners), Children, OnRealized (the width-expansion clip + open/close fade node capture, chained).</summary>
     public const string PartRoot = "Root";
     /// <summary>The horizontal primary icon row (WinUI PrimaryItemsRoot). Owned: Children.</summary>
     public const string PartPrimaryRow = "PrimaryRow";
-    /// <summary>The trailing … ellipsis expand toggle (WinUI MoreButton). Owned: OnClick (expand/collapse), Role.</summary>
+    /// <summary>The trailing … ellipsis expand toggle (WinUI MoreButton). Owned: OnClick (expand/collapse), Role,
+    /// OnKeyDown (the arrow-key roving), OnRealized (the width-expansion glide node capture, chained).</summary>
     public const string PartMoreButton = "MoreButton";
     /// <summary>The overflow region of labeled rows (WinUI OverflowContentRoot). Owned: OnRealized (the expand
-    /// clip+translate storyboard's node capture, chained), ClipToBounds, Children.</summary>
+    /// clip storyboard's node capture, chained), ClipToBounds, Children.</summary>
     public const string PartOverflow = "Overflow";
 
     public string TriggerLabel = "Commands";
     public IReadOnlyList<AppBarCommand> PrimaryCommands = [];
     public IReadOnlyList<AppBarCommand> SecondaryCommands = [];
-    /// <summary>WinUI V2 AlwaysExpanded: keep the overflow menu shown and hide the … More button.</summary>
+    /// <summary>WinUI V2 AlwaysExpanded: keep the overflow menu shown and hide the … More button. Forces
+    /// <see cref="CommandBarFlyoutShowMode.Standard"/> (CommandBarFlyout.cpp:173-177).</summary>
     public bool AlwaysExpanded = false;
+    /// <summary>Standard = open expanded (no transition) + focus the first command; Transient = open collapsed,
+    /// no focus steal (CommandBarFlyout.cpp:162-201; CommandBarFlyoutCommandBar.cpp:29-71).</summary>
+    public CommandBarFlyoutShowMode ShowMode = CommandBarFlyoutShowMode.Transient;
     public FlyoutPlacement Placement = FlyoutPlacement.BottomLeft;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract. Threaded into the popup body each open.</summary>
@@ -95,13 +115,15 @@ public sealed class CommandBarFlyout : Component
         IReadOnlyList<AppBarCommand> primaryCommands,
         IReadOnlyList<AppBarCommand> secondaryCommands,
         bool alwaysExpanded = false,
-        FlyoutPlacement placement = FlyoutPlacement.BottomLeft)
+        FlyoutPlacement placement = FlyoutPlacement.BottomLeft,
+        CommandBarFlyoutShowMode showMode = CommandBarFlyoutShowMode.Transient)
         => Embed.Comp(() => new CommandBarFlyout
         {
             TriggerLabel = triggerLabel,
             PrimaryCommands = primaryCommands,
             SecondaryCommands = secondaryCommands,
             AlwaysExpanded = alwaysExpanded,
+            ShowMode = showMode,
             Placement = placement,
         });
 
@@ -128,14 +150,25 @@ public sealed class CommandBarFlyout : Component
         var svc = UseContext(Overlay.Service);
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
+        // The body registers its 83ms fade-out close here (ClosingOpacityStoryboard, themeresources:659-662) so the
+        // trigger's own toggle also closes through the fade instead of snap-hiding.
+        var fadeClose = UseRef<Action?>(null);
         // `expanded` is a SIGNAL (not UseState) so the … toggle re-renders the overflow region granularly inside the
         // overlay body Component without re-opening the popup or bumping the OverlayHost version.
         var expanded = UseSignal(AlwaysExpanded);
 
+        bool standardMode = AlwaysExpanded || ShowMode == CommandBarFlyoutShowMode.Standard;
+
         void Toggle()
         {
-            if (handle.Value is { IsOpen: true } o) { o.Close(); return; }
-            expanded.Value = AlwaysExpanded;   // reset expansion each open (matches WinUI: opens collapsed unless AlwaysExpanded)
+            if (handle.Value is { IsOpen: true } o)
+            {
+                if (fadeClose.Value is { } fade) fade(); else o.Close();
+                return;
+            }
+            // Standard ShowMode (incl. AlwaysExpanded, which forces Standard — CommandBarFlyout.cpp:173-177) opens
+            // with the overflow already expanded (commandBar.IsOpen(true), cpp:194-197); Transient opens collapsed.
+            expanded.Value = standardMode;
             handle.Value = svc.Open(
                 () => anchor.Value,
                 () => Embed.Comp(() => new CommandBarFlyoutBody
@@ -143,13 +176,19 @@ public sealed class CommandBarFlyout : Component
                     Primary = PrimaryCommands,
                     Secondary = SecondaryCommands,
                     AlwaysExpanded = AlwaysExpanded,
+                    StandardMode = standardMode,
                     Expanded = expanded,
                     Close = () => handle.Value?.Close(),
+                    FadeCloseSlot = fadeClose,
                     Parts = Parts,
                 }),
                 Placement,
-                // ShouldConstrainToRootBounds=False on the CommandBarFlyout popup (generic.xaml:16987).
-                new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+                // ShouldConstrainToRootBounds=False + AreOpenCloseAnimationsEnabled=False (CommandBarFlyout.cpp:43-44):
+                // the popup must NOT play the menu clip-unfold — WinUI's open/close are the 83ms opacity storyboards
+                // (themeresources:655-662). PopupChrome.Static = a bare popup with no host transitions; the body
+                // seeds the 83ms open fade itself and replays the close fade for command/toggle closes (light-dismiss
+                // closes hide instantly — the one residual deviation from WinUI's closing fade).
+                new PopupOptions(Chrome: PopupChrome.Static) { ConstrainToRootBounds = false });
         }
 
         Action<NodeHandle> anchorCapture = x => anchor.Value = x;
@@ -189,14 +228,21 @@ public sealed class CommandBarFlyout : Component
 /// acrylic + 1px stroke + shadow + corner). Its own Component so reading <see cref="Expanded"/> grants the … toggle a
 /// granular re-render of the overflow region. Layout mirrors WinUI's CommandBarFlyoutCommandBar: a horizontal
 /// PrimaryItemsRoot (Height 40, Margin 3,3,0,3) of icon buttons + a trailing 44px ellipsis MoreButton, then an
-/// OverflowRegion of full-width labeled rows whose EXPAND/COLLAPSE runs the synced clip+translate storyboards.</summary>
+/// OverflowRegion of full-width labeled rows (ABOVE the row when expanded up) whose EXPAND/COLLAPSE runs the V2
+/// half-height clip + width-expansion storyboards. The body also drives the flyout-level 83ms opacity fades
+/// (Opening/ClosingOpacityStoryboard) and the WinUI arrow-key roving (CommandBarFlyoutCommandBar.cpp:1159-1296).</summary>
 internal sealed class CommandBarFlyoutBody : Component
 {
     public IReadOnlyList<AppBarCommand> Primary = [];
     public IReadOnlyList<AppBarCommand> Secondary = [];
     public bool AlwaysExpanded;
+    /// <summary>FlyoutShowMode.Standard semantics: opened expanded without transitions + initial focus on the first
+    /// command (CommandBarFlyout.cpp:162-201; CommandBarFlyoutCommandBar.cpp:25-71).</summary>
+    public bool StandardMode;
     public Signal<bool> Expanded = new(false);
     public Action Close = () => { };
+    /// <summary>Outer slot the body fills with its fade-close so the trigger toggle closes through the 83ms fade.</summary>
+    public Ref<Action?>? FadeCloseSlot;
     /// <summary>The owning <see cref="CommandBarFlyout"/>'s part modifiers (keyed by its <c>PartXxx</c> consts).</summary>
     public TemplateParts? Parts;
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: OverflowTextLabel.Padding 0,9,0,11 + check glyph margin
@@ -204,70 +250,325 @@ internal sealed class CommandBarFlyoutBody : Component
     public bool TouchInputMode;
 
     // Dim constants from CommandBarFlyout_themeresources.xaml.
-    const float PrimaryRowHeight = 40f;        // PrimaryItemsControl Height
+    const float PrimaryRowHeight = 40f;        // PrimaryItemsControl Height (:1043)
     const float AppBarBtnMinWidth = 40f;       // CommandBarFlyoutAppBarButton ContentRoot MinWidth (:285 MinWidth=40)
-    const float MoreButtonWidth = 44f;         // EllipsisButton Width
-    const float OverflowMinWidth = 136f;       // CommandBarOverflowPresenter MinWidth
-    const float OverflowMaxWidth = 440f;       // CommandBarOverflowPresenter MaxWidth / FlyoutMaxWidth
-    const float FlyoutMaxWidth = 440f;         // CommandBarFlyoutCommandBar MaxWidth
+    const float MoreButtonWidth = 44f;         // EllipsisButton Width (:568)
+    const float OverflowMinWidth = 136f;       // CommandBarOverflowPresenter MinWidth (:530)
+    const float OverflowMaxWidth = 440f;       // CommandBarOverflowPresenter MaxWidth (:531)
+    const float OverflowMaxHeight = 480f;      // CommandBarOverflowPresenter MaxHeight (:532) — scrolls past it (:533-536)
+    const float FlyoutMaxWidth = 440f;         // CommandBarFlyoutCommandBar MaxWidth (:639)
 
     public override Element Render()
     {
         lastService = UseContext(Overlay.Service);          // cascading sub-flyouts open through the same service
-        bool expanded = Expanded.Value || AlwaysExpanded;   // SUBSCRIBE: re-renders this body when the … toggle flips
-        var collapsing = UseSignal(false);                  // reverse animation in flight; region stays mounted
-        var expandSeeded = UseRef(false);                   // open animation seeded for the current expansion
+        var hk = UseContext(InputHooks.Current);            // focus moves: arrow roving + the Standard initial focus
+        var placement = UseContext(Overlay.Placement);
+
+        bool hasSecondary = Secondary.Count > 0;
+        // SecondaryCommandsOnly (themeresources:866-874): WinUI zeroes the primary row (Opacity 0 / Height 0 / not
+        // hit-testable) and skips the overflow shadow (shadow only added when primary commands exist,
+        // CommandBarFlyout.cpp:203-207) — the flyout IS the overflow menu, opened expanded with no … button.
+        bool secondaryOnly = hasSecondary && Primary.Count == 0;
+        bool expanded = Expanded.Value || AlwaysExpanded || secondaryOnly;   // SUBSCRIBE: … toggle re-renders this body
+
+        var collapsing = UseSignal(false);                  // reverse storyboard in flight; region stays mounted
+        var closing = UseSignal(false);                     // 83ms closing fade in flight; Close() fires at its end
+        var pendingFocus = UseSignal(-1);                   // secondary index awaiting focus once the overflow mounts
+        // Standard/AlwaysExpanded/secondary-only open EXPANDED with the transitions suppressed
+        // (UpdateUI(!m_commandBarFlyoutIsOpening), CommandBarFlyoutCommandBar.cpp:25/:121): seed as already-expanded
+        // so the first mount never replays the 250ms expand storyboard.
+        var expandSeeded = UseRef(AlwaysExpanded || StandardMode || secondaryOnly);
+        var seededUp = UseRef(false);                       // direction the live reveal was seeded with (flip detect)
+        var openFadeSeeded = UseRef(false);
+        var collapsedW = UseRef(0f);                        // collapsed (primary-row) width — WinUI collapsedWidth (cpp:879)
+        var widthDelta = UseRef(0f);                        // live expandedW − collapsedW for the collapse reverse
         var overflowNode = UseRef<NodeHandle>(default);
         _overflowNode = overflowNode;
         bool collapsingNow = collapsing.Value;
-        bool hasSecondary = Secondary.Count > 0;
-        bool showMore = hasSecondary && !AlwaysExpanded;
+        bool closingNow = closing.Value;
+        int pendingFocusNow = pendingFocus.Value;
+        bool showMore = hasSecondary && !AlwaysExpanded && !secondaryOnly;
         bool showOverflow = hasSecondary && (expanded || collapsingNow);
 
-        // ── Expand/collapse storyboards (PlayOpenAnimation/PlayCloseAnimation, CommandBarFlyoutCommandBar.cpp):
-        // the overflow region reveals through a clip window SYNCED with a content translate
-        // (OverflowContentRootClipTransform + OverflowContentTransform, generic.xaml:17009/:17018) — the content
-        // slides down into place while the clip's far edge expands, so nothing paints past the rounded corner.
-        // Open = ControlNormal 250ms, close = ControlFast 167ms, FastOutSlowIn 0,0,0,1.
+        if (_primaryNodes.Length != Primary.Count) _primaryNodes = new NodeHandle[Primary.Count];
+        if (_secondaryNodes.Length != Secondary.Count) _secondaryNodes = new NodeHandle[Secondary.Count];
+
+        // ── ExpandedUp (shouldExpandUp, CommandBarFlyoutCommandBar.cpp:609-657): WinUI expands the overflow UPWARD
+        // when there's no room below the bar but room above. Engine analog: the positioner bottom-anchors the popup
+        // when it doesn't fit below the anchor (OverlayPlacementInfo.OpensUp) — growth then happens upward with the
+        // primary row glued to the anchor edge, the overflow stacks ABOVE the row, seam/corners flip
+        // (ExpandedUpWithPrimaryCommands, themeresources:966-973) and the reveal runs bottom-half-up
+        // (ExpandUpAnimationStartPosition = +h/2, cpp:888).
+        bool expandUp = !secondaryOnly && (placement?.Value.OpensUp ?? false);
+
+        // ── Flyout-level open fade: OpeningOpacityStoryboard = Opacity 0→1 over ControlFasterAnimationDuration 83ms,
+        // linear (themeresources:655-658; AreOpenCloseAnimationsEnabled(false) kills the default flyout transition,
+        // CommandBarFlyout.cpp:44). Driven on the body root — the host surface card is host-owned. Mount-once.
+        UseLayoutEffect(() =>
+        {
+            if (openFadeSeeded.Value) return;
+            var scene = Context.Scene;
+            var anim = Context.Anim;
+            if (scene is null || anim is null || _rootNode.IsNull || !scene.IsLive(_rootNode)) return;
+            openFadeSeeded.Value = true;
+            anim.Animate(_rootNode, AnimChannel.Opacity, 0f, 1f, Motion.ControlFaster, Easing.Linear);
+        });
+
+        void CloseSubFlyout() { if (subHandleLive is { IsOpen: true } s) s.Close(); subHandleLive = null; }
+
+        // ClosingOpacityStoryboard: Opacity 1→0 over 83ms linear (themeresources:659-662), then hide. Every
+        // command/toggle close (and the trigger toggle, via FadeCloseSlot) routes through here.
+        void RequestClose()
+        {
+            if (closing.Peek()) return;
+            var scene = Context.Scene;
+            var anim = Context.Anim;
+            CloseSubFlyout();
+            if (scene is null || anim is null || _rootNode.IsNull || !scene.IsLive(_rootNode)) { Close(); return; }
+            closing.Value = true;   // mounts the 83ms clock below
+            anim.Animate(_rootNode, AnimChannel.Opacity, 1f, 0f, Motion.ControlFaster, Easing.Linear);
+        }
+        _requestClose = RequestClose;
+        if (FadeCloseSlot is { } slot) slot.Value = RequestClose;
+
+        // ── Expand/collapse storyboards — the V2 ExpansionStates transitions (themeresources:697-857), driven on the
+        // region + root + MoreButton nodes through the AnimEngine clip/translate channels:
+        //  • Reveal: a HALF-HEIGHT CLIP slide, content static — ExpandDownAnimationStartPosition = −h/2
+        //    (CommandBarFlyoutCommandBar.cpp:891) ⇒ the clip's far edge eases h/2 → h; ExpandedUp mirrors from +h/2
+        //    (cpp:888) ⇒ the near edge eases h/2 → 0. Only OverflowContentRootClipTransform animates — no content
+        //    translate (themeresources:784-787/:716-719).
+        //  • Width: the content clip's right edge jumps to the (collapsed+expanded)/2 midpoint and eases to the
+        //    expanded width (WidthExpansionAnimationStartPosition = −delta/2 → −delta, cpp:921-923;
+        //    themeresources:776-779) while the MoreButton glides delta/2 → 0 (cpp:973; themeresources:772-775).
+        // Open = ControlNormal 250ms, close = ControlFast 167ms, both ControlFastOutSlowInKeySpline 0,0,0,1.
         UseLayoutEffect(() =>
         {
             var scene = Context.Scene;
             var anim = Context.Anim;
+            if (scene is null || anim is null) return;
+            bool rootLive = !_rootNode.IsNull && scene.IsLive(_rootNode);
+
+            if (!showOverflow)
+            {
+                // Collapsed: remember the primary-row width — WinUI's collapsedWidth measure (cpp:879).
+                if (rootLive) collapsedW.Value = scene.AbsoluteRect(_rootNode).W;
+                return;
+            }
             var node = overflowNode.Value;
-            if (scene is null || anim is null || node.IsNull || !scene.IsLive(node)) return;
+            if (node.IsNull || !scene.IsLive(node)) return;
             float h = scene.AbsoluteRect(node).H;
             if (h <= 0f) return;
-            if (expanded && !collapsing.Peek() && !expandSeeded.Value)
+
+            if (expanded && !collapsing.Peek())
             {
-                expandSeeded.Value = true;
-                anim.Animate(node, AnimChannel.TranslateY, -h, 0f, Motion.ControlNormal, Easing.FluentPopOpen);
-                anim.Animate(node, AnimChannel.ClipT, h, 0f, Motion.ControlNormal, Easing.FluentPopOpen);
+                if (!expandSeeded.Value)
+                {
+                    expandSeeded.Value = true;
+                    seededUp.Value = expandUp;
+                    if (expandUp)
+                        anim.Animate(node, AnimChannel.ClipT, h * 0.5f, 0f, Motion.ControlNormal, Easing.FluentPopOpen);
+                    else
+                        anim.Animate(node, AnimChannel.ClipB, h * 0.5f, h, Motion.ControlNormal, Easing.FluentPopOpen);
+
+                    if (rootLive)
+                    {
+                        float c = collapsedW.Value;
+                        float e = scene.AbsoluteRect(_rootNode).W;
+                        if (c > 0f && e - c > 0.5f)
+                        {
+                            widthDelta.Value = e - c;
+                            anim.Animate(_rootNode, AnimChannel.ClipR, (c + e) * 0.5f, e, Motion.ControlNormal, Easing.FluentPopOpen);
+                            if (!_moreNode.IsNull && scene.IsLive(_moreNode))
+                                anim.Animate(_moreNode, AnimChannel.TranslateX, (c - e) * 0.5f, 0f, Motion.ControlNormal, Easing.FluentPopOpen);
+                        }
+                        else widthDelta.Value = 0f;
+                    }
+                }
+                else if (seededUp.Value != expandUp)
+                {
+                    // The positioner flipped the popup while expanded (the grown popup no longer fit below): settle
+                    // the reveal instantly in the new direction instead of clipping against the stale edge.
+                    anim.Cancel(node, AnimChannel.ClipT);
+                    anim.Cancel(node, AnimChannel.ClipB);
+                    seededUp.Value = expandUp;
+                }
             }
             else if (collapsing.Peek() && expandSeeded.Value)
             {
                 expandSeeded.Value = false;
-                anim.Animate(node, AnimChannel.TranslateY, 0f, -h, Motion.ControlFast, Easing.FluentPopOpen);
-                anim.Animate(node, AnimChannel.ClipT, 0f, h, Motion.ControlFast, Easing.FluentPopOpen);
+                if (expandUp)
+                    anim.Animate(node, AnimChannel.ClipT, 0f, h * 0.5f, Motion.ControlFast, Easing.FluentPopOpen);
+                else
+                    anim.Animate(node, AnimChannel.ClipB, h, h * 0.5f, Motion.ControlFast, Easing.FluentPopOpen);
+                if (rootLive && widthDelta.Value > 0.5f)
+                {
+                    float e = scene.AbsoluteRect(_rootNode).W;
+                    float c = e - widthDelta.Value;
+                    anim.Animate(_rootNode, AnimChannel.ClipR, e, (c + e) * 0.5f, Motion.ControlFast, Easing.FluentPopOpen);
+                    if (!_moreNode.IsNull && scene.IsLive(_moreNode))
+                        anim.Animate(_moreNode, AnimChannel.TranslateX, 0f, (c - e) * 0.5f, Motion.ControlFast, Easing.FluentPopOpen);
+                    widthDelta.Value = 0f;
+                }
             }
-        }, expanded, collapsingNow);
+        }, expanded, collapsingNow, expandUp);
+
+        // Keyboard entry into the overflow (Down past the … / Up-wrap): WinUI opens the overflow BEFORE focusing the
+        // secondary command (IsOpen(true) → FocusControl, CommandBarFlyoutCommandBar.cpp:1266-1279) — ours focuses
+        // the requested row once it has realized.
+        UseLayoutEffect(() =>
+        {
+            int j = pendingFocus.Peek();
+            if (j < 0 || !(Expanded.Peek() || AlwaysExpanded || secondaryOnly)) return;
+            var scene = Context.Scene;
+            if (scene is null) return;
+            if ((uint)j >= (uint)_secondaryNodes.Length) { pendingFocus.Value = -1; return; }
+            var node = _secondaryNodes[j];
+            if (node.IsNull || !scene.IsLive(node)) return;
+            pendingFocus.Value = -1;
+            hk.MoveFocusVisual?.Invoke(node);
+        }, expanded, pendingFocusNow);
+
+        // Standard-mode initial focus: the first primary command if any, else the first secondary
+        // (CommandBarFlyoutCommandBar.cpp:29-71 — FocusState::Programmatic, so no focus visual). Mount-once.
+        UseLayoutEffect(() =>
+        {
+            if (!StandardMode) return;
+            var scene = Context.Scene;
+            if (scene is null) return;
+            NodeHandle target = default;
+            for (int i = 0; i < Primary.Count; i++)
+                if (Primary[i].Enabled && !_primaryNodes[i].IsNull && scene.IsLive(_primaryNodes[i])) { target = _primaryNodes[i]; break; }
+            if (target.IsNull)
+                for (int j = 0; j < Secondary.Count; j++)
+                    if (Secondary[j].Kind != AppBarCommandKind.Separator && Secondary[j].Enabled
+                        && !_secondaryNodes[j].IsNull && scene.IsLive(_secondaryNodes[j])) { target = _secondaryNodes[j]; break; }
+            if (!target.IsNull) hk.FocusNode?.Invoke(target, false);
+        });
 
         void ExpandToggle()
         {
-            if (AlwaysExpanded) return;
+            if (AlwaysExpanded || secondaryOnly) return;
             if (!Expanded.Peek()) { collapsing.Value = false; Expanded.Value = true; return; }
             if (collapsing.Peek()) return;       // collapse already in flight
             collapsing.Value = true;             // keep the region mounted while the reverse storyboard runs
         }
 
-        void CloseSubFlyout() { if (subHandleLive is { IsOpen: true } s) s.Close(); subHandleLive = null; }
+        // ── Arrow-key roving (CommandBarFlyoutCommandBar::OnKeyDown, cpp:1159-1296): Left/Right cycle the HORIZONTAL
+        // list (primary commands + MoreButton) with NO wrap — the key is consumed even when focus stays put
+        // (:1286-1290); Up/Down cycle the VERTICAL list (primary → MoreButton → secondary) WITH wrap (:1215-1219
+        // shouldLoop), auto-expanding the overflow when the target is a secondary command (:1266-1273). Escape is
+        // engine-handled (the overlay's light-dismiss preview, :1190-1198 equivalent). WinUI's Tab group-hop
+        // (:1172-1188) is engine-blocked: the dispatcher consumes Tab for focus movement before node key handlers.
+        void FocusNodeVisual(NodeHandle n)
+        {
+            if (Context.Scene is { } sc && !n.IsNull && sc.IsLive(n)) hk.MoveFocusVisual?.Invoke(n);
+        }
+
+        void HorizontalMove(int from, int dir)
+        {
+            int count = Primary.Count + (showMore ? 1 : 0);
+            for (int i = from + dir; i >= 0 && i < count; i += dir)
+            {
+                if (i < Primary.Count && !Primary[i].Enabled) continue;
+                FocusNodeVisual(i == Primary.Count ? _moreNode : _primaryNodes[i]);
+                return;
+            }
+        }
+
+        void VerticalMove(int from, int dir)
+        {
+            int moreCount = showMore ? 1 : 0;
+            int total = Primary.Count + moreCount + Secondary.Count;
+            if (total == 0) return;
+            for (int step = 1; step <= total; step++)
+            {
+                int i = (((from + dir * step) % total) + total) % total;
+                if (i < Primary.Count)
+                {
+                    if (!Primary[i].Enabled) continue;
+                    FocusNodeVisual(_primaryNodes[i]);
+                    return;
+                }
+                if (i < Primary.Count + moreCount) { FocusNodeVisual(_moreNode); return; }
+                int j = i - Primary.Count - moreCount;
+                var cmd = Secondary[j];
+                if (cmd.Kind == AppBarCommandKind.Separator || !cmd.Enabled) continue;
+                bool overflowShown = Expanded.Peek() || AlwaysExpanded || secondaryOnly;
+                if (overflowShown && !collapsing.Peek()
+                    && (uint)j < (uint)_secondaryNodes.Length
+                    && !_secondaryNodes[j].IsNull && Context.Scene is { } s2 && s2.IsLive(_secondaryNodes[j]))
+                {
+                    FocusNodeVisual(_secondaryNodes[j]);
+                    return;
+                }
+                // Auto-expand on keyboard entry (cpp:1266-1273); the pendingFocus effect lands focus once mounted.
+                pendingFocus.Value = j;
+                collapsing.Value = false;
+                Expanded.Value = true;
+                return;
+            }
+        }
+
+        void OnBarKey(int hIdx, KeyEventArgs a)
+        {
+            if (a.Handled) return;
+            switch (a.KeyCode)
+            {
+                case Keys.Left: HorizontalMove(hIdx, -1); a.Handled = true; break;
+                case Keys.Right: HorizontalMove(hIdx, +1); a.Handled = true; break;
+                case Keys.Down: VerticalMove(hIdx, +1); a.Handled = true; break;
+                case Keys.Up: VerticalMove(hIdx, -1); a.Handled = true; break;
+            }
+        }
+
+        void OnRowKey(int j, KeyEventArgs a)
+        {
+            if (a.Handled) return;
+            int v = Primary.Count + (showMore ? 1 : 0) + j;
+            switch (a.KeyCode)
+            {
+                case Keys.Down: VerticalMove(v, +1); a.Handled = true; break;
+                case Keys.Up: VerticalMove(v, -1); a.Handled = true; break;
+                // Consumed but move nothing — the horizontal list holds only primary commands + the MoreButton
+                // (cpp:1215, :1286-1290).
+                case Keys.Left or Keys.Right: a.Handled = true; break;
+            }
+        }
+
+        Action<NodeHandle> rootCapture = h => _rootNode = h;
+
+        // The 83ms closing-fade clock: fires the real Close() once the ClosingOpacityStoryboard settles.
+        Element? closeClock = closingNow
+            ? Embed.Comp(() => new ToolTipClock { DurationMs = Motion.ControlFaster, OnElapsed = Close }) with { Key = "cbf-close" }
+            : null;
+
+        // ── SecondaryCommandsOnly: no primary row, no seam, no … — a plain expanded menu (themeresources:866-874). ──
+        if (secondaryOnly)
+        {
+            var menuChildren = new List<Element>(2) { BuildOverflow(expandUp: false, secondaryOnly: true, OnRowKey) };
+            if (closeClock is not null) menuChildren.Add(closeClock);
+            var menuRoot = new BoxEl
+            {
+                Direction = 1,
+                AlignSelf = FlexAlign.Start,
+                MaxWidth = FlyoutMaxWidth,
+                OnRealized = rootCapture,
+                Children = menuChildren.ToArray(),
+            };
+            var mm = Parts.Apply(CommandBarFlyout.PartRoot, menuRoot);
+            return mm with { Children = menuRoot.Children, OnRealized = TemplateParts.Chain(rootCapture, mm.OnRealized) };
+        }
 
         // ── PrimaryItemsRoot: horizontal row of icon buttons + trailing ellipsis ──────────────────────────────
         var primaryChildren = new List<Element>(Primary.Count + 2);
-        foreach (var cmd in Primary)
-            primaryChildren.Add(PrimaryButton(cmd));
+        for (int i = 0; i < Primary.Count; i++)
+        {
+            int idx = i;
+            primaryChildren.Add(PrimaryButton(Primary[i], idx, OnBarKey));
+        }
         primaryChildren.Add(new BoxEl { Grow = 1f });   // spacer pins the … button to the right edge
         if (showMore)
-            primaryChildren.Add(MoreButton(ExpandToggle));
+            primaryChildren.Add(MoreButton(ExpandToggle, OnBarKey));
 
         var primaryRow = new BoxEl
         {
@@ -275,22 +576,30 @@ internal sealed class CommandBarFlyoutBody : Component
             AlignItems = FlexAlign.Center,
             Height = PrimaryRowHeight,
             Margin = new Edges4(3, 3, 0, 3),
-            // Joint corner flattens against the overflow when expanded (per-corner via Radii top-only).
-            Corners = showOverflow ? Radii.OverlayTop : Radii.OverlayAll,
+            // The corner joint flattens against the overflow on the joined side: ExpandedDown keeps the row's TOP
+            // corners (TopCornerRadiusFilterConverter, themeresources:978-979), ExpandedUp keeps the BOTTOM corners
+            // (:969-970).
+            Corners = !showOverflow ? Radii.OverlayAll : expandUp ? Radii.OverlayBottom : Radii.OverlayTop,
             Children = primaryChildren.ToArray(),
         };
-        primaryRow = Parts.Apply(CommandBarFlyout.PartPrimaryRow, primaryRow) with { Children = primaryRow.Children };
+        // KEYED: the root's children REORDER when the expand direction flips (overflow above vs below) — keys keep
+        // the retained nodes (and the captured handles the storyboards drive) stable across the reorder.
+        primaryRow = Parts.Apply(CommandBarFlyout.PartPrimaryRow, primaryRow) with { Children = primaryRow.Children, Key = "cbf-primary" };
 
         if (!showOverflow)
         {
+            var collapsedChildren = new List<Element>(2) { primaryRow };
+            if (closeClock is not null) collapsedChildren.Add(closeClock);
             var collapsedRoot = new BoxEl
             {
                 Direction = 1,
                 AlignSelf = FlexAlign.Start,
                 MaxWidth = FlyoutMaxWidth,
-                Children = [primaryRow],
+                OnRealized = rootCapture,
+                Children = collapsedChildren.ToArray(),
             };
-            return Parts.Apply(CommandBarFlyout.PartRoot, collapsedRoot) with { Children = collapsedRoot.Children };
+            var cm = Parts.Apply(CommandBarFlyout.PartRoot, collapsedRoot);
+            return cm with { Children = collapsedRoot.Children, OnRealized = TemplateParts.Chain(rootCapture, cm.OnRealized) };
         }
 
         // The collapse clock unmounts the region once the 167ms reverse storyboard settles.
@@ -302,31 +611,43 @@ internal sealed class CommandBarFlyoutBody : Component
             }) with { Key = "cbf-collapse" }
             : null;
 
-        var children = new List<Element>(4)
-        {
-            primaryRow,
-            // 1px seam border between the primary row and the overflow region (the CommandBarFlyout joint seam).
-            new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
-            BuildOverflow(),
-        };
+        // 1px seam border between the primary row and the overflow region — CommandBarFlyoutBorderBrush =
+        // ControlStrokeColorDefaultBrush (themeresources:7, bound :629-630); the SecondaryItemsControl joint border
+        // is 1,0,1,1 expanded down / 1,1,1,0 expanded up (:977/:968) so the seam sits on the joined edge either way.
+        var seam = new BoxEl { Height = 1f, Fill = Tok.StrokeControlDefault, Key = "cbf-seam" };
+        var overflow = BuildOverflow(expandUp, secondaryOnly: false, OnRowKey) with { Key = "cbf-overflow" };
+
+        var children = new List<Element>(5);
+        if (expandUp) { children.Add(overflow); children.Add(seam); children.Add(primaryRow); }
+        else { children.Add(primaryRow); children.Add(seam); children.Add(overflow); }
         if (collapseClock is not null) children.Add(collapseClock);
+        if (closeClock is not null) children.Add(closeClock);
 
         var root = new BoxEl
         {
             Direction = 1,
             AlignSelf = FlexAlign.Start,
             MaxWidth = FlyoutMaxWidth,
-            ClipToBounds = true,   // the expand clip+translate must never paint past the popup's rounded corners
+            ClipToBounds = true,   // the expand clips must never paint past the popup's rounded corners
+            OnRealized = rootCapture,
             Children = children.ToArray(),
         };
-        return Parts.Apply(CommandBarFlyout.PartRoot, root) with { ClipToBounds = true, Children = root.Children };
+        var rm = Parts.Apply(CommandBarFlyout.PartRoot, root);
+        return rm with { ClipToBounds = true, Children = root.Children, OnRealized = TemplateParts.Chain(rootCapture, rm.OnRealized) };
     }
 
     // ── A single primary (icon-only) AppBarButton — CommandBarFlyoutAppBarButtonStyleBase metrics + the 83ms
-    //    BrushTransition on the InnerBorder background (CommandBarFlyout_themeresources.xaml:280-283). ──────────────
-    Element PrimaryButton(AppBarCommand cmd)
+    //    BrushTransition on the InnerBorder background (CommandBarFlyout_themeresources.xaml:280-283). A CHECKED
+    //    toggle paints the accent pill on the 2px-inset plate (Checked → AppBarButtonInnerBorder.Background =
+    //    CommandBarFlyoutAppBarButtonBackgroundChecked = AccentFillColorDefault, :386-392/:24; PointerOver = Accent
+    //    Secondary :25; Pressed = AccentTertiary :26) with on-accent foreground (:28-:30). CheckedDisabled sets NO
+    //    background — disabled foreground only, no pill (:407-416). ──────────────────────────────────────────────
+    Element PrimaryButton(AppBarCommand cmd, int idx, Action<int, KeyEventArgs> onKey)
     {
-        var fg = cmd.Enabled ? Tok.TextPrimary : Tok.TextDisabled;
+        bool enabled = cmd.Enabled;
+        bool isToggle = cmd.Kind == AppBarCommandKind.ToggleButton;
+        bool accent = isToggle && cmd.IsChecked && enabled;   // CheckedDisabled drops the pill (:407-416)
+        var fg = !enabled ? Tok.TextDisabled : accent ? Tok.TextOnAccentPrimary : Tok.TextPrimary;
         return new BoxEl
         {
             Direction = 1,
@@ -336,50 +657,79 @@ internal sealed class CommandBarFlyoutBody : Component
             MinHeight = PrimaryRowHeight,
             Margin = new Edges4(2, 2, 2, 2),    // CommandBarFlyoutAppBarButtonInnerBorderMargin (:107)
             Corners = Radii.ControlAll,
-            HoverFill = cmd.Enabled ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            PressedFill = cmd.Enabled ? Tok.FillSubtleTertiary : ColorF.Transparent,
+            Fill = accent ? Tok.AccentDefault : ColorF.Transparent,
+            HoverFill = !enabled ? ColorF.Transparent : accent ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
+            PressedFill = !enabled ? ColorF.Transparent : accent ? Tok.AccentTertiary : Tok.FillSubtleTertiary,
             // AppBarButtonInnerBorder BackgroundTransition = BrushTransition Duration 0:0:0.083 (:282).
             HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
             BrushTransitionMs = Motion.ControlFaster,
             Accelerator = cmd.Accelerator,
-            OnClick = cmd.Enabled ? () => Run(cmd) : null,
-            HitTestVisible = cmd.Enabled,
-            IsEnabled = cmd.Enabled,
-            Focusable = cmd.Enabled,
-            Role = AutomationRole.Button,
+            // Primary commands do NOT auto-close the flyout — WinUI hooks closeFlyoutFunc only on SecondaryCommands
+            // (CommandBarFlyout.cpp:67-74, :398-422).
+            OnClick = enabled ? () => cmd.Invoke?.Invoke() : null,
+            OnKeyDown = enabled ? a => onKey(idx, a) : null,
+            HitTestVisible = enabled,
+            IsEnabled = enabled,
+            Focusable = enabled,
+            OnRealized = h => { if ((uint)idx < (uint)_primaryNodes.Length) _primaryNodes[idx] = h; },
+            Role = isToggle ? AutomationRole.ToggleButton : AutomationRole.Button,
             Children =
             [
-                new TextEl(cmd.Glyph) { Size = 16f, Color = fg, PressedColor = cmd.Enabled ? Tok.TextSecondary : fg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont },
+                new TextEl(cmd.Glyph)
+                {
+                    Size = 16f, Color = fg,
+                    // ForegroundCheckedPressed = TextOnAccentFillColorSecondary (:30); plain pressed = TextSecondary (:14).
+                    PressedColor = !enabled ? fg : accent ? Tok.TextOnAccentSecondary : Tok.TextSecondary,
+                    DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont,
+                },
             ],
         };
     }
 
-    // ── The trailing … ellipsis toggle (EllipsisButton: Width 44, glyph E712 @16, inner margin 2,2,6,2). ─────────
-    Element MoreButton(Action toggle) => Parts.Apply(CommandBarFlyout.PartMoreButton, new BoxEl
+    // ── The trailing … ellipsis toggle (EllipsisButton: Width 44, glyph E712 @16, inner margin 2,2,6,2 —
+    //    CommandBarFlyout_themeresources.xaml:563-624, :108). The width-expansion storyboard glides this node's
+    //    TranslateX delta/2 → 0 (MoreButtonTransform, :772-775). ────────────────────────────────────────────────
+    Element MoreButton(Action toggle, Action<int, KeyEventArgs> onKey)
     {
-        Direction = 0,
-        AlignItems = FlexAlign.Center,
-        Justify = FlexJustify.Center,
-        Width = MoreButtonWidth,
-        MinHeight = PrimaryRowHeight,
-        Margin = new Edges4(2, 2, 6, 2),
-        Corners = Radii.ControlAll,
-        HoverFill = Tok.FillSubtleSecondary,
-        PressedFill = Tok.FillSubtleTertiary,
-        HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
-        HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
-        Focusable = true,
-        OnClick = toggle,
-        Role = AutomationRole.Button,
-        Children =
-        [
-            new TextEl(Icons.More) { Size = 16f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont },
-        ],
-    }) with { OnClick = toggle, Role = AutomationRole.Button };
+        Action<NodeHandle> capture = h => _moreNode = h;
+        var box = new BoxEl
+        {
+            Direction = 0,
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Width = MoreButtonWidth,
+            MinHeight = PrimaryRowHeight,
+            Margin = new Edges4(2, 2, 6, 2),
+            Corners = Radii.ControlAll,
+            HoverFill = Tok.FillSubtleSecondary,
+            PressedFill = Tok.FillSubtleTertiary,
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
+            HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
+            Focusable = true,
+            OnClick = toggle,
+            OnKeyDown = a => onKey(Primary.Count, a),
+            OnRealized = capture,
+            Role = AutomationRole.Button,
+            Children =
+            [
+                new TextEl(Icons.More) { Size = 16f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont },
+            ],
+        };
+        var m = Parts.Apply(CommandBarFlyout.PartMoreButton, box);
+        return m with
+        {
+            OnClick = toggle,
+            Role = AutomationRole.Button,
+            OnKeyDown = box.OnKeyDown,
+            OnRealized = TemplateParts.Chain(capture, m.OnRealized),
+        };
+    }
 
-    // ── OverflowRegion: vertical labeled rows (CommandBarOverflowPresenter, ItemsPresenter margin 0,4,0,4). ───────
-    Element BuildOverflow()
+    // ── OverflowRegion (WinUI OverflowContentRoot / CommandBarOverflowPresenter): MinWidth 136 / MaxWidth 440 /
+    //    MaxHeight 480 with vertical auto-scroll (CommandBarFlyout_themeresources.xaml:530-537), rows inside the 3px
+    //    ItemsPresenter inset (:556). The expand/collapse clip storyboards drive this node. ─────────────────────
+    Element BuildOverflow(bool expandUp, bool secondaryOnly, Action<int, KeyEventArgs> onRowKey)
     {
         bool hasIconColumn = false, hasCheckColumn = false;
         for (int i = 0; i < Secondary.Count; i++)
@@ -391,10 +741,20 @@ internal sealed class CommandBarFlyoutBody : Component
         }
 
         var rows = new List<Element>(Secondary.Count);
-        foreach (var cmd in Secondary)
+        for (int j = 0; j < Secondary.Count; j++)
+        {
+            var cmd = Secondary[j];
             rows.Add(cmd.Kind == AppBarCommandKind.Separator
                 ? OverflowSeparator()
-                : OverflowRow(cmd, hasIconColumn, hasCheckColumn));
+                : OverflowRow(cmd, j, hasIconColumn, hasCheckColumn, onRowKey));
+        }
+
+        var column = new BoxEl
+        {
+            Direction = 1,
+            Padding = new Edges4(3, 3, 3, 3),   // ItemsPresenter Margin="3" (:556)
+            Children = rows.ToArray(),
+        };
 
         Action<NodeHandle> regionCapture = h => { if (_overflowNode is { } r) r.Value = h; };
         var region = new BoxEl
@@ -402,12 +762,18 @@ internal sealed class CommandBarFlyoutBody : Component
             Direction = 1,
             MinWidth = OverflowMinWidth,
             MaxWidth = OverflowMaxWidth,
-            Padding = new Edges4(0, 4, 0, 4),   // OverflowPresenter ItemsPresenter Margin 0,4,0,4 (generic.xaml:17000-17031)
-            // Bottom corners stay rounded; the top meets the primary row flush.
-            Corners = Radii.OverlayBottom,
+            // ExpandedDown joins the primary row above (bottom corners kept, BottomCornerRadiusFilterConverter
+            // :980-981); ExpandedUp joins it below (top corners kept, :971-972); secondary-only = a plain menu,
+            // all corners rounded.
+            Corners = secondaryOnly ? Radii.OverlayAll : expandUp ? Radii.OverlayTop : Radii.OverlayBottom,
             ClipToBounds = true,
-            OnRealized = regionCapture,         // the expand/collapse clip+translate storyboards drive this node
-            Children = rows.ToArray(),
+            OnRealized = regionCapture,         // the expand/collapse clip storyboards drive this node
+            Children =
+            [
+                // CommandBarOverflowPresenter ScrollViewer: MaxHeight 480, VerticalScrollMode/Visibility Auto
+                // (:532-536) — short menus size to their rows, tall ones scroll.
+                new ScrollEl { Content = column, ContentSized = true, MaxHeight = OverflowMaxHeight },
+            ],
         };
         // Parts: restyle the overflow chrome; the storyboard node capture, the clip and the rows always win.
         if (Parts is { } op)
@@ -420,140 +786,142 @@ internal sealed class CommandBarFlyoutBody : Component
 
     static Element OverflowSeparator() => AppBarSeparator.Create(overflow: true);
 
-    Element OverflowRow(AppBarCommand cmd, bool hasIconColumn, bool hasCheckColumn)
+    Element OverflowRow(AppBarCommand cmd, int idx, bool hasIconColumn, bool hasCheckColumn, Action<int, KeyEventArgs> onRowKey)
     {
         bool isToggle = cmd.Kind == AppBarCommandKind.ToggleButton;
         bool isChecked = isToggle && cmd.IsChecked;
         bool enabled = cmd.Enabled;
         bool hasSub = cmd.Flyout is { Count: > 0 };
-        // Checked toggle = accent pill + on-accent foreground (CommandBarFlyoutAppBarButtonForegroundChecked =
-        // TextOnAccentFillColorPrimary :28; pressed → ...Secondary :30; disabled → ...Disabled :31).
-        ColorF fg = isChecked
-            ? (enabled ? Tok.TextOnAccentPrimary : Tok.TextOnAccentDisabled)
-            : (enabled ? Tok.TextPrimary : Tok.TextDisabled);
-        ColorF pressedFg = isChecked ? Tok.TextOnAccentSecondary : Tok.TextSecondary;
+        // V2 overflow rows NEVER paint the accent pill: OverflowChecked sets ONLY OverflowCheckGlyph.Opacity=1
+        // (CommandBarFlyout_themeresources.xaml:434-438); OverflowCheckedPointerOver/Pressed reuse the Subtle
+        // BackgroundPointerOver/Pressed with TextFillColorPrimary foreground (:439-458); CheckedDisabled = disabled
+        // foregrounds + the visible glyph, still no pill (:407-416).
+        ColorF fg = enabled ? Tok.TextPrimary : Tok.TextDisabled;
+        ColorF pressedFg = enabled ? Tok.TextSecondary : Tok.TextDisabled;   // ForegroundPressed = TextFillColorSecondary (:14)
 
+        // Metrics note: WinUI's overflow ladder is authored in ROW coordinates (the InnerBorder plate is a 2px-inset
+        // sibling, :107/:280) while our row box IS the plate — plate-local lefts/rights below are the WinUI values −2
+        // so the absolute leads match: text lead 12 plain / 39 with toggles / 67 with toggles+icons (:301/:152/:180).
         var children = new List<Element>(5);
-        // Check glyph: E73E @12, Margin 15,4,14,4 (:505); TouchInputMode → 12,10,12,10 (:465). Painted when checked.
+        // Check glyph: E73E @12, Margin 15,4,14,4 row-coords (:505) ⇒ 13,4,12,4 plate-local (13+12+12 = the 37 ⇒ 39
+        // lead); TouchInputMode → 12,10,12,10 (:465) ⇒ 10,10,15,10. Painted when checked (even disabled, :414).
         if (hasCheckColumn)
         {
             Element check = isChecked
-                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = enabled ? pressedFg : fg, FontFamily = Theme.IconFont }
+                ? new TextEl(Icons.Accept) { Size = 12f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont }
                 : new BoxEl { Width = 12f };
             children.Add(new BoxEl
             {
-                Margin = TouchInputMode ? new Edges4(12, 10, 12, 10) : new Edges4(15, 4, 14, 4),
+                Margin = TouchInputMode ? new Edges4(10, 10, 15, 10) : new Edges4(13, 4, 12, 4),
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,
                 Children = [check],
             });
         }
-        // Menu icon: 16×16 at left, Margin 12,0,12,0 (the toggle column above supplies the 39 lead when present —
-        // OverflowWithToggleButtonsAndMenuIcons ContentViewbox Margin 39,0,12,0 :177).
+        // Menu icon: 16×16 ContentViewbox — Margin 12,0,12,0 alone (text lead 39, :163/:166) or led by the toggle
+        // column (Margin 39,0,12,0 → text lead 67, :177/:180); plate-local −2 on the outer edges.
         if (hasIconColumn)
         {
             Element icon = cmd.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = 16f, Color = fg, PressedColor = enabled ? pressedFg : fg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont }
+                ? new TextEl(g) { Size = 16f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont }
                 : new BoxEl();
             children.Add(new BoxEl
             {
                 Width = 16f, Height = 16f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,
-                Margin = hasCheckColumn ? new Edges4(0, 0, 12, 0) : new Edges4(12, 0, 12, 0),
+                Margin = hasCheckColumn ? new Edges4(0, 0, 12, 0) : new Edges4(10, 0, 11, 0),
                 Children = [icon],
             });
         }
-        // OverflowTextLabel: Body 14, Padding 0,6,0,7 (:301); TouchInputMode → 0,9,0,11 (:243/:464); lead margin 12
-        // when no leading columns (12/39/67 ladder — the columns above supply the 39/67 leads).
+        bool hasTrailing = cmd.AcceleratorText is { Length: > 0 } || hasSub;
+        // OverflowTextLabel: Body 14, Padding 0,6,0,7 (:301); TouchInputMode → 0,9,0,11 (:243/:464); Margin
+        // 12,0,12,0 row-coords when no leading columns (the 12/39/67 ladder, :301/:152/:180).
         children.Add(new BoxEl
         {
             Grow = 1f,
             Direction = 0,
             AlignItems = FlexAlign.Center,
             Padding = TouchInputMode ? new Edges4(0, 9, 0, 11) : new Edges4(0, 6, 0, 7),
-            Margin = (hasCheckColumn || hasIconColumn) ? default : new Edges4(12, 0, 12, 0),
-            Children = [new TextEl(cmd.Label) { Size = 14f, Color = fg, PressedColor = enabled ? pressedFg : fg, DisabledColor = Tok.TextDisabled, Trim = TextTrim.Clip }],
+            Margin = new Edges4((hasCheckColumn || hasIconColumn) ? 0f : 10f, 0, hasTrailing ? 0f : 10f, 0),
+            Children = [new TextEl(cmd.Label) { Size = 14f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, Trim = TextTrim.Clip }],
         });
         // KeyboardAcceleratorTextLabel: Caption 12, right-aligned, Margin 24,0,12,0, TextSecondary→pressed Tertiary
         // ramp (:302 + CommandBarFlyoutAppBarButtonKeyboardTextLabelForeground* :16-18).
         if (cmd.AcceleratorText is { Length: > 0 } acc)
             children.Add(new TextEl(acc)
             {
-                Size = 12f, Margin = new Edges4(24, 0, 12, 0), AlignSelf = FlexAlign.Center,
-                Color = isChecked ? fg : (enabled ? Tok.TextSecondary : Tok.TextDisabled),
-                PressedColor = isChecked ? pressedFg : (enabled ? Tok.TextTertiary : Tok.TextDisabled),
+                Size = 12f, Margin = new Edges4(24, 0, hasSub ? 12f : 10f, 0), AlignSelf = FlexAlign.Center,
+                Color = enabled ? Tok.TextSecondary : Tok.TextDisabled,
+                PressedColor = enabled ? Tok.TextTertiary : Tok.TextDisabled,
                 DisabledColor = Tok.TextDisabled,
             });
-        // SubItemChevron: E76C @12, Margin 12,0,12,0, SubItemChevron foreground ramp (:303 + :19-23).
+        // SubItemChevron: E76C @12, Margin 12,0,12,0 (:303), SubItemChevron foreground ramp (:19-23).
         if (hasSub)
             children.Add(new TextEl(Icons.ChevronRight)
             {
-                Size = 12f, FontFamily = Theme.IconFont, Margin = new Edges4(12, 0, 12, 0), AlignSelf = FlexAlign.Center,
+                Size = 12f, FontFamily = Theme.IconFont, Margin = new Edges4(12, 0, 10, 0), AlignSelf = FlexAlign.Center,
                 Color = enabled ? Tok.TextSecondary : Tok.TextDisabled,
                 PressedColor = enabled ? Tok.TextTertiary : Tok.TextDisabled,
                 DisabledColor = Tok.TextDisabled,
             });
 
-        var rowNode = new NodeHandle[1];
+        int j = idx;
         return new BoxEl
         {
             Direction = 0,
             MinHeight = 0f,
             AlignItems = FlexAlign.Center,
-            Margin = new Edges4(4, 2, 4, 2),
+            Margin = new Edges4(2, 2, 2, 2),    // the InnerBorder plate inset (InnerBorderMargin = 2, :107)
             Corners = Radii.ControlAll,
             Role = isToggle ? AutomationRole.ToggleButton : AutomationRole.MenuItem,
-            // CommandBarFlyoutAppBarButtonBackgroundChecked = AccentFillColorDefault (:24); CheckedPointerOver =
-            // AccentFillColorSecondary (:25); CheckedPressed = AccentFillColorTertiary (:26); CheckedDisabled =
-            // AccentFillColorDisabled (:27) — a DISABLED checked row keeps the disabled pill and suppresses
-            // hover/press feedback (the engine's IsEnabled gate stops hover/press; the resting fill is control-chosen).
-            Fill = isChecked ? (enabled ? Tok.AccentDefault : Tok.AccentDisabled) : ColorF.Transparent,
-            HoverFill = !enabled ? (isChecked ? Tok.AccentDisabled : ColorF.Transparent)
-                       : (isChecked ? Tok.AccentSecondary : Tok.FillSubtleSecondary),
-            PressedFill = !enabled ? (isChecked ? Tok.AccentDisabled : ColorF.Transparent)
-                        : (isChecked ? Tok.AccentTertiary : Tok.FillSubtleTertiary),
+            // Subtle ramp only — checked rows reveal the glyph, never an accent plate (OverflowChecked :434-438;
+            // OverflowCheckedPointerOver/Pressed reuse BackgroundPointerOver/Pressed :443/:453).
+            Fill = ColorF.Transparent,
+            HoverFill = enabled ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            PressedFill = enabled ? Tok.FillSubtleTertiary : ColorF.Transparent,
             BrushTransitionMs = Motion.ControlFaster,   // 83ms BrushTransition on the row background (:282)
             HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
             Accelerator = cmd.Accelerator,
-            OnClick = enabled ? () => RunSecondary(cmd, rowNode) : null,
+            OnClick = enabled ? () => RunSecondary(cmd, j) : null,
+            OnKeyDown = enabled ? a => onRowKey(j, a) : null,
             HitTestVisible = enabled,
             IsEnabled = enabled,
             Focusable = enabled,
-            OnRealized = h => rowNode[0] = h,
+            OnRealized = h => { if ((uint)j < (uint)_secondaryNodes.Length) _secondaryNodes[j] = h; },
             Children = children.ToArray(),
         };
     }
 
-    void Run(AppBarCommand cmd)
-    {
-        cmd.Invoke?.Invoke();
-        // Toggle commands flip their checked state but keep the flyout open (CommandBarFlyout.cpp:335-340: toggle
-        // handlers do not Hide()); plain buttons commit and close.
-        if (cmd.Kind == AppBarCommandKind.ToggleButton) return;
-        Close();
-    }
-
     // Secondary rows: a command WITH a Flyout opens its cascading sub-menu and must NOT close the parent
-    // (CommandBarFlyout.cpp:95-108 — the Hide() call is gated on !button.Flyout()); toggles stay open; buttons close.
-    void RunSecondary(AppBarCommand cmd, NodeHandle[] rowNode)
+    // (CommandBarFlyout.cpp:95-108 — the Hide() call is gated on !button.Flyout()); plain buttons AND toggles close —
+    // closeFlyoutFunc = Hide() is hooked on Click, Checked AND Unchecked alike (cpp:97/:104-105, :414-419).
+    void RunSecondary(AppBarCommand cmd, int idx)
     {
         if (cmd.Flyout is { Count: > 0 } subItems)
         {
             if (subHandleLive is { IsOpen: true } s) { s.Close(); subHandleLive = null; }
             var svc2 = lastService;
             if (svc2 is null) return;
+            int j = idx;
             subHandleLive = svc2.Open(
-                () => rowNode[0],
-                () => MenuFlyout.Build(subItems, Close),   // invoking a sub item closes the WHOLE chain
+                () => (uint)j < (uint)_secondaryNodes.Length ? _secondaryNodes[j] : default,
+                // invoking a sub item closes the WHOLE chain (through the 83ms closing fade)
+                () => MenuFlyout.Build(subItems, () => _requestClose?.Invoke()),
                 FlyoutPlacement.RightEdgeAlignedTop,
                 new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
             return;
         }
-        Run(cmd);
+        cmd.Invoke?.Invoke();
+        _requestClose?.Invoke();
     }
 
-    // Cascading sub-flyout plumbing + the overflow-region node ref: captured at render time (UseContext/UseRef are
-    // render-scoped; instance fields let the row builders — instance methods — reach them).
+    // Cascading sub-flyout plumbing + node captures: UseContext/UseRef are render-scoped; instance fields let the
+    // row builders — instance methods — reach them.
     IOverlayService? lastService;
     OverlayHandle? subHandleLive;
     Ref<NodeHandle>? _overflowNode;
+    NodeHandle[] _primaryNodes = [];
+    NodeHandle[] _secondaryNodes = [];
+    NodeHandle _moreNode;
+    NodeHandle _rootNode;
+    Action? _requestClose;
 }

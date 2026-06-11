@@ -7217,7 +7217,8 @@ static class Slice
             Poll();
             bool autoClosed = !TipOpen();
 
-            Hover(52f, 50f);                  // re-hover < 200ms (wall) after the close → RESHOW delay (400ms)
+            Hover(10f, 10f);                  // auto-dismiss latches until a real owner leave
+            Hover(52f, 50f);                  // re-enter < 200ms (wall) after the close → RESHOW delay (400ms)
             Poll();
             Step(300f);
             Poll();
@@ -8824,19 +8825,19 @@ static class Slice
                     Tok.Use(kind);
                     const float tol = 1.5f / 255f;
 
-                    // Selected + multi-select + unchecked plate → [ic-content, ic-ring, ic-inner, ic-check].
+                    // Selected + multi-select + unchecked plate → [ic-content, ic-ring, ic-common, ic-check].
                     var scene = LayoutTree(strings, ItemContainer.Build(new BoxEl(), isSelected: true,
                         onInteraction: (t, mods) => { }, showSelectionCheckbox: true, isChecked: false, width: 120f, height: 48f));
                     var root = scene.Root;
                     ref var p = ref scene.Paint(root);
                     var ringN = Child(scene, root, 1);
-                    var innerN = Child(scene, root, 2);
+                    var commonN = Child(scene, root, 2);
                     var plateN = Child(scene, Child(scene, root, 3), 0);
                     bool states = ColorClose(p.Fill, ColorF.Transparent, tol)                      // ItemContainerBackground = SubtleFillColorTransparent (:5/:37)
-                        && ColorClose(p.HoverFill, hover, tol) && ColorClose(p.PressedFill, pressed, tol)
+                        && ColorClose(scene.Paint(commonN).HoverFill, hover, tol) && ColorClose(scene.Paint(commonN).PressedFill, pressed, tol)
                         && ColorClose(scene.Paint(ringN).BorderColor, ring, tol) && Near(scene.Paint(ringN).BorderWidth, 3f)   // PART_SelectionVisual (ItemContainer.xaml:116-126)
-                        && ColorClose(scene.Paint(innerN).BorderColor, inner, tol) && Near(scene.Paint(innerN).BorderWidth, 1f);
-                    var ir = scene.AbsoluteRect(innerN);
+                        && ColorClose(scene.Paint(commonN).BorderColor, inner, tol) && Near(scene.Paint(commonN).BorderWidth, 1f);
+                    var ir = scene.AbsoluteRect(commonN);
                     var pr = scene.AbsoluteRect(plateN);
                     bool geometry = Near(ir.X, 2f) && Near(ir.Y, 2f) && Near(ir.W, 116f) && Near(ir.H, 44f)   // ItemContainerSelectedInnerMargin 2 (themeresources:57)
                         && Near(pr.W, 20f) && Near(pr.H, 20f) && Near(pr.X, 96f) && Near(pr.Y, -2f);          // 20px checkbox, top-right, Margin 4,−2 (:56,:59-60)
@@ -8883,7 +8884,7 @@ static class Slice
             recon.ReconcileRoot(t0, null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             var container = Child(scene, scene.Root, 0);
-            bool noChrome = scene.ChildCount(container) == 1;     // unselected + single → content layer only
+            bool noChrome = scene.ChildCount(container) == 2;     // unselected + single → content + CommonVisual only
 
             recon.ReconcileRoot(Tree(true, true), t0);            // select + flip to Multiple → ring + checkbox enter
             new FlexLayout(scene, fonts).Run(scene.Root);
@@ -8898,8 +8899,10 @@ static class Slice
             bool entering = ring16 < 0.95f && check16 < 0.95f && mid > check16 && mid < 1f;
 
             // the authored spec is exactly the WinUI storyboard: a 167ms decelerate TWEEN entering from opacity 0.
-            var checkEl = (BoxEl)ItemContainer.Build(new BoxEl(), false, (t, mods) => { }, showSelectionCheckbox: true).Children[1];
-            bool spec = checkEl.Animate is { } a && a.Dynamics.Kind == DynamicsKind.Tween && Near(a.Dynamics.DurationMs, 167f)
+            BoxEl? checkEl = null;
+            foreach (var child in ItemContainer.Build(new BoxEl(), false, (t, mods) => { }, showSelectionCheckbox: true).Children)
+                if (child is BoxEl { Key: "ic-check" } b) { checkEl = b; break; }
+            bool spec = checkEl?.Animate is { } a && a.Dynamics.Kind == DynamicsKind.Tween && Near(a.Dynamics.DurationMs, 167f)
                 && a.Dynamics.Easing == Easing.FluentDecelerate && a.Enter.Active && Near(a.Enter.Opacity, 0f)
                 && (a.Channels & TransitionChannels.Opacity) != 0;
             Check("e11virt.12 ItemContainer ring + checkbox enter-fade 0→1 over the 167ms ControlFastAnimationDuration tween",
@@ -8960,7 +8963,7 @@ static class Slice
             bool home = ctl.CurrentItemIndex == 0 && Near(Sc().OffsetY, 0f);
             Check("e11virt.13 ItemsView keyboard: arrows follow focus, PageUp/Down jump a viewport, Home/End edge-align + focus the realized container",
                 def && click && down && up && pgdn && pgup && end && home,
-                $"cur 2→3→2→10→2→99→0 end-off={scEnd.OffsetY:0} focusY={fr.Y:0}");
+                $"def={def} click={click} down={down} up={up} pgdn={pgdn} pgup={pgup} end={end} home={home} cur={ctl.CurrentItemIndex} end-off={scEnd.OffsetY:0} focusY={fr.Y:0} focusH={fr.H:0}");
 
             Key(Keys.A, KeyModifiers.Ctrl);                              // Ctrl+A gated OFF in Single (ItemsViewInteractions.cpp:35-50)
             bool noSelectAll = sel.SelectedCount == 1;
@@ -10152,6 +10155,145 @@ static class Slice
             sizes && lineHs && weights && strong, $"sizes={sizes} lineHs={lineHs} weights={weights} strong={strong}");
     }
 
+    // Wave C — the inline-run text model (SpanTextEl, rtb-01), read-only text selection (rtb-02) and the per-control
+    // SelectionHighlightColor (api-04). Headless advance model: w<600 → size×0.55/char, w≥600 → size×0.62/char;
+    // line height = metricSize×1.4; baseline = ×1.1 (HeadlessFontSystem.cs).
+    static void WaveCSpanTextChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var clip = new HeadlessClipboard();
+        var dispatcher = new InputDispatcher(scene) { Fonts = fonts, Clipboard = clip };
+        CursorId cursor = CursorId.Arrow;
+        dispatcher.OnCursorChanged = c => cursor = c;
+        bool linkClicked = false;
+        var gold = ColorF.FromRgba(0xFF, 0xD7, 0x00);
+        var red = ColorF.FromRgba(0xFF, 0x00, 0x00);
+
+        recon.ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 200, Height = 100,
+            Children =
+            [
+                // [0] mixed-weight flow: "aaaa " base 400 (5 × 5.5 = 27.5) + "bbbb" 700 (4 × 6.2 = 24.8) → 52.3 one flow
+                new SpanTextEl([new TextSpan("aaaa "), new TextSpan("bbbb", Weight: 700)]) { Size = 10f },
+                // [1] hyperlink paragraph: link "docs" covers chars [9,13) → x [49.5, 71.5) on its line
+                new SpanTextEl(
+                [
+                    new TextSpan("Read the "),
+                    new TextSpan("docs", Color: gold, Underline: true, OnClick: () => linkClicked = true),
+                    new TextSpan(" now"),
+                ]) { Size = 10f },
+                // [2] selectable paragraph with a per-control highlight override (api-04)
+                new SpanTextEl([new TextSpan("Hello world")]) { Size = 10f, IsTextSelectionEnabled = true, SelectionHighlightColor = red },
+                // [3] plain TextEl, selection opt-in (WinUI TextBlock.cpp:583), engine-default highlight brush
+                new TextEl("Copy me too") { Size = 10f, IsTextSelectionEnabled = true },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+
+        var mixed = Child(scene, scene.Root, 0);
+        var linky = Child(scene, scene.Root, 1);
+        var sel = Child(scene, scene.Root, 2);
+        var plain = Child(scene, scene.Root, 3);
+
+        // (a) rtb-01: the paragraph measures as ONE flow with per-span advances (NOT a uniform-weight run), wraps as
+        // one unit, and reaches the draw stream as ONE glyph op carrying the span-run id.
+        var mixedStyle = scene.Layout(mixed).TextStyle;
+        var mUnwrapped = fonts.Measure(scene.Paint(mixed).Text, mixedStyle);
+        var mWrapped = fonts.Measure(scene.Paint(mixed).Text, mixedStyle, 30f);   // "aaaa " | "bbbb" → 2 lines × 14
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(200, 100), 1f, ColorF.Transparent));
+        int mixedOps = 0, mixedSpanId = 0;
+        foreach (var g in dev.LastGlyphs)
+            if (strings.Resolve(g.Text) == "aaaa bbbb") { mixedOps++; mixedSpanId = g.SpanRunId; }
+        Check("WC-SPAN.a mixed-weight spans measure as a SINGLE flow (52.3 = 5×5.5 + 4×6.2; wraps to 2 lines) and emit ONE glyph op",
+            Near(mUnwrapped.Size.Width, 52.3f, 0.01f) && Near(mWrapped.Size.Height, 28f, 0.01f)
+            && mixedOps == 1 && mixedSpanId != 0,
+            $"w={mUnwrapped.Size.Width:0.0} wrapH={mWrapped.Size.Height:0.0} ops={mixedOps} spanId={mixedSpanId}");
+
+        // (b) hyperlink span: Hand cursor over the span's laid rects (RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)),
+        // arrow elsewhere on the same node, click fires the span's OnClick; the underline bar draws in the span color.
+        var lr = scene.AbsoluteRect(linky);
+        var overLink = new Point2(lr.X + 55f, lr.Y + 7f);     // inside "docs" [49.5, 71.5)
+        var offLink = new Point2(lr.X + 10f, lr.Y + 7f);      // inside "Read the"
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, overLink, 0, 0) });
+        bool handOverLink = cursor == CursorId.Hand;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, offLink, 0, 0) });
+        bool arrowOffLink = cursor == CursorId.Arrow;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, overLink, 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, overLink, 0, 0) });
+        bool underlineInLinkColor = false;
+        foreach (var r in dev.LastRects)
+            if (ColorClose(r.Fill, gold, 0.01f) && Near(r.Rect.H, 1f, 0.01f) && Near(r.Rect.W, 22f, 0.01f)) underlineInLinkColor = true;
+        Check("WC-SPAN.b hyperlink span: Hand over its rects, arrow off them, OnClick fires, underline bar in the span color",
+            handOverLink && arrowOffLink && linkClicked && underlineInLinkColor,
+            $"hand={handOverLink} arrow={arrowOffLink} clicked={linkClicked} underline={underlineInLinkColor}");
+
+        // (c) rtb-02: drag-select publishes selection rects through the editor slab; Ctrl+C copies through the
+        // clipboard seam (TextSelectionManager.cpp:30-41); double-click selects the word under the press.
+        var sr = scene.AbsoluteRect(sel);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(sr.X + 1f, sr.Y + 7f), 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(sr.X + 29f, sr.Y + 7f), 0, 0) });   // → "Hello" [0,5)
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(sr.X + 29f, sr.Y + 7f), 0, 0) });
+        var dragRects = scene.GetTextEditSelectionRects(sel);
+        bool dragRectOk = dragRects.Length == 1 && Near(dragRects[0].W, 27.5f, 0.01f);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, 'C', Mods: KeyModifiers.Ctrl) });
+        bool copiedHello = clip.TryGetText(out string copied1) && copied1 == "Hello";
+        // double-click on "world" (chars [6,11) → x 33..60.5): press, release, press again inside the slop window
+        var onWorld = new Point2(sr.X + 35f, sr.Y + 7f);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, onWorld, 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, onWorld, 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, onWorld, 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, onWorld, 0, 0) });
+        bool wordSel = scene.TryGetTextSelection(sel, out int ws, out int we) && ws == 6 && we == 11;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, 'C', Mods: KeyModifiers.Ctrl) });
+        bool copiedWorld = clip.TryGetText(out string copied2) && copied2 == "world";
+        Check("WC-SPAN.c drag-select publishes rects + Ctrl+C copies; double-click selects the word",
+            dragRectOk && copiedHello && wordSel && copiedWorld,
+            $"rects={dragRects.Length} w={(dragRects.Length > 0 ? dragRects[0].W : 0):0.0} copy1='{copied1}' word=({ws},{we}) copy2='{copied2}'");
+
+        // (d) api-04: the per-control SelectionHighlightColor reaches the draw; a control WITHOUT the override keeps
+        // the host theme brush (TextControlSelectionHighlightColor ≡ system accent, TextSelectionManager.cpp:52-56).
+        var themeBlue = ColorF.FromRgba(0x00, 0x78, 0xD4);
+        var te = new TextEditStyle(themeBlue, ColorF.FromRgba(0xFF, 0xFF, 0xFF), ColorF.FromRgba(0xFF, 0xFF, 0xFF));
+        SceneRecorder.Record(scene, dl, textEdit: te);   // "world" still selected on the override paragraph
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(200, 100), 1f, ColorF.Transparent));
+        bool overrideReachesDraw = false, themeLeaked = false;
+        foreach (var r in dev.LastRects)
+        {
+            if (ColorClose(r.Fill, red, 0.01f)) overrideReachesDraw = true;
+            if (ColorClose(r.Fill, themeBlue, 0.01f)) themeLeaked = true;
+        }
+        // now select on the plain TextEl (no override) → the theme brush paints
+        var pr = scene.AbsoluteRect(plain);
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(pr.X + 1f, pr.Y + 7f), 0, 0) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(pr.X + 23f, pr.Y + 7f), 0, 0) });  // → "Copy" [0,4)
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(pr.X + 23f, pr.Y + 7f), 0, 0) });
+        SceneRecorder.Record(scene, dl, textEdit: te);
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(200, 100), 1f, ColorF.Transparent));
+        bool themeOnPlain = false;
+        foreach (var r in dev.LastRects)
+            if (ColorClose(r.Fill, themeBlue, 0.01f)) themeOnPlain = true;
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, 'C', Mods: KeyModifiers.Ctrl) });
+        bool copiedFromTextEl = clip.TryGetText(out string copied3) && copied3 == "Copy";
+        Check("WC-SPAN.d SelectionHighlightColor override reaches the draw; default keeps the theme brush; TextEl opt-in selects",
+            overrideReachesDraw && !themeLeaked && themeOnPlain && copiedFromTextEl,
+            $"override={overrideReachesDraw} leak={themeLeaked} theme={themeOnPlain} copy3='{copied3}'");
+
+        // (e) steady-state: with a live selection + span paragraphs, a re-record allocates ZERO managed bytes
+        // (artifacts/measure cached at layout; the recorder only reads — phases 6–13 stay clean).
+        SceneRecorder.Record(scene, dl, textEdit: te);   // warm growth (DrawList buffers, rect slabs)
+        SceneRecorder.Record(scene, dl, textEdit: te);
+        long a0 = GC.GetAllocatedBytesForCurrentThread();
+        SceneRecorder.Record(scene, dl, textEdit: te);
+        long recBytes = GC.GetAllocatedBytesForCurrentThread() - a0;
+        Check("WC-SPAN.e record with span paragraphs + live selection allocates 0 bytes", recBytes == 0, $"{recBytes} bytes");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -10311,6 +10453,9 @@ static class Slice
         // Wave C — text pipeline parity (numeric FontWeight, CharacterSpacing, LineHeight/LineStacking,
         // TextLineBounds=Tight, WinUI type-ramp values).
         WaveCTextPipelineChecks(strings);
+
+        // Wave C — inline-run text model (SpanTextEl, rtb-01), read-only selection (rtb-02), SelectionHighlightColor (api-04).
+        WaveCSpanTextChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

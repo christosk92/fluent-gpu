@@ -78,6 +78,22 @@ public sealed class ReorderList
         }
     }
 
+    /// <summary>The pending insertion boundary in the list's resting main-axis coordinates. This follows
+    /// <see cref="PendingIndex"/> immediately, before the live-reorder dwell promotes it to
+    /// <see cref="TargetIndex"/>, so virtualized/list controls can show a deterministic drop cue even while
+    /// displaced siblings are still waiting on WinUI's dwell timer.</summary>
+    public float PendingInsertionLineOffset
+    {
+        get
+        {
+            if (_dragged < 0 || _pending < 0 || (uint)_pending >= (uint)_count) return 0f;
+            float pos = _pending > _dragged
+                ? _starts[_pending] + _extents[_pending] + _spacing * 0.5f
+                : _starts[_pending] - _spacing * 0.5f;
+            return MathF.Max(0f, pos);
+        }
+    }
+
     /// <summary>Start a reorder for <paramref name="draggedIndex"/> over items with the given resting main-axis
     /// <paramref name="itemExtents"/>, separated by <paramref name="spacing"/> (the container's Gap). Copies the
     /// extents into grow-only storage (no per-drag steady alloc once grown).</summary>

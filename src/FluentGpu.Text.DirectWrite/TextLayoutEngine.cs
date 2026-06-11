@@ -7,13 +7,19 @@ using static TerraFX.Interop.Windows.Windows;
 namespace FluentGpu.Text.DirectWrite;
 
 /// <summary>One laid-out glyph: post-shaping glyph id, the DWrite face it belongs to (as <c>nint</c>), and its pen
-/// position in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top.</summary>
+/// position in DIP — X within the paragraph (line-relative origin folded in), Y = its line baseline from the top.
+/// <see cref="Size"/> is the DIP em size the glyph was shaped at (spans may override the base size) and
+/// <see cref="Span"/> the index of the <see cref="SpanStyle"/> it belongs to (−1 = the base style) — the renderer
+/// rasterizes at <see cref="Size"/> and tints per span (rtb-01 inline runs).</summary>
 public readonly struct LaidGlyph
 {
     public readonly ushort Gid;
     public readonly nint Face;
     public readonly float X, Y;
-    public LaidGlyph(ushort gid, nint face, float x, float y) { Gid = gid; Face = face; X = x; Y = y; }
+    public readonly float Size;
+    public readonly short Span;
+    public LaidGlyph(ushort gid, nint face, float x, float y, float size, short span)
+    { Gid = gid; Face = face; X = x; Y = y; Size = size; Span = span; }
 }
 
 /// <summary>Source mapping for one laid glyph — the hit-test companion to <see cref="LaidGlyph"/> (parallel to
@@ -84,7 +90,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private LaidLine[] _lines = new LaidLine[4];
     private int _lineRecCount;
     private int _textLen;
-    private ushort _ellGid; private float _ellAdv; private nint _ellFace;
+    private ushort _ellGid; private float _ellAdv; private nint _ellFace; private float _ellSize;
 
     public float Width { get; private set; }
     public float Height { get; private set; }
@@ -104,7 +110,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// <see cref="Layout"/>.</summary>
     public ReadOnlySpan<LaidLine> Lines => _lines.AsSpan(0, _lineRecCount);
 
-    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; }
+    private struct RunGlyph { public ushort Gid; public nint Face; public float Advance; public int Cluster; public byte Level; public float Size; public short Span; }
 
     public TextLayoutEngine()
     {
@@ -132,9 +138,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// are the TextWrap/TextTrim enum ints; <paramref name="size"/> is DIP. <paramref name="weight"/> is the NUMERIC
     /// font weight — the int IS the DWRITE_FONT_WEIGHT (clamped 1..999; ≤0 → 400). <paramref name="charSpacing"/> is
     /// WinUI CharacterSpacing in 1/1000 em; <paramref name="lineHeight"/> (DIP; NaN/≤0 = font-natural) resolves per
-    /// <paramref name="stacking"/> (LineStacking enum int) and <paramref name="lineBounds"/> (TextLineBounds enum int).</summary>
+    /// <paramref name="stacking"/> (LineStacking enum int) and <paramref name="lineBounds"/> (TextLineBounds enum int).
+    /// <para><paramref name="spans"/> (rtb-01 inline runs): per-char-range style overlays applied over the base style —
+    /// the text still shapes as ONE flow (one itemize + one wrap pass, like a WinUI paragraph's inline collection);
+    /// each span resolves its own face/weight/size for its range. <paramref name="names"/> resolves span family ids
+    /// (null ⇒ span families fall back to the base family). Line box: the MAX ascent/descent across base + spans —
+    /// one uniform line height per paragraph (the per-line LineStackingStrategy=MaxHeight refinement for mixed-size
+    /// lines is future work; uniform-size spans, the overwhelming case, are exact).</para></summary>
     public void Layout(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
-        float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0)
+        float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0,
+        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null)
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
@@ -146,9 +159,26 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         // height AND the in-box baseline; glyph descenders/underline simply extend below the reported box.
         float ascUnits = lineBounds == (int)TextLineBounds.Tight ? fm.Cap : fm.Asc;
         float descUnits = lineBounds == (int)TextLineBounds.Tight ? 0f : fm.Desc;
-        float lineH = (ascUnits + descUnits) * scale;
+        float ascDip = ascUnits * scale, descDip = descUnits * scale;
+        // Span runs: the line box is the max ascent/descent across the base AND every span face/size, so a larger
+        // span lifts the whole paragraph's lines instead of overlapping its neighbors.
+        for (int si = 0; si < spans.Length; si++)
+        {
+            ref readonly var sp = ref spans[si];
+            string fam2 = family;
+            if (!sp.FontFamily.IsEmpty && names is not null) { var f2 = names.Resolve(sp.FontFamily); if (f2.Length > 0) fam2 = f2; }
+            int w2 = sp.Weight != 0 ? sp.Weight : weight;
+            float sz2 = sp.SizeDip > 0f ? sp.SizeDip : size;
+            ResolveFace(fam2, w2, out FaceMetrics fm2);
+            float scale2 = fm2.Em > 0 ? sz2 / fm2.Em : sz2 / 2048f;
+            float asc2 = (lineBounds == (int)TextLineBounds.Tight ? fm2.Cap : fm2.Asc) * scale2;
+            float desc2 = (lineBounds == (int)TextLineBounds.Tight ? 0f : (float)fm2.Desc) * scale2;
+            if (asc2 > ascDip) ascDip = asc2;
+            if (desc2 > descDip) descDip = desc2;
+        }
+        float lineH = ascDip + descDip;
         if (lineH <= 0f) lineH = size * 1.3f;
-        Baseline = ascUnits * scale;
+        Baseline = ascDip;
         // WinUI TextBlock.LineHeight + LineStackingStrategy (BaseTextBlockStyle default MaxHeight,
         // TextBlock_themeresources.xaml:16): MaxHeight = line advance max(font-natural, LineHeight);
         // BlockLineHeight = the advance IS LineHeight. The baseline scales proportionally with the resolved height
@@ -176,7 +206,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         }
 
         // Ellipsis glyph for this face (for trim) — a single glyph, no shaping needed.
-        _ellFace = (nint)face; _ellGid = 0; _ellAdv = 0f;
+        _ellFace = (nint)face; _ellGid = 0; _ellAdv = 0f; _ellSize = size;
         if (face != null)
         {
             uint ec = '…'; ushort eg; face->GetGlyphIndices(&ec, 1, &eg);
@@ -190,24 +220,44 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         // AFTER shaping (the IDWriteTextLayout1::SetCharacterSpacing model). This engine is a custom itemize→shape
         // pipeline (there is no IDWriteTextLayout object to call SetCharacterSpacing on), so the post-shaping advance
         // adjustment IS the implementation, not a fallback approximation — wrap/trim/queries all see the spaced advances.
-        float spacing = charSpacing != 0f ? size * charSpacing / 1000f : 0f;
+        // Em-relative, so a span that overrides the size scales its own tracking with it.
 
-        // Shape each run, splitting by font-fallback coverage so CJK/emoji/symbols resolve to a covering face.
+        // Shape each run, splitting at SPAN boundaries (per-segment face/weight/size — the rtb-01 inline-run overlay)
+        // and then by font-fallback coverage so CJK/emoji/symbols resolve to a covering face. One itemize + one wrap
+        // pass over the whole paragraph: spans restyle ranges, they never re-flow independently.
         fixed (char* p = text)
         {
             _fsrc->Text = p; _fsrc->Len = (uint)n;
             foreach (var run in _runs)
             {
-                int pos = run.Start, remaining = run.Length;
-                while (remaining > 0)
+                int pos = run.Start, runEnd = run.Start + run.Length;
+                while (pos < runEnd)
                 {
-                    ResolveRunFace(family, weight, face, pos, remaining, out IDWriteFontFace* subFace, out int subLen);
-                    if (subLen <= 0) subLen = remaining;
-                    var shaped = _shaper.Shape(p, pos, subLen, subFace, size, run.ScriptId, run.ScriptShapes, run.IsRightToLeft);
-                    EnsureGlyphs(_glyphCount + shaped.Length);
-                    foreach (var g in shaped)
-                        _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = (nint)subFace, Advance = g.Advance + spacing, Cluster = g.Cluster, Level = run.BidiLevel };
-                    pos += subLen; remaining -= subLen;
+                    int spanIdx = -1;
+                    int segEnd = spans.IsEmpty ? runEnd : SpanSegmentEnd(spans, pos, runEnd, out spanIdx);
+                    string segFamily = family; int segWeight = weight; float segSize = size; short segSpan = -1;
+                    IDWriteFontFace* segFace = face;
+                    if (spanIdx >= 0)
+                    {
+                        ref readonly var sp = ref spans[spanIdx];
+                        segSpan = (short)spanIdx;
+                        if (sp.Weight != 0) segWeight = sp.Weight;
+                        if (sp.SizeDip > 0f) segSize = sp.SizeDip;
+                        if (!sp.FontFamily.IsEmpty && names is not null) { var f2 = names.Resolve(sp.FontFamily); if (f2.Length > 0) segFamily = f2; }
+                        if (segWeight != weight || segFamily != family) segFace = ResolveFace(segFamily, segWeight, out _);
+                    }
+                    float segSpacing = charSpacing != 0f ? segSize * charSpacing / 1000f : 0f;
+                    int remaining = segEnd - pos;
+                    while (remaining > 0)
+                    {
+                        ResolveRunFace(segFamily, segWeight, segFace, pos, remaining, out IDWriteFontFace* subFace, out int subLen);
+                        if (subLen <= 0) subLen = remaining;
+                        var shaped = _shaper.Shape(p, pos, subLen, subFace, segSize, run.ScriptId, run.ScriptShapes, run.IsRightToLeft);
+                        EnsureGlyphs(_glyphCount + shaped.Length);
+                        foreach (var g in shaped)
+                            _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = (nint)subFace, Advance = g.Advance + segSpacing, Cluster = g.Cluster, Level = run.BidiLevel, Size = segSize, Span = segSpan };
+                        pos += subLen; remaining -= subLen;
+                    }
                 }
             }
         }
@@ -321,13 +371,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int k = 0; k < useLen; k++)
         {
             ref readonly var g = ref _glyphs[order[k]];
-            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY);
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
             _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
             x += g.Advance;
         }
         if (ellipsize && _ellFace != 0)
         {
-            _laid[_laidCount++] = new LaidGlyph(_ellGid, _ellFace, x, baselineY);
+            _laid[_laidCount++] = new LaidGlyph(_ellGid, _ellFace, x, baselineY, _ellSize, -1);
             x += _ellAdv;
         }
         if (x > maxLineW) maxLineW = x;
@@ -450,6 +500,22 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 return _clusters[line.FirstGlyph + line.GlyphCount - 1].Cluster;
         }
         return line.EndChar;
+    }
+
+    /// <summary>The exclusive end of the homogeneous span segment starting at <paramref name="pos"/> (clamped to
+    /// <paramref name="limit"/>): inside a span → that span's end; in a gap → the next span's start (base style).
+    /// Spans are reconciler-built sorted + non-overlapping; a linear scan is fine at span counts (≤ tens).</summary>
+    private static int SpanSegmentEnd(ReadOnlySpan<SpanStyle> spans, int pos, int limit, out int spanIdx)
+    {
+        spanIdx = -1;
+        int segEnd = limit;
+        for (int i = 0; i < spans.Length; i++)
+        {
+            int s = spans[i].Start, e = spans[i].End;
+            if (pos >= s && pos < e) { spanIdx = i; return Math.Min(segEnd, e); }
+            if (s > pos && s < segEnd) segEnd = s;
+        }
+        return segEnd;
     }
 
     private void EnsureGlyphs(int n) { if (_glyphs.Length < n) Array.Resize(ref _glyphs, Math.Max(n, _glyphs.Length * 2)); }
