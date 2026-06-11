@@ -152,8 +152,10 @@ public static class ProgressRing
 
                 if (!props.IsActive)
                 {
-                    anim.Cancel(arcNode, AnimChannel.StrokeTrimEnd);
-                    anim.Cancel(arcNode, AnimChannel.StrokeTrimStart);
+                    // CancelToRest, not Cancel: a bare cancel freezes the last interpolated trim in paint (no NaN
+                    // sentinel), so the arc kept a stale partial sweep instead of resting on the ArcSpec terminal.
+                    anim.CancelToRest(arcNode, AnimChannel.StrokeTrimEnd);
+                    anim.CancelToRest(arcNode, AnimChannel.StrokeTrimStart);
                     return;
                 }
 

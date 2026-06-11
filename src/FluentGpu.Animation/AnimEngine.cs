@@ -262,6 +262,28 @@ public sealed class AnimEngine
     {
         for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node && _tracks[i].Channel == channel) _tracks.RemoveAt(i);
     }
+
+    /// <summary>Cancel + reset the channel's paint to its settle-time resting sentinel — symmetric with the settle
+    /// path (StrokeTrim/PresentedW/H → NaN, Clip → Infinite). A bare <see cref="Cancel"/> only drops the track,
+    /// freezing the last interpolated value in paint with no spec fallback (a deactivated ProgressRing froze a
+    /// partial arc). Channels without a rest sentinel (transform/opacity/layout) behave exactly like Cancel —
+    /// their resting value is the reconciler's static re-assert.</summary>
+    public void CancelToRest(NodeHandle node, AnimChannel channel)
+    {
+        Cancel(node, channel);
+        if (!_scene.IsLive(node)) return;
+        ref NodePaint p = ref _scene.Paint(node);
+        switch (channel)
+        {
+            case AnimChannel.SizeW: p.PresentedW = float.NaN; _scene.Unmark(node, NodeFlags.Relayouting); break;
+            case AnimChannel.SizeH: p.PresentedH = float.NaN; break;
+            case AnimChannel.StrokeTrimStart: p.StrokeTrimStart = float.NaN; break;
+            case AnimChannel.StrokeTrimEnd: p.StrokeTrimEnd = float.NaN; break;
+            case AnimChannel.ClipL or AnimChannel.ClipT or AnimChannel.ClipR or AnimChannel.ClipB: p.ClipRect = RectF.Infinite; break;
+            default: return;   // no rest sentinel — identical to Cancel
+        }
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
     public void CancelAll(NodeHandle node)
     {
         for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node) _tracks.RemoveAt(i);

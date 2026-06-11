@@ -794,6 +794,22 @@ sealed class W0fStaticProbe : Component
     public override Element Render() => Build();
 }
 
+// The NavPill resting-opacity shape (anim.rest.pill): a fade transition owns Opacity while animating, but a settled
+// track frees WITHOUT resetting the channel — so the element MUST declare the state-dependent static at the same
+// terminal, or any unrelated re-render snaps the hidden node back to the default 1f.
+sealed class PillRestProbe : Component
+{
+    public required FluentGpu.Signals.Signal<bool> Visible;
+    public required FluentGpu.Signals.Signal<int> Unrelated;
+    public override Element Render()
+    {
+        bool visible = Visible.Value;
+        _ = Unrelated.Value;                       // unrelated re-render trigger
+        UseTransition(AnimChannel.Opacity, visible ? 0f : 1f, visible ? 1f : 0f, 150f, Easing.EaseOut, visible);
+        return new BoxEl { Width = 3f, Height = 16f, Fill = Tok.AccentDefault, Opacity = visible ? 1f : 0f };
+    }
+}
+
 // Spring-retarget probe (check 23s): the gallery spring-lab path — a component effect re-seeds a spring on its own
 // captured node when state flips; a mid-flight retarget must keep position+velocity (no snap back to an endpoint).
 sealed class SpringLabProbe : Component
@@ -10270,6 +10286,94 @@ static class Slice
             host.Scene.Paint(nCan).TextColor == canCol.Peek(), $"paint={host.Scene.Paint(nCan).TextColor} want={canCol.Peek()}");
     }
 
+    // ── anim.rest.*: settled/canceled-track resting values vs static re-asserts (Prop<T> B-waves) ────────────────
+    static void AnimRestChecks(StringTable strings)
+    {
+        // B1: deactivating a ProgressRing must CancelToRest the trim channels (paint → NaN, recorder falls back to
+        // the ArcSpec terminal) — a bare Cancel froze the last interpolated partial sweep in paint.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("anim-rest-ring", new Size2(240, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var active = new Signal<bool>(true);
+            NodeHandle arc = default;
+            var parts = new TemplateParts();
+            parts[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Width = 120, Height = 120, Children = [ProgressRing.Indeterminate(isActive: active.Value, parts: parts)] },
+            });
+            host.RunFrame(); host.RunFrame(); host.RunFrame();   // let the trim loop write real values into paint
+            bool spinning = !arc.IsNull && host.Animation.HasTracks(arc);
+            active.Value = false;
+            host.RunFrame(); host.RunFrame();
+            ref var p = ref host.Scene.Paint(arc);
+            Check("anim.rest.progress.ring.cancel deactivation rests the trim channels at NaN (spec fallback), not a frozen partial arc",
+                spinning && !host.Animation.HasTracks(arc) && float.IsNaN(p.StrokeTrimStart) && float.IsNaN(p.StrokeTrimEnd),
+                $"spinning={spinning} tracks={host.Animation.HasTracks(arc)} trimS={p.StrokeTrimStart} trimE={p.StrokeTrimEnd}");
+        }
+
+        // B2: the NavPill shape — after a hide-fade settles and frees, an UNRELATED re-render must keep the node
+        // hidden (the element declares the state-dependent static at the transition terminal).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("anim-rest-pill", new Size2(240, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var visible = new Signal<bool>(true);
+            var unrelated = new Signal<int>(0);
+            using var host = new AppHost(app, window, device, fonts, strings, new PillRestProbe { Visible = visible, Unrelated = unrelated });
+            host.RunFrame();
+            var pill = host.Scene.FirstChild(host.Scene.Root);
+            visible.Value = false;
+            for (int f = 0; f < 40 && host.Animation.HasActive; f++) host.RunFrame();   // fade out + settle/free
+            bool settledHidden = Near(host.Scene.Paint(pill).Opacity, 0f, 0.01f) && !host.Animation.HasTracks(pill);
+            unrelated.Value = 1;                                                        // unrelated owner re-render
+            host.RunFrame();
+            Check("anim.rest.pill hidden-after-fade survives an unrelated re-render (state-dependent resting opacity)",
+                settledHidden && Near(host.Scene.Paint(pill).Opacity, 0f, 0.01f),
+                $"settledHidden={settledHidden} after={host.Scene.Paint(pill).Opacity}");
+        }
+
+        // B3: a settled transform track's terminal survives an owner re-render on an identity-declared polyline
+        // (the BoxEl :1003 identity gate now applies to PolylineStrokeEl too).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("anim-rest-poly", new Size2(240, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var rr = new Signal<int>(0);
+            NodeHandle wrap = default;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () =>
+                {
+                    _ = rr.Value;
+                    return new BoxEl
+                    {
+                        Width = 200, Height = 100,
+                        Children = [ new BoxEl { OnRealized = h => wrap = h, Children = [ new PolylineStrokeEl
+                        {
+                            P0 = new Point2(0f, 0f), P1 = new Point2(24f, 24f), PointCount = 2,
+                            Color = Tok.AccentDefault, Thickness = 2f, Width = 24f, Height = 24f,
+                        } ] } ],
+                    };
+                },
+            });
+            host.RunFrame();
+            var poly = host.Scene.FirstChild(wrap);
+            host.Animation.Animate(poly, AnimChannel.TranslateX, 0f, 14f, 40f, Easing.Linear);
+            for (int f = 0; f < 40 && host.Animation.HasActive; f++) host.RunFrame();
+            bool settled = !host.Animation.HasTracks(poly) && Near(host.Scene.Paint(poly).LocalTransform.Dx, 14f, 0.1f);
+            rr.Value = 1;
+            host.RunFrame();
+            Check("anim.rest.polyline.transform settled track terminal survives an owner re-render (identity gate)",
+                settled && Near(host.Scene.Paint(poly).LocalTransform.Dx, 14f, 0.1f),
+                $"settled={settled} dx={host.Scene.Paint(poly).LocalTransform.Dx}");
+        }
+    }
+
     static void ProgressIndeterminateLifecycleChecks(StringTable strings)
     {
         // ProgressRing: parent re-render updates isActive through context, preserving the component instance.
@@ -11530,6 +11634,7 @@ static class Slice
         D2PasswordRevealFocusChecks(strings);
         ProgressIndeterminateLifecycleChecks(strings);
         PropNetClobberChecks(strings);     // Prop<T> W0: bound-channel ownership net (clobber guards + contract locks)
+        AnimRestChecks(strings);           // Prop<T> B1-B3: canceled/settled-track resting values vs static re-asserts
         D3ExpanderChecks(strings);
         D4ScrollBarChecks(strings);
 

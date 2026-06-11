@@ -1272,10 +1272,16 @@ public sealed class TreeReconciler
                 paint.OriginY = pl.TransformOriginY;
                 paint.Opacity = pl.Opacity;
 
-                var tf = Affine2D.Translation(pl.OffsetX, pl.OffsetY);
-                if (pl.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(pl.Rotation * (MathF.PI / 180f)));
-                if (pl.ScaleX != 1f || pl.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pl.ScaleX, pl.ScaleY));
-                paint.LocalTransform = tf;
+                // Identity value-gate, matching the BoxEl rule (:1003): an identity-declared polyline has no opinion
+                // about its matrix — leave it to AnimEngine owners (a settled T/R/S track's terminal otherwise got
+                // reset to identity by every re-render; no polyline in the tree declares transform statics today).
+                if (pl.OffsetX != 0f || pl.OffsetY != 0f || pl.Rotation != 0f || pl.ScaleX != 1f || pl.ScaleY != 1f)
+                {
+                    var tf = Affine2D.Translation(pl.OffsetX, pl.OffsetY);
+                    if (pl.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(pl.Rotation * (MathF.PI / 180f)));
+                    if (pl.ScaleX != 1f || pl.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pl.ScaleX, pl.ScaleY));
+                    paint.LocalTransform = tf;
+                }
 
                 if (pl.HoverScale != 1f || pl.PressScale != 1f)
                 {

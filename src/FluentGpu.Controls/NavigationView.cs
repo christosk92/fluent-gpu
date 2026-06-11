@@ -1146,6 +1146,10 @@ internal sealed class NavIndicator : Component
             Corners = CornerRadius4.All(2f),
             Fill = Tok.AccentDefault,
             AlignSelf = FlexAlign.Start,
+            // State-dependent RESTING opacity: the fade transition owns the channel while animating (phase-7 fold
+            // wins the frame), but a settled track frees WITHOUT resetting Opacity — so any later re-render
+            // re-asserted the default 1f and a hidden pill snapped visible. The static must equal the terminal.
+            Opacity = visible ? 1f : 0f,
         });
     }
 }
