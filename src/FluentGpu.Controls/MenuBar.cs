@@ -49,6 +49,7 @@ public sealed class MenuBar : Component
         public bool KeyboardOpen;
         public int Count;
         public NodeHandle[] Nodes = [];   // realized title nodes, for Left/Right focus moves between titles
+        public NodeHandle Root;           // the bar strip — the overlay pass-through target while a menu is open
     }
 
     public override Element Render()
@@ -82,6 +83,7 @@ public sealed class MenuBar : Component
             MinHeight = 40f,   // MenuBarHeight (MenuBar_themeresources.xaml:44)
             // MenuBar.Background = MenuBarBackground = SubtleFillColorTransparent (explicit transparent surface).
             Fill = Tok.FillSubtleTransparent,
+            OnRealized = h => bar.Root = h,   // overlay pass-through target (OverlayInputPassThroughElement)
             Children = buttons,
         };
     }
@@ -145,7 +147,13 @@ public sealed class MenuBar : Component
                     // Below the title, left edges aligned; WinUI menus are WINDOWED popups
                     // (FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup) → may escape the window.
                     FlyoutPlacement.BottomLeft,
-                    new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+                    new PopupOptions(Chrome: PopupChrome.Flyout)
+                    {
+                        ConstrainToRootBounds = false,
+                        // WinUI sets the BAR as OverlayInputPassThroughElement (MenuBarItem.cpp:64-70): hover/press
+                        // over the strip bypass the light-dismiss scrim — hover-switch + press-another-title work.
+                        PassThrough = () => Bar.Root,
+                    });
                 handle.Value.ClosedAction = () =>
                 {
                     handle.Value = null;

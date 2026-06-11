@@ -2,6 +2,20 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Pal;
 
+/// <summary>OS user-preference parameters the engine honors (WinUI reads them through SystemParametersInfo /
+/// the registry). The platform writes them ONCE at startup (Win32: HKCU + SPI reads); headless keeps the
+/// defaults for determinism. Read anywhere (controls included) — plain statics, no per-frame cost.</summary>
+public static class SystemParams
+{
+    /// <summary>HKCU "Control Panel\Desktop" MenuShowDelay (ms) — the cascading-menu hover open/close delay.
+    /// WinUI: CascadingMenuHelper.cpp:83-95 with DefaultMenuShowDelay = 400 fallback (MenuFlyout_Partial.h:13).</summary>
+    public static float MenuShowDelayMs { get; set; } = 400f;
+
+    /// <summary>SPI_GETMENUDROPALIGNMENT: true = menus drop RIGHT-aligned (left-handed convention) — WinUI uses it
+    /// to pick the slider tooltip / menu side (Slider_Partial.cpp:2094-2099).</summary>
+    public static bool MenuDropRightAligned { get; set; }
+}
+
 public enum InputKind : byte
 {
     PointerMove = 1, PointerDown = 2, PointerUp = 3, Key = 4, Wheel = 5, Char = 6,

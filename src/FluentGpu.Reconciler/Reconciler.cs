@@ -1292,7 +1292,8 @@ public sealed class TreeReconciler
                 ref LayoutInput li = ref _scene.Layout(node);
                 var famId = _strings.Intern(t.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
-                li.TextStyle = new TextStyle(famId, t.Size, t.Bold, t.Wrap, t.Trim, t.MaxLines);
+                li.TextStyle = new TextStyle(famId, t.Size, t.ResolvedWeight, t.Wrap, t.Trim, t.MaxLines,
+                    t.CharSpacing, t.LineHeight, t.LineStacking, t.LineBounds);
                 li.Margin = t.Margin;
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;

@@ -166,6 +166,24 @@ public sealed class AnimEngine
     public bool HasActive => _tracks.Count > 0;
 
     // ── Seeding ─────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The LIVE value of an in-flight track on <paramref name="node"/>+<paramref name="channel"/> — so an
+    /// interrupting eased tween can start FROM where the animation currently is instead of a recomputed endpoint
+    /// (WinUI AnimatedIcon queues/blends transitions, AnimatedIcon.cpp:235-267 — a mid-flight chevron reversal must
+    /// not snap). False = no live track (caller uses its resting value).</summary>
+    public bool TryGetTrackValue(NodeHandle node, AnimChannel channel, out float value)
+    {
+        // Value is the per-tick folded result for EVERY mode (eased keyframes and springs both write it);
+        // a just-seeded track hasn't produced one yet — the caller falls back to its resting value.
+        if (Find(node, channel) is { Done: false, JustSeeded: false } t)
+        {
+            value = t.Value;
+            return true;
+        }
+        value = 0f;
+        return false;
+    }
+
     /// <summary>Eased two-point tween (retargets any live track on the same node+channel).</summary>
     public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs,
                         Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)

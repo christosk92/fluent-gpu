@@ -52,7 +52,8 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
     private void LayoutFor(ReadOnlySpan<char> text, in TextStyle style, float maxWidth)
     {
         string family = _strings.Resolve(style.FontFamily);
-        _engine.Layout(text, family, style.Bold, style.SizeDip, maxWidth, (int)style.Wrap, (int)style.Trim, style.MaxLines);
+        _engine.Layout(text, family, style.Weight, style.SizeDip, maxWidth, (int)style.Wrap, (int)style.Trim, style.MaxLines,
+            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds);
     }
 
     public void Dispose() => _engine.Dispose();

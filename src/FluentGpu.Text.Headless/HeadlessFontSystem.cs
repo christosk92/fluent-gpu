@@ -7,9 +7,14 @@ namespace FluentGpu.Text.Headless;
 /// Deterministic stub font system for tests: uniform advances so layout is reproducible without DirectWrite.
 /// THE ADVANCE MODEL (headless checks are written against these exact constants):
 /// <list type="bullet">
-/// <item>advance/char = SizeDip × 0.55 (regular) | SizeDip × 0.62 (bold) — every UTF-16 unit one cell, spaces and
-/// control chars included (no hard-break semantics; grapheme/surrogate snapping is the editor's job);</item>
-/// <item>line height = SizeDip × 1.4; baseline = SizeDip × 1.1 (down from the line top);</item>
+/// <item>advance/char = SizeDip × 0.55 (weight &lt; 600) | SizeDip × 0.62 (weight ≥ 600) + SizeDip × CharSpacing/1000
+/// (WinUI CharacterSpacing, 1/1000 em) — every UTF-16 unit one cell, spaces and control chars included (no hard-break
+/// semantics; grapheme/surrogate snapping is the editor's job). The old bool-Bold model maps exactly: Bold ≡ 700 →
+/// 0.62, default ≡ 400 → 0.55, so pre-weight measurements are unchanged;</item>
+/// <item>line height = SizeDip × 1.4; baseline = SizeDip × 1.1 (down from the line top). TextLineBounds.Tight trims
+/// the line box to cap-height..baseline: capHeight ≈ 0.7 × SizeDip ⇒ line height = baseline = SizeDip × 0.7.
+/// An explicit LineHeight resolves per LineStacking (MaxHeight = max(natural, LineHeight); BlockLineHeight =
+/// LineHeight exactly) and the baseline scales proportionally (resolved × naturalBaseline/naturalHeight);</item>
 /// <item>UnderlineY = baseline + 1, UnderlineThickness = 1, StrikeY = SizeDip × 0.8 (≈ baseline − half an 0.6-em
 /// x-height) — same top-down frame as the baseline;</item>
 /// <item>wrap = greedy word-wrap on ' ' runs (a word's trailing spaces ride its line; an over-long unbreakable word
@@ -30,9 +35,28 @@ public sealed class HeadlessFontSystem : IFontSystem
 
     public HeadlessFontSystem(StringTable strings) => _strings = strings;
 
-    private static float AdvanceOf(in TextStyle style) => style.SizeDip * (style.Bold ? 0.62f : 0.55f);
-    private static float LineHeightOf(in TextStyle style) => style.SizeDip * 1.4f;
-    private static float BaselineOf(in TextStyle style) => style.SizeDip * 1.1f;
+    private static float AdvanceOf(in TextStyle style)
+        => style.SizeDip * (style.Weight >= 600 ? 0.62f : 0.55f) + style.SizeDip * style.CharSpacing / 1000f;
+
+    // Font-natural metrics of the advance model (Full: 1.4/1.1 of the em; Tight: cap ≈ 0.7 em, box = cap..baseline).
+    private static float NaturalLineHeight(in TextStyle style)
+        => style.SizeDip * (style.LineBounds == TextLineBounds.Tight ? 0.7f : 1.4f);
+    private static float NaturalBaseline(in TextStyle style)
+        => style.SizeDip * (style.LineBounds == TextLineBounds.Tight ? 0.7f : 1.1f);
+    private static bool HasLineHeight(in TextStyle style) => !float.IsNaN(style.LineHeight) && style.LineHeight > 0f;
+
+    private static float LineHeightOf(in TextStyle style)
+    {
+        float natural = NaturalLineHeight(in style);
+        if (!HasLineHeight(in style)) return natural;
+        return style.Stacking == LineStacking.BlockLineHeight ? style.LineHeight : MathF.Max(natural, style.LineHeight);
+    }
+
+    private static float BaselineOf(in TextStyle style)
+    {
+        if (!HasLineHeight(in style)) return NaturalBaseline(in style);   // exact pre-LineHeight constants (goldens)
+        return LineHeightOf(in style) * (NaturalBaseline(in style) / NaturalLineHeight(in style));
+    }
 
     public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
     {

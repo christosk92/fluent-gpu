@@ -59,11 +59,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private IDWriteFactory* _dw;
     private readonly DWriteItemizer _itemizer;
     private readonly DWriteTextShaper _shaper;
-    private readonly Dictionary<(string fam, bool bold), nint> _faces = new();
-    private readonly Dictionary<(string fam, bool bold), FaceMetrics> _metrics = new();
+    private readonly Dictionary<(string fam, int weight), nint> _faces = new();
+    private readonly Dictionary<(string fam, int weight), FaceMetrics> _metrics = new();
 
-    /// <summary>Cached per-face design metrics (design units; positive-up from the baseline as DWrite reports them).</summary>
-    private struct FaceMetrics { public ushort Em; public short Asc, Desc, UnderPos, StrikePos; public ushort UnderThk; }
+    /// <summary>Cached per-face design metrics (design units; positive-up from the baseline as DWrite reports them).
+    /// <c>Cap</c> is the OS/2 cap height (TextLineBounds.Tight trims the line box to cap..baseline); fonts that report
+    /// none get the ~0.7 em convention, matching the headless model (HeadlessFontSystem.cs:13).</summary>
+    private struct FaceMetrics { public ushort Em; public short Asc, Desc, UnderPos, StrikePos; public ushort UnderThk; public ushort Cap; }
     // Font fallback (Phase 6): split a run by glyph coverage so CJK/emoji/symbols resolve to a covering face.
     private IDWriteFontFallback* _fallback;
     private IDWriteFontCollection* _sysColl;
@@ -111,7 +113,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         _dw = f;
         _itemizer = new DWriteItemizer();
         _shaper = new DWriteTextShaper(_dw);
-        ResolveFace(DefaultFamily, false, out _);
+        ResolveFace(DefaultFamily, 400, out _);
 
         // Best-effort system font fallback (null ⇒ base-face only, no coverage splitting).
         IDWriteFactory2* f2;
@@ -127,15 +129,37 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     }
 
     /// <summary>Lay out <paramref name="text"/>; fills <see cref="Glyphs"/> + metrics. <paramref name="wrap"/>/<paramref name="trim"/>
-    /// are the TextWrap/TextTrim enum ints; <paramref name="size"/> is DIP.</summary>
-    public void Layout(ReadOnlySpan<char> text, string family, bool bold, float size, float maxWidth, int wrap, int trim, int maxLines)
+    /// are the TextWrap/TextTrim enum ints; <paramref name="size"/> is DIP. <paramref name="weight"/> is the NUMERIC
+    /// font weight — the int IS the DWRITE_FONT_WEIGHT (clamped 1..999; ≤0 → 400). <paramref name="charSpacing"/> is
+    /// WinUI CharacterSpacing in 1/1000 em; <paramref name="lineHeight"/> (DIP; NaN/≤0 = font-natural) resolves per
+    /// <paramref name="stacking"/> (LineStacking enum int) and <paramref name="lineBounds"/> (TextLineBounds enum int).</summary>
+    public void Layout(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0)
     {
+        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
-        var face = ResolveFace(family, bold, out FaceMetrics fm);
+        var face = ResolveFace(family, weight, out FaceMetrics fm);
         float scale = fm.Em > 0 ? size / fm.Em : size / 2048f;
-        float lineHeight = (fm.Asc + fm.Desc) * scale;
-        if (lineHeight <= 0f) lineHeight = size * 1.3f;
-        Baseline = fm.Asc * scale;
+        // TextLineBounds.Tight (WinUI TextBlock.TextLineBounds; default Full, TextBlock_themeresources.xaml:17):
+        // trim the line box to cap-height..baseline — the box top sits at the cap top, the bottom at the baseline —
+        // so vertical centering is optical (e.g. PersonPicture initials, PersonPicture.xaml:66). Affects the measured
+        // height AND the in-box baseline; glyph descenders/underline simply extend below the reported box.
+        float ascUnits = lineBounds == (int)TextLineBounds.Tight ? fm.Cap : fm.Asc;
+        float descUnits = lineBounds == (int)TextLineBounds.Tight ? 0f : fm.Desc;
+        float lineH = (ascUnits + descUnits) * scale;
+        if (lineH <= 0f) lineH = size * 1.3f;
+        Baseline = ascUnits * scale;
+        // WinUI TextBlock.LineHeight + LineStackingStrategy (BaseTextBlockStyle default MaxHeight,
+        // TextBlock_themeresources.xaml:16): MaxHeight = line advance max(font-natural, LineHeight);
+        // BlockLineHeight = the advance IS LineHeight. The baseline scales proportionally with the resolved height
+        // (resolved × naturalBaseline/naturalHeight — the IDWriteTextLayout SetLineSpacing UNIFORM convention),
+        // which is exact-identity when the resolved height equals the natural one.
+        if (!float.IsNaN(lineHeight) && lineHeight > 0f)
+        {
+            float resolved = stacking == (int)LineStacking.BlockLineHeight ? lineHeight : MathF.Max(lineH, lineHeight);
+            Baseline = resolved * (Baseline / lineH);
+            lineH = resolved;
+        }
         // Decoration bars: DWrite reports positions positive-UP from the baseline (underline usually negative = below);
         // engine Y runs top-down, so flip over the baseline. A face with no underline thickness gets a 1-DIP-ish bar.
         UnderlineY = Baseline - fm.UnderPos * scale;
@@ -145,9 +169,9 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         _textLen = n;
         if (n == 0)
         {
-            Width = 0; Height = lineHeight; LineCount = 1;
+            Width = 0; Height = lineH; LineCount = 1;
             EnsureLines(1);
-            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = 0, Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
+            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = 0, Top = 0f, Height = lineH, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
             return;
         }
 
@@ -162,6 +186,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
         _itemizer.Itemize(text, _runs, _breaks);
 
+        // WinUI TextElement.CharacterSpacing: tracking in 1/1000 em → a per-glyph TRAILING advance adjustment applied
+        // AFTER shaping (the IDWriteTextLayout1::SetCharacterSpacing model). This engine is a custom itemize→shape
+        // pipeline (there is no IDWriteTextLayout object to call SetCharacterSpacing on), so the post-shaping advance
+        // adjustment IS the implementation, not a fallback approximation — wrap/trim/queries all see the spaced advances.
+        float spacing = charSpacing != 0f ? size * charSpacing / 1000f : 0f;
+
         // Shape each run, splitting by font-fallback coverage so CJK/emoji/symbols resolve to a covering face.
         fixed (char* p = text)
         {
@@ -171,18 +201,18 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 int pos = run.Start, remaining = run.Length;
                 while (remaining > 0)
                 {
-                    ResolveRunFace(family, bold, face, pos, remaining, out IDWriteFontFace* subFace, out int subLen);
+                    ResolveRunFace(family, weight, face, pos, remaining, out IDWriteFontFace* subFace, out int subLen);
                     if (subLen <= 0) subLen = remaining;
                     var shaped = _shaper.Shape(p, pos, subLen, subFace, size, run.ScriptId, run.ScriptShapes, run.IsRightToLeft);
                     EnsureGlyphs(_glyphCount + shaped.Length);
                     foreach (var g in shaped)
-                        _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = (nint)subFace, Advance = g.Advance, Cluster = g.Cluster, Level = run.BidiLevel };
+                        _glyphs[_glyphCount++] = new RunGlyph { Gid = g.GlyphId, Face = (nint)subFace, Advance = g.Advance + spacing, Cluster = g.Cluster, Level = run.BidiLevel };
                     pos += subLen; remaining -= subLen;
                 }
             }
         }
 
-        WrapAndPosition(size, scale, lineHeight, maxWidth, wrap, trim, maxLines, (nint)face);
+        WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face);
     }
 
     private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face)
@@ -428,7 +458,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     private void EnsureLines(int n) { if (_lines.Length < n) Array.Resize(ref _lines, Math.Max(n, _lines.Length * 2)); }
 
     // Pick the face covering [pos, pos+subLen) via system fallback; subLen is the coverage-run length DWrite reports.
-    private void ResolveRunFace(string family, bool bold, IDWriteFontFace* baseFace, int pos, int remaining, out IDWriteFontFace* subFace, out int subLen)
+    private void ResolveRunFace(string family, int weight, IDWriteFontFace* baseFace, int pos, int remaining, out IDWriteFontFace* subFace, out int subLen)
     {
         subFace = baseFace; subLen = remaining;
         if (baseFace == null) return;
@@ -458,11 +488,10 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         string fam = string.IsNullOrEmpty(family) ? DefaultFamily : family;
         if (fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || fam.EndsWith(".otf", StringComparison.OrdinalIgnoreCase)) return;
         uint mappedLen; IDWriteFont* mappedFont = null; float sc;
-        var weight = bold ? DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL;
         int hr;
         fixed (char* fn = fam)
             hr = (int)_fallback->MapCharacters((IDWriteTextAnalysisSource*)_fsrc, (uint)pos, (uint)remaining, _sysColl, fn,
-                weight, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, &mappedLen, &mappedFont, &sc);
+                (DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, &mappedLen, &mappedFont, &sc);
         if (hr < 0 || mappedLen == 0) { if (mappedFont != null) mappedFont->Release(); return; }
         subLen = (int)mappedLen;
         if (mappedFont != null)
@@ -493,17 +522,17 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         return face;
     }
 
-    private IDWriteFontFace* ResolveFace(string family, bool bold, out FaceMetrics m)
+    private IDWriteFontFace* ResolveFace(string family, int weight, out FaceMetrics m)
     {
         if (string.IsNullOrEmpty(family)) family = DefaultFamily;
-        var key = (family, bold);
+        var key = (family, weight);
         if (_faces.TryGetValue(key, out var cached)) { m = _metrics[key]; return (IDWriteFontFace*)cached; }
         IDWriteFontFace* face;
-        try { face = CreateFaceFor(family, bold); } catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
+        try { face = CreateFaceFor(family, weight); } catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
         if (face == null)
         {
             // Faceless fallback: Segoe-ish design ratios (per 2048 em) so metrics-dependent callers stay sane.
-            m = new FaceMetrics { Em = 2048, Asc = 1500, Desc = 500, UnderPos = -200, UnderThk = 140, StrikePos = 600 };
+            m = new FaceMetrics { Em = 2048, Asc = 1500, Desc = 500, UnderPos = -200, UnderThk = 140, StrikePos = 600, Cap = 1434 };
             return null;
         }
         DWRITE_FONT_METRICS fm; face->GetMetrics(&fm);
@@ -511,12 +540,15 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         {
             Em = fm.designUnitsPerEm, Asc = (short)fm.ascent, Desc = (short)fm.descent,
             UnderPos = fm.underlinePosition, UnderThk = fm.underlineThickness, StrikePos = fm.strikethroughPosition,
+            // OS/2 cap height for TextLineBounds.Tight; a font that reports none gets the ~0.7 em convention
+            // (the headless model's capHeight ≈ 0.7 × size, HeadlessFontSystem.cs:13).
+            Cap = fm.capHeight != 0 ? fm.capHeight : (ushort)(fm.designUnitsPerEm * 7 / 10),
         };
         _faces[key] = (nint)face; _metrics[key] = m;
         return face;
     }
 
-    private IDWriteFontFace* CreateFaceFor(string family, bool bold)
+    private IDWriteFontFace* CreateFaceFor(string family, int weight)
     {
         int hash = family.IndexOf('#');
         string path = hash >= 0 ? family.Substring(0, hash) : family;
@@ -528,17 +560,20 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             BOOL sup; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE fct; uint nf;
             Check(file->Analyze(&sup, &ft, &fct, &nf), "Analyze");
             IDWriteFontFile** files = &file;
-            var sim = bold ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
+            // A raw file face has no weight family to pick from — synthesize bold for the heavy half (≥ 600).
+            var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
             IDWriteFontFace* ff; Check(_dw->CreateFontFace(fct, 1, files, 0, sim, &ff), "CreateFontFace(file)");
             file->Release(); return ff;
         }
         IDWriteFontCollection* coll;
         Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
         uint idx; BOOL exists; fixed (char* pn = family) Check(coll->FindFamilyName(pn, &idx, &exists), "FindFamilyName");
-        if (!exists) { coll->Release(); return family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
+        if (!exists) { coll->Release(); return family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
         IDWriteFontFamily* fam; Check(coll->GetFontFamily(idx, &fam), "GetFontFamily");
-        IDWriteFont* font; var w = bold ? DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL;
-        Check(fam->GetFirstMatchingFont(w, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
+        // The numeric weight IS the DWRITE_FONT_WEIGHT — GetFirstMatchingFont picks the nearest face/named instance
+        // (variable families like "Segoe UI Variable Text" expose their weight axis as named instances here).
+        IDWriteFont* font;
+        Check(fam->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
         IDWriteFontFace* face2; Check(font->CreateFontFace(&face2), "CreateFontFace");
         font->Release(); fam->Release(); coll->Release();
         return face2;
@@ -549,7 +584,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         using var e = new TextLayoutEngine();
         void T(string s, float maxW)
         {
-            e.Layout(s.AsSpan(), "Segoe UI", false, 14f, maxW, 1, 0, 0);
+            e.Layout(s.AsSpan(), "Segoe UI", 400, 14f, maxW, 1, 0, 0);
             Console.WriteLine($"[layout] \"{s}\" maxW={(float.IsInfinity(maxW) ? "inf" : maxW.ToString("0"))} -> {e.LineCount} lines, W={e.Width:0.0} H={e.Height:0.0} glyphs={e.Glyphs.Length}");
         }
         T("Hello world", float.PositiveInfinity);
@@ -557,7 +592,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         T("Hidden content, revealed when the Expander is expanded.", float.PositiveInfinity);
         T("AVAWAV", float.PositiveInfinity);   // kerned advances
         // Fallback: Latin + CJK + emoji should resolve to multiple covering faces with non-.notdef gids.
-        e.Layout("Hi 你好 😀".AsSpan(), "Segoe UI", false, 14f, float.PositiveInfinity, 1, 0, 0);
+        e.Layout("Hi 你好 😀".AsSpan(), "Segoe UI", 400, 14f, float.PositiveInfinity, 1, 0, 0);
         var faces = new HashSet<nint>(); int zero = 0;
         foreach (var g in e.Glyphs) { faces.Add(g.Face); if (g.Gid == 0) zero++; }
         Console.WriteLine($"[fallback] \"Hi 你好 😀\" -> {e.Glyphs.Length} glyphs across {faces.Count} face(s), {zero} .notdef");

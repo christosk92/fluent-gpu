@@ -122,7 +122,12 @@ public sealed class Expander : Component
                 anim.Animate(chevronRef.Value, AnimChannel.Rotation, to, to, 1f, Easing.Linear);   // seed the resting angle, no visible motion
                 return;
             }
-            anim.Animate(chevronRef.Value, AnimChannel.Rotation, open ? 0f : 180f, to, ChevronMs,
+            // A mid-flight toggle starts from the LIVE rotation, not the recomputed endpoint — WinUI's
+            // AnimatedIcon machine never snaps on interrupt (it queues/blends, AnimatedIcon.cpp:235-267).
+            float from = anim.TryGetTrackValue(chevronRef.Value, AnimChannel.Rotation, out float live)
+                ? live
+                : (open ? 0f : 180f);
+            anim.Animate(chevronRef.Value, AnimChannel.Rotation, from, to, ChevronMs,
                 EasingSpec.CubicBezier(0.167f, 0.167f, 0f, 1f));
         }, open);
 

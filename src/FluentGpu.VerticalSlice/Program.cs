@@ -18,6 +18,7 @@ using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using FluentGpu.Text;
 using FluentGpu.Text.Headless;
 using static FluentGpu.Dsl.Ui;
 
@@ -3621,6 +3622,43 @@ static class Slice
         bool chromeOrder = firstFill >= 0 && secondFill > firstFill && stroke > secondFill;
         Check("57c. BoxEl chrome order: parent border records after descendant fills",
             chromeOrder, $"parentFill={firstFill} childFill={secondFill} stroke={stroke}");
+
+        // 57e — WinUI MappingMode=Absolute (ControlElevationBorderBrush EndPoint 0,3): AxisLengthPx squeezes the stop
+        // ramp into 3 physical px of the 40px axis (offsets ×3/40); AnchorEnd (the light/accent ScaleY=-1 mirror)
+        // measures the band from the BOTTOM, reversing the stop order so offsets stay ascending.
+        {
+            var sec = ColorF.FromRgba(0x10, 0x10, 0x10);
+            var def = ColorF.FromRgba(0xF0, 0xF0, 0xF0);
+            var absBand = new GradientSpec(GradientShape.Linear, 90f,
+                [new GradientStop(0.33f, sec), new GradientStop(1f, def)]) { AxisLengthPx = 3f };
+            var topScene = LayoutTree(strings, new BoxEl
+            {
+                Width = 120, Height = 40, Corners = CornerRadius4.All(4f), BorderBrush = absBand, BorderWidth = 1f,
+            });
+            var dl2 = new DrawList();
+            SceneRecorder.Record(topScene, dl2);
+            var dev2 = new HeadlessGpuDevice();
+            dev2.SubmitDrawList(dl2.Bytes, dl2.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+            var g1 = dev2.LastGradientStrokes[0];
+            float k = 3f / 40f;
+            bool topBand = Near(g1.O0, 0.33f * k) && Near(g1.O1, k) && g1.C0 == sec && g1.C1 == def;
+
+            var bottomScene = LayoutTree(strings, new BoxEl
+            {
+                Width = 120, Height = 40, Corners = CornerRadius4.All(4f),
+                BorderBrush = absBand with { AnchorEnd = true }, BorderWidth = 1f,
+            });
+            var dl3 = new DrawList();
+            SceneRecorder.Record(bottomScene, dl3);
+            var dev3 = new HeadlessGpuDevice();
+            dev3.SubmitDrawList(dl3.Bytes, dl3.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+            var g2 = dev3.LastGradientStrokes[0];
+            bool bottomBand = Near(g2.O0, 1f - k) && Near(g2.O1, 1f - 0.33f * k) && g2.C0 == def && g2.C1 == sec;
+
+            Check("57e. absolute-axis elevation band: 3px ramp at the top; AnchorEnd mirrors it to the bottom (stops reversed)",
+                topBand && bottomBand,
+                $"top=({g1.O0:0.0000},{g1.O1:0.0000} secFirst={g1.C0 == sec}) bottom=({g2.O0:0.0000},{g2.O1:0.0000} defFirst={g2.C0 == def})");
+        }
     }
 
     // Hover cross-fade: the InteractionAnimator eases HoverT and the recorder lerps Fill→HoverFill in LINEAR light
@@ -10030,6 +10068,90 @@ static class Slice
         }
     }
 
+    // ── Wave C — text pipeline parity: numeric FontWeight end-to-end, CharacterSpacing, LineHeight +
+    // LineStackingStrategy, TextLineBounds=Tight, and the WinUI type-ramp values (TextBlock_themeresources.xaml:3-51).
+    // Headless advance model (HeadlessFontSystem.cs:8-18): advance = size×(weight≥600 ? 0.62 : 0.55) +
+    // size×CharSpacing/1000; natural line = 1.4×size, baseline = 1.1×size; Tight box = cap..baseline = 0.7×size.
+    static void WaveCTextPipelineChecks(StringTable strings)
+    {
+        // (a)+(b) the numeric weight threads TextEl → TextStyle → the DrawGlyphRun op; Bold sugar resolves to 700,
+        // the default to 400, and an explicit Weight beats Bold (the TextEl.ResolvedWeight rule).
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new TextEl("semibold") { Weight = 600 },
+                new TextEl("boldsugar") { Bold = true },
+                new TextEl("normal"),
+                new TextEl("semilight") { Weight = 350, Bold = true },
+            ],
+        }, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        int w600 = -1, w700 = -1, w400 = -1, w350 = -1;
+        foreach (var g in dev.LastGlyphs)
+        {
+            string t = strings.Resolve(g.Text);
+            if (t == "semibold") w600 = g.Weight;
+            else if (t == "boldsugar") w700 = g.Weight;
+            else if (t == "normal") w400 = g.Weight;
+            else if (t == "semilight") w350 = g.Weight;
+        }
+        Check("WC-TXT.a numeric Weight reaches the DrawGlyphRun op (Weight=600 → op 600)", w600 == 600, $"weight={w600}");
+        Check("WC-TXT.b Bold sugar → 700; default → 400; explicit Weight beats Bold", w700 == 700 && w400 == 400 && w350 == 350,
+            $"bold={w700} normal={w400} explicit={w350}");
+
+        // (c) LineHeight changes the measured height deterministically: natural 14×1.4 = 19.6;
+        // MaxHeight = max(natural, LineHeight) (BaseTextBlockStyle default, TextBlock_themeresources.xaml:16);
+        // BlockLineHeight = LineHeight exactly, even below natural.
+        var fonts = new HeadlessFontSystem(strings);
+        var hello = strings.Intern("Hello");
+        float hNat = fonts.Measure(hello, new TextStyle(default, 14f, 400)).Size.Height;
+        float hMax30 = fonts.Measure(hello, new TextStyle(default, 14f, 400, LineHeight: 30f)).Size.Height;
+        float hMax10 = fonts.Measure(hello, new TextStyle(default, 14f, 400, LineHeight: 10f)).Size.Height;
+        float hBlock10 = fonts.Measure(hello, new TextStyle(default, 14f, 400, LineHeight: 10f, Stacking: LineStacking.BlockLineHeight)).Size.Height;
+        bool lineHeightOk = Near(hNat, 19.6f, 0.01f) && Near(hMax30, 30f, 0.01f) && Near(hMax10, 19.6f, 0.01f) && Near(hBlock10, 10f, 0.01f);
+        // …and through the element pipeline: a TextEl with LineHeight=30 lays out 30 DIP tall.
+        var lhScene = LayoutTree(strings, new BoxEl { Direction = 1, Children = [new TextEl("line") { LineHeight = 30f }] });
+        float nodeH = lhScene.AbsoluteRect(Child(lhScene, lhScene.Root, 0)).H;
+        Check("WC-TXT.c LineHeight resolves per LineStackingStrategy (MaxHeight clamps up, BlockLineHeight exact)",
+            lineHeightOk && Near(nodeH, 30f, 0.01f),
+            $"nat={hNat:0.0} max30={hMax30:0.0} max10={hMax10:0.0} block10={hBlock10:0.0} nodeH={nodeH:0.0}");
+
+        // (d) CharacterSpacing (1/1000 em) widens the measured advance: 5 chars × (14×0.55 + 14×100/1000) = 45.5 vs 38.5.
+        float wPlain = fonts.Measure(hello, new TextStyle(default, 14f, 400)).Size.Width;
+        float wSpaced = fonts.Measure(hello, new TextStyle(default, 14f, 400, CharSpacing: 100f)).Size.Width;
+        Check("WC-TXT.d CharacterSpacing widens the measured advance (+size×spacing/1000 per char)",
+            Near(wPlain, 38.5f, 0.01f) && Near(wSpaced, 45.5f, 0.01f), $"plain={wPlain:0.0} spaced={wSpaced:0.0}");
+
+        // (e) TextLineBounds=Tight trims the line box to cap-height..baseline: 14×0.7 = 9.8 < 19.6 full,
+        // and the baseline lands at the box bottom (= the tight height).
+        var mTight = fonts.Measure(hello, new TextStyle(default, 14f, 400, LineBounds: TextLineBounds.Tight));
+        Check("WC-TXT.e TextLineBounds=Tight reduces the measured height to cap..baseline",
+            Near(mTight.Size.Height, 9.8f, 0.01f) && Near(mTight.Baseline, 9.8f, 0.01f),
+            $"tightH={mTight.Size.Height:0.0} baseline={mTight.Baseline:0.0} fullH={hNat:0.0}");
+
+        // (f) the ramp carries the WinUI values: sizes 12/14/14/18/20/28/40/68 (TextBlock_themeresources.xaml:3-9),
+        // SemiBold 600 on BodyStrong/Subtitle/Title/TitleLarge/Display (:13 inherited; :26, :36-51), line heights
+        // 16/20/20/24/28/36/52/92 (the Fluent type-ramp spec); Strong() now means SemiBold 600, not Bold 700.
+        var cap = Caption("x"); var body = Body("x"); var bs = BodyStrong("x"); var bl = BodyLarge("x");
+        var sub = Subtitle("x"); var ti = Title("x"); var tl = TitleLarge("x"); var di = Display("x");
+        bool sizes = cap.Size == 12f && body.Size == 14f && bs.Size == 14f && bl.Size == 18f
+                  && sub.Size == 20f && ti.Size == 28f && tl.Size == 40f && di.Size == 68f;
+        bool lineHs = cap.LineHeight == 16f && body.LineHeight == 20f && bs.LineHeight == 20f && bl.LineHeight == 24f
+                   && sub.LineHeight == 28f && ti.LineHeight == 36f && tl.LineHeight == 52f && di.LineHeight == 92f;
+        bool weights = cap.ResolvedWeight == 400 && body.ResolvedWeight == 400 && bs.Weight == 600
+                    && sub.Weight == 600 && ti.Weight == 600 && tl.Weight == 600 && di.Weight == 600;
+        bool strong = new TextEl("x").Strong().Weight == 600 && new TextEl("x").FontWeight(350).ResolvedWeight == 350;
+        Check("WC-TXT.f type ramp carries the WinUI values (sizes, line heights, SemiBold 600; Strong()=600)",
+            sizes && lineHs && weights && strong, $"sizes={sizes} lineHs={lineHs} weights={weights} strong={strong}");
+    }
+
     static int Main()
     {
         Console.WriteLine("FluentGpu — minimum vertical slice (headless RHI/PAL/Text)\n");
@@ -10185,6 +10307,10 @@ static class Slice
         // flyout placement + per-kind menu/dropdown motion).
         D5EditableComboBoxChecks(strings);
         D67SplitButtonFlyoutChecks(strings);
+
+        // Wave C — text pipeline parity (numeric FontWeight, CharacterSpacing, LineHeight/LineStacking,
+        // TextLineBounds=Tight, WinUI type-ramp values).
+        WaveCTextPipelineChecks(strings);
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end."); return 0; }

@@ -13,7 +13,36 @@ public sealed unsafe partial class Win32App : IPlatformApp
     [LibraryImport("user32.dll")]
     private static partial int SetProcessDpiAwarenessContext(nint value);
 
-    public Win32App() => SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
+    // SPI_GETMENUDROPALIGNMENT = 0x001B (WinUser.h) — left-handed "menus drop right-aligned" preference.
+    private const uint SpiGetMenuDropAlignment = 0x001B;
+
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW")]
+    [return: global::System.Runtime.InteropServices.MarshalAs(global::System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool SystemParametersInfoW(uint uiAction, uint uiParam, void* pvParam, uint fWinIni);
+
+    public Win32App()
+    {
+        SetProcessDpiAwarenessContext(unchecked((nint)(-4)));
+        ReadSystemParams();
+    }
+
+    /// <summary>One-time OS user-preference reads into <see cref="SystemParams"/> — the same sources WinUI consults:
+    /// HKCU "Control Panel\Desktop" MenuShowDelay with the 400ms fallback (CascadingMenuHelper.cpp:83-95) and
+    /// SPI_GETMENUDROPALIGNMENT handedness (Slider_Partial.cpp:2094-2099).</summary>
+    private static void ReadSystemParams()
+    {
+        try
+        {
+            if (Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Desktop", "MenuShowDelay", null)
+                    is string s && int.TryParse(s, out int delayMs) && delayMs >= 0)
+                SystemParams.MenuShowDelayMs = delayMs;
+        }
+        catch { /* best-effort: keep the 400ms WinUI fallback */ }
+
+        int dropRight = 0;
+        if (SystemParametersInfoW(SpiGetMenuDropAlignment, 0, &dropRight, 0))
+            SystemParams.MenuDropRightAligned = dropRight != 0;
+    }
 
     public IPlatformWindow CreateWindow(in WindowDesc desc) => new Win32Window(desc);
     public IClipboard Clipboard { get; } = new Win32Clipboard();

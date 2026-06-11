@@ -54,7 +54,11 @@ public enum LayerKind : int
 public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, ColorF Fill, Affine2D Transform, float Opacity,
     int FillKind = 0, ColorF ColorB = default, float CellPx = 0f);
 // Wrap/Trim are TextWrap/TextTrim enum values; MaxLines caps the line count (0 = unlimited). Bounds.W is the wrap width.
-public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Bold, int Wrap, int Trim, int MaxLines, Affine2D Transform, float Opacity);
+// Weight is the NUMERIC font weight (the int IS the DWRITE_FONT_WEIGHT; sugar like Bold resolves to 700/400 upstream).
+// CharSpacing is WinUI CharacterSpacing (1/1000 em, per-glyph trailing advance); LineHeight (DIP; NaN/<=0 = natural)
+// resolves per LineStacking (enum int) and TextLineBounds (enum int) — see FluentGpu.Text.TextStyle, the style source.
+public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
+    float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -147,10 +151,12 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int bold, int wrap, int trim, int maxLines, in Affine2D transform, float opacity, ulong sortKey = 0)
+    public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0)
     {
         WriteOp(DrawOp.DrawGlyphRun);
-        WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, bold, wrap, trim, maxLines, transform, opacity));
+        WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity));
         PushSort(sortKey);
     }
 

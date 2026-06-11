@@ -232,6 +232,7 @@ public sealed class SceneStore : ISceneBackend
         _scroll.Remove(idx);
         _extents.Remove(idx);
         _grids.Remove(idx);
+        _hitPassThrough.Remove(idx);
         _interact.Remove(idx);
         _shadows.Remove(idx);
         _arcs.Remove(idx);
@@ -582,6 +583,22 @@ public sealed class SceneStore : ISceneBackend
     public bool HasScroll(NodeHandle h) => _scroll.ContainsKey((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
+
+    // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
+    // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there
+    // bypasses the scrim and reaches the content beneath (the MenuBar hover-switches titles with a menu open,
+    // FlyoutBase_Partial.cpp:3922-3938). Sparse — O(open scrims), cleared on free.
+    private readonly Dictionary<int, NodeHandle> _hitPassThrough = new();
+
+    public void SetHitTestPassThrough(NodeHandle node, NodeHandle target)
+    {
+        if (!IsLive(node)) return;
+        if (target.IsNull) _hitPassThrough.Remove((int)node.Raw.Index);
+        else _hitPassThrough[(int)node.Raw.Index] = target;
+    }
+
+    public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
+        => _hitPassThrough.TryGetValue((int)node.Raw.Index, out target);
 
     // ── sticky registry (CSS position:sticky, top edge) ─────────────────────────────────────────
     // Node index → (handle, top inset, pin-state observer). The reconciler Set/Clears it from BoxEl.StickyTop each

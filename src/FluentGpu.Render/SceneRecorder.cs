@@ -346,8 +346,10 @@ public static class SceneRecorder
 
                 // (b) the base glyph run — the existing path, unchanged.
                 if (!p.Text.IsEmpty)
-                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
-                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
+                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                        li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                        world, opacity, key);
 
                 // (b2) text decorations (TextEl.Underline/Strikethrough → NodePaint.TextDecorations, E9): bars placed
                 // by the FACE metrics the measure pass cached on TextMeasureCache (UnderlineY/UnderlineThickness/StrikeY
@@ -386,8 +388,10 @@ public static class SceneRecorder
                         RectF selDevice = world.TransformBounds(selRects[i]).Intersect(childClip);
                         if (selDevice.IsEmpty) continue;
                         dl.PushClip(selDevice, key | 0x1);
-                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
-                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key | 0x1);
+                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, key | 0x1);
                         dl.PopClip(key | 0x1);
                     }
 
@@ -673,7 +677,42 @@ public static class SceneRecorder
         // never a new GradientSpec). Differing stop counts blend only the shared prefix (rest of resting stops hold).
         if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
         if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
+        RemapAbsoluteAxis(in g, MathF.Abs(dx) * local.W + MathF.Abs(dy) * local.H, n,
+            ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3);
         dl.GradientRect(new DrawGradientRectCmd(local, corners, start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, world, opacity), key);
+    }
+
+    /// <summary>WinUI <c>MappingMode="Absolute"</c> (record-time emulation): squeeze the stop ramp into
+    /// <see cref="GradientSpec.AxisLengthPx"/> physical px of the node's axis extent — the shader's edge-clamp holds
+    /// the boundary stop across the rest (the ControlElevationBorder 3px band, Common_themeresources_any.xaml:186).
+    /// <see cref="GradientSpec.AnchorEnd"/> measures the band from the END of the axis (the ScaleY=-1 elevation
+    /// mirror), which reverses the stop order so offsets stay ascending. Stack-only, zero alloc.</summary>
+    private static void RemapAbsoluteAxis(in GradientSpec g, float extent, int n,
+        ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
+        ref float o0, ref float o1, ref float o2, ref float o3)
+    {
+        if (g.AxisLengthPx <= 0f || extent <= 0.01f) return;
+        float k = MathF.Min(1f, g.AxisLengthPx / extent);
+        if (!g.AnchorEnd)
+        {
+            o0 *= k;
+            if (n > 1) o1 *= k; else o1 = 1f;   // unused trailing slots stay at 1 (ascending, shader clamp intact)
+            if (n > 2) o2 *= k; else o2 = 1f;
+            if (n > 3) o3 *= k; else o3 = 1f;
+            return;
+        }
+        Span<float> os = stackalloc float[4];
+        Span<ColorF> cs = stackalloc ColorF[4];
+        os[0] = o0; os[1] = o1; os[2] = o2; os[3] = o3;
+        cs[0] = c0; cs[1] = c1; cs[2] = c2; cs[3] = c3;
+        for (int i = 0; i < n; i++) os[i] = 1f - os[i] * k;
+        for (int i = 0; i < n / 2; i++)
+        {
+            (os[i], os[n - 1 - i]) = (os[n - 1 - i], os[i]);
+            (cs[i], cs[n - 1 - i]) = (cs[n - 1 - i], cs[i]);
+        }
+        c0 = cs[0]; c1 = n > 1 ? cs[1] : c0; c2 = n > 2 ? cs[2] : c1; c3 = n > 3 ? cs[3] : c2;
+        o0 = os[0]; o1 = n > 1 ? os[1] : 1f; o2 = n > 2 ? os[2] : 1f; o3 = n > 3 ? os[3] : 1f;
     }
 
     // Blend the four stack-local gradient stops toward another spec's stops by t (linear-light color, linear offset).
@@ -691,7 +730,8 @@ public static class SceneRecorder
 
     /// <summary>A gradient-tinted border ring: the gradient PS sampled along the local axis, drawn as an SDF band of
     /// width <paramref name="bw"/> centered on a rect inset by bw/2 (so the stroke sits inside the bounds, WinUI-style).
-    /// The vertical axis spans the whole control, matching WinUI's ControlElevationBorderBrush.</summary>
+    /// Relative specs span the whole control; <see cref="GradientSpec.AxisLengthPx"/> specs confine the blend to the
+    /// WinUI absolute band (ControlElevationBorderBrush's 3px edge) via the record-time stop remap.</summary>
     private static void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
         in Affine2D world, float opacity, ulong key)
@@ -706,6 +746,8 @@ public static class SceneRecorder
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
         if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
         if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
+        RemapAbsoluteAxis(in g, MathF.Abs(dx) * b.W + MathF.Abs(dy) * b.H, n,
+            ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3);
         var ring = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
         dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }

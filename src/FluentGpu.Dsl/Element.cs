@@ -318,7 +318,26 @@ public sealed record TextEl(string Text) : Element
     public Func<ColorF>? ColorBind { get; init; }  // → text color  (PaintDirty)
 
     public float Size { get; init; } = 14f;
+    /// <summary>Bold sugar — kept for the many existing call sites; equivalent to <see cref="Weight"/> = 700.
+    /// Ignored when <see cref="Weight"/> is set explicitly.</summary>
     public bool Bold { get; init; }
+    /// <summary>Numeric font weight (WinUI FontWeight, 1–999 — the value IS the DWrite weight; the WinUI type ramp is
+    /// SemiBold 600, BaseTextBlockStyle FontWeight, TextBlock_themeresources.xaml:13). 0 = unset → resolves from
+    /// <see cref="Bold"/> (700) or Normal (400); see <see cref="ResolvedWeight"/>.</summary>
+    public ushort Weight { get; init; }
+    /// <summary>The weight the text pipeline shapes with: <see cref="Weight"/> when set, else Bold→700 / 400.</summary>
+    public ushort ResolvedWeight => Weight != 0 ? Weight : Bold ? (ushort)700 : (ushort)400;
+    /// <summary>WinUI <c>TextElement.CharacterSpacing</c>: tracking in 1/1000 em (negative = tighter), applied as a
+    /// per-glyph trailing advance adjustment after shaping (e.g. Pivot headers use −25).</summary>
+    public float CharSpacing { get; init; }
+    /// <summary>WinUI <c>TextBlock.LineHeight</c> in DIP (NaN = font-natural); interpreted per <see cref="LineStacking"/>.</summary>
+    public float LineHeight { get; init; } = float.NaN;
+    /// <summary>WinUI <c>TextBlock.LineStackingStrategy</c> (default MaxHeight — TextBlock_themeresources.xaml:16):
+    /// how an explicit <see cref="LineHeight"/> combines with the font-natural line box.</summary>
+    public LineStacking LineStacking { get; init; } = LineStacking.MaxHeight;
+    /// <summary>WinUI <c>TextBlock.TextLineBounds</c> (default Full — TextBlock_themeresources.xaml:17): Tight trims
+    /// the measured line box to cap-height..baseline so vertical centering is optical (PersonPicture initials).</summary>
+    public TextLineBounds LineBounds { get; init; } = TextLineBounds.Full;
     /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (WinUI TextBlock default foreground —
     /// dark #FFFFFF / light #E4000000), resolved at element CONSTRUCTION. NOTE: a runtime <c>Tok.Use</c> switch does
     /// not itself re-render — the theme is set at startup today; a live theme switcher must force a full re-render

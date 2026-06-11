@@ -120,7 +120,8 @@ public static class PersonPicture
                     new TextEl(actualText)
                     {
                         Size = ts.InitialsFontSize,                // Width * 0.42 (WinUI OnSizeChanged), min 1
-                        Bold = true,                               // InitialsTextBlock FontWeight=SemiBold in EVERY state (initials AND Group/Contact glyph)
+                        Weight = 600,                              // InitialsTextBlock FontWeight=SemiBold in EVERY state (PersonPicture.xaml:66)
+                        LineBounds = TextLineBounds.Tight,         // TextLineBounds="Tight" — optical (cap-height) centering (PersonPicture.xaml:66)
                         Color = Tok.TextPrimary,                   // PersonPictureForegroundThemeBrush = TextFillColorPrimary
                         FontFamily = useSymbolFont ? Theme.IconFont // SymbolThemeFontFamily for Group / NoPhotoOrInitials
                                                    : Theme.BodyFont, // ContentControlThemeFontFamily for initials
@@ -169,7 +170,8 @@ public static class PersonPicture
             Size = ts.BadgeFontSize,                               // BadgePlateSize * 0.60, min 1
             Color = Tok.TextOnAccentPrimary,                       // PersonPictureEllipseBadgeForegroundThemeBrush
             FontFamily = isGlyph ? Theme.IconFont : Theme.BodyFont, // BadgeGlyphIcon uses SymbolThemeFontFamily
-            Bold = true,                                           // SemiBold FontWeight on the badge label in every state (WinUI)
+            Weight = 600,                                          // SemiBold on the badge label in every state (PersonPicture.xaml:71)
+            LineBounds = TextLineBounds.Tight,                     // TextLineBounds="Tight" on BadgeNumberTextBlock (PersonPicture.xaml:71)
         };
 
         // Position at the top-right corner. WinUI: BadgeGrid VerticalAlignment=Top, HorizontalAlignment=Right,

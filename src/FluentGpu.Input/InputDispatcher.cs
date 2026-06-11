@@ -190,9 +190,9 @@ public sealed class InputDispatcher
                     // continuous OnDrag gesture (slider scrub) keeps its pressed state — WinUI's captured thumb does.
                     if (!_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && _scene.IsLive(_down))
                     {
-                        var dr = _scene.AbsoluteRect(_down);
-                        bool overDown = e.PositionPx.X >= dr.X && e.PositionPx.X < dr.X + dr.W
-                                     && e.PositionPx.Y >= dr.Y && e.PositionPx.Y < dr.Y + dr.H;
+                        var dl = PointToLocal(_down, e.PositionPx);   // scale-aware (a button inside a Viewbox)
+                        ref RectF db = ref _scene.Bounds(_down);
+                        bool overDown = dl.X >= 0f && dl.X < db.W && dl.Y >= 0f && dl.Y < db.H;
                         SetState(ref _pressed, overDown ? _down : NodeHandle.Null, NodeFlags.Pressed);
                         // Auto-repeat pauses off-node and resumes with a FRESH delay on re-entry — no immediate
                         // re-fire (RepeatButton_Partial.cpp:530-548, :565-574). Idempotent per move.
@@ -1104,59 +1104,135 @@ public sealed class InputDispatcher
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) Collect(c, into);
     }
 
-    /// <summary>Event position (window space) → the node's LOCAL coords, clamped to its box (for slider/scrollbar drag).</summary>
+    /// <summary>Event position (window space) → the node's MODEL-LOCAL coords, clamped to its box (slider/scrollbar
+    /// drag). Inverse-maps through every ancestor transform (scale-aware: a slider inside a Viewbox scrubs true).</summary>
     private Point2 LocalPos(NodeHandle node, Point2 abs)
     {
-        var r = _scene.AbsoluteRect(node);
-        return new Point2(Math.Clamp(abs.X - r.X, 0f, r.W), Math.Clamp(abs.Y - r.Y, 0f, r.H));
+        var l = PointToLocal(node, abs);
+        return new Point2(Math.Clamp(l.X, 0f, _scene.Bounds(node).W), Math.Clamp(l.Y, 0f, _scene.Bounds(node).H));
     }
 
+    private readonly List<NodeHandle> _chain = new();   // reused root→node buffer for PointToLocal (0 steady alloc)
+
+    /// <summary>Window-space point → <paramref name="node"/>'s model-local space, undoing every ancestor's frame the
+    /// way the recorder composes it (translate(bounds) ∘ origin-conjugated LocalTransform, counter-scale about the
+    /// centre) — the inverse of SceneRecorder.Walk's world transform.</summary>
+    private Point2 PointToLocal(NodeHandle node, Point2 abs)
+    {
+        _chain.Clear();
+        for (var n = node; !n.IsNull; n = _scene.Parent(n)) _chain.Add(n);
+        var q = abs;
+        float sx = 1f, sy = 1f;
+        for (int i = _chain.Count - 1; i >= 0; i--)
+            if (!StepIntoNode(_chain[i], ref q, ref sx, ref sy)) return q;   // degenerate scale: best-effort
+        return q;
+    }
+
+    /// <summary>Undo ONE node's frame: parent-content point → this node's model-local point, mirroring the recorder's
+    /// composition (translate(b) ∘ [T(o)∘L∘T(−o)] then the counter-scale block). Updates the running net scale the
+    /// children inherit. Interaction hover/press grow is deliberately NOT mirrored — the hit target keeps its model
+    /// box while a thumb visually grows (matches the previous engine behavior and WinUI's layout-driven hit testing).</summary>
+    private bool StepIntoNode(NodeHandle node, ref Point2 q, ref float netSx, ref float netSy)
+    {
+        ref RectF b = ref _scene.Bounds(node);
+        ref NodePaint np = ref _scene.Paint(node);
+        float lx = q.X - b.X, ly = q.Y - b.Y;
+        if (!np.LocalTransform.IsIdentity)
+        {
+            float ox = b.W * np.OriginX, oy = b.H * np.OriginY;
+            // forward: l' = L(l − o) + o  ⇒  l = L⁻¹(l' − o) + o
+            if (!np.LocalTransform.TryInverseTransform(new Point2(lx - ox, ly - oy), out var inv))
+            {
+                q = new Point2(float.MinValue, float.MinValue);   // zero-scale renders nothing: miss everything
+                return false;
+            }
+            lx = inv.X + ox; ly = inv.Y + oy;
+        }
+        // Counter-scaled node (drag-lift label …): the recorder un-scales it about its centre by the PARENT net scale
+        // (SceneRecorder counter block) — the inverse re-applies that scale to the point.
+        if ((_scene.Flags(node) & NodeFlags.CounterScaled) != 0 && (netSx != 1f || netSy != 1f))
+        {
+            float cx = b.W * 0.5f, cy = b.H * 0.5f;
+            lx = (lx - cx) * netSx + cx;
+            ly = (ly - cy) * netSy + cy;
+            netSx = 1f; netSy = 1f;
+        }
+        netSx *= np.LocalTransform.M11;
+        netSy *= np.LocalTransform.M22;
+        q = new Point2(lx, ly);
+        return true;
+    }
+
+    private Point2 _hitAbs;   // the window-space point of the in-flight hit walk (pass-through rect checks)
+
     public NodeHandle HitTest(Point2 p)
-        => _scene.Root.IsNull ? NodeHandle.Null : Hit(_scene.Root, 0f, 0f, p);
+    {
+        if (_scene.Root.IsNull) return NodeHandle.Null;
+        _hitAbs = p;
+        return Hit(_scene.Root, p, 1f, 1f);
+    }
 
     /// <summary>Deepest visible node containing the point, regardless of click handler (used to find a scroll target).</summary>
     private NodeHandle HitTestAny(Point2 p)
-        => _scene.Root.IsNull ? NodeHandle.Null : HitAny(_scene.Root, 0f, 0f, p);
+    {
+        if (_scene.Root.IsNull) return NodeHandle.Null;
+        _hitAbs = p;
+        return HitAny(_scene.Root, p, 1f, 1f);
+    }
 
-    private NodeHandle HitAny(NodeHandle node, float ox, float oy, Point2 p)
+    /// <summary>WinUI <c>OverlayInputPassThroughElement</c>: a light-dismiss scrim yields the hit when the pointer is
+    /// over its registered pass-through subtree — input falls through to the content beneath (the MenuBar keeps
+    /// hover-switching titles with a menu open, FlyoutBase_Partial.cpp:3922-3938).</summary>
+    private bool YieldsToPassThrough(NodeHandle node)
+    {
+        if (!_scene.TryGetHitTestPassThrough(node, out var pass) || pass.IsNull || !_scene.IsLive(pass)) return false;
+        var pr = _scene.AbsoluteRect(pass);
+        return _hitAbs.X >= pr.X && _hitAbs.X < pr.X + pr.W && _hitAbs.Y >= pr.Y && _hitAbs.Y < pr.Y + pr.H;
+    }
+
+    // Both walks descend the POINT through each node's inverse transform (scale-aware — WinUI hit-tests the rendered
+    // geometry, so a button inside a 2× Viewbox is clickable across its whole rendered extent), mirroring the
+    // recorder's world composition exactly. q is the point in the node's PARENT-content space.
+
+    private NodeHandle HitAny(NodeHandle node, Point2 q, float netSx, float netSy)
     {
         var flags = _scene.Flags(node);
         if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
             return NodeHandle.Null;
 
         ref RectF b = ref _scene.Bounds(node);
-        ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
-        float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
-        var rect = new RectF(ax, ay, b.W, b.H);
-        if ((flags & NodeFlags.ClipsToBounds) != 0 && !rect.Contains(p)) return NodeHandle.Null;
+        var local = q;
+        if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
+        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
 
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var r = HitAny(c, ax, ay, p);
+            var r = HitAny(c, local, netSx, netSy);
             if (!r.IsNull) result = r;
         }
-        if (result.IsNull && rect.Contains(p))
+        if (result.IsNull && inside && !YieldsToPassThrough(node))
             result = node;
         return result;
     }
 
-    private NodeHandle Hit(NodeHandle node, float ox, float oy, Point2 p)
+    private NodeHandle Hit(NodeHandle node, Point2 q, float netSx, float netSy)
     {
         var flags = _scene.Flags(node);
         if ((flags & (NodeFlags.Visible | NodeFlags.HitTestVisible)) != (NodeFlags.Visible | NodeFlags.HitTestVisible))
             return NodeHandle.Null;
 
         ref RectF b = ref _scene.Bounds(node);
-        ref NodePaint np = ref _scene.Paint(node);   // composited translation (scroll offset / animation) shifts self + subtree
-        float ax = ox + b.X + np.LocalTransform.Dx, ay = oy + b.Y + np.LocalTransform.Dy;
-        var rect = new RectF(ax, ay, b.W, b.H);
-        if ((flags & NodeFlags.ClipsToBounds) != 0 && !rect.Contains(p)) return NodeHandle.Null;
+        var local = q;
+        if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
+        bool inside = local.X >= 0f && local.X < b.W && local.Y >= 0f && local.Y < b.H;
+        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
 
         NodeHandle result = NodeHandle.Null;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var r = Hit(c, ax, ay, p);
+            var r = Hit(c, local, netSx, netSy);
             if (!r.IsNull) result = r;
         }
 
@@ -1168,7 +1244,7 @@ public sealed class InputDispatcher
             // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
             if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
                 (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit)) != 0 &&
-                rect.Contains(p))
+                inside && !YieldsToPassThrough(node))
             {
                 result = node;
             }

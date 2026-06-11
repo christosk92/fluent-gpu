@@ -66,8 +66,9 @@ public static class MenuFlyout
     internal const string RadioGlyph      = "";              // RadioMenuFlyoutItem CheckGlyph (Icons.RadioBullet)
     /// <summary>Sub-menu hover-open AND delay-close interval — WinUI CascadingMenuHelper reads the user's
     /// HKCU MenuShowDelay, defaulting to <c>DefaultMenuShowDelay = 400</c>ms (MenuFlyout_Partial.h:13;
-    /// CascadingMenuHelper.cpp:93-95 fallback, :439/:508 open/close timer intervals).</summary>
-    public const float SubMenuShowDelayMs = 400f;
+    /// CascadingMenuHelper.cpp:93-95 fallback, :439/:508 open/close timer intervals). The platform pump writes the
+    /// live registry value into <see cref="FluentGpu.Pal.SystemParams"/> at startup; headless stays 400.</summary>
+    public static float SubMenuShowDelayMs => FluentGpu.Pal.SystemParams.MenuShowDelayMs;
     static readonly Edges4 ItemMargin     = new(4, 2, 4, 2);       // MenuFlyoutItemMargin (themeresources:260)
     static readonly Edges4 ItemPadding    = new(11, 8, 11, 9);     // MenuFlyoutItemThemePadding (themeresources:261)
     static readonly Edges4 ChevronMargin  = new(24, 0, 0, 0);      // MenuFlyoutItemChevronMargin 24,0,0,-1 (themeresources:257; the -1 optical nudge is sub-px here)
@@ -361,7 +362,13 @@ internal sealed class MenuFlyoutPresenter : Component
                     Parts = Parts,                       // part modifiers cascade into every sub-menu level
                 }),
                 FlyoutPlacement.RightEdgeAlignedTop,
-                new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
+                new PopupOptions(Chrome: PopupChrome.Flyout)
+                {
+                    ConstrainToRootBounds = false,
+                    // The cascade overlaps its owner by 4px (m_subMenuOverlapPixels — CascadingMenuHelper.h:121,
+                    // cpp:678 subMenuPosition.X += subItemWidth − 4); mirrored automatically on a left flip.
+                    AnchorOffsetX = -4f,
+                });
             handle.ClosedAction = () =>
             {
                 if (ReferenceEquals(subHandle.Value, handle)) { subHandle.Value = null; subOpenIdx.Value = -1; }

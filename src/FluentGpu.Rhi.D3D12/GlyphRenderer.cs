@@ -29,8 +29,10 @@ internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, Beari
 internal struct FaceMetrics { public ushort Em; public short Asc, Desc; }
 /// <summary>Glyph-atlas cache key. <paramref name="Fam"/> is a family id (codepoint path) OR a face id (glyph-id path);
 /// <paramref name="Ch"/> is a codepoint OR a glyph id. <paramref name="ByGid"/> keeps those two key spaces disjoint so a
-/// codepoint entry and a glyph-id entry can never alias (the bug that smeared shaped + per-char glyphs together). Value type → no alloc.</summary>
-internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold, int Ch, bool ByGid);
+/// codepoint entry and a glyph-id entry can never alias (the bug that smeared shaped + per-char glyphs together).
+/// <paramref name="Weight"/> is the NUMERIC font weight (codepoint path; the glyph-id path keys weight via the face id,
+/// since faces are resolved per (family, weight)). Value type → no alloc.</summary>
+internal readonly record struct GlyphKey(int Fam, int Size, int Scale, int Weight, int Ch, bool ByGid);
 
 /// <summary>One baked glyph quad in LOCAL (DIP) space — color/transform/opacity are applied per-frame at replay, NOT baked
 /// here, so the same shaped run is reusable across scroll/theme/fade. The atlas UVs are stable (the shelf packer never
@@ -42,9 +44,12 @@ internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V
 internal struct ShapedRun { public ShapedGlyph[] Glyphs; public int Count; public int LastUsedFrame; }
 
 /// <summary>Content key for the shaped-run cache. Keyed on the interned <see cref="StringId"/> handles (stable across frames,
-/// no per-frame string hashing) + quantized layout inputs. Excludes color/transform/opacity (replayed). Bounds origin and
-/// width are layout-stable for a given element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
-internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Bold, int Wrap, int Trim, int MaxLines, int WidthQ, int OriginXQ, int OriginYQ, int ScaleQ);
+/// no per-frame string hashing) + quantized layout inputs — including EVERY shaping input of the glyph op (numeric Weight,
+/// CharacterSpacing ×10, LineHeight ×10, packed LineStacking|LineBounds), so two runs differing only in weight or tracking
+/// can never alias. Excludes color/transform/opacity (replayed). Bounds origin and width are layout-stable for a given
+/// element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
+internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Weight, int Wrap, int Trim, int MaxLines, int WidthQ, int OriginXQ, int OriginYQ, int ScaleQ,
+    int SpacingQ, int LineHQ, int LineFlags);
 
 /// <summary>
 /// DirectWrite glyph atlas + textured-quad pipeline (design/subsystems/text.md, gpu-renderer.md DrawGlyphRun). Glyphs are
@@ -62,9 +67,9 @@ internal sealed unsafe class GlyphRenderer : IDisposable
 
     private IDWriteFactory* _dw;
     private const string DefaultFamily = "Segoe UI";
-    // Per-(family, weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
-    private readonly Dictionary<(string fam, bool bold), nint> _faces = new();
-    private readonly Dictionary<(string fam, bool bold), FaceMetrics> _faceMetrics = new();
+    // Per-(family, numeric weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
+    private readonly Dictionary<(string fam, int weight), nint> _faces = new();
+    private readonly Dictionary<(string fam, int weight), FaceMetrics> _faceMetrics = new();
     private readonly Dictionary<string, int> _famIds = new();
 
     private readonly byte[] _cpu = new byte[ATLAS * ATLAS];
@@ -171,7 +176,7 @@ float4 PSMain(VSOut i) : SV_Target
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
         // warm the default face so the atlas has metrics from frame 1
-        ResolveFace(DefaultFamily, false, out _, out _, out _);
+        ResolveFace(DefaultFamily, 400, out _, out _, out _);
     }
 
     // A small per-family integer used in the glyph-cache key (so the same codepoint in two fonts caches separately).
@@ -182,12 +187,14 @@ float4 PSMain(VSOut i) : SV_Target
         id = _famIds.Count + 1; _famIds[family] = id; return id;
     }
 
-    /// <summary>Resolve (and cache) a font face for a family + weight. Family is a system name ("Segoe UI",
-    /// "Segoe Fluent Icons") or a custom file "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
-    private IDWriteFontFace* ResolveFace(string family, bool bold, out ushort em, out short asc, out short desc)
+    /// <summary>Resolve (and cache) a font face for a family + NUMERIC weight (the int IS the DWRITE_FONT_WEIGHT;
+    /// ≤0 → 400, clamped to 999). Family is a system name ("Segoe UI", "Segoe Fluent Icons") or a custom file
+    /// "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
+    private IDWriteFontFace* ResolveFace(string family, int weight, out ushort em, out short asc, out short desc)
     {
         if (string.IsNullOrEmpty(family)) family = DefaultFamily;
-        var key = (family, bold);
+        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
+        var key = (family, weight);
         if (_faces.TryGetValue(key, out var cached))
         {
             var m0 = _faceMetrics[key]; em = m0.Em; asc = m0.Asc; desc = m0.Desc;
@@ -195,8 +202,8 @@ float4 PSMain(VSOut i) : SV_Target
         }
 
         IDWriteFontFace* face;
-        try { face = CreateFaceFor(family, bold); }
-        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
+        try { face = CreateFaceFor(family, weight); }
+        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
         if (face == null) { em = 2048; asc = 1500; desc = 500; return null; }
 
         DWRITE_FONT_METRICS m; face->GetMetrics(&m);
@@ -206,15 +213,15 @@ float4 PSMain(VSOut i) : SV_Target
         return face;
     }
 
-    private IDWriteFontFace* CreateFaceFor(string family, bool bold)
+    private IDWriteFontFace* CreateFaceFor(string family, int weight)
     {
         int hash = family.IndexOf('#');
         string path = hash >= 0 ? family.Substring(0, hash) : family;
         bool isFile = path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
-        return isFile ? CreateFaceFromFile(path, bold) : CreateSystemFace(family, bold);
+        return isFile ? CreateFaceFromFile(path, weight) : CreateSystemFace(family, weight);
     }
 
-    private IDWriteFontFace* CreateSystemFace(string familyName, bool bold)
+    private IDWriteFontFace* CreateSystemFace(string familyName, int weight)
     {
         IDWriteFontCollection* coll;
         Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
@@ -223,28 +230,30 @@ float4 PSMain(VSOut i) : SV_Target
         if (!exists)   // unknown family → fall back to the default
         {
             coll->Release();
-            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, bold);
+            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, weight);
         }
         IDWriteFontFamily* family;
         Check(coll->GetFontFamily(index, &family), "GetFontFamily");
+        // The numeric weight passes straight through (WinUI FontWeight ≡ DWRITE_FONT_WEIGHT) — GetFirstMatchingFont
+        // picks the nearest face / variable-font named instance (e.g. SemiBold 600 of "Segoe UI Variable Text").
         IDWriteFont* font;
-        var weight = bold ? DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL;
-        Check(family->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
+        Check(family->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
         IDWriteFontFace* face;
         Check(font->CreateFontFace(&face), "CreateFontFace");
         font->Release(); family->Release(); coll->Release();
         return face;
     }
 
-    // Load a face directly from a .ttf/.otf file (custom icon fonts). Bold is synthesized when requested.
-    private IDWriteFontFace* CreateFaceFromFile(string path, bool bold)
+    // Load a face directly from a .ttf/.otf file (custom icon fonts). A raw file has no weight family to pick from,
+    // so the heavy half (>= 600) synthesizes bold.
+    private IDWriteFontFace* CreateFaceFromFile(string path, int weight)
     {
         IDWriteFontFile* file;
         fixed (char* p = path) Check(_dw->CreateFontFileReference(p, null, &file), "CreateFontFileReference");
         BOOL supported; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE faceType; uint numFaces;
         Check(file->Analyze(&supported, &ft, &faceType, &numFaces), "Analyze(font)");
         IDWriteFontFile** files = &file;
-        var sim = bold ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
+        var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
         IDWriteFontFace* face;
         Check(_dw->CreateFontFace(faceType, 1, files, 0, sim, &face), "CreateFontFace(file)");
         file->Release();
@@ -252,11 +261,11 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
-    private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale)
+    private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, int weight, float dpiScale)
     {
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        var key = new GlyphKey(famId, sizeQ, scaleQ, bold, ch, ByGid: false);
+        var key = new GlyphKey(famId, sizeQ, scaleQ, weight, ch, ByGid: false);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         uint cp = ch;
@@ -369,10 +378,14 @@ float4 PSMain(VSOut i) : SV_Target
     /// <see cref="RunKey"/>: an unchanged run replays its baked local-space quads with the CURRENT color/transform/opacity and
     /// touches neither DirectWrite nor the glyph dictionary. <paramref name="textId"/>/<paramref name="familyId"/> are the
     /// interned handles (the cache key); <paramref name="text"/>/<paramref name="family"/> are needed only to shape on a miss.
-    /// <paramref name="family"/> selects the face (system name or "path.ttf#Family"); empty = the default body font.</summary>
-    public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
+    /// <paramref name="family"/> selects the face (system name or "path.ttf#Family"); empty = the default body font.
+    /// <paramref name="weight"/> is the NUMERIC font weight; <paramref name="charSpacing"/>/<paramref name="lineHeight"/>/
+    /// <paramref name="lineStacking"/>/<paramref name="lineBounds"/> mirror the glyph op (see DrawGlyphRunCmd) and feed
+    /// the layout engine, so the GPU path lays out exactly like the measure path.</summary>
+    public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
     {
-        var key = MakeRunKey(textId, familyId, size, bold, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale);
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
         if (!Unsafe.IsNullRef(ref hit))
@@ -380,7 +393,7 @@ float4 PSMain(VSOut i) : SV_Target
             hit.LastUsedFrame = _frame;
             _runsCached++;
 #if DEBUG
-            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale);
+            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale);
 #endif
             Replay(hit.Glyphs.AsSpan(0, hit.Count), color, world, opacity, outList);
             return;
@@ -389,7 +402,7 @@ float4 PSMain(VSOut i) : SV_Target
         // Miss (new/changed run): shape once into the scratch buffer, cache the baked local-space quads, then replay.
         // The quad array is POOLED (returned on eviction) so scroll-storms of fresh text don't churn Gen0 per run.
         _scratch.Clear();
-        ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
+        ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
         int n = _scratch.Count;
         var arr = RentQuads(n);
         for (int i = 0; i < n; i++) arr[i] = _scratch[i];
@@ -418,11 +431,14 @@ float4 PSMain(VSOut i) : SV_Target
         (_quadPool[bucket] ??= new Stack<ShapedGlyph[]>()).Push(arr);
     }
 
-    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, bool bold, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale)
+    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds)
     {
         int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : (int)MathF.Round(maxWidth);
-        return new RunKey(textId.Value, familyId.Value, (int)MathF.Round(size), bold ? 1 : 0, wrap, trim, maxLines,
-            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f));
+        int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
+        return new RunKey(textId.Value, familyId.Value, (int)MathF.Round(size), weight, wrap, trim, maxLines,
+            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f),
+            (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8));
     }
 
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity.
@@ -445,9 +461,10 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Shape + lay out a run via the DirectWrite layout engine (itemize → shape → wrap/trim → position, with
     /// kerning/ligatures/complex-script/BiDi), then rasterize each POST-shaping glyph (by glyph id) into the atlas and
     /// bake its local-space quad. The engine drives BOTH this render path and the measure path, so they layout identically.</summary>
-    private void ShapeInto(string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, float dpiScale, List<ShapedGlyph> outList)
+    private void ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, List<ShapedGlyph> outList)
     {
-        _engine.Layout(text.AsSpan(), family ?? "", bold, size, maxWidth, wrap, trim, maxLines);
+        _engine.Layout(text.AsSpan(), family ?? "", weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds);
         float inv = 1f / dpiScale;
         // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
         // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
@@ -481,7 +498,8 @@ float4 PSMain(VSOut i) : SV_Target
         int faceId = FaceId((nint)face);
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        var key = new GlyphKey(faceId, sizeQ, scaleQ, false, gid, ByGid: true);
+        // Weight 0 here is correct: the face id already encodes the (family, numeric weight) the engine resolved.
+        var key = new GlyphKey(faceId, sizeQ, scaleQ, 0, gid, ByGid: true);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         float physEm = size * dpiScale;
@@ -517,9 +535,9 @@ float4 PSMain(VSOut i) : SV_Target
         return e;
     }
 
-    private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale, float pen, float baseline, float inv, List<ShapedGlyph> outList)
+    private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, int weight, float dpiScale, float pen, float baseline, float inv, List<ShapedGlyph> outList)
     {
-        var g = GetGlyph(face, em, famId, ch, size, bold, dpiScale);
+        var g = GetGlyph(face, em, famId, ch, size, weight, dpiScale);
         if (g.W > 0 && g.H > 0)
             outList.Add(new ShapedGlyph
             {
@@ -551,10 +569,11 @@ float4 PSMain(VSOut i) : SV_Target
 
 #if DEBUG
     // Re-shape and assert the cached run is byte-identical to a fresh shape — proves the cache is output-preserving.
-    private void VerifyAgainstReshape(in ShapedRun cached, string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, float dpiScale)
+    private void VerifyAgainstReshape(in ShapedRun cached, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale)
     {
         _scratch.Clear();
-        ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
+        ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
         Debug.Assert(_scratch.Count == cached.Count, $"shaped-run cache count mismatch for \"{text}\": {_scratch.Count} vs {cached.Count}");
         for (int i = 0; i < _scratch.Count && i < cached.Count; i++)
         {
@@ -571,25 +590,25 @@ float4 PSMain(VSOut i) : SV_Target
     {
         private readonly GlyphRenderer _r;
         private readonly nint _face;
-        private readonly ushort _em; private readonly int _famId; private readonly float _size; private readonly bool _bold; private readonly float _dpi;
-        public GlyphAdvanceSource(GlyphRenderer r, IDWriteFontFace* face, ushort em, int famId, float size, bool bold, float dpi)
-        { _r = r; _face = (nint)face; _em = em; _famId = famId; _size = size; _bold = bold; _dpi = dpi; }
-        public float Advance(char ch) => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, ch, _size, _bold, _dpi).Advance;
-        public float EllipsisAdvance => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, '…', _size, _bold, _dpi).Advance;
+        private readonly ushort _em; private readonly int _famId; private readonly float _size; private readonly int _weight; private readonly float _dpi;
+        public GlyphAdvanceSource(GlyphRenderer r, IDWriteFontFace* face, ushort em, int famId, float size, int weight, float dpi)
+        { _r = r; _face = (nint)face; _em = em; _famId = famId; _size = size; _weight = weight; _dpi = dpi; }
+        public float Advance(char ch) => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, ch, _size, _weight, _dpi).Advance;
+        public float EllipsisAdvance => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, '…', _size, _weight, _dpi).Advance;
     }
 
-    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale)
-        => LineBreaker.MeasureRange(text.AsSpan(), s, e, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, int weight, float dpiScale)
+        => LineBreaker.MeasureRange(text.AsSpan(), s, e, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
-    private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale, float maxWidth, float ellipsisW)
-        => LineBreaker.FitEllipsis(text.AsSpan(), s, e, maxWidth, ellipsisW, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, int weight, float dpiScale, float maxWidth, float ellipsisW)
+        => LineBreaker.FitEllipsis(text.AsSpan(), s, e, maxWidth, ellipsisW, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
     private static int SkipSpaces(string text, int i) { while (i < text.Length && text[i] == ' ') i++; return i; }
 
     /// <summary>Greedy line break (shared with the measure path): the exclusive end index of the line starting at
     /// <paramref name="start"/> that fits within <paramref name="maxWidth"/>.</summary>
-    private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, bool bold, float dpiScale, float maxWidth, int wrap)
-        => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, int weight, float dpiScale, float maxWidth, int wrap)
+        => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
     // ── GPU resources ─────────────────────────────────────────────────────────
     private void InitAtlasTexture(ID3D12Device* device)

@@ -79,6 +79,19 @@ public readonly record struct PopupOptions(
     /// row; ThemeAnimations.cpp:682 registers ClipTranslateY = OffsetFromCenter immediately). Null (the default) keeps
     /// the anchor-edge reveal. Only meaningful with <see cref="PopupChrome.Dropdown"/>.</summary>
     public float? SeamOffsetY { get; init; }
+
+    /// <summary>WinUI <c>FlyoutBase.OverlayInputPassThroughElement</c> (FlyoutBase_Partial.cpp:3922-3938): pointer
+    /// input over THIS node's rendered bounds bypasses the light-dismiss scrim while the popup is open — the MenuBar
+    /// keeps hover-switching titles with a menu down (MenuBarItem.cpp:64-70 sets the bar as the pass-through).
+    /// (The full FlyoutShowMode surface — Transient / TransientWithDismissOnPointerMoveAway 80px — remains open;
+    /// tracked as engine item 31 in docs/plans/winui-parity-sweep.md.)</summary>
+    public Func<NodeHandle>? PassThrough { get; init; }
+
+    /// <summary>Post-placement horizontal nudge in px, MIRRORED when the positioner flips the popup to the anchor's
+    /// other side: the cascading-menu 4px overlap onto its owner (CascadingMenuHelper.h:121
+    /// <c>m_subMenuOverlapPixels = 4</c>; cpp:678 subMenuPosition.X += subItemWidth − 4 → pass −4 with
+    /// <see cref="FlyoutPlacement.RightEdgeAlignedTop"/>).</summary>
+    public float AnchorOffsetX { get; init; }
 }
 
 public interface IOverlayService
@@ -133,6 +146,8 @@ internal sealed class OverlayEntry
     public NodeHandle SurfaceNode;    // presenter surface: the clip-reveal + translate + opacity animate this node
     public NodeHandle PlateNode;      // menu chrome plate (acrylic+stroke+shadow): the WinUI MenuFlyoutPresenterBorder ScaleY stretch animates this node
     public float? SeamOffsetY;        // Dropdown SplitOpen/SplitClose seam (PopupOptions.SeamOffsetY)
+    public Func<NodeHandle>? PassThrough;   // WinUI OverlayInputPassThroughElement (PopupOptions.PassThrough)
+    public float AnchorOffsetX;       // post-placement nudge, mirrored on flip (cascade 4px overlap)
     public float MeasuredW;
     public float MeasuredH;
     public bool OpensUp;
@@ -211,6 +226,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
             Chrome = options.Chrome,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
             SeamOffsetY = options.SeamOffsetY,
+            PassThrough = options.PassThrough,
+            AnchorOffsetX = options.AnchorOffsetX,
             Phase = OverlayPhase.Opening,
             SavedFocus = GetFocus?.Invoke() ?? NodeHandle.Null,   // capture pre-open focus → restore on close
             ParentId = ResolveParentId(anchor),
@@ -516,6 +533,18 @@ public sealed class OverlayHost : Component
             var anim = Context.Anim;
             if (scene is null || anim is null) return;
             var vpRect = new RectF(0f, 0f, vp.Width, vp.Height);
+
+            // WinUI OverlayInputPassThroughElement: register the first open entry's pass-through subtree on the
+            // scrim — hover/press over its rendered bounds bypass the light-dismiss layer (the MenuBar keeps
+            // hover-switching titles with a menu down, FlyoutBase_Partial.cpp:3922-3938). Cleared when none.
+            if (!svc.ScrimNode.IsNull && scene.IsLive(svc.ScrimNode))
+            {
+                var pass = NodeHandle.Null;
+                foreach (var e in svc.Entries)
+                    if (e.Phase != OverlayPhase.Closing && e.PassThrough is { } pt) { pass = pt(); break; }
+                scene.SetHitTestPassThrough(svc.ScrimNode, pass);
+            }
+
             foreach (var e in svc.Entries)
             {
                 if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode)) continue;
@@ -555,7 +584,9 @@ public sealed class OverlayHost : Component
                         if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
                             container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
 
-                        var place = FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed);
+                        var place = ApplyAnchorOffsetX(
+                            FlyoutPositioner.Place(in aRect, in popupSize, in container, e.Placement, isWindowed: wantWindowed),
+                            e.AnchorOffsetX, in aRect);
 
                         if (wantWindowed)
                         {
@@ -567,7 +598,9 @@ public sealed class OverlayHost : Component
                             if (e.PopupWindowToken >= 0)
                                 svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H));
                             else
-                                place = FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false);
+                                place = ApplyAnchorOffsetX(
+                                    FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
+                                    e.AnchorOffsetX, in aRect);
                         }
 
                         e.OpensUp = place.OpensUp;
@@ -791,6 +824,16 @@ public sealed class OverlayHost : Component
         // shell and reset the nav scroll. The popup still floats/overflows freely; it just no longer affects the layout.
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
             Ui.ZStack(layers.ToArray()) with { Grow = 1, Width = vp.Width, Height = vp.Height });
+    }
+
+    /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the
+    /// placed popup on X, MIRRORED when the positioner flipped it to the anchor's LEFT side so the overlap still
+    /// points back onto the owner.</summary>
+    static PopupPlacementResult ApplyAnchorOffsetX(PopupPlacementResult place, float offsetX, in RectF anchor)
+    {
+        if (offsetX == 0f) return place;
+        bool leftOfAnchor = place.X + place.MeasuredW <= anchor.X + 0.5f;
+        return place with { X = place.X + (leftOfAnchor ? -offsetX : offsetX) };
     }
 
     static BoxEl Positioned(OverlayEntry e) => e.Chrome == PopupChrome.Modal ? PositionedModal(e) : PositionedAnchored(e);

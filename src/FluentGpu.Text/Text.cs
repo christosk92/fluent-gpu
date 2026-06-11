@@ -2,8 +2,17 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Text;
 
-public readonly record struct TextStyle(StringId FontFamily, float SizeDip, bool Bold,
-    TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0);
+/// <summary>The resolved style a text run is measured/shaped under. <see cref="Weight"/> is the NUMERIC font weight
+/// (WinUI FontWeight — the int IS the DWRITE_FONT_WEIGHT, 1..999; callers resolve sugar like Bold→700 before
+/// constructing; 0 is treated as 400). <see cref="CharSpacing"/> is WinUI TextElement.CharacterSpacing — tracking in
+/// 1/1000 em, applied per glyph after shaping. <see cref="LineHeight"/> (DIP; NaN/≤0 = font-natural) resolves per
+/// <see cref="Stacking"/> (WinUI LineStackingStrategy), and <see cref="LineBounds"/> (WinUI TextLineBounds) selects
+/// the reported line box (Full = ascent..descent, Tight = cap-height..baseline). Record equality over ALL fields is
+/// load-bearing: TextStyle is the TextMeasureCache key, so every layout-affecting input must live here.</summary>
+public readonly record struct TextStyle(StringId FontFamily, float SizeDip, ushort Weight,
+    TextWrap Wrap = TextWrap.NoWrap, TextTrim Trim = TextTrim.None, int MaxLines = 0,
+    float CharSpacing = 0f, float LineHeight = float.NaN,
+    LineStacking Stacking = LineStacking.MaxHeight, TextLineBounds LineBounds = TextLineBounds.Full);
 
 /// <summary>Result of measuring a run: the box the shaped glyphs occupy + the baseline offset from the top, plus the
 /// face's decoration metrics — all vertical values measured DOWN from the line top, the same frame as

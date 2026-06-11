@@ -194,4 +194,16 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
         M12 * o.M21 + M22 * o.M22,
         M11 * o.Dx + M21 * o.Dy + Dx,
         M12 * o.Dx + M22 * o.Dy + Dy);
+
+    /// <summary>Inverse-map a DEVICE point back through this transform into the pre-transform frame — the hit-test
+    /// mirror of <see cref="Transform"/> (scale-aware pointer routing into Viewbox/zoomed content). False when the
+    /// matrix is degenerate (a zero scale renders nothing hit-testable).</summary>
+    public bool TryInverseTransform(Point2 p, out Point2 inv)
+    {
+        float det = M11 * M22 - M21 * M12;
+        if (MathF.Abs(det) < 1e-6f) { inv = default; return false; }
+        float x = p.X - Dx, y = p.Y - Dy;
+        inv = new Point2((M22 * x - M21 * y) / det, (M11 * y - M12 * x) / det);
+        return true;
+    }
 }
