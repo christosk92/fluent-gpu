@@ -10232,7 +10232,7 @@ static class Slice
                     Children = new Element[]
                     {
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, FillBind = () => fill.Value, OnRealized = nh => nFill = nh },
-                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), OpacityBind = () => op.Value, OnRealized = nh => nOp = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), Opacity = Prop.Of(() => op.Value), OnRealized = nh => nOp = nh },
                         new BoxEl { Height = 10, BorderWidth = proof, WidthBind = () => w.Value, OnRealized = nh => nW = nh },
                         new BoxEl { Width = 40, BorderWidth = proof, HeightBind = () => h.Value, OnRealized = nh => nH = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
@@ -10347,7 +10347,7 @@ static class Slice
                 Build = () =>
                 {
                     int r = rr.Value;                            // each render captures a FRESH r in a FRESH thunk
-                    return new BoxEl { Width = 40, Height = 10, Opacity = (Func<float>)(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
+                    return new BoxEl { Width = 40, Height = 10, Opacity = Prop.Of(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
                 },
             });
             host.RunFrame();

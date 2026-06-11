@@ -192,7 +192,6 @@ public sealed record BoxEl : Element
     // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
     // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).
     public Func<Affine2D>? TransformBind { init { if (value is not null) Transform = value; } }   // → LocalTransform (TransformDirty | PaintDirty)
-    public Func<float>? OpacityBind { init { if (value is not null) Opacity = value; } }          // → Opacity (PaintDirty)
     public Func<ColorF>? FillBind { init { if (value is not null) Fill = value; } }               // → Fill (PaintDirty)
     public Func<float>? WidthBind { init { if (value is not null) Width = value; } }              // → LayoutInput.Width (LayoutDirty → scoped relayout)
     public Func<float>? HeightBind { init { if (value is not null) Height = value; } }            // → LayoutInput.Height (LayoutDirty → scoped relayout)

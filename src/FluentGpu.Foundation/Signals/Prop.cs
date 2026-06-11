@@ -14,6 +14,14 @@ namespace FluentGpu.Signals;
 /// reads only <see cref="IsBound"/> (one null test). Conversions from the <see cref="IReadSignal{T}"/> INTERFACE are
 /// illegal in C# (CS0552) — through an interface-typed variable use the thunk form <c>chan = () =&gt; s.Value</c>.
 /// </summary>
+/// <summary>Thunk sugar for inline lambdas: C# cannot chain a lambda conversion into a user-defined conversion, so
+/// <c>Opacity = () =&gt; x</c> does not compile bare — write <c>Opacity = Prop.Of(() =&gt; x)</c> (or assign a typed
+/// <c>Func&lt;T&gt;</c> local, the usual control idiom). Pure passthroughs should assign the signal itself instead.</summary>
+public static class Prop
+{
+    public static Prop<T> Of<T>(Func<T> thunk) => thunk;
+}
+
 public readonly struct Prop<T>
 {
     private readonly T _value;        // static value, stored inline (never boxed)

@@ -54,11 +54,11 @@ public static partial class ScrollBar
     /// not style), TransformBind (the compositor-bound scroll position). On the legacy panning variant everything
     /// is style (drag lives on the rail, no binds).</summary>
     public const string PartThumb = "sb-thumb";
-    /// <summary>The always-mounted acrylic track (WinUI Vertical/HorizontalTrackRect). Owned: Key, OpacityBind (the
+    /// <summary>The always-mounted acrylic track (WinUI Vertical/HorizontalTrackRect). Owned: Key, the bound Opacity (the
     /// 83ms chrome fade).</summary>
     public const string PartTrack = "sb-track";
     /// <summary>The TRAILING arrow cell (WinUI VerticalSmallIncrease — glyph EDDC, scrolls down; horizontal
-    /// HorizontalSmallIncrease — glyph EDDA, scrolls right). Owned: Key, OpacityBind (the chrome fade),
+    /// HorizontalSmallIncrease — glyph EDDA, scrolls right). Owned: Key, the bound Opacity (the chrome fade),
     /// Repeats + RepeatIntervalMs + OnClick (the small-change repeat step), OnHoverMove/OnPointerExit (the
     /// conscious hover lane).</summary>
     public const string PartIncreaseButton = "sb-down";
@@ -191,7 +191,7 @@ public static partial class ScrollBar
 /// modeled as a debounce so geometry never rides a delayed FLIP), then the 167ms KeySpline(0,0,0,1) cross-axis
 /// width 2↔6 + the 83ms linear chrome fades, stepped per frame by a mounted <see cref="FrameClock"/> ticker
 /// (16ms-per-frame engine convention — the <c>UseAnimatedValue</c> precedent; deterministic headlessly). The eased
-/// values flow through SIGNALS into a cross-axis <c>Width/HeightBind</c> (scoped relayout) and <c>OpacityBind</c>s
+/// values flow through SIGNALS into a cross-axis <c>Width/HeightBind</c> (scoped relayout) and bound <c>Opacity</c>s
 /// (track/arrow fades, compositor-only) — the component itself never re-renders per frame. Thumb position is a
 /// <c>TransformBind</c> on the position signal: instant, compositor-only, never animated. The arrow cells are
 /// ALWAYS reserved, so track length and thumb geometry are hover-invariant (WinUI rows 0/4 with fixed extent,
@@ -229,7 +229,7 @@ internal sealed class ScrollBarAnatomy : Component
     private bool _ticking;
     private Action<bool>? _setTicking;
     private Signal<float>? _widthSig;        // eased thumb cross-axis size (2 ↔ 6) → thumb Width/HeightBind
-    private Signal<float>? _chromeSig;       // eased track/arrow opacity (0 ↔ 1) → OpacityBinds
+    private Signal<float>? _chromeSig;       // eased track/arrow opacity (0 ↔ 1) → the bound Opacity channels
 
     // Gesture state (instance fields, the conscious-machine idiom — none of these drive a re-render).
     private bool _dragging;                  // live thumb drag (WinUI Thumb.IsDragging)
@@ -398,12 +398,12 @@ internal sealed class ScrollBarAnatomy : Component
             Corners = CornerRadius4.All(6f),                    // CornerRadius 3 × the Scale=2 converter (:193-194/:702)
             Acrylic = Tok.AcrylicFlyout,
             Fill = Tok.AcrylicFlyout.Fallback,
-            OpacityBind = trackFadeBind,
+            Opacity = trackFadeBind,
             HitTestVisible = false,
         };
         // Parts: restyle anything (acrylic, fill, corners…); the Key and the 83ms chrome-fade bind always win.
         if (Parts is not null)
-            track = Parts.Apply(ScrollBar.PartTrack, track) with { Key = "sb-track", OpacityBind = trackFadeBind };
+            track = Parts.Apply(ScrollBar.PartTrack, track) with { Key = "sb-track", Opacity = trackFadeBind };
 
         return new BoxEl
         {
@@ -593,7 +593,7 @@ internal sealed class ScrollBarAnatomy : Component
                 ? (dec ? new Edges4(4f, 0f, 0f, 0f) : new Edges4(0f, 0f, 4f, 0f))    // (:195-196)
                 : (dec ? new Edges4(0f, 4f, 0f, 0f) : new Edges4(0f, 0f, 0f, 4f)),   // (:197-198)
             Fill = ColorF.Transparent,                          // ScrollBarButtonBackground, ALL states (:14)
-            OpacityBind = fadeBind,
+            Opacity = fadeBind,
             Repeats = true,
             RepeatIntervalMs = ScrollBar.RepeatIntervalMs,      // Interval=50 (:703/:711); Delay stays the 500ms default
             TabStop = false,                                    // IsTabStop=False on every part (:681-711)
@@ -624,7 +624,7 @@ internal sealed class ScrollBarAnatomy : Component
             cell = m with
             {
                 Key = dec ? "sb-up" : "sb-down",
-                OpacityBind = fadeBind,
+                Opacity = fadeBind,
                 Repeats = true,
                 RepeatIntervalMs = ScrollBar.RepeatIntervalMs,
                 OnClick = click,
