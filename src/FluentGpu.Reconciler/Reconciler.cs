@@ -951,12 +951,15 @@ public sealed class TreeReconciler
 
                 // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
                 // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.
+                // A BOUND fill is excluded per-channel: its effect owns paint.Fill, so diffing against the static would
+                // arm a phantom fade toward a color the channel doesn't own (the border sub-block is unaffected).
+                bool fillOwned = b.FillBind is null;
                 if (!isMount && !float.IsNaN(b.BrushTransitionMs) && b.BrushTransitionMs > 0f
-                    && (paint.Fill != b.Fill || paint.BorderColor != b.BorderColor))
+                    && ((fillOwned && paint.Fill != b.Fill) || paint.BorderColor != b.BorderColor))
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
                     var ba = new BrushAnim { DurationMs = b.BrushTransitionMs };
-                    if (paint.Fill != b.Fill)
+                    if (fillOwned && paint.Fill != b.Fill)
                     {
                         ba.FillFrom = midFlight && (prev.Channels & BrushAnim.FillBit) != 0
                             ? ColorF.LerpLinear(prev.FillFrom, paint.Fill, prev.T)   // continue from the displayed color
@@ -974,7 +977,9 @@ public sealed class TreeReconciler
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }
 
-                paint.Fill = b.Fill;
+                // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
+                // clobber it on an update between signal fires (mount was safe only because the bind fires after this).
+                if (fillOwned) paint.Fill = b.Fill;
                 paint.HoverFill = b.HoverFill;
                 paint.PressedFill = b.PressedFill;
                 paint.BorderColor = b.BorderColor;
@@ -1325,7 +1330,9 @@ public sealed class TreeReconciler
                 paint.VisualKind = VisualKind.Text;
 
                 // Implicit BrushTransition on the resting foreground (WinUI BrushTransition on a logical state flip).
-                if (!isMount && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color)
+                // Skipped when ColorBind owns the channel (same per-channel rule as the BoxEl fill block above).
+                bool colorOwned = t.ColorBind is null;
+                if (!isMount && colorOwned && !float.IsNaN(t.BrushTransitionMs) && t.BrushTransitionMs > 0f && paint.TextColor != t.Color)
                 {
                     bool midFlight = _scene.TryGetBrushAnim(node, out var prev);
                     var ba = new BrushAnim
@@ -1340,7 +1347,9 @@ public sealed class TreeReconciler
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }
 
-                paint.TextColor = t.Color;
+                // Guarded like Text below: a bound color is owned by its effect (EditableText's doc-vs-placeholder
+                // ColorBind was clobbered back to the static by any re-render between signal fires).
+                if (colorOwned) paint.TextColor = t.Color;
                 paint.TextHoverColor = t.HoverColor;
                 paint.TextPressedColor = t.PressedColor;
                 paint.TextDisabledColor = t.DisabledColor;

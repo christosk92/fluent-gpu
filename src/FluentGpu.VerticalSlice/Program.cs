@@ -10177,6 +10177,99 @@ static class Slice
             $"blur={blurUnmounts} refocus={noEyeOnRefocus} typing={typingPopulatedHidden} rearmed={rearmed}");
     }
 
+    // ── prop-net.*: the bound-channel ownership net (Prop<T> unification W0) ─────────────────────────────────────
+    // One fixture, every bindable channel: mount bound → fire the signal once → force an OWNER re-render with FRESH
+    // element instances (Build() returns new records each render, so Update's ReferenceEquals shortcut cannot hide
+    // the write) WITHOUT touching the bound signals → the bound value must survive the static re-assert. Fill and
+    // TextColor were the live clobbers (no `*Bind is null` guard at the static write); the other channels lock the
+    // already-correct contract the Prop<T> migration must preserve. prop-net.source lands with the W1 chokepoint
+    // (no ImageEl decode fixture exists headlessly; its static path is already guarded + id-diffed).
+    static void PropNetClobberChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("prop-net", new Size2(420, 420), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        var rr = new Signal<int>(0);                      // owner re-render trigger (read by Build)
+        var fill = new Signal<ColorF>(ColorF.FromRgba(0xE8, 0x3C, 0x3C, 0xFF));
+        var op = new Signal<float>(0.8f);
+        var w = new Signal<float>(64f);
+        var h = new Signal<float>(24f);
+        var tx = new Signal<float>(12f);
+        var txt = new Signal<string>("t1");
+        var col = new Signal<ColorF>(ColorF.FromRgba(0x18, 0xA0, 0x57, 0xFF));
+        var tint = new Signal<ColorF>(ColorF.FromRgba(0x2D, 0x7D, 0xF6, 0xFF));
+        var canCol = new Signal<ColorF>(ColorF.FromRgba(0xF5, 0xC5, 0x18, 0xFF));
+
+        NodeHandle nFill = default, nOp = default, nW = default, nH = default, nT = default,
+                   wTxt = default, wCol = default, wImg = default, wCan = default;   // wrappers: OnRealized is BoxEl-only
+        var root = new W0fStaticProbe
+        {
+            Build = () =>
+            {
+                int r = rr.Value;                          // subscribe: rr bump re-renders the owner
+                float proof = 0.5f + 0.25f * r;            // reconcile proof: lands in paint.BorderWidth each render
+                return new BoxEl
+                {
+                    Direction = 1, Width = 400, Height = 400, Gap = 2,
+                    Children = new Element[]
+                    {
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, FillBind = () => fill.Value, OnRealized = nh => nFill = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), OpacityBind = () => op.Value, OnRealized = nh => nOp = nh },
+                        new BoxEl { Height = 10, BorderWidth = proof, WidthBind = () => w.Value, OnRealized = nh => nW = nh },
+                        new BoxEl { Width = 40, BorderWidth = proof, HeightBind = () => h.Value, OnRealized = nh => nH = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
+                        new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, TextBind = () => txt.Value } ] },
+                        new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, ColorBind = () => col.Value } ] },
+                        new BoxEl { OnRealized = nh => wImg = nh, Children = [ new ImageEl { Width = 24, Height = 24, PlaceholderBind = () => tint.Value } ] },
+                        // the EditableText shape: a STATIC Color AND a ColorBind on one TextEl — the bind must win
+                        new BoxEl { OnRealized = nh => wCan = nh, Children = [ new TextEl("canary") { Color = Tok.TextPrimary, Underline = (r & 1) == 1, ColorBind = () => canCol.Value } ] },
+                    },
+                };
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        NodeHandle nTxt = host.Scene.FirstChild(wTxt), nCol = host.Scene.FirstChild(wCol),
+                   nImg = host.Scene.FirstChild(wImg), nCan = host.Scene.FirstChild(wCan);
+
+        // fire every bound signal ONCE (new values), no re-render in between
+        fill.Value = ColorF.FromRgba(0x8B, 0x3C, 0xC9, 0xFF);
+        op.Value = 0.4f; w.Value = 96f; h.Value = 48f; tx.Value = 31f;
+        txt.Value = "t2"; col.Value = ColorF.FromRgba(0xE8, 0x8C, 0x1C, 0xFF);
+        tint.Value = ColorF.FromRgba(0x18, 0xA0, 0xA0, 0xFF); canCol.Value = ColorF.FromRgba(0x3C, 0x8B, 0xC9, 0xFF);
+        host.RunFrame();
+
+        // OWNER re-render: fresh element records, bound signals untouched
+        rr.Value = 1;
+        host.RunFrame();
+
+        bool reconciled = Near(host.Scene.Paint(nFill).BorderWidth, 0.75f, 0.001f)
+                          && (host.Scene.Paint(nTxt).TextDecorations & NodePaint.UnderlineBit) != 0;
+        Check("prop-net.reconciled owner re-render actually rewrote columns on the probed nodes",
+            reconciled, $"bw={host.Scene.Paint(nFill).BorderWidth} deco={host.Scene.Paint(nTxt).TextDecorations}");
+
+        Check("prop-net.fill bound Fill survives an owner re-render between signal fires",
+            host.Scene.Paint(nFill).Fill == fill.Peek(), $"paint={host.Scene.Paint(nFill).Fill} want={fill.Peek()}");
+        Check("prop-net.opacity bound Opacity survives an owner re-render",
+            Near(host.Scene.Paint(nOp).Opacity, 0.4f, 0.001f), $"paint={host.Scene.Paint(nOp).Opacity}");
+        Check("prop-net.width bound Width survives an owner re-render",
+            Near(host.Scene.Layout(nW).Width, 96f, 0.001f), $"li={host.Scene.Layout(nW).Width}");
+        Check("prop-net.height bound Height survives an owner re-render",
+            Near(host.Scene.Layout(nH).Height, 48f, 0.001f), $"li={host.Scene.Layout(nH).Height}");
+        Check("prop-net.transform bound Transform survives an owner re-render (identity-gate skips the static)",
+            Near(host.Scene.Paint(nT).LocalTransform.Dx, 31f, 0.001f), $"dx={host.Scene.Paint(nT).LocalTransform.Dx}");
+        Check("prop-net.text bound Text survives an owner re-render",
+            host.Scene.Paint(nTxt).Text == strings.Intern("t2"), $"text-id={host.Scene.Paint(nTxt).Text}");
+        Check("prop-net.textcolor bound Color survives an owner re-render between signal fires",
+            host.Scene.Paint(nCol).TextColor == col.Peek(), $"paint={host.Scene.Paint(nCol).TextColor} want={col.Peek()}");
+        Check("prop-net.placeholder bound Placeholder survives an owner re-render",
+            host.Scene.Paint(nImg).Fill == tint.Peek(), $"paint={host.Scene.Paint(nImg).Fill}");
+        Check("prop-net.canary static Color + ColorBind on one TextEl: the bind wins across re-renders (EditableText shape)",
+            host.Scene.Paint(nCan).TextColor == canCol.Peek(), $"paint={host.Scene.Paint(nCan).TextColor} want={canCol.Peek()}");
+    }
+
     static void ProgressIndeterminateLifecycleChecks(StringTable strings)
     {
         // ProgressRing: parent re-render updates isActive through context, preserving the component instance.
@@ -11436,6 +11529,7 @@ static class Slice
         Cp2ConsolidationChecks(strings);   // collection consolidation: ItemsView premiere + thin LV/GV presets + 2-D reorder + displacement channel
         D2PasswordRevealFocusChecks(strings);
         ProgressIndeterminateLifecycleChecks(strings);
+        PropNetClobberChecks(strings);     // Prop<T> W0: bound-channel ownership net (clobber guards + contract locks)
         D3ExpanderChecks(strings);
         D4ScrollBarChecks(strings);
 
