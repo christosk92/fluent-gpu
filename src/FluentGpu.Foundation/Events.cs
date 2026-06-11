@@ -64,6 +64,21 @@ public sealed class PointerEventArgs
 }
 
 /// <summary>
+/// Element-level wheel payload for <c>OnPointerWheel</c> (WinUI PointerWheelChanged): the platform wheel delta —
+/// the same value the viewport scroll path consumes — plus the modifier chord. Setting <see cref="Handled"/> stops
+/// the dispatcher from scrolling the enclosing viewport (NumberBox value-stepping inside a scrollable form,
+/// NumberBox.cpp:578-597 OnNumberBoxScroll marks the routed event handled). Unhandled, the wheel keeps walking up
+/// to the next handler / the nearest scrollable (routed-event semantics). Allocated per wheel event (cold edge).
+/// </summary>
+public sealed class WheelEventArgs
+{
+    public Point2 Local;
+    public float Delta;
+    public KeyModifiers Mods;
+    public bool Handled;
+}
+
+/// <summary>
 /// Drag-reorder lifecycle payload for <c>OnDragStarted</c>/<c>OnDragDelta</c>/<c>OnDragCompleted</c>: the pointer in
 /// the dragged node's CURRENT box (<see cref="Local"/> stays ≈ the grab offset) and in window space, the accumulated
 /// gesture translation since the arming press, and the smoothed pointer velocity (px/s, ~50ms EMA) for flick/settle

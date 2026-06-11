@@ -40,6 +40,7 @@ sealed class ShotScene : Component
         "flyout-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.Flyout))),
         "contentdialog-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.Modal))),
         "teachingtip-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.TeachingTip))),
+        "atlas-stress" => CenterShot(Embed.Comp(() => new AtlasStressShot())),
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
@@ -799,6 +800,43 @@ sealed class ListViewShot : Component
             Padding = new Edges4(0, 4, 0, 4),
             Children = [ListView.Create(Items, selected)],
         };
+    }
+}
+
+// Glyph-atlas overflow proof (run with --frames 14): the first frames rasterize ~1,200 distinct Segoe Fluent glyphs
+// at THREE sizes (≈6.2 M px² of coverage vs the 4.19 M px² atlas — guaranteed overflow → generational reset), then
+// the storm unmounts and only a sentinel line remains. A correct reset re-shapes the sentinel from the fresh
+// generation → the screenshot shows crisp readable text. The pre-fix behavior cached overflowed glyphs at the atlas
+// origin, so the sentinel (and every later glyph) rendered as corrupt fragments.
+sealed class AtlasStressShot : Component
+{
+    public override Element Render()
+    {
+        var tick = UseContext(FrameClock.Tick);
+        bool storm = tick < 6;
+
+        var kids = new List<Element>
+        {
+            new TextEl("Atlas generation reset OK — the quick brown fox 0123456789") { Size = 16f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) },
+            new TextEl("       ") { Size = 20f, Color = ColorF.FromRgba(0x4C, 0xC2, 0xFF), FontFamily = Theme.IconFont },
+        };
+
+        if (storm)
+        {
+            // A FRESH glyph set per frame: the cache key includes the quantized size, so size = 20 + tick rasterizes
+            // 1,200 new entries each storm frame (~1 M px² of coverage per frame → guaranteed overflow by frame ~5).
+            // All rows sit inside the viewport — record-time culling must not skip the shaping.
+            const int Count = 1200, PerRow = 60;
+            float size = 20f + tick;
+            for (int row = 0; row < Count / PerRow; row++)
+            {
+                var sb = new System.Text.StringBuilder(PerRow);
+                for (int i = 0; i < PerRow; i++) sb.Append((char)(0xE700 + row * PerRow + i));
+                kids.Add(new TextEl(sb.ToString()) { Size = size, Color = ColorF.FromRgba(0x80, 0x80, 0x80), FontFamily = Theme.IconFont });
+            }
+        }
+
+        return new BoxEl { Direction = 1, Gap = 2f, Width = 1320f, Children = kids.ToArray() };
     }
 }
 

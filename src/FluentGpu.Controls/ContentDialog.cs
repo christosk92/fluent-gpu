@@ -48,6 +48,26 @@ public sealed class ContentDialog : Component
     /// Primary/Secondary for the commands, None for the close button, Escape, or a programmatic close.</summary>
     public Action<ContentDialogResult>? Closed;
 
+    // Template parts (see TemplateParts). Each const's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The dialog card (WinUI BackgroundElement): fill, border, corners, shadow, min/max sizes… Owned:
+    /// OnKeyDown (Enter → default button, chained with any modifier-supplied handler), Children (the content ·
+    /// separator · command-row structure).</summary>
+    public const string PartPlate = "Plate";
+    /// <summary>The title text (the WinUI Title presenter) — a TextEl part: customize via
+    /// <c>Parts.Set&lt;TextEl&gt;(ContentDialog.PartTitle, t =&gt; t with { … })</c>. Owned: none (pure styling).</summary>
+    public const string PartTitle = "Title";
+    /// <summary>The padded content region above the separator (the WinUI DialogSpace top overlay). Owned: Children
+    /// (the title + message structure).</summary>
+    public const string PartContent = "Content";
+    /// <summary>The footer command row (WinUI CommandSpace) — built only when a button is shown. Owned: Children
+    /// (the command buttons: their click handlers, default-button accent, and TabIndex focus-trap ranking).</summary>
+    public const string PartCommandRow = "CommandRow";
+
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
+
     // ContentDialog_themeresources.xaml / Common_themeresources_any.xaml.
     const float MinW = 320f, MaxW = 548f, MinH = 184f, MaxH = 756f;
     const float Pad = 24f;
@@ -125,6 +145,8 @@ public sealed class ContentDialog : Component
                 else if (secondaryAccent) { RunSecondary(); e.Handled = true; }
                 else if (closeAccent) { RunClose(); e.Handled = true; }
             }
+            // One delegate instance, so the Chain re-assert collapses when a [PartPlate] modifier leaves it in place.
+            Action<KeyEventArgs> onCardKey = OnCardKey;
 
             var buttons = new List<BoxEl>(3);
             if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent, RunPrimary));
@@ -153,7 +175,7 @@ public sealed class ContentDialog : Component
                 Fill = Tok.FillLayerAlt,   // ContentDialogTopOverlay = LayerFillColorAltBrush
                 Children =
                 [
-                    new TextEl(Title)
+                    Parts.Apply(PartTitle, new TextEl(Title)
                     {
                         Size = TitleSize,
                         Bold = true,       // SemiBold (600) in WinUI; TextEl exposes Bold (700) — engine-wide weight limitation
@@ -162,10 +184,11 @@ public sealed class ContentDialog : Component
                         MaxLines = 2,
                         Trim = TextTrim.WordEllipsis,
                         Margin = new Edges4(0, 0, 0, ContentGap),   // ContentDialogTitleMargin 0,0,0,12
-                    },
+                    }),
                     new TextEl(Message) { Size = ContentSize, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap },
                 ],
             };
+            contentRegion = Parts.Apply(PartContent, contentRegion) with { Children = contentRegion.Children };   // structure = title + message
 
             var cardChildren = new List<Element>(3) { contentRegion };
             if (buttons.Count > 0)
@@ -174,7 +197,7 @@ public sealed class ContentDialog : Component
                 // ContentDialogSeparatorBorderBrush=CardStrokeColorDefault. Model it as the bottom separator between
                 // the top overlay and the command row.
                 cardChildren.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault });
-                cardChildren.Add(new BoxEl
+                var commandRow = new BoxEl
                 {
                     Direction = 0,
                     Gap = BtnGap,
@@ -183,10 +206,12 @@ public sealed class ContentDialog : Component
                     Padding = Edges4.All(Pad),
                     Fill = Tok.FillSolidBase,   // the command space fills (CommandSpace Background = ContentDialogBackground)
                     Children = commandChildren,
-                });
+                };
+                // Restyle via [PartCommandRow]; the buttons (handlers + TabIndex focus ranking) always win.
+                cardChildren.Add(Parts.Apply(PartCommandRow, commandRow) with { Children = commandChildren });
             }
 
-            return new BoxEl
+            var plate = new BoxEl
             {
                 Direction = 1,
                 Width = cardW,
@@ -200,9 +225,19 @@ public sealed class ContentDialog : Component
                 BorderWidth = 1f,
                 Shadow = Elevation.Dialog,
                 ClipToBounds = true,
-                OnKeyDown = OnCardKey,   // Enter → default button (bubbles from any focused child inside the trap)
+                OnKeyDown = onCardKey,   // Enter → default button (bubbles from any focused child inside the trap)
                 Children = cardChildren.ToArray(),
             };
+            if (Parts is { } pp)
+            {
+                var m = pp.Apply(PartPlate, plate);
+                plate = m with
+                {
+                    Children = plate.Children,
+                    OnKeyDown = TemplateParts.Chain(onCardKey, m.OnKeyDown),   // Enter routing first, then any modifier handler
+                };
+            }
+            return plate;
         }
 
         void Open()

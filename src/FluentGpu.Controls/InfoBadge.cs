@@ -67,6 +67,13 @@ public readonly record struct InfoBadgeTemplateSettings(
 /// </summary>
 public static class InfoBadge
 {
+    // Template parts (see TemplateParts). The part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The badge pill itself (WinUI RootGrid — the control's only named element). Owned: Children (the
+    /// value text / icon glyph — the display-kind content; the Dot has none). The per-kind geometry and severity
+    /// fill are stock per-render styling a modifier may override.</summary>
+    public const string PartRoot = "Root";
+
     // WinUI severity Icon-style default glyphs (InfoBadge_themeresources.xaml *IconInfoBadgeStyle IconSource):
     //   Attention      = FontIcon  0xEA38
     //   Informational  = FontIcon  0xF13F
@@ -94,35 +101,36 @@ public static class InfoBadge
     };
 
     /// <summary>The bare 4x4 dot. WinUI Dot state (no Value, no Icon): 4x4, corner = 2 (pill at that height).</summary>
-    public static BoxEl Dot(ColorF? color = null) => DotSeverity(color);
+    public static BoxEl Dot(ColorF? color = null, TemplateParts? parts = null) => DotSeverity(color, parts);
 
     /// <summary>Severity dot — same geometry as <see cref="Dot"/> with the severity background.</summary>
-    public static BoxEl Dot(InfoBadgeSeverity severity) => DotSeverity(SeverityFill(severity));
+    public static BoxEl Dot(InfoBadgeSeverity severity, TemplateParts? parts = null) => DotSeverity(SeverityFill(severity), parts);
 
-    private static BoxEl DotSeverity(ColorF? color)
+    private static BoxEl DotSeverity(ColorF? color, TemplateParts? parts)
     {
         var ts = InfoBadgeTemplateSettings.For(value: -1, hasIcon: false);   // Kind 0
-        return new BoxEl
+        // Parts: the Dot has no children — everything on it is open to the modifier.
+        return parts.Apply(PartRoot, new BoxEl
         {
             Width = ts.MinWidth,
             Height = ts.Height,
             Corners = CornerRadius4.All(ts.CornerRadius),
             Fill = color ?? Tok.AccentDefault,
-        };
+        });
     }
 
     /// <summary>The Value badge: a notification count. WinUI clamps to a 16-tall pill; single digits stay circular via the
     /// MinWidth = Height square. Pass <paramref name="severity"/> to recolor.</summary>
-    public static BoxEl Count(int value, ColorF? color = null) =>
-        CountCore(value, color ?? Tok.AccentDefault);
+    public static BoxEl Count(int value, ColorF? color = null, TemplateParts? parts = null) =>
+        CountCore(value, color ?? Tok.AccentDefault, parts);
 
-    public static BoxEl Count(int value, InfoBadgeSeverity severity) =>
-        CountCore(value, SeverityFill(severity));
+    public static BoxEl Count(int value, InfoBadgeSeverity severity, TemplateParts? parts = null) =>
+        CountCore(value, SeverityFill(severity), parts);
 
-    private static BoxEl CountCore(int value, ColorF fill)
+    private static BoxEl CountCore(int value, ColorF fill, TemplateParts? parts)
     {
         var ts = InfoBadgeTemplateSettings.For(value, hasIcon: false);   // Kind 1
-        return new BoxEl
+        var root = new BoxEl
         {
             Direction = 0,
             MinWidth = ts.MinWidth,        // 16 — MeasureOverride squares a narrower badge (single digit stays a circle)
@@ -142,21 +150,23 @@ public static class InfoBadge
                 },
             ],
         };
+        // Parts: restyle the pill; the value text (the display-kind content) always wins.
+        return parts.Apply(PartRoot, root) with { Children = root.Children };
     }
 
     /// <summary>The Icon badge: a Segoe Fluent glyph in the 16-tall pill. WinUI FontIcon state (Value &lt; 0, IconSource
     /// present) — the IconPresenter Viewbox scales the glyph to the content-box height (defaults to the full ~16 box
     /// for the ad-hoc, no-severity overloads); FontIcon margin 4,0,4,2.</summary>
-    public static BoxEl Icon(string glyph, ColorF? color = null) =>
-        IconCore(glyph, color ?? Tok.AccentDefault, InfoBadgeTemplateSettings.IconGlyphSizeFull);
+    public static BoxEl Icon(string glyph, ColorF? color = null, TemplateParts? parts = null) =>
+        IconCore(glyph, color ?? Tok.AccentDefault, InfoBadgeTemplateSettings.IconGlyphSizeFull, parts);
 
-    public static BoxEl Icon(string glyph, InfoBadgeSeverity severity) =>
-        IconCore(glyph, SeverityFill(severity), GlyphSize(severity));
+    public static BoxEl Icon(string glyph, InfoBadgeSeverity severity, TemplateParts? parts = null) =>
+        IconCore(glyph, SeverityFill(severity), GlyphSize(severity), parts);
 
     /// <summary>Severity icon using WinUI's default per-severity glyph (Attention 0xEA38, Informational 0xF13F,
     /// Success Accept, Caution Important, Critical Cancel), scaled by the per-style IconPresenter Viewbox target.</summary>
-    public static BoxEl Icon(InfoBadgeSeverity severity) =>
-        IconCore(DefaultGlyph(severity), SeverityFill(severity), GlyphSize(severity));
+    public static BoxEl Icon(InfoBadgeSeverity severity, TemplateParts? parts = null) =>
+        IconCore(DefaultGlyph(severity), SeverityFill(severity), GlyphSize(severity), parts);
 
     /// <summary>The IconPresenter-Viewbox glyph target height per severity Icon style: Attention/Informational shrink to
     /// 10 (their <c>Padding="0,4,0,2"</c> = 16 − 6), Success/Caution/Critical (and Default) fill the full ~16 box.</summary>
@@ -176,10 +186,10 @@ public static class InfoBadge
         _                               => GlyphAttention,
     };
 
-    private static BoxEl IconCore(string glyph, ColorF fill, float glyphSize)
+    private static BoxEl IconCore(string glyph, ColorF fill, float glyphSize, TemplateParts? parts)
     {
         var ts = InfoBadgeTemplateSettings.For(value: -1, hasIcon: true);   // Kind 2
-        return new BoxEl
+        var root = new BoxEl
         {
             Direction = 0,
             MinWidth = ts.MinWidth,        // 16 (squares to a circle)
@@ -200,5 +210,7 @@ public static class InfoBadge
                 },
             ],
         };
+        // Parts: restyle the pill; the glyph (the display-kind content) always wins.
+        return parts.Apply(PartRoot, root) with { Children = root.Children };
     }
 }

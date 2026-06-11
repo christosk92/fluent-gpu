@@ -35,6 +35,24 @@ public sealed class InfoBarClosedEventArgs
 /// </summary>
 public static class InfoBar
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The severity-tinted bar root. Owned: Children (the icon / panel / close columns — conditional
+    /// mounts), Role. The severity tint/stroke are stock per-render styling a modifier may override.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The 16x16 standard severity icon Z-stack (WinUI StandardIcon area). Owned: none — the per-severity
+    /// glyph colors are recomputed per render in the stock build (override-able).</summary>
+    public const string PartIcon = "Icon";
+    /// <summary>The SemiBold title (WinUI Title). A TextEl part — restyle via
+    /// <c>parts.Set&lt;TextEl&gt;(InfoBar.PartTitle, t =&gt; t with { … })</c>. Owned: none.</summary>
+    public const string PartTitle = "Title";
+    /// <summary>The message body (WinUI Message). A TextEl part — restyle via
+    /// <c>parts.Set&lt;TextEl&gt;(InfoBar.PartMessage, t =&gt; t with { … })</c>. Owned: none.</summary>
+    public const string PartMessage = "Message";
+    /// <summary>The trailing 38x38 X button (WinUI CloseButton). Owned: OnClick (the Closing→onClose→Closed lifecycle
+    /// chain — kept whenever the control has close handlers; a modifier OnClick survives only when it has none), Role.</summary>
+    public const string PartCloseButton = "CloseButton";
+
     // WinUI InfoBar_themeresources.xaml:70-74 standard icon glyphs (Segoe Fluent Icons / SymbolThemeFontFamily),
     // single-sourced from Icons.cs as VISIBLE \uXXXX escapes (raw PUA literals read as "empty" in most viewers —
     // the audit's blocker — so the named constants are the canonical spelling).
@@ -101,6 +119,9 @@ public static class InfoBar
     /// <param name="onClosing">Closing hook (WinUI Closing). Set <c>e.Cancel = true</c> to veto: the close is aborted and
     /// <paramref name="onClose"/>/<paramref name="onClosed"/> do not run (the caller keeps the bar open).</param>
     /// <param name="onClosed">Closed hook (WinUI Closed), fired after a non-canceled close.</param>
+    /// <param name="parts">Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts —
+    /// see <see cref="TemplateParts"/> for the contract. Title/Message are TextEl parts
+    /// (<c>parts.Set&lt;TextEl&gt;(InfoBar.PartTitle, …)</c>).</param>
     public static Element Create(
         InfoBarSeverity severity,
         string title,
@@ -111,7 +132,8 @@ public static class InfoBar
         bool isIconVisible = true,
         Element? actionButton = null,
         Action<InfoBarClosingEventArgs>? onClosing = null,
-        Action<InfoBarClosedEventArgs>? onClosed = null)
+        Action<InfoBarClosedEventArgs>? onClosed = null,
+        TemplateParts? parts = null)
     {
         if (!isOpen)
             return new BoxEl { };
@@ -122,7 +144,7 @@ public static class InfoBar
         // filled circle) carries the severity icon-background color; the status glyph sits on top in the inverse color.
         // Both at FontSize 16, top-aligned, with the 0,16,14,16 icon margin. A 16x16 Z-stack box matches the glyph box.
         Element? icon = isIconVisible
-            ? new BoxEl
+            ? parts.Apply(PartIcon, new BoxEl
             {
                 ZStack = true,
                 Width = IconFontSize,
@@ -134,7 +156,7 @@ public static class InfoBar
                     new TextEl(IconBackgroundGlyph) { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconBackground },
                     new TextEl(ts.Glyph)            { Size = IconFontSize, FontFamily = Theme.IconFont, Color = ts.IconForeground },
                 ],
-            }
+            })
             : null;
 
         // Column 1: the InfoBarPanel (Title / Message / Action). WinUI's InfoBarPanel.MeasureOverride switches orientation:
@@ -156,8 +178,8 @@ public static class InfoBar
             || (hasAction && hasMessage && message.Length >= LongMessageChars);
 
         var panel = isVertical
-            ? BuildVerticalPanel(title, message, actionButton, hasTitle, hasMessage)
-            : BuildHorizontalPanel(title, message, actionButton, hasTitle, hasMessage);
+            ? BuildVerticalPanel(title, message, actionButton, hasTitle, hasMessage, parts)
+            : BuildHorizontalPanel(title, message, actionButton, hasTitle, hasMessage, parts);
 
         var children = new List<Element>(3);
         if (icon is not null) children.Add(icon);
@@ -168,7 +190,10 @@ public static class InfoBar
         // SubtleFillColorSecondary/Tertiary). The X both invokes onClose AND runs the Closing/Closed lifecycle.
         if (isClosable)
         {
-            children.Add(new BoxEl
+            Action? closeClick = onClose is null && onClosing is null && onClosed is null
+                ? null
+                : () => RaiseClose(InfoBarCloseReason.CloseButton, onClose, onClosing, onClosed);
+            var closeButton = new BoxEl
             {
                 Width = CloseButtonSize,
                 Height = CloseButtonSize,
@@ -179,9 +204,7 @@ public static class InfoBar
                 Corners = Radii.ControlAll,                     // ControlCornerRadius = 4
                 HoverFill = Tok.FillSubtleSecondary,            // AppBarButtonBackgroundPointerOver
                 PressedFill = Tok.FillSubtleTertiary,           // AppBarButtonBackgroundPressed
-                OnClick = onClose is null && onClosing is null && onClosed is null
-                    ? null
-                    : () => RaiseClose(InfoBarCloseReason.CloseButton, onClose, onClosing, onClosed),
+                OnClick = closeClick,
                 Role = AutomationRole.Button,
                 Children =
                 [
@@ -191,10 +214,14 @@ public static class InfoBar
                         HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary,  // AppBarButtonForegroundPressed
                     },
                 ],
-            });
+            };
+            // Parts: restyle the X freely; the Closing→Closed lifecycle always wins when the control owns one (a
+            // modifier-supplied OnClick survives only when the caller gave no close handlers).
+            var m = parts.Apply(PartCloseButton, closeButton);
+            children.Add(m with { OnClick = closeClick ?? m.OnClick, Role = AutomationRole.Button });
         }
 
-        return new BoxEl
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Stretch,                     // columns stretch to row height (icon/close self-align Top)
@@ -207,6 +234,9 @@ public static class InfoBar
             Role = AutomationRole.InfoBar,
             Children = children.ToArray(),
         };
+        // Parts: restyle the bar chrome (the severity tint is stock per-render styling — override-able); the column
+        // structure and role always win.
+        return parts.Apply(PartRoot, root) with { Children = root.Children, Role = AutomationRole.InfoBar };
     }
 
     // HORIZONTAL InfoBarPanel: icon-column already trails; here title + message + action sit inline on one row. Panel
@@ -214,7 +244,7 @@ public static class InfoBar
     // gaps (title 0,14,0,0; message 12,14,0,0; action 16,8,0,0) — the panel ignores the FIRST child's leading-left margin
     // (WinUI "hasPreviousElement"), so the leftmost child gets only its top margin. AlignItems Top mirrors WinUI's
     // VerticalAlignment="Top" on Title/Message and Action. Cold Render path — array build here never hits a hot frame phase.
-    private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage)
+    private static BoxEl BuildHorizontalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, TemplateParts? parts)
     {
         var kids = new List<Element>(3);
         bool first = true;
@@ -222,20 +252,20 @@ public static class InfoBar
         {
             // Title FontWeight = SemiBold (600) in WinUI (InfoBarTitleFontWeight); TextEl only exposes bool Bold (700), so
             // Bold=true is the closest weight pending a numeric TextEl FontWeight (engine-wide limitation — fix in the engine).
-            kids.Add(new TextEl(title)
+            kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
                 Size = TitleFontSize, Bold = true, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, TitleHMargin.Top, 0f, 0f),   // first child: ignore leading-left margin
-            });
+            }));
             first = false;
         }
         if (hasMessage)
         {
-            kids.Add(new TextEl(message)
+            kids.Add(parts.Apply(PartMessage, new TextEl(message)
             {
                 Size = MessageFontSize, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(first ? 0f : MessageHMargin.Left, MessageHMargin.Top, 0f, 0f),
-            });
+            }));
             first = false;
         }
         if (actionButton is not null)
@@ -263,7 +293,7 @@ public static class InfoBar
     // (InfoBarPanelVerticalOrientationPadding); per-child vertical orientation margins give the inter-line spacing
     // (title 0,14,0,0; message 0,4,0,0; action 0,12,0,0) — the panel ignores the FIRST child's leading-TOP margin
     // (WinUI "hasPreviousElement"), and the panel's own top padding (14) supplies the leading gap instead.
-    private static BoxEl BuildVerticalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage)
+    private static BoxEl BuildVerticalPanel(string title, string message, Element? actionButton, bool hasTitle, bool hasMessage, TemplateParts? parts)
     {
         var kids = new List<Element>(3);
         bool first = true;
@@ -271,20 +301,20 @@ public static class InfoBar
         {
             // Title FontWeight = SemiBold (600) in WinUI (InfoBarTitleFontWeight); TextEl only exposes bool Bold (700), so
             // Bold=true is the closest weight pending a numeric TextEl FontWeight (engine-wide limitation — fix in the engine).
-            kids.Add(new TextEl(title)
+            kids.Add(parts.Apply(PartTitle, new TextEl(title)
             {
                 Size = TitleFontSize, Bold = true, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, first ? 0f : TitleVMargin.Top, 0f, 0f),   // first child: ignore leading-top margin
-            });
+            }));
             first = false;
         }
         if (hasMessage)
         {
-            kids.Add(new TextEl(message)
+            kids.Add(parts.Apply(PartMessage, new TextEl(message)
             {
                 Size = MessageFontSize, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords, Shrink = 1f,
                 Margin = new Edges4(0f, first ? 0f : MessageVMargin.Top, 0f, 0f), // 0,4,0,0 below the title
-            });
+            }));
             first = false;
         }
         if (actionButton is not null)

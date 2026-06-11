@@ -43,6 +43,25 @@ public enum AnnotatedScrollBarScrollKind : byte { Click = 0, Drag = 1, Increment
 /// </summary>
 public static class AnnotatedScrollBar
 {
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those). Every Create overload takes a trailing `TemplateParts?
+    // parts`. Const VALUES happen to match the internal reconcile Keys; the Keys themselves stay literal on the
+    // elements (never derived from these consts).
+    /// <summary>The labels grid (WinUI PART_LabelsGrid). Owned: Key, Children (the annotations slot — restructure
+    /// via the annotations list, restyle via this part).</summary>
+    public const string PartLabels = "asb-labels";
+    /// <summary>The 1px right-aligned tooltip anchor rail row (WinUI PART_ToolTipRail). Owned: Key.</summary>
+    public const string PartRail = "asb-rail";
+    /// <summary>The hover-preview ghost-thumb row (WinUI PART_VerticalThumbGhost; mounted only while hovering).
+    /// Owned: Key — the hover-tracking OffsetY is stock per-render placement a modifier sees and may override.</summary>
+    public const string PartGhost = "asb-ghost";
+    /// <summary>The hover detail-chip row (WinUI PART_DetailLabelToolTip; mounted while hovering with a
+    /// detailLabel). Owned: Key — same OffsetY note as <see cref="PartGhost"/>.</summary>
+    public const string PartTip = "asb-tip";
+    /// <summary>The live accent-thumb row (WinUI PART_VerticalThumb). Owned: Key, TransformBind (the
+    /// compositor-bound scroll position).</summary>
+    public const string PartThumb = "asb-thumb";
+
     private const float ThumbWidth = 30f;      // ThumbWidth (:36)
     private const float ThumbHeight = 3f;      // ThumbHeight (:35)
     private const float ThumbRadius = 1.5f;    // ThumbCornerRadius (:41)
@@ -55,8 +74,8 @@ public static class AnnotatedScrollBar
 
     /// <summary>Static/legacy surface (kept source-compatible): annotations as (label, 0..1 position) with no
     /// callbacks — renders the full anatomy inert at position 0.2 (the original demo shape).</summary>
-    public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, float height = 280f)
-        => Create(annotations, 0.2f, onScroll: null, height: height);
+    public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations, float height = 280f, TemplateParts? parts = null)
+        => Create(annotations, 0.2f, onScroll: null, height: height, parts: parts);
 
     /// <summary>The interactive control with a FROZEN position (component props freeze at mount — use the
     /// <c>Signal&lt;float&gt;</c> overload below for a live, app-controlled position).</summary>
@@ -66,8 +85,9 @@ public static class AnnotatedScrollBar
                                  float height = 280f,
                                  float smallChange01 = 0.05f,
                                  Func<float, bool>? onScrolling = null,
-                                 Func<float, string>? detailLabel = null)
-        => Create(annotations, new Signal<float>(Math.Clamp(position01, 0f, 1f)), onScroll, height, smallChange01, onScrolling, detailLabel);
+                                 Func<float, string>? detailLabel = null,
+                                 TemplateParts? parts = null)
+        => Create(annotations, new Signal<float>(Math.Clamp(position01, 0f, 1f)), onScroll, height, smallChange01, onScrolling, detailLabel, parts);
 
     /// <summary>
     /// The interactive control. <paramref name="position01"/> is the normalized scroll position signal (0..1) —
@@ -75,7 +95,8 @@ public static class AnnotatedScrollBar
     /// (new position, kind); <paramref name="onScrolling"/> (optional) may return false to CANCEL a scroll (the WinUI
     /// Scrolling.Cancel seam); <paramref name="smallChange01"/> is the button step (default 0.05 — the SmallChange
     /// auto-value stands in for viewport/ratio, cpp:484-489); <paramref name="detailLabel"/> resolves the hover chip
-    /// text from a position.
+    /// text from a position; <paramref name="parts"/> = per-part styling keyed by the <c>PartXxx</c> consts (see
+    /// <see cref="TemplateParts"/> for the contract).
     /// </summary>
     public static Element Create(IReadOnlyList<(string Label, float Position01)> annotations,
                                  Signal<float> position01,
@@ -83,7 +104,8 @@ public static class AnnotatedScrollBar
                                  float height = 280f,
                                  float smallChange01 = 0.05f,
                                  Func<float, bool>? onScrolling = null,
-                                 Func<float, string>? detailLabel = null)
+                                 Func<float, string>? detailLabel = null,
+                                 TemplateParts? parts = null)
         => Embed.Comp(() => new AnnotatedScrollBarComponent
         {
             Annotations = annotations ?? [],
@@ -93,6 +115,7 @@ public static class AnnotatedScrollBar
             DetailLabel = detailLabel,
             Height = height,
             SmallChange = smallChange01,
+            Parts = parts,
         });
 
     internal sealed class AnnotatedScrollBarComponent : Component
@@ -104,6 +127,9 @@ public static class AnnotatedScrollBar
         public Func<float, string>? DetailLabel;
         public float Height = 280f;
         public float SmallChange = 0.05f;
+        /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+        /// <see cref="TemplateParts"/> for the contract.</summary>
+        public TemplateParts? Parts;
 
         public override Element Render()
         {
@@ -142,26 +168,28 @@ public static class AnnotatedScrollBar
             bool interactive = OnScroll is not null;
             bool hovering = interactive && !float.IsNaN(hoverY);
 
-            var railLayers = new List<Element>(5)
+            // PART_LabelsGrid: HorizontalAlignment=Center MinWidth 44 (xaml:41-45) — center == fill in the
+            // 44-wide control; the label rows right-align inside it.
+            var labelsGrid = new BoxEl { Key = "asb-labels", ZStack = true, MinWidth = LabelsMinWidth, Height = railHeight, Children = labels };
+            if (Parts is not null)
+                labelsGrid = Parts.Apply(PartLabels, labelsGrid) with { Key = "asb-labels", Children = labels };   // structure = the annotations slot
+            // PART_ToolTipRail: the 1px right-aligned tooltip anchor (xaml:46), right-aligned via a row wrapper.
+            var tooltipRail = new BoxEl
             {
-                // PART_LabelsGrid: HorizontalAlignment=Center MinWidth 44 (xaml:41-45) — center == fill in the
-                // 44-wide control; the label rows right-align inside it.
-                new BoxEl { Key = "asb-labels", ZStack = true, MinWidth = LabelsMinWidth, Height = railHeight, Children = labels },
-                // PART_ToolTipRail: the 1px right-aligned tooltip anchor (xaml:46), right-aligned via a row wrapper.
-                new BoxEl
-                {
-                    Key = "asb-rail",
-                    Direction = 0,
-                    Justify = FlexJustify.End,
-                    HitTestVisible = false,
-                    Children = [new BoxEl { Width = 1f, Height = railHeight }],
-                },
+                Key = "asb-rail",
+                Direction = 0,
+                Justify = FlexJustify.End,
+                HitTestVisible = false,
+                Children = [new BoxEl { Width = 1f, Height = railHeight }],
             };
+            if (Parts is not null)
+                tooltipRail = Parts.Apply(PartRail, tooltipRail) with { Key = "asb-rail" };
+            var railLayers = new List<Element>(5) { labelsGrid, tooltipRail };
             if (hovering)
             {
                 // Ghost thumb at the hover target (PART_VerticalThumbGhost xaml:74-83 — AccentFillColorDisabled,
                 // right-aligned, top-anchored).
-                railLayers.Add(new BoxEl
+                var ghost = new BoxEl
                 {
                     Key = "asb-ghost",
                     Direction = 0,
@@ -178,13 +206,16 @@ public static class AnnotatedScrollBar
                             Fill = Tok.AccentDisabled,
                         },
                     ],
-                });
+                };
+                if (Parts is not null)
+                    ghost = Parts.Apply(PartGhost, ghost) with { Key = "asb-ghost" };
+                railLayers.Add(ghost);
                 if (DetailLabel is not null)
                 {
                     // The detail chip (PART_DetailLabelToolTip xaml:46-73): Placement=Top above the pointer,
                     // MaxWidth 360 / MinHeight 40 (:38/:39), BaseTextBlockStyle content (14px SemiBold,
                     // TextBlock_themeresources.xaml:10-18), right-aligned against the tooltip rail.
-                    railLayers.Add(new BoxEl
+                    var tip = new BoxEl
                     {
                         Key = "asb-tip",
                         Direction = 0,
@@ -208,19 +239,23 @@ public static class AnnotatedScrollBar
                                 Children = [new TextEl(DetailLabel(Math.Clamp(hoverY / railHeight, 0f, 1f))) { Size = 14f, Bold = true, Color = Tok.TextPrimary }],
                             },
                         ],
-                    });
+                    };
+                    if (Parts is not null)
+                        tip = Parts.Apply(PartTip, tip) with { Key = "asb-tip" };
+                    railLayers.Add(tip);
                 }
             }
             // Live thumb (PART_VerticalThumb xaml:84-92): 30×3 accent @ r1.5, HorizontalAlignment=Right via the
             // Justify=End row wrapper, VerticalAlignment=Top + the position translate as a compositor TransformBind
             // (a position write moves the thumb the same frame — no re-render, no relayout).
-            railLayers.Add(new BoxEl
+            Func<Affine2D> thumbPositionBind = () => Affine2D.Translation(0f, Math.Clamp(Position.Value, 0f, 1f) * (railHeight - ThumbHeight));
+            var thumb = new BoxEl
             {
                 Key = "asb-thumb",
                 Direction = 0,
                 Justify = FlexJustify.End,
                 HitTestVisible = false,
-                TransformBind = () => Affine2D.Translation(0f, Math.Clamp(Position.Value, 0f, 1f) * (railHeight - ThumbHeight)),
+                TransformBind = thumbPositionBind,
                 Children =
                 [
                     new BoxEl
@@ -231,7 +266,12 @@ public static class AnnotatedScrollBar
                         Fill = Tok.AccentDefault,               // VerticalThumbBrush = AccentFillColorDefault (:11/:21)
                     },
                 ],
-            });
+            };
+            // Parts: restyle anything (swap the thumb visual via Children…); the Key and the compositor position
+            // bind always win — they ARE the scroll indicator, not style.
+            if (Parts is not null)
+                thumb = Parts.Apply(PartThumb, thumb) with { Key = "asb-thumb", TransformBind = thumbPositionBind };
+            railLayers.Add(thumb);
 
             var rail = new BoxEl
             {

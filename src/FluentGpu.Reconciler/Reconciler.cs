@@ -981,6 +981,7 @@ public sealed class TreeReconciler
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
+                if (b.StickyTop is { } st) _scene.SetSticky(node, st, b.OnPinned); else _scene.ClearSticky(node);
                 if (b.Animate is { } at && Anim is { } anim)
                 {
                     anim.SetTransition(node, at);
@@ -997,7 +998,6 @@ public sealed class TreeReconciler
                 if (b.OnClick is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.ClickBit;
-                    ii.Cursor = CursorId.Hand;
                     _scene.SetClickHandler(node, b.OnClick);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
@@ -1015,6 +1015,26 @@ public sealed class TreeReconciler
 
                 if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
                 else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
+                ii.RepeatDelayMs = b.RepeatDelayMs;       // NaN = WinUI DP defaults (500/33) — the ticker resolves
+                ii.RepeatIntervalMs = b.RepeatIntervalMs;
+
+                // WinUI KeyPress::Button bAcceptsReturn=false (CheckBox/RadioButton/ToggleSwitch): Space-only activation.
+                if (!b.ActivateOnEnter) ii.HandlerMask |= InteractionInfo.NoEnterActivateBit;
+                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.NoEnterActivateBit);
+                // WinUI AllowFocusOnInteraction=False: a press never moves focus to (or past) this node.
+                if (!b.AllowFocusOnInteraction) ii.HandlerMask |= InteractionInfo.NoPointerFocusBit;
+                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.NoPointerFocusBit);
+
+                if (b.OnPointerWheel is not null)
+                {
+                    ii.HandlerMask |= InteractionInfo.WheelBit;
+                    _scene.SetPointerWheel(node, b.OnPointerWheel);
+                }
+                else
+                {
+                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.WheelBit);
+                    _scene.SetPointerWheel(node, null);
+                }
 
                 if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null || b.OnPointerExit is not null)
                 {
@@ -1102,7 +1122,12 @@ public sealed class TreeReconciler
                 if (b.Accelerator is { } accel) { ii.AccelKey = accel.Key; ii.AccelMods = accel.Mods; }
                 else { ii.AccelKey = 0; ii.AccelMods = KeyModifiers.None; }
                 ii.AccessKey = b.AccessKey;
-                if (b.Cursor is { } cursor) ii.Cursor = cursor;   // explicit override beats the OnClick hand default
+                // Cursor follows WinUI: NO clickable default (arrow everywhere; only HyperlinkButton/inline links set
+                // the hand, editable text sets the I-beam). An EXPLICIT cursor — including Arrow — terminates the
+                // dispatcher's hover walk via CursorBit, so a TextBox delete button (Arrow) masks the field's I-beam
+                // exactly like WinUI's forced SetCursor(MouseCursorArrow) (TextBox_Partial.cpp:884).
+                if (b.Cursor is { } cursor) { ii.Cursor = cursor; ii.HandlerMask |= InteractionInfo.CursorBit; }
+                else { ii.Cursor = CursorId.Arrow; ii.HandlerMask &= unchecked((ushort)~InteractionInfo.CursorBit); }
 
                 // WinUI Control.IsTabStop: an explicit TabStop beats the clickable⇒focusable auto-derive (the overlay
                 // light-dismiss catcher is clickable but must never enter the tab order — WinUI's dismiss layer is

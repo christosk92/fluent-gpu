@@ -28,12 +28,21 @@ public enum BackgroundSizing : byte
 /// (lines 29/90/127); FocusVisualMargin −3 (line 167); BackgroundTransition 83ms (lines 173-175).
 /// WinUI Button has NO scale animation — its state storyboards swap Background/BorderBrush/Foreground only
 /// (Button_themeresources.xaml:176-229), so no Hover/PressScale here (removed at the Wave-1 parity pass).
-/// Keyboard: the engine activates a focused clickable on Enter-down / Space-up (E2), and draws the keyboard focus
+/// Keyboard: the engine arms a pressed visual on Space/Enter key-DOWN and clicks on key-UP — held keys never repeat,
+/// any other key cancels without firing (WinUI ButtonBaseKeyProcess.h; E2) — and draws the keyboard focus
 /// ring itself (E1) — nothing control-side. The pointer cursor stays the WinUI arrow (only HyperlinkButton shows a
 /// hand — dxaml\xcp\dxaml\lib\HyperLinkButton_Partial.cpp:32). <c>partial</c> so apps/framework can add variants.
 /// </summary>
 public static partial class Button
 {
+    // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
+    // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The button chrome (the WinUI ContentPresenter root). Owned: OnClick, Role, Children (the label slot).</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The label run — a <see cref="TextEl"/>, so customize via <c>parts.Set&lt;TextEl&gt;(Button.PartLabel, …)</c>.
+    /// Owned: none (the P2 foreground ramp is style-driven and a modifier may override it).</summary>
+    public const string PartLabel = "Label";
+
     /// <summary>A button's visual style. Colours resolve from <see cref="Tok"/> in the computed default styles below.
     /// State colours follow WinUI's 4-state matrix (normal/hover/pressed/disabled) for fill, foreground and border.</summary>
     public sealed record Style
@@ -123,52 +132,55 @@ public static partial class Button
         // BackgroundSizing stays the InnerBorderEdge style default (Button_themeresources.xaml:156).
     };
 
-    /// <summary>An accent (primary) button. Override the look by passing a <see cref="Style"/>.</summary>
-    public static BoxEl Accent(string label, Action onClick, Style? style = null, bool isEnabled = true) => Build(label, onClick, style ?? AccentStyle, isEnabled);
+    /// <summary>An accent (primary) button. Override the look by passing a <see cref="Style"/>; restyle internals via
+    /// <paramref name="parts"/> (see <see cref="TemplateParts"/> and the <c>PartXxx</c> consts).</summary>
+    public static BoxEl Accent(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null) => Build(label, onClick, style ?? AccentStyle, isEnabled, parts);
 
     /// <summary>A neutral (standard) button.</summary>
-    public static BoxEl Standard(string label, Action onClick, Style? style = null, bool isEnabled = true) => Build(label, onClick, style ?? StandardStyle, isEnabled);
+    public static BoxEl Standard(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null) => Build(label, onClick, style ?? StandardStyle, isEnabled, parts);
 
-    private static BoxEl Build(string label, Action onClick, Style s, bool enabled) => new()
+    private static BoxEl Build(string label, Action onClick, Style s, bool enabled, TemplateParts? parts)
     {
-        Direction = 0,
-        Role = AutomationRole.Button,
-        Padding = s.Padding,
-        MinHeight = s.MinHeight,
-        Justify = s.HorizontalContentAlignment,   // WinUI HorizontalContentAlignment default Center (DependencyProperty.cpp:646-648)
-        AlignItems = s.VerticalContentAlignment,  // WinUI VerticalContentAlignment default Center (DependencyProperty.cpp:650-652)
-        // Disabled is a logical state (no engine ramp): resting fill/border swap to the WinUI disabled tokens. Hover/Pressed
-        // never fire while disabled (the engine gate stops hit-test), so HoverFill/PressedFill stay wired but inert.
-        Fill = enabled ? s.Background : s.DisabledBackground,
-        HoverFill = s.HoverBackground,
-        PressedFill = s.PressedBackground,
-        BorderBrush = enabled ? s.BorderBrush : (s.DisabledBorderBrush ?? s.BorderBrush),
-        HoverBorderBrush = s.HoverBorderBrush,           // P4b state-gradient border
-        PressedBorderBrush = s.PressedBorderBrush,
-        BorderWidth = s.BorderWidth,
-        Corners = CornerRadius4.All(s.CornerRadius),
-        // WinUI ContentPresenter.BackgroundTransition (83ms BrushTransition, Button_themeresources.xaml:173-175):
-        // logical fill flips (enabled↔disabled, restyle) cross-fade via the E3 sparse BrushAnim row.
-        BrushTransitionMs = s.BrushTransitionMs,
-        // Keyboard focus: WinUI UseSystemFocusVisuals + FocusVisualMargin −3 (Button_themeresources.xaml:166-167).
-        // The engine draws the 2px-outer/1px-inner ring outside the bounds on keyboard focus only (E1).
-        Focusable = true,
-        FocusVisualMargin = s.FocusVisualMargin,
-        // WinUI buttons keep the ARROW cursor — only HyperlinkButton calls SetCursor(MouseCursorHand)
-        // (HyperLinkButton_Partial.cpp:28-34). Explicit Arrow overrides the engine's OnClick hand default.
-        Cursor = CursorId.Arrow,
-        IsEnabled = enabled,                              // P1 engine gate (no manual handler-nulling)
-        OnClick = onClick,
-        Children =
-        [
-            new TextEl(label)
-            {
-                Size = s.FontSize, Bold = s.Bold,
-                Color = s.Foreground,                    // P2 foreground ramp: rest → hover → pressed; disabled via the gate
-                HoverColor = s.HoverForeground,
-                PressedColor = s.PressedForeground,
-                DisabledColor = s.DisabledForeground,
-            },
-        ],
-    };
+        var labelEl = parts.Apply(PartLabel, new TextEl(label)
+        {
+            Size = s.FontSize, Bold = s.Bold,
+            Color = s.Foreground,                    // P2 foreground ramp: rest → hover → pressed; disabled via the gate
+            HoverColor = s.HoverForeground,
+            PressedColor = s.PressedForeground,
+            DisabledColor = s.DisabledForeground,
+        });
+        var root = new BoxEl
+        {
+            Direction = 0,
+            Role = AutomationRole.Button,
+            Padding = s.Padding,
+            MinHeight = s.MinHeight,
+            Justify = s.HorizontalContentAlignment,   // WinUI HorizontalContentAlignment default Center (DependencyProperty.cpp:646-648)
+            AlignItems = s.VerticalContentAlignment,  // WinUI VerticalContentAlignment default Center (DependencyProperty.cpp:650-652)
+            // Disabled is a logical state (no engine ramp): resting fill/border swap to the WinUI disabled tokens. Hover/Pressed
+            // never fire while disabled (the engine gate stops hit-test), so HoverFill/PressedFill stay wired but inert.
+            Fill = enabled ? s.Background : s.DisabledBackground,
+            HoverFill = s.HoverBackground,
+            PressedFill = s.PressedBackground,
+            BorderBrush = enabled ? s.BorderBrush : (s.DisabledBorderBrush ?? s.BorderBrush),
+            HoverBorderBrush = s.HoverBorderBrush,           // P4b state-gradient border
+            PressedBorderBrush = s.PressedBorderBrush,
+            BorderWidth = s.BorderWidth,
+            Corners = CornerRadius4.All(s.CornerRadius),
+            // WinUI ContentPresenter.BackgroundTransition (83ms BrushTransition, Button_themeresources.xaml:173-175):
+            // logical fill flips (enabled↔disabled, restyle) cross-fade via the E3 sparse BrushAnim row.
+            BrushTransitionMs = s.BrushTransitionMs,
+            // Keyboard focus: WinUI UseSystemFocusVisuals + FocusVisualMargin −3 (Button_themeresources.xaml:166-167).
+            // The engine draws the 2px-outer/1px-inner ring outside the bounds on keyboard focus only (E1).
+            Focusable = true,
+            FocusVisualMargin = s.FocusVisualMargin,
+            // No Cursor: WinUI buttons never call SetCursor (arrow by inheritance — only HyperlinkButton sets the
+            // hand, HyperLinkButton_Partial.cpp:28-34); unset also lets an ancestor's explicit cursor show through.
+            IsEnabled = enabled,                              // P1 engine gate (no manual handler-nulling)
+            OnClick = onClick,
+            Children = [labelEl],
+        };
+        // Parts: restyle anything (fills, corners, padding…); the click mechanics and the label slot always win.
+        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
+    }
 }

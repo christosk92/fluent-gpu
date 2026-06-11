@@ -54,6 +54,9 @@ public sealed class TreeView : Component
 
     public IReadOnlyList<TreeNode> Roots = [];
     /// <summary>Custom row content (icon + label + metadata) — WinUI ContentTemplate (TreeViewItem.xaml:147).</summary>
+    // Per-item chrome customization goes through this ItemTemplate seam (the ContainerFactory analogue), NOT
+    // TemplateParts — per-item part modifiers in recycled scroll paths are an allocation/recycling hazard
+    // (docs/guide/control-fidelity.md §6).
     public Func<TreeNode, Element>? ItemTemplate;
     /// <summary>WinUI <c>TreeViewSelectionMode.Multiple</c>: checkbox lane + cascading subtree selection.</summary>
     public bool IsMultiSelectEnabled;

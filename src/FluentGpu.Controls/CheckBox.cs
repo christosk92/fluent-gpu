@@ -19,6 +19,21 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class CheckBox
 {
+    // Template parts (the TemplateParts door; see Expander for the reference adoption). Each part's doc lists the
+    // props the control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The returned clickable row (WinUI RootGrid). Owned: OnClick (the toggle), Role, Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The 20px check square (WinUI NormalRectangle). Owned: Children (the conditional draw-on mark mount —
+    /// checkmark when Checked, dash when Indeterminate, none when Unchecked).</summary>
+    public const string PartBox = "Box";
+    /// <summary>The drawn checkmark / indeterminate dash (WinUI CheckGlyph) — a <see cref="PolylineStrokeEl"/>, so use
+    /// <c>Parts.Set&lt;PolylineStrokeEl&gt;(CheckBox.PartMark, …)</c>. Owned: TrimStart/TrimEnd (the StrokeTrimEnd
+    /// draw-on keyframes land there).</summary>
+    public const string PartMark = "Mark";
+    /// <summary>The label (a <see cref="TextEl"/> — use <c>Parts.Set&lt;TextEl&gt;(CheckBox.PartLabel, …)</c>).
+    /// Owned: none (the fg ramp sits in the stock build; a modifier may restyle it).</summary>
+    public const string PartLabel = "Label";
+
     public sealed record Style
     {
         public float BoxSize { get; init; } = 20f;          // CheckBoxSize (CheckBox_themeresources.xaml:270)
@@ -56,10 +71,12 @@ public static partial class CheckBox
         LabelFg   = StateBrush.Flat(Tok.TextPrimary) with { Disabled = Tok.TextDisabled },
     };
 
-    public static BoxEl Create(string label, bool isChecked, Action onToggle, Style? style = null, bool isEnabled = true)
-        => Build(label, isChecked ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled);
+    public static BoxEl Create(string label, bool isChecked, Action onToggle, Style? style = null, bool isEnabled = true,
+                               TemplateParts? parts = null)
+        => Build(label, isChecked ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled, parts);
 
-    public static BoxEl Create(string label, CheckState state, Action<CheckState> onChange, Style? style = null, bool isEnabled = true)
+    public static BoxEl Create(string label, CheckState state, Action<CheckState> onChange, Style? style = null, bool isEnabled = true,
+                               TemplateParts? parts = null)
     {
         var next = state switch
         {
@@ -67,10 +84,10 @@ public static partial class CheckBox
             CheckState.Checked => CheckState.Indeterminate,
             _ => CheckState.Unchecked,
         };
-        return Build(label, state, _ => onChange(next), style, isEnabled);
+        return Build(label, state, _ => onChange(next), style, isEnabled, parts);
     }
 
-    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled)
+    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
         bool on = state == CheckState.Checked;
@@ -87,9 +104,9 @@ public static partial class CheckBox
         // tip, so a left-to-right reveal is the pen order). The dash reveals the same way. Unchecked has NO child (an empty
         // placeholder would persist as the same node and suppress the insert/remove). The box fill/stroke ease under it.
         Element[] markChildren = on
-            ? [Embed.Comp(() => new DrawnCheckmark { Size = s.GlyphSize + 2f, Thickness = 1.8f, Color = glyphColor, Pressable = enabled })]
+            ? [Embed.Comp(() => new DrawnCheckmark { Size = s.GlyphSize + 2f, Thickness = 1.8f, Color = glyphColor, Pressable = enabled, Parts = parts })]
             : indet
-                ? [Embed.Comp(() => new DrawnDash { Width = s.BoxSize * 0.5f, Thickness = 2f, Color = glyphColor, Pressable = enabled })]
+                ? [Embed.Comp(() => new DrawnDash { Width = s.BoxSize * 0.5f, Thickness = 2f, Color = glyphColor, Pressable = enabled, Parts = parts })]
                 : [];
 
         // The box keeps a 1px ring in every state; the engine eases Fill/BorderColor toward the Hover/Pressed legs of the
@@ -109,8 +126,24 @@ public static partial class CheckBox
             PressedBorderColor = stroke.Pressed,
             Children = markChildren,
         };
+        // Parts: restyle the square freely (the state ramps above sit BEFORE the modifier); the mark mount always wins.
+        box = parts.Apply(PartBox, box) with { Children = markChildren };
 
-        return new BoxEl
+        Action toggle = () => onClick(state);
+        Element[] children =
+        [
+            box,
+            parts.Apply(PartLabel, new TextEl(label)
+            {
+                Size = s.FontSize,
+                Color = s.LabelFg.Rest,
+                HoverColor = s.LabelFg.Hover,
+                PressedColor = s.LabelFg.Pressed,
+                DisabledColor = s.LabelFg.Disabled,
+            }),
+        ];
+
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -128,20 +161,14 @@ public static partial class CheckBox
             // KeyTime 0 (e.g. CheckedNormal, CheckBox_themeresources.xaml:378-401) — WinUI does not cross-fade here.
             Focusable = true,
             FocusVisualMargin = s.FocusVisualMargin,
-            OnClick = () => onClick(state),
-            Children =
-            [
-                box,
-                new TextEl(label)
-                {
-                    Size = s.FontSize,
-                    Color = s.LabelFg.Rest,
-                    HoverColor = s.LabelFg.Hover,
-                    PressedColor = s.LabelFg.Pressed,
-                    DisabledColor = s.LabelFg.Disabled,
-                },
-            ],
+            OnClick = toggle,
+            // Space ONLY (KeyPress::Button bAcceptsReturn=false, CheckBox_Partial.cpp:27) — Enter falls through
+            // to normal key routing (e.g. a dialog's default button).
+            ActivateOnEnter = false,
+            Children = children,
         };
+        // Parts: restyle anything on the row; the toggle mechanics and the box+label structure always win.
+        return parts.Apply(PartRoot, root) with { OnClick = toggle, Role = AutomationRole.CheckBox, Children = children };
     }
 }
 
@@ -170,6 +197,7 @@ internal sealed class DrawnCheckmark : Component
     public ColorF Color;
     public bool Pressable = true;
     public float DurationMs = CheckBoxMotion.NormalOffToNormalOnMs;
+    public TemplateParts? Parts;   // routes CheckBox.PartMark onto the stroke
 
     // Normalized checkmark vertices in the Size×Size box (y down). x is monotonic → left-to-right reveal = draw order.
     static readonly EasingSpec DrawEase = CheckBoxMotion.AcceptTrimEndEase;
@@ -182,7 +210,7 @@ internal sealed class DrawnCheckmark : Component
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
             [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], DurationMs);
 
-        return new PolylineStrokeEl
+        var mark = new PolylineStrokeEl
         {
             Width = Size,
             Height = Size,
@@ -197,6 +225,8 @@ internal sealed class DrawnCheckmark : Component
             RoundCaps = true,
             PressScale = Pressable ? 0.86f : 1f,   // WinUI's pressed "squish" (inherits the row's press progress)
         };
+        // PartMark: restyle geometry/color/thickness; the trim stays owned (the draw-on keyframes land on it).
+        return Parts.Apply(CheckBox.PartMark, mark) with { TrimStart = 0f, TrimEnd = 1f };
     }
 
 }
@@ -209,12 +239,13 @@ internal sealed class DrawnDash : Component
     public ColorF Color;
     public bool Pressable = true;
     public float DurationMs = 200f;
+    public TemplateParts? Parts;   // routes CheckBox.PartMark onto the stroke
 
     public override Element Render()
     {
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
             [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], DurationMs);
-        return new PolylineStrokeEl
+        var dash = new PolylineStrokeEl
         {
             Width = Width,
             Height = Thickness,
@@ -228,5 +259,7 @@ internal sealed class DrawnDash : Component
             RoundCaps = true,
             PressScale = Pressable ? 0.86f : 1f,
         };
+        // PartMark (shared with the checkmark — one is mounted at a time); the trim stays owned (draw-on keyframes).
+        return Parts.Apply(CheckBox.PartMark, dash) with { TrimStart = 0f, TrimEnd = 1f };
     }
 }

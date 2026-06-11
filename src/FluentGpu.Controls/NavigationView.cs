@@ -23,6 +23,8 @@ public sealed record NavItem(string Key, string Glyph, string Label, bool IsHead
     public bool IsSeparator { get; init; }
     /// <summary>InfoBadge slot (the WinUI InfoBadgePresenter): pass <c>InfoBadge.Dot(...)/Count(...)</c> etc.</summary>
     public Element? InfoBadge { get; init; }
+    /// <summary>Marks the auto-generated settings footer row (routes <see cref="NavigationView.PartSettingsItem"/>).</summary>
+    internal bool IsSettings { get; init; }
     internal bool IsExpandable => !IsHeader && !IsSeparator && Children is { Length: > 0 };
 }
 
@@ -74,6 +76,30 @@ public sealed class NavPaneClosingArgs
 /// </summary>
 public sealed class NavigationView : Component
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The left pane column — both the expanded/overlay pane AND the compact icon rail. Owned: Width (the
+    /// mode/collapse-driven pane width), ClipToBounds + Animate (the presented-width Reveal) on the full pane,
+    /// OnKeyDown on the compact rail, Children.</summary>
+    public const string PartPane = "Pane";
+    /// <summary>The pane title row (back + hamburger + title). Owned: Children.</summary>
+    public const string PartPaneHeader = "PaneHeader";
+    /// <summary>The sliding 3×16 selection pill (WinUI SelectionIndicator). Owned: Key (the NavPill reconcile
+    /// identity). The slide spring (<see cref="MotionSprings.NavPill"/>) and opacity fade are HOOK-driven AnimEngine
+    /// channels — a modifier cannot clobber them; do not add a Position-channel Animate here.</summary>
+    public const string PartIndicator = "Indicator";
+    /// <summary>A left-pane item row (WinUI NavigationViewItem). Owned: Key, Role, Focusable, OnClick (the
+    /// select/expand activate), Animate (the hierarchy-reflow spec), OnRealized (row capture, chained), Children.
+    /// NOTE: pane items are NOT virtualized, but the modifier runs once per item per render — keep it cheap.</summary>
+    public const string PartItem = "Item";
+    /// <summary>An item's icon column (icon + compact InfoBadge overlay). Owned: Children.</summary>
+    public const string PartItemIcon = "ItemIcon";
+    /// <summary>An item's label wrapper (the slide+fade enter/exit host). Owned: Animate (the label transition), Children.</summary>
+    public const string PartItemLabel = "ItemLabel";
+    /// <summary>The auto settings footer row (<see cref="IsSettingsVisible"/>) — applied AFTER <see cref="PartItem"/>
+    /// on the same row; same owned props.</summary>
+    public const string PartSettingsItem = "SettingsItem";
+
     public NavItem[] Items = [];
     public NavItem[] Footer = [];
     public string Initial = "";
@@ -96,11 +122,17 @@ public sealed class NavigationView : Component
     public Action<NavPaneClosingArgs>? PaneClosing;
     /// <summary>WinUI <c>DisplayModeChanged</c> — fired when the resolved adaptive mode transitions.</summary>
     public Action<PaneMode>? DisplayModeChanged;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract. Top-mode bar items are not part-routed (different structure).</summary>
+    public TemplateParts? Parts;
 
     /// <summary>Ambient navigate action for descendants that need to drive selection without prop threading.</summary>
     public static readonly Context<Action<string>> Nav = new(static _ => { });
 
-    internal static readonly Context<float> IndicatorTarget = new(-1000f);
+    // The sliding selection pill's target (pane-local): Y = the selected row's indicator centre line; X = the depth
+    // indentation (WinUI's SelectionIndicator sits INSIDE the indented PresenterContentRootGrid,
+    // NavigationView_themeresources.xaml:600-603 — a depth-d item's pill rides at 4 + 31*d). (-1000,-1000) = hidden.
+    internal static readonly Context<Point2> IndicatorTarget = new(new Point2(-1000f, -1000f));
 
     // Labels slide+fade on enter/exit; their position rides the parent item's projection. A label is a plain child —
     // present when expanded, removed (→ exit orphan that fades out) when collapsed. No wrapper component, no context.
@@ -171,7 +203,7 @@ public sealed class NavigationView : Component
         var overflowAnchor = UseRef(NodeHandle.Null);
 
         NavItem[] footerItems = IsSettingsVisible
-            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel)]   // gear E713 (Icons.Settings)
+            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel) { IsSettings = true }]   // gear E713 (Icons.Settings)
             : Footer;
 
         float width = UseContext(Viewport.Size).Width;
@@ -430,8 +462,8 @@ public sealed class NavigationView : Component
                      Action<NavItem> activate, Action<KeyEventArgs> handleNavKey, Action toggle,
                      Func<string, Action<NodeHandle>> captureRow, bool overlay, bool labelsVisible)
     {
-        var mainItems = BuildItems(flat, selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible, captureRow);
-        var footerRows = BuildItems(footerItems.Select(f => (f, 0)).ToList(), selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible, captureRow);
+        var mainItems = BuildItems(flat, selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible, captureRow, Parts);
+        var footerRows = BuildItems(footerItems.Select(f => (f, 0)).ToList(), selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible, captureRow, Parts);
         // Pane background, per the shipped WinUI generic.xaml: the EXPANDED (always-visible) pane =
         // NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent → FULLY TRANSPARENT, so DWM's Mica
         // window backdrop shows through. Only the transient OVERLAY (minimal/compact flyout) pane uses in-app acrylic
@@ -461,11 +493,12 @@ public sealed class NavigationView : Component
         // the focused row to this container's handler (rows are the tab stops — WinUI items are focusable).
         paneChildren.Add(Ui.ScrollView(Ui.ZStack(
             new BoxEl { Direction = 1, OnKeyDown = handleNavKey, Children = mainItems },
-            Ctx.Provide(IndicatorTarget, SelectedY(flat, selected), Embed.Comp(() => new NavIndicator()))
+            Ctx.Provide(IndicatorTarget, SelectedPos(flat, selected), Embed.Comp(() => new NavIndicator { Parts = Parts }))
         )));
         paneChildren.Add(new BoxEl { Direction = 1, OnKeyDown = handleNavKey, Children = footerRows });
         paneChildren.Add(new BoxEl { Height = 4 });
 
+        var paneKids = paneChildren.ToArray();
         var pane = new BoxEl
         {
             Width = width,
@@ -479,10 +512,12 @@ public sealed class NavigationView : Component
             BorderWidth = 1f,
             Corners = overlay ? PaneOverlayCorners : default,
             Shadow = overlay ? Elevation.Flyout : null,
-            Children = paneChildren.ToArray(),
+            Children = paneKids,
         };
 
-        return pane;   // intent lives ON the node (BoxEl.Animate) — no wrapper component, no context round-trip
+        // Intent lives ON the node (BoxEl.Animate) — no wrapper component, no context round-trip. Parts: restyle
+        // anything (acrylic, border, corners…); the mode-driven width + reveal mechanics always win.
+        return Parts.Apply(PartPane, pane) with { Width = width, ClipToBounds = true, Animate = PaneTransition, Children = paneKids };
     }
 
     Element CompactPane(NavItem[] footerItems, string selected, Action<string, bool> select, Action toggle,
@@ -510,16 +545,17 @@ public sealed class NavigationView : Component
         foreach (var it in Items)
             children.Add(it.IsHeader ? new BoxEl { Height = 8 }
                        : it.IsSeparator ? SeparatorRow(expandedLayout: false)
-                       : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key)));
+                       : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
 
         children.Add(new BoxEl { Grow = 1 });
 
         foreach (var it in footerItems)
             children.Add(it.IsHeader ? new BoxEl { Height = 8 }
                        : it.IsSeparator ? SeparatorRow(expandedLayout: false)
-                       : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key)));
+                       : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
 
-        return new BoxEl
+        var railKids = children.ToArray();
+        var rail = new BoxEl
         {
             Width = CompactWidth,
             Direction = 1,
@@ -528,8 +564,10 @@ public sealed class NavigationView : Component
             BorderWidth = 1f,
             AlignItems = FlexAlign.Center,
             OnKeyDown = handleNavKey,
-            Children = children.ToArray(),
+            Children = railKids,
         };
+        // The same PartPane door as the full pane: the rail IS the pane in compact mode.
+        return Parts.Apply(PartPane, rail) with { Width = CompactWidth, OnKeyDown = handleNavKey, Children = railKids };
     }
 
     Element TopBar(Action toggle) => new BoxEl
@@ -747,13 +785,15 @@ public sealed class NavigationView : Component
                 new TextEl(title) { Size = 14f, Bold = true, Color = Tok.TextPrimary },
                 PaneHeaderRowHeight, 1f, new Edges4(4, 0, 16, 0))));
 
-        return new BoxEl
+        var rowKids = children.ToArray();
+        var row = new BoxEl
         {
             Direction = 0,
             Height = TopPaneHeight,
             AlignItems = FlexAlign.Center,
-            Children = children.ToArray(),
+            Children = rowKids,
         };
+        return Parts.Apply(PartPaneHeader, row) with { Children = rowKids };
     }
 
     static Element PaneToggleButton(Action onClick) => PaneGlyphButton(Icons.Menu, onClick);
@@ -775,36 +815,41 @@ public sealed class NavigationView : Component
         Children = [AnimatedIcon.Glyph(glyph, IconSize, Tok.TextPrimary, Theme.IconFont)],
     };
 
-    const float IndentStep = 24f;   // per-depth left indent for nested group children (expanded layout only)
+    const float IndentStep = 31f;   // per-depth left indent for nested group children (expanded layout only) —
+                                    // WinUI c_itemIndentation = 31 px/level (NavigationViewItemBase.h:63, applied
+                                    // Depth() * c_itemIndentation, NavigationViewItem.cpp:895-902)
 
     static Element[] BuildItems(List<(NavItem Item, int Depth)> flat, string selected, string[] expanded,
                                 Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible,
-                                Func<string, Action<NodeHandle>> captureRow)
+                                Func<string, Action<NodeHandle>> captureRow, TemplateParts? parts)
     {
         var result = new Element[flat.Count];
         for (int i = 0; i < flat.Count; i++)
             result[i] = flat[i].Item.IsSeparator
-                ? SeparatorRow(expandedLayout)
+                ? SeparatorRow(expandedLayout, flat[i].Depth)
                 : Item(flat[i].Item, flat[i].Depth, i, selected, expanded, activate, expandedLayout, ownIndicator, labelsVisible,
-                       captureRow(flat[i].Item.Key));
+                       captureRow(flat[i].Item.Key), parts);
 
         return result;
     }
 
-    /// <summary>NavigationViewItemSeparator: a 1px DividerStroke rule (height :223, foreground :46, margin 0,3,0,4 :247).</summary>
-    static Element SeparatorRow(bool expandedLayout) => new BoxEl
+    /// <summary>NavigationViewItemSeparator: a 1px DividerStroke rule (height :223, foreground :46, margin 0,3,0,4 :247).
+    /// Nested separators indent 31/level like items (NavigationViewItemSeparator.cpp:74-83 rootGrid Margin.Left).</summary>
+    static Element SeparatorRow(bool expandedLayout, int depth = 0) => new BoxEl
     {
         Height = SeparatorRowHeight,
         Direction = 1,
         Justify = FlexJustify.Center,
-        Padding = expandedLayout ? new Edges4(ItemMarginX, 0, ItemMarginX, 0) : new Edges4(8, 0, 8, 0),
+        Padding = expandedLayout
+            ? new Edges4(ItemMarginX + depth * IndentStep, 0, ItemMarginX, 0)
+            : new Edges4(8, 0, 8, 0),
         Children = [new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
     };
 
-    static float SelectedY(List<(NavItem Item, int Depth)> flat, string selected)
+    static Point2 SelectedPos(List<(NavItem Item, int Depth)> flat, string selected)
     {
         float y = 0f;
-        foreach (var (it, _) in flat)
+        foreach (var (it, depth) in flat)
         {
             if (it.IsHeader)
             {
@@ -818,26 +863,62 @@ public sealed class NavigationView : Component
             }
 
             if (it.Key == selected)
-                return y + ItemMarginY + (ItemHeight - IndicatorH) * 0.5f;
+                // X = the depth indentation (the pill lives inside WinUI's indented content grid — 31/level);
+                // Y = the row's indicator centre line.
+                return new Point2(depth * IndentStep, y + ItemMarginY + (ItemHeight - IndicatorH) * 0.5f);
 
             y += ItemOuterHeight;
         }
 
-        return -1000f;
+        return new Point2(-1000f, -1000f);
     }
 
     static Element Item(NavItem it, int depth, int visualIndex, string selected, string[] expanded,
                         Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible,
-                        Action<NodeHandle> capture)
+                        Action<NodeHandle> capture, TemplateParts? parts)
     {
         if (it.IsHeader)
-            return HeaderItem(it, expandedLayout, labelsVisible);
+            return HeaderItem(it, expandedLayout, labelsVisible, depth);
 
         bool sel = it.Key == selected;
         bool isExpanded = it.IsExpandable && expanded.Contains(it.Key);
         // NavigationViewItemForeground = TextFillColorPrimary in every state EXCEPT Pressed → TextFillColorSecondary
         // (NavigationView_themeresources.xaml:21-34) — the old engine TextSecondary-at-rest was a drift.
         var foreground = Tok.TextPrimary;
+
+        // Depth indentation lands on the CONTENT, never the row: WinUI sets Depth()*31 as the left margin of the
+        // presenter's content grid (NavigationViewItem.cpp:894-902 → NavigationViewItemPresenter.cpp:264-277
+        // UpdateMargin) — the item plate (background/hover) stays full-row width at the pane edge, while the
+        // SELECTION INDICATOR + icon + label all shift together (the indicator lives INSIDE that grid,
+        // NavigationView_themeresources.xaml:600-603). Indenting the whole row (the old Margin approach) shrank the
+        // plate and visibly detached the sliding pill from the row.
+        float contentIndent = expandedLayout ? depth * IndentStep : 0f;
+
+        var iconCell = new BoxEl
+        {
+            Width = IconColumnWidth - IndicatorW,
+            Height = ItemHeight,
+            Direction = 0,
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Children = it.InfoBadge is not null && !expandedLayout
+                ?
+                [
+                    // Compact rail: the badge overlays the icon's top-right corner (the WinUI compact InfoBadge).
+                    new BoxEl
+                    {
+                        ZStack = true,
+                        Children =
+                        [
+                            AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont),
+                            new BoxEl { OffsetX = 10f, OffsetY = -6f, HitTestVisible = false, Children = [it.InfoBadge] },
+                        ],
+                    },
+                ]
+                : [AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)],
+        };
+        if (parts is not null)
+            iconCell = parts.Apply(PartItemIcon, iconCell) with { Children = iconCell.Children };   // structure = icon + badge mount
 
         // Uniform structure across expanded/compact: an indicator sliver + the icon column are ALWAYS present (so the
         // keyed item node and its icon are reused, not remounted), plus the label ONLY when expanded. Collapsing removes
@@ -848,39 +929,26 @@ public sealed class NavigationView : Component
             {
                 Width = IndicatorW,
                 Height = IndicatorH,
+                // The depth indent rides the indicator sliver (the first content-grid child): sliver + icon + label
+                // shift 31/level together while the plate spans the full row (UpdateContentLeftIndentation).
+                Margin = new Edges4(contentIndent, 0, 0, 0),
                 Corners = CornerRadius4.All(2f),   // NavigationViewSelectionIndicatorRadius (:222)
                 Fill = ownIndicator && sel ? Tok.AccentDefault : ColorF.Transparent,
                 AlignSelf = FlexAlign.Center,
             },
-            new BoxEl
-            {
-                Width = IconColumnWidth - IndicatorW,
-                Height = ItemHeight,
-                Direction = 0,
-                AlignItems = FlexAlign.Center,
-                Justify = FlexJustify.Center,
-                Children = it.InfoBadge is not null && !expandedLayout
-                    ?
-                    [
-                        // Compact rail: the badge overlays the icon's top-right corner (the WinUI compact InfoBadge).
-                        new BoxEl
-                        {
-                            ZStack = true,
-                            Children =
-                            [
-                                AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont),
-                                new BoxEl { OffsetX = 10f, OffsetY = -6f, HitTestVisible = false, Children = [it.InfoBadge] },
-                            ],
-                        },
-                    ]
-                    : [AnimatedIcon.Glyph(it.Glyph, IconSize, foreground, Theme.IconFont)],
-            },
+            iconCell,
         };
         if (expandedLayout)
         {
-            children.Add(AnimatedLabel(labelsVisible, new NavLabelSpec(
+            var label = AnimatedLabel(labelsVisible, new NavLabelSpec(
                 new TextEl(it.Label) { Size = 14f, Color = foreground, PressedColor = Tok.TextSecondary },
-                ItemHeight, 1f, new Edges4(4, 0, 8, 0))));
+                ItemHeight, 1f, new Edges4(4, 0, 8, 0)));
+            if (parts is not null && label is BoxEl lb)
+            {
+                var m = parts.Apply(PartItemLabel, lb);
+                label = m with { Animate = lb.Animate, Children = lb.Children };
+            }
+            children.Add(label);
             if (it.InfoBadge is not null)
                 children.Add(new BoxEl
                 {
@@ -901,7 +969,7 @@ public sealed class NavigationView : Component
             Animate = ItemReflowTransition(visualIndex),   // hierarchy reflow animates the entire cell, not subparts
             Width = expandedLayout ? float.NaN : PaneToggleWidth,
             Height = ItemHeight,
-            Margin = new Edges4(ItemMarginX + (expandedLayout ? depth * IndentStep : 0f), ItemMarginY, ItemMarginX, ItemMarginY),
+            Margin = new Edges4(ItemMarginX, ItemMarginY, ItemMarginX, ItemMarginY),   // constant — depth indents the CONTENT (iconCell), not the row
             AlignItems = FlexAlign.Center,
             Corners = Radii.OverlayAll,   // WinUI nav items round to OverlayCornerRadius (8), not ControlCornerRadius (4)
             // Backplate ramp (themeresources:9-20): rest Transparent/Selected=Secondary; hover Secondary/SelectedPointerOver=Tertiary;
@@ -930,14 +998,15 @@ public sealed class NavigationView : Component
         Children = [new TextEl(expanded ? Icons.ChevronDown : Icons.ChevronRight) { Size = 8f, Color = Tok.TextSecondary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont }],
     };
 
-    static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible)
+    static Element HeaderItem(NavItem it, bool expandedLayout, bool labelsVisible, int depth = 0)
     {
         if (!expandedLayout)
             return new BoxEl { Height = 8 };
 
+        // Nested headers indent 31/level like items (NavigationViewItemHeader.cpp:76-84 rootGrid Margin.Left).
         return AnimatedLabel(labelsVisible, new NavLabelSpec(
             new TextEl(it.Label) { Size = 14f, Bold = true, Color = Tok.TextSecondary },
-            HeaderHeight, 0f, new Edges4(16, 0, 16, 0)));
+            HeaderHeight, 0f, new Edges4(16 + depth * IndentStep, 0, 16, 0)));
     }
 
     // A pane label: a plain child whose appearance/disappearance is the general enter/exit animation. Intent lives on the
@@ -958,14 +1027,20 @@ internal readonly record struct NavLabelSpec(Element Child, float Height, float 
 
 internal sealed class NavIndicator : Component
 {
+    public TemplateParts? Parts;
+
     public override Element Render()
     {
-        float target = UseContext(NavigationView.IndicatorTarget);
-        bool visible = target > -500f;
+        Point2 target = UseContext(NavigationView.IndicatorTarget);
+        bool visible = target.Y > -500f;
         // The WinUI selection-indicator slide: the named NavPill composition-spring preset (MotionSprings.NavPill).
-        UseSpring(AnimChannel.TranslateY, visible ? target : 0f, MotionSprings.NavPill, visible ? MathF.Round(target) : -1f);
+        // X rides the same spring — the pill glides into a child's 31/level indentation (it lives inside WinUI's
+        // indented content grid, so depth changes move it horizontally too).
+        UseSpring(AnimChannel.TranslateY, visible ? target.Y : 0f, MotionSprings.NavPill, visible ? MathF.Round(target.Y) : -1f);
+        UseSpring(AnimChannel.TranslateX, visible ? target.X : 0f, MotionSprings.NavPill, visible ? MathF.Round(target.X) : -1f);
         UseTransition(AnimChannel.Opacity, visible ? 0f : 1f, visible ? 1f : 0f, 150f, Easing.EaseOut, visible);
-        return new BoxEl
+        // Parts: pure styling — the slide/fade springs ride the component's own node regardless of the modifier.
+        return Parts.Apply(NavigationView.PartIndicator, new BoxEl
         {
             Width = 3f,
             Height = 16f,
@@ -973,6 +1048,6 @@ internal sealed class NavIndicator : Component
             Corners = CornerRadius4.All(2f),
             Fill = Tok.AccentDefault,
             AlignSelf = FlexAlign.Start,
-        };
+        });
     }
 }

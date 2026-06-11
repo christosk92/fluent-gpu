@@ -18,6 +18,14 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class HyperlinkButton
 {
+    // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
+    // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The link surface. Owned: OnClick (Click → OpenUri order), Role, Children (the label slot).</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The link text — a <see cref="TextEl"/>, so customize via <c>parts.Set&lt;TextEl&gt;(HyperlinkButton.PartLabel, …)</c>.
+    /// Owned: none (the accent foreground ramp and the Underline opt-in are style-driven; a modifier may override them).</summary>
+    public const string PartLabel = "Label";
+
     public sealed record Style
     {
         public float FontSize { get; init; } = 14f;   // ControlContentThemeFontSize (HyperlinkButton_themeresources.xaml:61)
@@ -64,14 +72,14 @@ public static partial class HyperlinkButton
     };
 
     /// <summary>A link that raises <paramref name="onClick"/> (in-app navigation).</summary>
-    public static BoxEl Create(string text, Action onClick, Style? style = null, bool isEnabled = true)
-        => Build(text, onClick, style, isEnabled);
+    public static BoxEl Create(string text, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Build(text, onClick, style, isEnabled, parts);
 
     /// <summary>A link with a WinUI <c>NavigateUri</c>: raises Click first, then launches <paramref name="navigateUri"/>
     /// in the OS default handler (browser/mail) — WinUI's exact OnClick order (Click → Launcher::TryInvokeLauncher,
     /// HyperLinkButton_Partial.cpp:166-173) through the <c>IPlatformApp.OpenUri</c> PAL seam. Headless hosts record the
     /// URI instead of launching (HeadlessPlatformApp.OpenedUris).</summary>
-    public static BoxEl Create(string text, string navigateUri, Style? style = null, bool isEnabled = true, Action? onClick = null)
+    public static BoxEl Create(string text, string navigateUri, Style? style = null, bool isEnabled = true, Action? onClick = null, TemplateParts? parts = null)
         => Build(text, () =>
         {
             onClick?.Invoke();
@@ -79,12 +87,12 @@ public static partial class HyperlinkButton
             // InputHooks.Current channel-DEFAULT instance (static factories have no component scope → no UseContext,
             // so they reach the seam via the default). Null until a host exists — building elements never launches.
             InputHooks.Current.Default.OpenUri?.Invoke(navigateUri);
-        }, style, isEnabled);
+        }, style, isEnabled, parts);
 
-    private static BoxEl Build(string text, Action onClick, Style? style, bool isEnabled)
+    private static BoxEl Build(string text, Action onClick, Style? style, bool isEnabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
-        var label = new TextEl(text)
+        var label = parts.Apply(PartLabel, new TextEl(text)
         {
             // P2 foreground ramp: rest → hover → pressed; the disabled step applies via the ancestor's IsEnabled gate.
             Size = s.FontSize, Color = s.Foreground,
@@ -94,8 +102,8 @@ public static partial class HyperlinkButton
             // TextMeasureCache), riding the same hover/press easing as the label — WinUI gates it on
             // HyperlinkUnderlineVisible / HighContrast (HyperLinkButton_Partial.cpp:207-212).
             Underline = s.UnderlineVisible,
-        };
-        return new BoxEl
+        });
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -120,5 +128,7 @@ public static partial class HyperlinkButton
             OnClick = onClick,
             Children = [label],
         };
+        // Parts: restyle anything (fills, padding, even the Hand cursor); the Click→OpenUri order and the label slot win.
+        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Hyperlink, Children = root.Children };
     }
 }

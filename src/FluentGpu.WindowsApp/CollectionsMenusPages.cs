@@ -88,12 +88,20 @@ sealed class MenuBarPage : Component
 // Category overview pages.
 sealed class CollectionsOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Collections",
-        "Controls for showing collections of data: ListView, GridView, FlipView, TreeView, ItemsRepeater.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Collections", "Controls for showing collections of data.",
+            GalleryPage.CategoryGrid("Collections", navigate));
+    }
 }
 
 sealed class MenusOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Menus & toolbars",
-        "Command surfaces: MenuBar, AppBarButton / CommandBar, MenuFlyout.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Menus & toolbars", "Command surfaces: menus, app bars, and toolbars.",
+            GalleryPage.CategoryGrid("Menus & toolbars", navigate));
+    }
 }

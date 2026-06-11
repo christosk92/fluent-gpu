@@ -54,7 +54,11 @@ internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Bol
 /// </summary>
 internal sealed unsafe class GlyphRenderer : IDisposable
 {
-    private const int ATLAS = 1024;
+    // 2048² R8 (4 MB CPU mirror + 4 MB GPU): sized so even the Iconography page's full Segoe Fluent catalog
+    // (~1,500 distinct glyphs at two sizes) plus the app's text fits one generation. Overflow is still HANDLED
+    // (generational reset below) — before that, a full atlas silently cached entries at X=Y=0, so every later
+    // glyph sampled the atlas origin and corrupted all text for the rest of the session.
+    private const int ATLAS = 2048;
 
     private IDWriteFactory* _dw;
     private const string DefaultFamily = "Segoe UI";
@@ -293,7 +297,7 @@ float4 PSMain(VSOut i) : SV_Target
                 Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
             byte[] gray = new byte[w * h];      // average to grayscale coverage for the R8 atlas
             for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            Pack(ref e, gray, w, h);
+            PackOrReset(ref e, gray, w, h);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
@@ -302,10 +306,12 @@ float4 PSMain(VSOut i) : SV_Target
         return e;
     }
 
-    private void Pack(ref GlyphEntry e, byte[] src, int w, int h)
+    /// <summary>Shelf-pack one rasterized glyph. False = atlas full — the caller must NOT cache the entry as-is
+    /// (an unpacked entry keeps X=Y=0 and would sample the atlas origin); it resets the atlas generation and retries.</summary>
+    private bool TryPack(ref GlyphEntry e, byte[] src, int w, int h)
     {
         if (_shelfX + w + 1 > ATLAS) { _shelfX = 1; _shelfY += _shelfH + 1; _shelfH = 0; }
-        if (_shelfY + h + 1 > ATLAS) return;   // atlas full (slice never hits this)
+        if (_shelfY + h + 1 > ATLAS) return false;   // atlas full → generational reset (ResetAtlas)
         e.X = _shelfX; e.Y = _shelfY;
         long nonZero = _atlasNonZero;
         for (int row = 0; row < h; row++)
@@ -322,6 +328,40 @@ float4 PSMain(VSOut i) : SV_Target
         _atlasNonZero = nonZero;
         _shelfX += w + 1;
         if (h > _shelfH) _shelfH = h;
+        return true;
+    }
+
+    /// <summary>Pack with overflow recovery: a full atlas flushes the GENERATION (pixels + glyph entries + every cached
+    /// run — their quads embed atlas UVs) and packs into the fresh one. Quads already emitted THIS frame briefly sample
+    /// repacked texels (one-frame artifact on the overflow frame); next frame re-shapes from the empty run cache and is
+    /// clean. The epoch counter lets an in-flight <see cref="ShapeInto"/> detect the flush and re-shape its own run so a
+    /// single cached run never mixes generations.</summary>
+    private void PackOrReset(ref GlyphEntry e, byte[] src, int w, int h)
+    {
+        if (TryPack(ref e, src, w, h)) return;
+        ResetAtlas();
+        if (!TryPack(ref e, src, w, h))
+        {
+            // A single glyph larger than the whole atlas — render nothing rather than garbage.
+            e.W = 0; e.H = 0;
+            Diag.Set("text.atlas", "oversized-glyph", $"{w}x{h} > {ATLAS}");
+        }
+    }
+
+    private int _atlasEpoch;
+
+    private void ResetAtlas()
+    {
+        Array.Clear(_cpu);
+        _shelfX = 1; _shelfY = 1; _shelfH = 0;
+        _atlasNonZero = 0;
+        _cache.Clear();
+        foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+        _runCache.Clear();
+        _atlasEpoch++;
+        _atlasDirty = true;
+        Diag.Count("text.atlas", "generation-reset");
+        Diag.Event("text.atlas", $"generation reset #{_atlasEpoch} (atlas full at {ATLAS}x{ATLAS})");
     }
 
     /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space, then emit them tinted/transformed into
@@ -409,18 +449,27 @@ float4 PSMain(VSOut i) : SV_Target
     {
         _engine.Layout(text.AsSpan(), family ?? "", bold, size, maxWidth, wrap, trim, maxLines);
         float inv = 1f / dpiScale;
-        foreach (var lg in _engine.Glyphs)
+        // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
+        // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
+        // Bounded: a restarted pass packs into an empty 2048² atlas; one run can't fill it (guard at 3 just in case).
+        int epoch, restarts = 0;
+        do
         {
-            if (lg.Face == 0) continue;
-            var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, size, dpiScale);
-            if (ge.W > 0 && ge.H > 0)
-                outList.Add(new ShapedGlyph
-                {
-                    DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
-                    DstW = ge.W * inv, DstH = ge.H * inv,
-                    U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
-                });
-        }
+            epoch = _atlasEpoch;
+            outList.Clear();
+            foreach (var lg in _engine.Glyphs)
+            {
+                if (lg.Face == 0) continue;
+                var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, size, dpiScale);
+                if (ge.W > 0 && ge.H > 0)
+                    outList.Add(new ShapedGlyph
+                    {
+                        DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
+                        DstW = ge.W * inv, DstH = ge.H * inv,
+                        U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
+                    });
+            }
+        } while (epoch != _atlasEpoch && ++restarts < 3);
     }
 
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
@@ -457,7 +506,7 @@ float4 PSMain(VSOut i) : SV_Target
                 Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)(w * h * 3)), "CreateAlphaTexture");
             byte[] gray = ArrayPool<byte>.Shared.Rent(w * h);
             for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            Pack(ref e, gray, w, h);
+            PackOrReset(ref e, gray, w, h);
             ArrayPool<byte>.Shared.Return(gray);
             ArrayPool<byte>.Shared.Return(rgb);
             _atlasDirty = true;
@@ -710,7 +759,7 @@ float4 PSMain(VSOut i) : SV_Target
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
-        if (count == 0) return;
+        if (count <= 0) return;
         for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
         _cursor += count;
 

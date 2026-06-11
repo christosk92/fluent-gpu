@@ -771,6 +771,106 @@ sealed class W0fStaticProbe : Component
     public override Element Render() => Build();
 }
 
+// Spring-retarget probe (check 23s): the gallery spring-lab path — a component effect re-seeds a spring on its own
+// captured node when state flips; a mid-flight retarget must keep position+velocity (no snap back to an endpoint).
+sealed class SpringLabProbe : Component
+{
+    public NodeHandle Dot;
+
+    public override Element Render()
+    {
+        var (on, setOn) = UseState(false);
+        var armed = UseRef(false);
+        UseLayoutEffect(() =>
+        {
+            if (Context.Anim is not { } anim) return;
+            if (!armed.Value) { armed.Value = true; return; }
+            if (!Dot.IsNull) anim.Spring(Dot, AnimChannel.TranslateX, on ? 210f : 0f, SpringParams.FromResponse(0.45f, 0.8f));
+        }, on);
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl { Width = 60f, Height = 24f, OnClick = () => setOn(!on) },
+                new BoxEl { Width = 226f, Height = 16f, Direction = 0, Children = [new BoxEl { Width = 16f, Height = 16f, OnRealized = h => Dot = h }] },
+            ],
+        };
+    }
+}
+
+// Relayout-restore probe (check 23t): a width-toggled card with an AUTO height and wrapping text — after the
+// SizeMode.Relayout animation settles, the declared LayoutInput must be RESTORED (auto height stays auto), not left
+// frozen at the last interpolated solve.
+sealed class RelayoutRestoreProbe : Component
+{
+    public override Element Render()
+    {
+        var (wide, setWide) = UseState(false);
+        return new BoxEl
+        {
+            Direction = 1, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new BoxEl { Width = 60f, Height = 24f, OnClick = () => setWide(!wide) },
+                new BoxEl
+                {
+                    Width = wide ? 300f : 160f,
+                    Animate = LayoutTransition.BoundsT(SizeMode.Relayout),
+                    Children = [new TextEl("the quick brown fox jumps over the lazy dog again and again") { Size = 13f, Wrap = TextWrap.Wrap }],
+                },
+            ],
+        };
+    }
+}
+
+// SizeMode.Reflow probe (checks 23r/23x): a reflow wrapper above a row carrying a BoundsAnimated mover. `toggle`
+// opens/closes the reveal; `noise` re-commits the SAME elements mid-flight (exercises the snap/skip/re-establish
+// path); `shift` grows the leading spacer (a genuine LOCAL move that must still FLIP the mover).
+sealed class ReflowProbe : Component
+{
+    static readonly LayoutTransition Reflow = new(TransitionChannels.Size,
+        TransitionDynamics.Tween(333f, Easing.FluentPopOpen),
+        Size: SizeMode.Reflow,
+        ExitDynamics: TransitionDynamics.Tween(167f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),
+        Anchor: SizeAnchor.Trailing);
+    static readonly LayoutTransition Slide = new(TransitionChannels.Position,
+        TransitionDynamics.Tween(167f, Easing.FluentPopOpen));
+
+    public override Element Render()
+    {
+        var (open, setOpen) = UseState(false);
+        var (noise, setNoise) = UseState(0);
+        var (shifted, setShifted) = UseState(false);
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl { Height = 32f, OnClick = () => setOpen(!open) },        // [0] toggle the reveal
+                new BoxEl { Height = 16f, OnClick = () => setNoise(noise + 1) },   // [1] unrelated re-commit
+                new BoxEl { Height = 16f, OnClick = () => setShifted(!shifted) },  // [2] local spacer move
+                new BoxEl                                                          // [3] the reflow wrapper
+                {
+                    Direction = 1, ClipToBounds = true,
+                    Height = open ? float.NaN : 0f,
+                    Animate = Reflow,
+                    Children = [new BoxEl { Height = 60f, Children = [new TextEl("reflow-content") { Size = 12f }] }],
+                },
+                new BoxEl                                                          // [4] sibling row below
+                {
+                    Direction = 0,
+                    Children =
+                    [
+                        new BoxEl { Width = shifted ? 40f : 0f, Height = 30f },
+                        new BoxEl { Width = 30f, Height = 30f, Animate = Slide },  // the rigidity probe
+                    ],
+                },
+            ],
+        };
+    }
+}
+
 // Hosts an overlay layer and exposes the ambient service + an anchored button so a test can open/close flyouts.
 sealed class OverlayProbe : Component
 {
@@ -1556,6 +1656,7 @@ static class Slice
 
         dispatcher.SetFocus(b1);
         dispatcher.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
+        dispatcher.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Enter) });   // WinUI: click on key-UP
         Check("20. Enter activates the focused clickable", clicked, "OnClick fired via keyboard");
 
         dispatcher.SetFocus(b2);
@@ -1923,6 +2024,272 @@ static class Slice
             Check("23h. Relayout re-solves only the subtree at the interpolated size (live reflow)",
                 relayouting && interpolated && runs >= 2, $"midW={midW:0} runs={runs}");
         }
+    }
+
+    // Animation regressions surfaced by the gallery AnimationPage: a component-effect spring must retarget mid-flight
+    // without snapping (23s), and a settled SizeMode.Relayout animation must RESTORE the element-declared LayoutInput
+    // instead of freezing the node at the last interpolated solve (23t — the auto-height axis is where it shows).
+    static void AnimRegressionChecks(StringTable strings)
+    {
+        // 23s — spring retarget continuity through the live AppHost path (UseLayoutEffect → Context.Anim.Spring).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("springlab", new Size2(320, 120), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new SpringLabProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var toggle = Child(host.Scene, host.Scene.Root, 0);
+
+            ClickNode(host, window, toggle);                       // 0 → 210
+            for (int i = 0; i < 8; i++) host.RunFrame();           // mid-flight
+            float before = host.Scene.Paint(root.Dot).LocalTransform.Dx;
+            ClickNode(host, window, toggle);                       // retarget mid-flight → 0
+            float atClick = host.Scene.Paint(root.Dot).LocalTransform.Dx;
+            host.RunFrame();
+            float after = host.Scene.Paint(root.Dot).LocalTransform.Dx;
+            bool continuous = MathF.Abs(atClick - before) < 25f && MathF.Abs(after - atClick) < 25f;   // no snap to an endpoint
+            bool carried = after > 5f;                             // velocity carry: still well away from 0 right after
+            for (int i = 0; i < 90; i++) host.RunFrame();
+            bool settled = MathF.Abs(host.Scene.Paint(root.Dot).LocalTransform.Dx) < 0.5f && !host.Animation.HasTracks(root.Dot);
+            Check("23s. spring retarget mid-flight keeps position+velocity through the component-effect path (no snap)",
+                before > 30f && continuous && carried && settled,
+                $"before={before:0.0} atClick={atClick:0.0} after={after:0.0} settled={settled}");
+        }
+
+        // 23w — alpha-weighted (premultiplied) linear-light lerp: a translucent white-tinted card fill cross-fading
+        // to an OPAQUE DARK solid must stay dark mid-flight. The straight per-channel lerp passed through bright
+        // half-transparent grey (~0.74 sRGB) — the sticky-header "white flash". Same-alpha pairs are bit-identical
+        // to the straight linear-light lerp (every pre-existing mid-color assertion stays valid).
+        {
+            static float S2L(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+            static float L2S(float c) => c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(MathF.Max(c, 0f), 1f / 2.4f) - 0.055f;
+            var cardWhite5 = new ColorF(1f, 1f, 1f, 0.051f);     // CardBackgroundFillColorDefault (dark theme): white @ 5%
+            var solidDark = ColorF.FromRgba(0x20, 0x20, 0x20);   // SolidBackgroundFillColorBase: opaque dark
+            var mid = ColorF.LerpLinear(cardWhite5, solidDark, 0.5f);
+            bool staysDark = mid.R < 0.35f && mid.G < 0.35f && mid.B < 0.35f && Near(mid.A, 0.5255f, 0.01f);
+            var sa = new ColorF(0.2f, 0.4f, 0.6f, 0.8f);
+            var sb = new ColorF(0.6f, 0.2f, 0.4f, 0.8f);
+            var sm = ColorF.LerpLinear(sa, sb, 0.5f);
+            bool sameAlphaIdentical =
+                Near(sm.R, L2S((S2L(sa.R) + S2L(sb.R)) * 0.5f), 0.002f) &&
+                Near(sm.G, L2S((S2L(sa.G) + S2L(sb.G)) * 0.5f), 0.002f) &&
+                Near(sm.B, L2S((S2L(sa.B) + S2L(sb.B)) * 0.5f), 0.002f) && Near(sm.A, 0.8f, 0.002f);
+            Check("23w. LerpLinear is alpha-weighted: translucent-white → opaque-dark stays dark mid-flight; same-alpha pairs unchanged",
+                staysDark && sameAlphaIdentical,
+                $"mid=({mid.R:0.00},{mid.G:0.00},{mid.B:0.00},{mid.A:0.00}) sameAlpha={sameAlphaIdentical}");
+        }
+
+        // 23u — CSS position:sticky (BoxEl.StickyTop): the header scrolls normally, PINS at the viewport top while
+        // its parent card is in view (hit-test follows — AbsoluteRect includes the pin transform), CLAMPS at the
+        // card's end (never escapes its containing block), releases on scroll-back, and fires OnPinned per transition.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sticky", new Size2(320, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            int pinEvents = 0; bool lastPin = false;
+            var root = new W0fStaticProbe
+            {
+                Build = () => ScrollView(new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new BoxEl { Height = 100f },                              // lead-in
+                        new BoxEl                                                  // the card (containing block)
+                        {
+                            Direction = 1,
+                            Children =
+                            [
+                                new BoxEl { Height = 40f, StickyTop = 0f, OnPinned = p => { pinEvents++; lastPin = p; } },
+                                new BoxEl { Height = 400f },                       // card content
+                            ],
+                        },
+                        new BoxEl { Height = 600f },                               // after the card
+                    ],
+                }),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle FindScrollable(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                {
+                    var r = FindScrollable(c);
+                    if (!r.IsNull) return r;
+                }
+                return NodeHandle.Null;
+            }
+            var vp = FindScrollable(s.Root);                       // the ScrollView viewport
+            var content = s.ScrollRef(vp).ContentNode;
+            var headerN = NodeHandle.Null;                         // the sticky node, straight from the registry
+            foreach (var kv in s.StickyNodes) headerN = kv.Value.Node;
+            float vpTop = s.AbsoluteRect(vp).Y;
+            float restY = s.AbsoluteRect(headerN).Y;
+
+            void ScrollTo(float y)
+            {
+                ref ScrollState st = ref s.ScrollRef(vp);
+                st.OffsetY = y; st.TargetY = y;
+                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
+                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                // Wake the frame loop like real input would (a wheel scroll sets frameNeeded via dispatch; a raw
+                // ScrollRef write does not) — the sticky pass runs in the full frame pipeline.
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+                host.RunFrame();
+            }
+
+            ScrollTo(250f);   // header's natural Y (100) is far above the viewport top → pinned at the top
+            bool pinnedNow = (s.Flags(headerN) & NodeFlags.StickyPinned) != 0;
+            float pinnedY = s.AbsoluteRect(headerN).Y;
+            // Card spans content 100..540; the header (40h) can pin until content-y 500 (shift limit 400). At offset
+            // 520 the clamp holds it at content-y 500 → viewport −20: the card's end pushes it out, CSS-exactly.
+            ScrollTo(520f);
+            float clampedY = s.AbsoluteRect(headerN).Y;
+            bool stillPinned = (s.Flags(headerN) & NodeFlags.StickyPinned) != 0;
+            ScrollTo(0f);     // released, back at its natural slot
+            bool releasedFlag = (s.Flags(headerN) & NodeFlags.StickyPinned) == 0;
+            float releasedY = s.AbsoluteRect(headerN).Y;
+            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases, OnPinned fires per transition",
+                pinnedNow && Near(pinnedY, vpTop, 0.5f)
+                && stillPinned && Near(clampedY, vpTop - 20f, 0.5f)
+                && releasedFlag && Near(releasedY, restY, 0.5f)
+                && pinEvents == 2 && !lastPin,
+                $"restY={restY:0} pinnedY={pinnedY:0} (vpTop={vpTop:0}) clampedY={clampedY:0} releasedY={releasedY:0} pinEvents={pinEvents} lastPin={lastPin}");
+        }
+
+        // 23t — SizeMode.Relayout restores the DECLARED LayoutInput at settle (auto height stays auto).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("relayoutfix", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new RelayoutRestoreProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var toggle = Child(host.Scene, host.Scene.Root, 0);
+            var card = Child(host.Scene, host.Scene.Root, 1);
+            float narrowH = host.Scene.AbsoluteRect(card).H;       // tall: text wraps hard at 160
+
+            ClickNode(host, window, toggle);                       // widen 160 → 300
+            for (int i = 0; i < 90; i++) host.RunFrame();          // settle the spring fully
+            bool wideAuto = float.IsNaN(host.Scene.Layout(card).Height);          // declared auto RESTORED
+            bool wideDeclaredW = host.Scene.Layout(card).Width == 300f;           // declared width restored too
+            float wideH = host.Scene.AbsoluteRect(card).H;                        // fewer lines → shorter
+
+            ClickNode(host, window, toggle);                       // back to narrow
+            for (int i = 0; i < 90; i++) host.RunFrame();
+            bool narrowAuto = float.IsNaN(host.Scene.Layout(card).Height);
+            float narrowH2 = host.Scene.AbsoluteRect(card).H;                     // re-wraps back to the tall layout
+            Check("23t. Relayout settle restores declared LayoutInput (auto axis stays auto; round-trip re-wraps)",
+                wideAuto && wideDeclaredW && narrowAuto && wideH < narrowH - 4f && Near(narrowH2, narrowH, 1.5f),
+                $"narrowH={narrowH:0} wideH={wideH:0} narrowH2={narrowH2:0} wideAuto={wideAuto} narrowAuto={narrowAuto}");
+        }
+    }
+
+    // SizeMode.Reflow — the layout-participating size transition (smooth reflow): the interpolated size runs through
+    // REAL layout each tick (boundary-scoped re-solve), so siblings ease instead of snapping; the declared LayoutInput
+    // is restored at settle; the Trailing anchor rides the content's end edge on the animated edge; and the parent-
+    // relative FLIP projection keeps BoundsAnimated nodes below RIGID while everything reflows.
+    static void ReflowChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("reflow", new Size2(360, 420), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new ReflowProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        var s = host.Scene;
+
+        host.RunFrame();   // mount collapsed (first frame never captures → no spurious enter reveal)
+        var toggle = Child(s, s.Root, 0);
+        var noise = Child(s, s.Root, 1);
+        var shift = Child(s, s.Root, 2);
+        var wrap = Child(s, s.Root, 3);
+        var row = Child(s, s.Root, 4);
+        var mover = Child(s, row, 1);
+        float sibY0 = s.AbsoluteRect(row).Y;          // the row below IS the observable sibling
+        float wrapH0 = s.AbsoluteRect(wrap).H;
+
+        // 23r.a — expand: old size on the click frame (no jump), sibling eases MONOTONICALLY through the 333ms reveal,
+        // Trailing child-shift == interp − contentExtent mid-flight, settle restores the declared NaN(auto) input.
+        ClickNode(host, window, toggle);
+        float wrapHClick = s.AbsoluteRect(wrap).H;
+        float sibYClick = s.AbsoluteRect(row).Y;
+        bool monotone = true;
+        float prevY = sibYClick, midH = 0f, midShift = 0f;
+        for (int i = 0; i < 30; i++)
+        {
+            host.RunFrame();
+            float y = s.AbsoluteRect(row).Y;
+            if (y < prevY - 0.25f) monotone = false;
+            prevY = y;
+            if (i == 2) { midH = s.AbsoluteRect(wrap).H; midShift = s.Paint(wrap).ChildShiftY; }
+        }
+        float wrapHOpen = s.AbsoluteRect(wrap).H;
+        float sibYOpen = s.AbsoluteRect(row).Y;
+        bool liRestoredOpen = float.IsNaN(s.Layout(wrap).Height);
+        bool shiftRest = s.Paint(wrap).ChildShiftY == 0f;
+        Check("23r.a Reflow expand: old-size click frame, sibling eases monotonically, trailing shift rides, settle restores declared input",
+            wrapH0 < 0.5f && wrapHClick < 0.5f && Near(sibYClick, sibY0, 0.5f) && monotone
+            && midH > 4f && midH < 56f && Near(midShift, midH - 60f, 1.5f)
+            && Near(wrapHOpen, 60f, 0.5f) && Near(sibYOpen, sibY0 + 60f, 0.5f) && liRestoredOpen && shiftRest,
+            $"wrapH {wrapHClick:0.0}→{midH:0.0}→{wrapHOpen:0.0} sibY {sibY0:0.0}→{sibYClick:0.0}→{sibYOpen:0.0} shift={midShift:0.0} liNaN={liRestoredOpen}");
+
+        // 23r.b — collapse with a mid-flight UNRELATED re-commit: the commit snap-solves the wrapper at its declared
+        // value inside the frame, but the target/echo guards keep the in-flight track (no restart) and phase 7
+        // re-establishes the interp before record — so the collapse still settles ON SCHEDULE (167ms + pad).
+        ClickNode(host, window, toggle);                 // collapse — ExitDynamics leg
+        host.RunFrame(); host.RunFrame();                // ~32ms in
+        float hA = s.AbsoluteRect(wrap).H;
+        ClickNode(host, window, noise);                  // unrelated state commit mid-flight
+        float hB = s.AbsoluteRect(wrap).H;
+        bool stillFlying = host.Animation.HasTracks(wrap);
+        for (int i = 0; i < 11; i++) host.RunFrame();    // total ≈ 224ms ≥ 167ms — would NOT settle if the tween restarted
+        bool closedOnSchedule = Near(s.AbsoluteRect(wrap).H, 0f, 0.5f) && !host.Animation.HasTracks(wrap);
+        bool liRestoredClosed = s.Layout(wrap).Height == 0f;
+        bool sibHome = Near(s.AbsoluteRect(row).Y, sibY0, 0.5f);
+        Check("23r.b Reflow collapse: mid-flight reconcile does not restart the track (guards), settles on schedule, declared 0 restored",
+            hA < 59.5f && hA > 0.5f && hB <= hA + 0.25f && stillFlying && closedOnSchedule && liRestoredClosed && sibHome,
+            $"hA={hA:0.0} hB={hB:0.0} flying={stillFlying} closed={closedOnSchedule} li0={liRestoredClosed}");
+
+        // 23x — rigidity: a BoundsAnimated node below the reflowing wrapper rides the reveal RIGIDLY (parent-relative
+        // projection skips it on commit frames — exercised by clicking noise EVERY ride frame), then a genuine LOCAL
+        // move (the leading spacer) still FLIPs it.
+        ClickNode(host, window, toggle);                 // expand again
+        bool rigid = true;
+        float prevMovY = s.AbsoluteRect(mover).Y, prevRowY = s.AbsoluteRect(row).Y;
+        float rideStartY = prevMovY;
+        for (int i = 0; i < 5; i++)
+        {
+            ClickNode(host, window, noise);              // every ride frame is a COMMIT frame (capture+apply run)
+            float my = s.AbsoluteRect(mover).Y, ry = s.AbsoluteRect(row).Y;
+            if (!Near(my - prevMovY, ry - prevRowY, 0.25f)) rigid = false;
+            if (host.Animation.HasTracks(mover)) rigid = false;
+            if (MathF.Abs(s.Paint(mover).LocalTransform.Dy) > 0.01f) rigid = false;
+            prevMovY = my; prevRowY = ry;
+        }
+        bool rode = prevMovY > rideStartY + 4f;          // it genuinely moved with the reveal
+        for (int i = 0; i < 30; i++) host.RunFrame();    // settle the reveal
+        float movX0 = s.AbsoluteRect(mover).X;
+        ClickNode(host, window, shift);                  // spacer 0→40: a LOCAL move within the row
+        bool seeded = host.Animation.HasTracks(mover);
+        float dx0 = s.Paint(mover).LocalTransform.Dx;    // JustSeeded samples u=0 → −40 on the commit frame
+        bool held = Near(s.AbsoluteRect(mover).X, movX0, 1.5f);   // presented X holds (FLIP "Invert")
+        for (int i = 0; i < 30; i++) host.RunFrame();
+        bool landed = Near(s.AbsoluteRect(mover).X, movX0 + 40f, 0.5f) && !host.Animation.HasTracks(mover);
+        Check("23x. parent-relative projection: ancestor reflow rides rigidly (no tracks, no transform); a local move still FLIPs",
+            rigid && rode && seeded && dx0 < -30f && held && landed,
+            $"rigid={rigid} rode={rode} seeded={seeded} dx0={dx0:0.0} held={held} landed={landed}");
     }
 
     // Nested stateful component: renders, owns its own UseState, and re-renders on its own setState.
@@ -3541,34 +3908,34 @@ static class Slice
         host.RunFrame();   // collapsed (chevron rotation seeded to 0° → identity)
         var chevron0 = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
         float m11Collapsed = host.Scene.Paint(chevron0).LocalTransform.M11;
-        bool noContent = Child(host.Scene, host.Scene.Root, 1).IsNull;
+        bool noContent = Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0).IsNull;   // clip mounted, panel not
 
         // Toggle open. (a) The chevron rotation TWEENS (167ms): track peak sin θ — a tween passes through a mid-angle
-        // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel SLIDES down from under the
-        // header (WinUI ExpandDown: TranslateY −ContentHeight → 0 over 333ms KeySpline 0,0,0,1 — NO opacity animation,
-        // Expander.xaml:62-77): track its minimum TranslateY — an instant appear would read 0 every frame.
+        // (sin θ → ~1 near 90°), an instant snap never leaves ~0. (b) The content panel SLIDES out from under the
+        // header: the clip wrapper's SizeMode.Reflow Trailing anchor keeps the panel's bottom edge on the reveal edge
+        // (ChildShiftY < 0 mid-flight, 0 at rest) — an instant appear would read 0 every frame.
         ClickNode(host, window, Child(host.Scene, host.Scene.Root, 0));
-        float peakSin = 0f, minContentTy = 0f;
+        float peakSin = 0f, minShift = 0f;
         for (int i = 0; i < 16; i++)
         {
             host.RunFrame();
             var ch = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
             peakSin = MathF.Max(peakSin, MathF.Abs(host.Scene.Paint(ch).LocalTransform.M12));
-            var content = Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0);   // clip wrapper → sliding panel
-            if (!content.IsNull) minContentTy = MathF.Min(minContentTy, host.Scene.Paint(content).LocalTransform.Dy);
+            var clipW = Child(host.Scene, host.Scene.Root, 1);   // the reflow clip wrapper carries the child-shift
+            if (!clipW.IsNull) minShift = MathF.Min(minShift, host.Scene.Paint(clipW).ChildShiftY);
         }
         bool rotating = peakSin > 0.5f;
-        bool contentSlidIn = minContentTy < -4f;
+        bool contentSlidIn = minShift < -4f;
 
         for (int i = 0; i < 16; i++) host.RunFrame();   // settle
         var chevronDone = Child(host.Scene, Child(host.Scene, host.Scene.Root, 0), 1);
         float m11Done = host.Scene.Paint(chevronDone).LocalTransform.M11;   // cos 180° ≈ -1
         bool settled = m11Done < -0.9f;
-        bool hasContent = !Child(host.Scene, host.Scene.Root, 1).IsNull && HasGlyph(device, strings, "expander-body");
+        bool hasContent = !Child(host.Scene, Child(host.Scene, host.Scene.Root, 1), 0).IsNull && HasGlyph(device, strings, "expander-body");
 
         Check("W1-P3.a Expander animates chevron rotation + content slide (mid-flight)",
             Near(m11Collapsed, 1f, 0.05f) && rotating && settled && contentSlidIn && hasContent,
-            $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minContentTy={minContentTy:0.0} content {!noContent}→{hasContent}");
+            $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minShift={minShift:0.0} content {!noContent}→{hasContent}");
     }
 
     // Wave 1 / P5a — popup placement result: vertical flip when a side can't fit, corner-join against the anchor, and
@@ -3680,8 +4047,9 @@ static class Slice
                 $"f1=A?{f1 == a} f2=B?{f2 == b} f3=A?{f3 == a}");
         }
 
-        // E2.b/c/d — WinUI activation semantics: Enter fires on key-DOWN; Space arms (pressed visual) and fires on
-        // key-UP; Escape while Space is held cancels without firing.
+        // E2.b/c/d — WinUI ButtonBase activation (ButtonBaseKeyProcess.h): Space/Enter key-DOWN arms the pressed
+        // visual (held-key repeats ignored — ONE activation per hold); the click fires on key-UP (ClickMode.Release,
+        // ButtonBase_Partial.cpp:475-483); Escape or ANY other key while held cancels without firing (:64-70).
         {
             var scene = new SceneStore();
             int clicks = 0;
@@ -3693,20 +4061,35 @@ static class Slice
             var node = disp.Focused;
 
             disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
-            bool enterDown = clicks == 1;
+            bool enterArms = clicks == 0 && (scene.Flags(node) & NodeFlags.Pressed) != 0;   // pressed, no click yet
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter, IsRepeat: true) });
+            bool heldOnce = clicks == 0;                                                    // held Enter never re-fires
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Enter) });
+            bool enterUp = clicks == 1 && (scene.Flags(node) & NodeFlags.Pressed) == 0;     // click on the UP edge
 
             disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
             bool armedNoFire = clicks == 1 && (scene.Flags(node) & NodeFlags.Pressed) != 0;
             disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
             bool firedOnUp = clicks == 2 && (scene.Flags(node) & NodeFlags.Pressed) == 0;
-            Check("E2.b Enter activates on key-down; Space arms pressed and fires on key-up",
-                enterDown && armedNoFire && firedOnUp, $"enter={enterDown} armed={armedNoFire} up={firedOnUp}");
+            Check("E2.b Space/Enter arm pressed on key-down, click on key-up; a held key activates exactly once",
+                enterArms && heldOnce && enterUp && armedNoFire && firedOnUp,
+                $"enterArm={enterArms} held={heldOnce} enterUp={enterUp} spaceArm={armedNoFire} spaceUp={firedOnUp}");
 
             disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
             disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
             disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
             Check("E2.c Escape cancels a held Space without firing",
                 clicks == 2 && (scene.Flags(node) & NodeFlags.Pressed) == 0, $"clicks={clicks}");
+
+            // ANY other key while held also cancels without firing (ButtonBaseKeyProcess.h:64-70) — the press visual
+            // clears on the foreign key-down and the eventual Space-up does nothing.
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
+            bool reArmed = (scene.Flags(node) & NodeFlags.Pressed) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.A) });
+            bool canceledByKey = (scene.Flags(node) & NodeFlags.Pressed) == 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
+            Check("E2.c2 any other key-down cancels a held Space/Enter press without firing",
+                reArmed && canceledByKey && clicks == 2, $"armed={reArmed} canceled={canceledByKey} clicks={clicks}");
         }
 
         // E2.e — double/triple-click promotion (timestamps + slop) surfaces in OnPointerPressed.ClickCount.
@@ -3835,7 +4218,10 @@ static class Slice
                 pressedBefore && clearedAfter && blurred, $"before={pressedBefore} after={clearedAfter} hook={blurred}");
         }
 
-        // E2.l — hover resolves the cursor: clickable → Hand by default; explicit Cursor=IBeam overrides; empty → Arrow.
+        // E2.l — hover resolves the cursor with WinUI semantics: clickability does NOT imply the hand (arrow unless an
+        // element declares a cursor — WinUI sets the hand only on HyperlinkButton); an explicit cursor INHERITS down to
+        // cursor-less descendants; and an explicit Arrow on a child MASKS an ancestor's I-beam (CursorBit stops the
+        // walk — WinUI's forced SetCursor(MouseCursorArrow) on TextBox's delete button, TextBox_Partial.cpp:884).
         {
             var scene = new SceneStore();
             new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
@@ -3843,22 +4229,41 @@ static class Slice
                 Direction = 0, Gap = 10, Padding = Edges4.All(0),
                 Children =
                 [
-                    new BoxEl { Key = "hand", Width = 20, Height = 20, OnClick = () => { } },
-                    new BoxEl { Key = "ibeam", Width = 20, Height = 20, OnClick = () => { }, Cursor = CursorId.IBeam },
+                    new BoxEl { Key = "plain", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl
+                    {
+                        Key = "field", Direction = 0, Gap = 10, Cursor = CursorId.IBeam,   // an editing surface
+                        Children =
+                        [
+                            new BoxEl { Key = "text", Width = 20, Height = 20, OnClick = () => { } },                            // inherits I-beam
+                            new BoxEl { Key = "affix", Width = 20, Height = 20, OnClick = () => { }, Cursor = CursorId.Arrow }, // masks I-beam
+                        ],
+                    },
+                    new BoxEl { Key = "link", Width = 20, Height = 20, OnClick = () => { }, Cursor = CursorId.Hand },
                 ],
             }, null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             var disp = new InputDispatcher(scene);
             CursorId last = CursorId.Arrow;
             disp.OnCursorChanged = c => last = c;
+            // Row layout: plain 0–20 | field 30–80 (text 30–50, gap 50–60, affix 60–80) | link 90–110.
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(100, 10), 0, 0) });
+            bool hand = last == CursorId.Hand;                  // explicit Hand (the HyperlinkButton case)
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0) });
-            bool hand = last == CursorId.Hand;
+            bool plainArrow = last == CursorId.Arrow;           // clickable WITHOUT a declared cursor → arrow, not hand
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(40, 10), 0, 0) });
-            bool ibeam = last == CursorId.IBeam;
-            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(200, 200), 0, 0) });
-            bool arrow = last == CursorId.Arrow;
-            Check("E2.l hover resolves the cursor (hand → explicit I-beam → arrow off-control)",
-                hand && ibeam && arrow, $"hand={hand} ibeam={ibeam} arrow={arrow}");
+            bool inherited = last == CursorId.IBeam;            // cursor-less child falls through to the field's I-beam
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 10), 0, 0) });
+            bool masked = last == CursorId.Arrow;               // child's explicit Arrow masks the ancestor I-beam
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(55, 10), 0, 0) });
+            bool ownSurface = last == CursorId.IBeam;           // the field's OWN gap resolves its I-beam (CursorBit
+                                                                // makes a cursor-declared node hover-resolvable, like
+                                                                // WinUI's background-gated hit testing)
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(300, 200), 0, 0) });
+            bool offArrow = last == CursorId.Arrow;             // off-control: a REAL IBeam→Arrow transition must fire
+            Check("E2.l hover resolves the cursor (no clickable hand; explicit inherits; Arrow masks ancestor I-beam; own surface; off→arrow)",
+                hand && plainArrow && inherited && masked && ownSurface && offArrow,
+                $"hand={hand} plain={plainArrow} inherit={inherited} mask={masked} own={ownSurface} off={offArrow}");
         }
     }
 
@@ -3871,6 +4276,241 @@ static class Slice
     // ReorderList carries the live-reorder slot math: midpoint rule (GetDragOverIndex —
     // ListViewBase_Partial_Reorder.cpp:984-1063), the 200ms LISTVIEW_LIVEREORDER_TIMER dwell (:50) and the
     // part-to-make-room displacement (MoveItemsForLiveReorder :2125-2158).
+    // Wave B input-semantics parity (WinUI ButtonBase/RepeatButton/NumberBox/TabView ground truth): pressed tracks the
+    // held pointer, repeat pause/resume, focus-on-press + AllowFocusOnInteraction, middle-click release routing, the
+    // element wheel hook, ActivateOnEnter opt-out, keyboard repeat arming, cancel delivery, touch hover, theme text
+    // default, and the PersonPicture geometry contract.
+    static void WaveBInputChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // B.1 — pressed visual tracks the pointer while held (ButtonBase_Partial.cpp:629-638): drag-off un-presses,
+        // drag-back re-presses, and a release back over the node still clicks.
+        {
+            var scene = new SceneStore();
+            int clicks = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnClick = () => clicks++ }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var node = scene.Root;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0) });
+            bool pressed = (scene.Flags(node) & NodeFlags.Pressed) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(200, 100), 0, 0) });
+            bool offCleared = (scene.Flags(node) & NodeFlags.Pressed) == 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0) });
+            bool backPressed = (scene.Flags(node) & NodeFlags.Pressed) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(10, 10), 0, 0) });
+            bool clicked = clicks == 1 && (scene.Flags(node) & NodeFlags.Pressed) == 0;
+            Check("B.1 pressed tracks the held pointer (off→clear, back→press, release-over→click)",
+                pressed && offCleared && backPressed && clicked,
+                $"down={pressed} off={offCleared} back={backPressed} click={clicked}");
+        }
+
+        // B.2 — repeat pause/resume hooks fire on drag-off/drag-back while held; ticker honors per-node Delay/Interval
+        // with a FRESH delay (no immediate re-fire) on resume (RepeatButton_Partial.cpp:530-574).
+        {
+            var scene = new SceneStore();
+            int clicks = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, Repeats = true, RepeatDelayMs = 80f, RepeatIntervalMs = 30f, OnClick = () => clicks++ }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var ticker = new FluentGpu.Animation.RepeatTicker(scene);
+            var disp = new InputDispatcher(scene)
+            {
+                OnRepeatArmed = ticker.Arm, OnRepeatReleased = ticker.Disarm,
+                OnRepeatPaused = ticker.Pause, OnRepeatResumed = ticker.Resume,
+            };
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0) });
+            bool armFired = clicks == 1;                       // Arm fires once immediately (ClickMode.Press)
+            ticker.Tick(100f);                                 // crosses the 80ms custom delay → second fire
+            bool delayHonored = clicks == 2;
+            ticker.Tick(60f);                                  // two 30ms intervals
+            bool intervalHonored = clicks == 4;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(200, 100), 0, 0) });   // off → pause
+            ticker.Tick(500f);
+            bool pausedNoFire = clicks == 4 && !ticker.HasActive;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0) });     // back → resume
+            bool resumedNoImmediate = clicks == 4 && ticker.HasActive;   // fresh delay, NO re-fire on re-entry
+            ticker.Tick(79f);
+            bool freshDelay = clicks == 4;                     // still inside the fresh 80ms delay
+            ticker.Tick(2f);
+            bool resumedFires = clicks == 5;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(10, 10), 0, 0) });
+            bool releaseStops = !ticker.HasActive && clicks == 5;   // release does NOT re-click a repeat node
+            Check("B.2 repeat: per-node 80/30 cadence; drag-off pauses; re-entry resumes with a fresh delay",
+                armFired && delayHonored && intervalHonored && pausedNoFire && resumedNoImmediate && freshDelay && resumedFires && releaseStops,
+                $"arm={armFired} delay={delayHonored} interval={intervalHonored} pause={pausedNoFire} resume={resumedNoImmediate} fresh={freshDelay} fires={resumedFires} stop={releaseStops}");
+        }
+
+        // B.3 — pointer focus moves on the PRESS edge (ButtonBase_Partial.cpp:700-709); AllowFocusOnInteraction=false
+        // blocks the move entirely while Tab still reaches the node (AppBarButton_themeresources.xaml:136).
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Gap = 10,
+                Children =
+                [
+                    new BoxEl { Key = "a", Width = 20, Height = 20, OnClick = () => { } },
+                    new BoxEl { Key = "b", Width = 20, Height = 20, OnClick = () => { }, AllowFocusOnInteraction = false },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var a = Child(scene, scene.Root, 0); var b = Child(scene, scene.Root, 1);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0) });
+            bool focusOnPress = disp.Focused == a;             // BEFORE any release
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(10, 10), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 10), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(40, 10), 0, 0) });
+            bool blocked = disp.Focused == a;                  // press on b never moved focus
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Tab) });
+            bool tabReaches = disp.Focused == b;               // keyboard still reaches it
+            Check("B.3 pointer focus on press; AllowFocusOnInteraction=false blocks pointer focus, Tab still works",
+                focusOnPress && blocked && tabReaches, $"press={focusOnPress} blocked={blocked} tab={tabReaches}");
+        }
+
+        // B.4 — middle-button release over the press target delivers OnPointerPressed with Button=2 (the WinUI
+        // TabViewItem middle-click-close commit, TabViewItem.cpp:418-462); release elsewhere delivers nothing.
+        {
+            var scene = new SceneStore();
+            var seen = new List<byte>();
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnPointerPressed = e => seen.Add(e.Button) }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 2, 0) });
+            bool noneOnDown = seen.Count == 0;                 // middle never presses/activates on the down edge
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(10, 10), 2, 0) });
+            bool delivered = seen.Count == 1 && seen[0] == 2;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 2, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(200, 100), 2, 0) });
+            bool offDropped = seen.Count == 1;                 // release elsewhere → no delivery
+            Check("B.4 middle-click: typed args Button=2 on release-over-same; nothing on down or off-release",
+                noneOnDown && delivered && offDropped, $"down={noneOnDown} hit={delivered} off={offDropped}");
+        }
+
+        // B.5 — the element wheel hook sees the wheel BEFORE the viewport and consumes it when Handled
+        // (NumberBox.cpp:578-597); an unhandled hook lets the dispatch fall through.
+        {
+            var scene = new SceneStore();
+            float sawDelta = 0f; int calls = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnPointerWheel = e => { calls++; sawDelta = e.Delta; e.Handled = true; } }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            int handled = disp.Dispatch(new[] { new InputEvent(InputKind.Wheel, new Point2(10, 10), 0, 0, ScrollDelta: -48f) });
+            Check("B.5 element wheel hook consumes the wheel (Handled) with the raw delta",
+                handled == 1 && calls == 1 && sawDelta == -48f, $"handled={handled} calls={calls} delta={sawDelta}");
+        }
+
+        // B.6 — ActivateOnEnter=false (CheckBox/RadioButton/ToggleSwitch — KeyPress::Button bAcceptsReturn=false):
+        // Enter does NOT activate (it routes to OnKeyDown instead); Space still activates on key-up.
+        {
+            var scene = new SceneStore();
+            int clicks = 0, sawKey = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, ActivateOnEnter = false, OnClick = () => clicks++, OnKeyDown = a => sawKey = a.KeyCode }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.MoveFocus(forward: true);
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Enter) });
+            bool enterRouted = clicks == 0 && sawKey == Keys.Enter;
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
+            bool spaceClicks = clicks == 1;
+            Check("B.6 ActivateOnEnter=false: Enter falls through to key routing; Space still toggles",
+                enterRouted && spaceClicks, $"enter={enterRouted} (saw={sawKey}) space={spaceClicks}");
+        }
+
+        // B.7 — keyboard repeat: a held Space arms the engine repeat timer ONCE (no OS auto-repeat involvement);
+        // Enter on a repeat node yields exactly one click on its down edge (RepeatButton_Partial.cpp:212-217, :29).
+        {
+            var scene = new SceneStore();
+            int clicks = 0, armed = 0, released = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, Repeats = true, OnClick = () => clicks++ }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene) { OnRepeatArmed = _ => armed++, OnRepeatReleased = _ => released++ };
+            disp.MoveFocus(forward: true);
+            var node = disp.Focused;
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Space, IsRepeat: true) });
+            bool armedOnce = armed == 1 && (scene.Flags(node) & NodeFlags.Pressed) != 0;   // OS repeat ignored
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Space) });
+            bool releasedOnce = released == 1 && clicks == 0;   // ticker owns the clicks; key-up never re-fires
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Enter, IsRepeat: true) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.KeyUp, default, 0, Keys.Enter) });
+            bool enterOnce = clicks == 1 && armed == 1;         // Enter: ONE direct click, never arms the timer
+            Check("B.7 keyboard repeat: Space arms the ticker once; Enter fires exactly one click on a repeat node",
+                armedOnce && releasedOnce && enterOnce, $"armed={armedOnce} released={releasedOnce} enter={enterOnce}");
+        }
+
+        // B.8 — PointerCancel delivers OnPointerExit to the captured OnDrag target (capture-loss reset — the
+        // RatingControl alt-tab mid-sweep case); touch lift clears hover (no resting touch hover).
+        {
+            var scene = new SceneStore();
+            int exits = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                new BoxEl { Width = 40, Height = 20, OnDrag = _ => { }, OnPointerExit = () => exits++ }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerCancel, default, 0, 0) });
+            bool cancelExit = exits >= 1;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0, Pointer: PointerKind.Touch) });
+            bool hovered = (scene.Flags(scene.Root) & NodeFlags.Hovered) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(10, 10), 0, 0, Pointer: PointerKind.Touch) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(10, 10), 0, 0, Pointer: PointerKind.Touch) });
+            bool touchHoverCleared = (scene.Flags(scene.Root) & NodeFlags.Hovered) == 0;
+            Check("B.8 cancel delivers exit to the captured drag target; touch lift clears hover",
+                cancelExit && hovered && touchHoverCleared, $"exit={cancelExit} hover={hovered} lifted={touchHoverCleared}");
+        }
+
+        // B.9 — TextEl's default Color resolves the LIVE theme's TextFillColorPrimary at construction
+        // (dark #FFFFFF / light #E4000000) — guards the Tok.TextPrimary default against a hardcoded revert.
+        {
+            var darkDefault = new TextEl("x").Color;
+            Tok.Use(ThemeKind.Light);
+            var lightDefault = new TextEl("x").Color;
+            Tok.Use(ThemeKind.Dark);
+            bool dark = darkDefault == Tok.TextPrimary && darkDefault == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+            bool light = lightDefault == ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4);
+            Check("B.9 TextEl default color = theme TextFillColorPrimary (dark #FFFFFF / light #E4000000)",
+                dark && light, $"dark={dark} light={light}");
+        }
+
+        // B.10 — PersonPicture geometry contract: initials centered in the circle; the badge plate hangs 4px outside
+        // the top-right (root UNclipped, left = size+4−plate, top = −4); a negative badge number shows NO badge.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(PersonPicture.Create("JD", 96f, badgeNumber: 5), null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var root = scene.Root;
+            bool unclipped = (scene.Flags(root) & NodeFlags.ClipsToBounds) == 0;
+            var face = Child(scene, root, 0);
+            var text = Child(scene, face, 0);
+            var rootR = scene.AbsoluteRect(root);
+            var textR = scene.AbsoluteRect(text);
+            bool centered = MathF.Abs((textR.X + textR.W / 2f) - (rootR.X + 48f)) <= 1f
+                         && MathF.Abs((textR.Y + textR.H / 2f) - (rootR.Y + 48f)) <= 1f;
+            var badge = Child(scene, root, 1);
+            var badgeR = scene.AbsoluteRect(badge);
+            bool badgePos = MathF.Abs(badgeR.X - rootR.X - 52f) <= 0.5f && MathF.Abs(badgeR.Y - rootR.Y + 4f) <= 0.5f
+                         && MathF.Abs(badgeR.W - 48f) <= 0.5f;
+
+            var scene2 = new SceneStore();
+            new TreeReconciler(scene2, strings).ReconcileRoot(PersonPicture.Create("JD", 96f, badgeNumber: -3, badgeGlyph: ""), null);
+            bool negativeNoBadge = Child(scene2, scene2.Root, 1).IsNull;   // number<0 owns the slot → NO badge, glyph ignored
+            Check("B.10 PersonPicture: centered initials; badge at (52,−4) 48px on an unclipped root; negative number = no badge",
+                unclipped && centered && badgePos && negativeNoBadge,
+                $"unclipped={unclipped} centered={centered} badge={badgePos} negNone={negativeNoBadge}");
+        }
+    }
+
     static void E5DragDropChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -5646,9 +6286,11 @@ static class Slice
         Check("W1-P1.b disabled node is not a tab stop (focus skips it)", focusEnabled && gatedNotFocused,
             $"focusEnabled={focusEnabled} gatedFocused={!gatedNotFocused}");
 
-        // disabled-no-key-activate: Enter activates the focused ENABLED box; the disabled box never key-activates.
+        // disabled-no-key-activate: Enter activates the focused ENABLED box (pressed on down, click on key-UP — the
+        // WinUI ClickMode.Release contract); the disabled box never key-activates.
         int beforeEnter = root.EnabledClicks;
         window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Enter));
+        window.QueueInput(new InputEvent(InputKind.KeyUp, default, 0, Keys.Enter));
         host.RunFrame();
         Check("W1-P1.c Enter activates the focused enabled node; disabled never key-activates",
             root.EnabledClicks == beforeEnter + 1 && root.GatedClicks == 0,
@@ -7554,7 +8196,8 @@ static class Slice
             host.RunFrame();
             var control = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
             var track = Child(host.Scene, control, 0);
-            var knob = Child(host.Scene, Child(host.Scene, track, 1), 0);
+            var knobHost = Child(host.Scene, track, 1);            // the 20×20 positioning host OWNS the travel FLIP
+            var knob = Child(host.Scene, knobHost, 0);
 
             window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
             host.RunFrame();
@@ -7564,12 +8207,12 @@ static class Slice
             window.QueueInput(new InputEvent(InputKind.KeyUp, default, 0, Keys.Space));
             host.RunFrame();                                       // commit frame (dt 0): FLIP seeded at the full inverse
             bool toggledOnUp = root.On;
-            float dx0 = host.Scene.Paint(knob).LocalTransform.Dx;  // ≈ −20: presented still at the off spot
+            float dx0 = host.Scene.Paint(knobHost).LocalTransform.Dx;  // ≈ −20: presented still at the off spot
 
             clock.Advance(50f); host.RunFrame();                   // mid-travel of the 167ms tween
-            float dxMid = host.Scene.Paint(knob).LocalTransform.Dx;
+            float dxMid = host.Scene.Paint(knobHost).LocalTransform.Dx;
             clock.Advance(500f); host.RunFrame(); host.RunFrame();
-            float dxEnd = host.Scene.Paint(knob).LocalTransform.Dx;
+            float dxEnd = host.Scene.Paint(knobHost).LocalTransform.Dx;
             var trk = host.Scene.AbsoluteRect(track);
             var kOn = host.Scene.AbsoluteRect(knob);
             bool seeded = Near(dx0, -20f, 1.5f);
@@ -8657,12 +9300,13 @@ static class Slice
             $"blur={blurUnmounts} refocus={noEyeOnRefocus} typing={typingPopulatedHidden} rearmed={rearmed}");
     }
 
-    // D3 — Expander motion parity (Expander.xaml ExpandDown ~62-77 / CollapseUp ~78-90): the card height SNAPS (WinUI
-    // never tweens it) while the content SLIDES under the header behind the clip wrapper — expand TranslateY
-    // −ContentHeight → 0 over 333ms (KeySpline 0,0,0,1), collapse 0 → −ContentHeight over 167ms (KeySpline 1,1,0,1)
-    // with the panel kept mounted until settle (the Visibility=Collapsed keyframe at t=167ms). NO opacity animation.
-    // An initiallyExpanded mount rests at TranslateY 0 with no motion and no presented-height residue (the gallery
-    // "content clipped at the card bottom" bug).
+    // D3 — Expander motion (the SizeMode.Reflow contract — a DELIBERATE divergence from WinUI's layout snap): the clip
+    // wrapper's LAYOUT height eases 0 → ContentHeight over 333ms (KeySpline 0,0,0,1) and back over 167ms (KeySpline
+    // 1,1,0,1, the ExitDynamics leg), so the sibling below moves smoothly and MONOTONICALLY instead of snapping; the
+    // Trailing anchor rides the panel's bottom edge on the reveal edge (ChildShiftY == clipH − contentExtent mid-
+    // flight — the slide-from-under-the-header); the panel stays MOUNTED through the collapse and unmounts at settle
+    // (WinUI's Visibility=Collapsed keyframe at t=167ms). NO opacity animation. An initiallyExpanded mount rests with
+    // no motion, zero child-shift, and no presented-height residue (the gallery "content clipped at the card bottom" bug).
     static void D3ExpanderChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -8670,8 +9314,8 @@ static class Slice
         window.Show();
         var device = new HeadlessGpuDevice();
         var fonts = new HeadlessFontSystem(strings);
-        // Host the Expander INSIDE a column wrapper (the scene root always fills the window, so the card's
-        // snap-to-natural-height is only observable on a non-root box — the gallery shape).
+        // Host the Expander INSIDE a column wrapper with a following sibling: the scene root always fills the window,
+        // so sibling Y is the observable proof that reveal height participates in parent layout.
         var root = new W0fStaticProbe
         {
             Build = () => new BoxEl
@@ -8685,55 +9329,125 @@ static class Slice
                         Content = new BoxEl { Height = 60f, Children = new Element[] { new TextEl("expander-action") { Size = 14f } } },
                         InitiallyExpanded = false,
                     }),
+                    new BoxEl { Height = 24f, Children = new Element[] { new TextEl("after-expander") { Size = 14f } } },
                 ],
             },
         };
         using var host = new AppHost(app, window, device, fonts, strings, root);
 
         host.RunFrame();   // mount collapsed
-        var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));   // component anchor → the card box
+        var anchor = Child(host.Scene, host.Scene.Root, 0);    // scene root IS the Build column → child 0 = component anchor
+        var sibling = Child(host.Scene, host.Scene.Root, 1);   // the 24px row below the expander
+        var card = host.Scene.FirstChild(anchor);              // component anchor → the card box
         var header = Child(host.Scene, card, 0);
         float headerH = host.Scene.AbsoluteRect(header).H;
+        float siblingYCollapsed = host.Scene.AbsoluteRect(sibling).Y;
 
-        // cp3.a — open click: the card height snaps to header+content THIS frame (no height tween) while the content
-        // TranslateY sits at −ContentHeight (WinUI's discrete keyframe at t=0), tweens mid-flight, settles at 0.
+        // cp3.a — open click: the content mounts, but the click frame still PAINTS the old size (the reflow track's
+        // JustSeeded first tick re-establishes 0 before record), so the sibling never jumps; later frames ease it down
+        // MONOTONICALLY while the Trailing anchor keeps the panel's bottom edge on the reveal edge.
         ClickNode(host, window, header);
-        var clip = Child(host.Scene, card, 1);
+        var clip = Child(host.Scene, card, 1);           // the clip wrapper is ALWAYS mounted (the transition's host)
         var content = clip.IsNull ? NodeHandle.Null : Child(host.Scene, clip, 0);
-        float cardH = host.Scene.AbsoluteRect(card).H;
-        float clipH = clip.IsNull ? 0f : host.Scene.AbsoluteRect(clip).H;
+        float cardHClick = host.Scene.AbsoluteRect(card).H;
+        float clipHClick = clip.IsNull ? 0f : host.Scene.AbsoluteRect(clip).H;
         float contentH = content.IsNull ? 0f : host.Scene.AbsoluteRect(content).H;
-        float tySeed = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
-        bool snapped = !clip.IsNull && !content.IsNull && cardH > headerH + 40f && Near(cardH, headerH + clipH, 1.5f);
-        host.RunFrame();
-        float tyMid = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
-        for (int i = 0; i < 30; i++) host.RunFrame();   // ≥ 333ms — settle
-        float tyDone = content.IsNull ? 0f : host.Scene.Paint(content).LocalTransform.Dy;
-        Check("cp3.a — expand: card snaps to header+content while the slide runs −H → 0 (333ms) and settles at 0",
-            snapped && Near(tySeed, -contentH, 1.5f) && tyMid < -1f && tyMid > -contentH && MathF.Abs(tyDone) < 0.5f,
-            $"cardH={cardH:0} headerH={headerH:0} clipH={clipH:0} ty {tySeed:0.0}→{tyMid:0.0}→{tyDone:0.00}");
+        float contentExtent = contentH - 1f;             // the −1px border-overlap margin: panel bottom = contentH − 1
+        float siblingYClick = host.Scene.AbsoluteRect(sibling).Y;
+        bool monotoneOpen = true;
+        float prevSibY = siblingYClick, clipHMid = 0f, shiftMid = 0f, siblingYMid = 0f;
+        for (int i = 0; i < 30; i++)                     // ≥ 333ms — settle (sampled per frame for monotonicity)
+        {
+            host.RunFrame();
+            float y = host.Scene.AbsoluteRect(sibling).Y;
+            if (y < prevSibY - 0.25f) monotoneOpen = false;
+            prevSibY = y;
+            if (i == 2) { clipHMid = host.Scene.AbsoluteRect(clip).H; shiftMid = host.Scene.Paint(clip).ChildShiftY; siblingYMid = host.Scene.AbsoluteRect(sibling).Y; }
+        }
+        float clipHOpen = host.Scene.AbsoluteRect(clip).H;
+        float siblingYOpen = host.Scene.AbsoluteRect(sibling).Y;
+        float shiftDone = host.Scene.Paint(clip).ChildShiftY;
+        bool liRestoredOpen = float.IsNaN(host.Scene.Layout(clip).Height);   // settle returned the declared NaN(auto)
+        bool noClickJump = !clip.IsNull && !content.IsNull && Near(siblingYClick, siblingYCollapsed, 1.5f) && Near(cardHClick, headerH + clipHClick, 1.5f) && clipHClick < 2f;
+        bool layoutRevealed = siblingYMid > siblingYClick + 4f && siblingYMid < siblingYOpen - 4f && clipHMid > 4f && clipHMid < clipHOpen - 4f;
+        bool anchoredOpen = Near(shiftMid, clipHMid - contentExtent, 1.5f) && shiftMid < -4f;   // bottom edge rides the reveal edge
+        Check("cp3.a — expand: sibling eases down monotonically (no click jump); the panel's bottom edge rides the reveal edge",
+            noClickJump && layoutRevealed && monotoneOpen && anchoredOpen && MathF.Abs(shiftDone) < 0.01f
+            && Near(clipHOpen, contentExtent, 1.5f) && liRestoredOpen,
+            $"siblingY {siblingYCollapsed:0.0}→{siblingYClick:0.0}→{siblingYMid:0.0}→{siblingYOpen:0.0} clipH {clipHClick:0.0}→{clipHMid:0.0}→{clipHOpen:0.0} shift {shiftMid:0.0}→{shiftDone:0.00} liNaN={liRestoredOpen}");
 
-        // cp3.b — close click: the content stays LIVE through the 167ms slide (TranslateY heading to −H), then
-        // unmounts at settle and the card height snaps back to the header height (WinUI Collapsed at t=167ms).
-        ClickNode(host, window, header);                 // collapse — seeds TranslateY 0 → −H this frame
-        for (int i = 0; i < 3; i++) host.RunFrame();     // ~48ms into the 167ms slide
-        var clipEarly = Child(host.Scene, card, 1);
-        var contentEarly = clipEarly.IsNull ? NodeHandle.Null : Child(host.Scene, clipEarly, 0);
+        // cp3.b — close click: the content stays LIVE through the 167ms reflow while the sibling eases upward; only
+        // after the reflow settles does the content unmount (the clip itself STAYS mounted at its declared 0 height).
+        ClickNode(host, window, header);                 // collapse — the declared Height flips to 0; ExitDynamics leg
+        float siblingYCloseClick = host.Scene.AbsoluteRect(sibling).Y;
+        for (int i = 0; i < 3; i++) host.RunFrame();     // ~48ms into the 167ms reflow
+        var contentEarly = Child(host.Scene, clip, 0);
         bool liveEarly = !contentEarly.IsNull && host.Scene.IsLive(contentEarly);
-        float tyClosing = liveEarly ? host.Scene.Paint(contentEarly).LocalTransform.Dy : 0f;
-        for (int i = 0; i < 6; i++) host.RunFrame();     // ~144ms — still inside the slide window
-        var clipLate = Child(host.Scene, card, 1);
-        bool lateMounted = !clipLate.IsNull && !Child(host.Scene, clipLate, 0).IsNull;
-        for (int i = 0; i < 20; i++) host.RunFrame();    // settle + the watcher's unmount frame
-        bool unmounted = Child(host.Scene, card, 1).IsNull;
+        float siblingYClosing = host.Scene.AbsoluteRect(sibling).Y;
+        float clipHClosing = host.Scene.AbsoluteRect(clip).H;
+        float shiftClosing = host.Scene.Paint(clip).ChildShiftY;
+        for (int i = 0; i < 20; i++) host.RunFrame();    // settle + the collapse watcher's unmount frame
+        bool unmounted = Child(host.Scene, clip, 0).IsNull && !Child(host.Scene, card, 1).IsNull;
         float closedH = host.Scene.AbsoluteRect(card).H;
-        Check("cp3.b — collapse: content live mid-slide heading to −H, unmounted at settle, card snaps to header height",
-            liveEarly && tyClosing < -8f && tyClosing > -contentH + 0.5f && lateMounted && unmounted && Near(closedH, headerH, 1.5f),
-            $"liveEarly={liveEarly} tyClosing={tyClosing:0.0} (−H={-contentH:0}) lateMounted={lateMounted} unmounted={unmounted} closedH={closedH:0} headerH={headerH:0}");
+        float siblingYClosed = host.Scene.AbsoluteRect(sibling).Y;
+        bool liRestoredClosed = host.Scene.Layout(clip).Height == 0f;        // settle returned the declared 0
+        bool noCloseJump = Near(siblingYCloseClick, siblingYOpen, 1.5f);
+        bool layoutCollapsed = siblingYClosing < siblingYCloseClick - 4f && siblingYClosing > siblingYCollapsed + 4f && clipHClosing > 4f && clipHClosing < clipHOpen - 4f;
+        bool anchoredClosing = Near(shiftClosing, clipHClosing - contentExtent, 1.5f) && shiftClosing < -8f;
+        Check("cp3.b — collapse: content stays LIVE while the sibling eases up (anchored to the reveal edge), unmounts at settle",
+            liveEarly && noCloseJump && layoutCollapsed && anchoredClosing && unmounted && Near(closedH, headerH, 1.5f)
+            && Near(siblingYClosed, siblingYCollapsed, 1.5f) && liRestoredClosed,
+            $"liveEarly={liveEarly} siblingY {siblingYOpen:0.0}→{siblingYCloseClick:0.0}→{siblingYClosing:0.0}→{siblingYClosed:0.0} clipHClosing={clipHClosing:0.0} shift={shiftClosing:0.0} unmounted={unmounted} li0={liRestoredClosed}");
 
-        // cp3.c — resting expanded mount (the gallery page mounts initiallyExpanded:true): no motion is seeded
-        // (TranslateY rests at 0), the content paints, and the LAST content child's absolute bottom sits INSIDE the
-        // card's absolute bottom — the clipped "An action" gallery bug.
+        // cp3.e — TemplateParts: a part modifier restyles (header fill, content padding) but can NEVER break the
+        // control's mechanics — the control re-asserts them after the modifier (a hostile OnClick = null is defeated;
+        // the toggle still opens the card).
+        {
+            using var app3 = new HeadlessPlatformApp();
+            var window3 = new HeadlessWindow(new WindowDesc("expander-d3p", new Size2(360, 320), 1f));
+            window3.Show();
+            var device3 = new HeadlessGpuDevice();
+            var partFill = ColorF.FromRgba(10, 200, 30);
+            var root3 = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        Embed.Comp(() => new Expander
+                        {
+                            Header = "Parted",
+                            Content = new BoxEl { Height = 60f },
+                            Parts = new()
+                            {
+                                [Expander.PartHeader] = b => b with { Fill = partFill, OnClick = null },   // hostile clobber attempt
+                                [Expander.PartContent] = c => c with { Padding = Edges4.All(0) },
+                            },
+                        }),
+                    ],
+                },
+            };
+            using var host3 = new AppHost(app3, window3, device3, new HeadlessFontSystem(strings), strings, root3);
+            host3.RunFrame();
+            var card3 = host3.Scene.FirstChild(Child(host3.Scene, host3.Scene.Root, 0));
+            var header3 = Child(host3.Scene, card3, 0);
+            var clip3 = Child(host3.Scene, card3, 1);
+            bool fillApplied = host3.Scene.Paint(header3).Fill.Equals(partFill);
+            ClickNode(host3, window3, header3);                  // would be dead if the modifier's OnClick=null won
+            for (int i = 0; i < 30; i++) host3.RunFrame();       // settle the reveal
+            var content3 = Child(host3.Scene, clip3, 0);
+            bool opened = !content3.IsNull && host3.Scene.AbsoluteRect(clip3).H > 40f;
+            // Padding 0 via the part: the panel solves at the user content's height (60), not 60 + 2×16 default padding.
+            bool padApplied = !content3.IsNull && Near(host3.Scene.AbsoluteRect(content3).H, 60f, 1.5f);
+            Check("cp3.e — TemplateParts: part modifiers restyle (fill, padding) but mechanics are re-asserted (toggle survives OnClick=null)",
+                fillApplied && opened && padApplied,
+                $"fill={fillApplied} opened={opened} clipH={host3.Scene.AbsoluteRect(clip3).H:0} contentH={(content3.IsNull ? -1f : host3.Scene.AbsoluteRect(content3).H):0}");
+        }
+
+        // cp3.c — resting expanded mount (the gallery page mounts initiallyExpanded:true): no motion is seeded (the
+        // first frame never FLIP-captures), the child-shift rests at 0, the content paints, and the LAST content
+        // child's absolute bottom sits INSIDE the card's absolute bottom — the clipped "An action" gallery bug.
         using var app2 = new HeadlessPlatformApp();
         var window2 = new HeadlessWindow(new WindowDesc("expander-d3b", new Size2(360, 320), 1f));
         window2.Show();
@@ -8761,13 +9475,14 @@ static class Slice
         var content2 = clip2.IsNull ? NodeHandle.Null : Child(host2.Scene, clip2, 0);
         var inner2 = content2.IsNull ? NodeHandle.Null : Child(host2.Scene, content2, 0);   // the user content row
         float tyRest = content2.IsNull ? 1f : host2.Scene.Paint(content2).LocalTransform.Dy;
+        float shiftRest2 = clip2.IsNull ? 1f : host2.Scene.Paint(clip2).ChildShiftY;
         var rootR = host2.Scene.AbsoluteRect(card2);
         var innerR = inner2.IsNull ? default : host2.Scene.AbsoluteRect(inner2);
         bool contained = !inner2.IsNull && innerR.Y + innerR.H <= rootR.Y + rootR.H + 0.5f;
-        bool noStaleReveal = float.IsNaN(host2.Scene.Paint(card2).PresentedH);
-        Check("cp3.c — initiallyExpanded rests at TranslateY 0 with the content inside the card bottom (no clipping)",
-            MathF.Abs(tyRest) < 0.01f && contained && noStaleReveal && HasGlyph(device2, strings, "expander-action"),
-            $"tyRest={tyRest:0.00} innerBottom={(innerR.Y + innerR.H):0} cardBottom={(rootR.Y + rootR.H):0} presentedHNaN={noStaleReveal}");
+        bool noStaleReveal = float.IsNaN(host2.Scene.Paint(card2).PresentedH) && float.IsNaN(host2.Scene.Paint(clip2).PresentedH);
+        Check("cp3.c — initiallyExpanded rests with no motion (zero shift) and the content inside the card bottom (no clipping)",
+            MathF.Abs(tyRest) < 0.01f && MathF.Abs(shiftRest2) < 0.01f && contained && noStaleReveal && HasGlyph(device2, strings, "expander-action"),
+            $"tyRest={tyRest:0.00} shiftRest={shiftRest2:0.00} innerBottom={(innerR.Y + innerR.H):0} cardBottom={(rootR.Y + rootR.H):0} presentedHNaN={noStaleReveal}");
     }
 
     // ── D4 — ScrollBar conscious anatomy + AnnotatedScrollBar template geometry ─────────────────────────────────
@@ -9363,6 +10078,8 @@ static class Slice
         ProjectionChecks(strings);
         EnterExitChecks(strings);
         SizeModeChecks(strings);
+        ReflowChecks(strings);
+        AnimRegressionChecks(strings);
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
@@ -9416,6 +10133,7 @@ static class Slice
         ClipChannelChecks();
         FocusNavChecks(strings);
         InputVocabularyChecks(strings);
+        WaveBInputChecks(strings);
         E5DragDropChecks(strings);
         FocusRingChecks(strings);
         BrushTransitionChecks(strings);

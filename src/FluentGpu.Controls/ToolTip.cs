@@ -26,11 +26,14 @@ public enum ToolTipPlacementMode : byte { Top, Mouse }
 ///   reshow: ToolTipService_Partial.cpp:1777-1779), exactly WinUI's OnOwnerGotFocus gate
 ///   (ToolTipService_Partial.cpp:1648-1664: only <c>FocusState::Keyboard</c> shows the tooltip — pointer focus does
 ///   not). Focus leaving closes it (cpp:1696-1706 OnOwnerLostFocus → OnOwnerLeaveInternal).</item>
-/// <item>Press dismiss — a pointer press over the target closes an open bubble without re-arming it (tooltips never
-///   survive an interaction with their owner).</item>
+/// <item>Press dismiss — a pointer press over the target closes an open (or pending) bubble, and it stays closed
+///   until the pointer LEAVES and re-enters (classic tooltip behavior; WinUI 3's ToolTipService itself registers no
+///   PointerPressed handler — it closes via safe-zone exit monitoring, ToolTipService_Partial.cpp:1437-1453 — but
+///   cannot re-open a dismissed owner until a real leave + re-enter either, cpp:725-737 CancelAutomaticToolTip).</item>
 /// <item>Auto-dismiss — an open bubble closes itself after <see cref="ShowDurationMs"/> (<c>SPI_GETMESSAGEDURATION</c>
 ///   default 5s).</item>
-/// <item>Click trigger — the legacy click-to-toggle path is preserved for call-site compat (re-click / Escape closes).</item>
+/// <item>No click trigger — the wrapper adds NO OnClick (ToolTipService registers none,
+///   ToolTipService_Partial.cpp:176-220), so a tooltipped element is never a tab stop by itself.</item>
 /// </list>
 /// Chrome matches <c>ToolTip_themeresources.xaml</c>: AcrylicInAppFillColorDefault fill, 1px SurfaceStrokeColorFlyout
 /// stroke, ControlCornerRadius (4px) corners, the light tooltip elevation (<see cref="Elevation.Tooltip"/>), 9,6,9,8
@@ -41,9 +44,19 @@ public enum ToolTipPlacementMode : byte { Top, Mouse }
 /// </summary>
 public sealed class ToolTip : Component
 {
+    // Template parts (see TemplateParts). The part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those). The hover/focus/press trigger wrapper around Target is NOT
+    // a part — its handlers ARE the ToolTipService mechanics.
+    /// <summary>The text bubble surface (the control-built chrome inside the raw overlay host — acrylic fill, flyout
+    /// stroke, 4px corners, tooltip elevation, 9,6,9,8 padding). Owned: Children (the <see cref="Text"/> content).</summary>
+    public const string PartBubble = "Bubble";
+
     public Element Target = new BoxEl();
     public string Text = "";
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real tooltip after first mount
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     /// <summary>WinUI <c>ToolTip.Placement</c> (Top/Mouse subset). Default <see cref="ToolTipPlacementMode.Top"/> —
     /// the WinUI default (ToolTip_Partial.cpp:1119-1122).</summary>
@@ -83,7 +96,7 @@ public sealed class ToolTip : Component
         var h = UseRef<OverlayHandle?>(null);
         var autoOpened = UseRef(false);
         var lastPointerLocal = UseRef<Point2>(default);   // last hover position (wrapper-local) → Mouse placement
-        var suppressClick = UseRef(false);                // a press-dismiss must not re-toggle on the click that follows
+        var pressDismissed = UseRef(false);               // press-dismissed: no re-open until the pointer leaves + re-enters
 
         // Timer phase: 0 = idle, 1 = show-delay counting down (open after it), 2 = bubble open (auto-dismiss counting down).
         var phase = UseSignal(0);
@@ -148,13 +161,16 @@ public sealed class ToolTip : Component
         void OnEnter(Point2 local)
         {
             lastPointerLocal.Value = local;   // tracked even while open — WinUI re-reads the current point at placement
+            if (pressDismissed.Value) return; // press-dismissed: moves while still hovering must NOT re-arm (the WinUI
+                                              // owner stays out of m_nestedOwners until a real leave + re-enter)
             if (phase.Peek() != 0 || (h.Value is { IsOpen: true })) return;
             keyboardMode.Value = false;
             phase.Value = 1;   // show-delay counting down
         }
 
-        // Pointer-leave: cancel a pending open, or close an open bubble (ToolTipService.OnOwnerLeaveInternal → Cancel).
-        void OnLeave() => CloseNow();
+        // Pointer-leave: cancel a pending open, or close an open bubble (ToolTipService.OnOwnerLeaveInternal → Cancel);
+        // a leave also lifts the press-dismiss latch (the next enter may show again).
+        void OnLeave() { pressDismissed.Value = false; CloseNow(); }
 
         // Keyboard focus entering the target subtree (the dispatcher routes focus-changed to ancestors on subtree
         // boundary crossings): WinUI OnOwnerGotFocus (ToolTipService_Partial.cpp:1635-1668) — show ONLY for
@@ -173,20 +189,16 @@ public sealed class ToolTip : Component
             phase.Value = 1;
         }
 
-        // Pointer press over the target: dismiss an open bubble (and a pending one) — and swallow the click that
-        // follows so the legacy click-to-toggle doesn't instantly re-open it.
+        // Pointer press over the target: dismiss an open bubble (and a pending one), latched until leave + re-enter.
+        // Press-dismiss is classic Win32/WPF tooltip behavior we keep deliberately — WinUI 3's ToolTipService registers
+        // no PointerPressed handler (ToolTipService_Partial.cpp:176-220; it closes via safe-zone exit, cpp:1437-1453)
+        // but equally cannot re-open a dismissed owner until a real leave + re-enter (cpp:725-737). There is no
+        // click-to-toggle — the wrapper adds NO OnClick, so it never becomes a tab stop or intercepts activation.
         void OnPressed(PointerEventArgs _)
         {
-            if (phase.Peek() == 0) return;
-            suppressClick.Value = true;
+            if (phase.Peek() == 0 && h.Value is not { IsOpen: true }) return;
+            pressDismissed.Value = true;
             CloseNow();
-        }
-
-        void Toggle()
-        {
-            if (suppressClick.Value) { suppressClick.Value = false; return; }
-            if (h.Value is { IsOpen: true } || phase.Peek() == 2) { CloseNow(); return; }
-            OpenNow();
         }
 
         UseEffect(() =>
@@ -223,7 +235,6 @@ public sealed class ToolTip : Component
             OnPointerExit = OnLeave,       // mouse-leave → cancel pending / close open
             OnPointerPressed = OnPressed,  // press over the target → dismiss (never survives an interaction)
             OnFocusChanged = OnFocus,      // keyboard focus in/out of the target subtree (a11y trigger)
-            OnClick = Toggle,              // legacy click-to-toggle (call-site compat); re-click closes
             Children = clock is null ? [Target] : [Target, clock],
         };
     }
@@ -235,27 +246,32 @@ public sealed class ToolTip : Component
     //   CornerRadius = ControlCornerRadius (4px), Padding = ToolTipBorderPadding 9,6,9,8
     //   FontSize = ToolTipContentThemeFontSize 12, Foreground = TextFillColorPrimary, MaxWidth = 320, TextWrapping = Wrap.
     //   Shadow = the light transient elevation class (Elevation.Tooltip) — tooltips sit on the lowest popup band.
-    Element BubbleContent() => new BoxEl
+    Element BubbleContent()
     {
-        Fill = ColorF.Transparent,
-        Acrylic = Tok.AcrylicFlyout,
-        BorderColor = Tok.StrokeFlyoutDefault,
-        BorderWidth = 1f,
-        Corners = Radii.ControlAll,
-        Shadow = Elevation.Tooltip,
-        MaxWidth = 320f,
-        Padding = new Edges4(9, 6, 9, 8),
-        Children =
-        [
-            new TextEl(Text)
-            {
-                Size = 12f,
-                Color = Tok.TextPrimary,
-                Wrap = TextWrap.Wrap,
-                MaxWidth = 302f,   // 320 − (9 + 9) horizontal padding
-            },
-        ],
-    };
+        var bubble = new BoxEl
+        {
+            Fill = ColorF.Transparent,
+            Acrylic = Tok.AcrylicFlyout,
+            BorderColor = Tok.StrokeFlyoutDefault,
+            BorderWidth = 1f,
+            Corners = Radii.ControlAll,
+            Shadow = Elevation.Tooltip,
+            MaxWidth = 320f,
+            Padding = new Edges4(9, 6, 9, 8),
+            Children =
+            [
+                new TextEl(Text)
+                {
+                    Size = 12f,
+                    Color = Tok.TextPrimary,
+                    Wrap = TextWrap.Wrap,
+                    MaxWidth = 302f,   // 320 − (9 + 9) horizontal padding
+                },
+            ],
+        };
+        // Parts: restyle the bubble chrome (acrylic, stroke, elevation, padding…); the Text content always wins.
+        return Parts.Apply(PartBubble, bubble) with { Children = bubble.Children };
+    }
 }
 
 /// <summary>

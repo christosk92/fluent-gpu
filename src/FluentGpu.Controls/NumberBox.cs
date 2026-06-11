@@ -44,6 +44,20 @@ public enum NumberBoxValidationMode : byte
 /// </remarks>
 public sealed class NumberBox : Component
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The field row wrapper hosting the InputBox part — the Compact popup's anchor and the
+    /// Up/Down/PageUp/PageDown stepping host. Owned: OnRealized (anchor capture, chained), OnKeyDown (step keys),
+    /// Children (the EditableText mount).</summary>
+    public const string PartField = "Field";
+    /// <summary>One spin RepeatButton — applied to BOTH the inline pair (UpSpinButton/DownSpinButton) and the Compact
+    /// popup pair (PopupUpSpinButton/PopupDownSpinButton), like WinUI's shared spin-button style. The enabled-state
+    /// fills are computed per render BEFORE the modifier. Owned: OnClick (step), Repeats (auto-repeat), Role.</summary>
+    public const string PartSpinButton = "SpinButton";
+    /// <summary>The caret glyph TextEl inside each spin button (style via <c>Parts.Set&lt;TextEl&gt;(PartSpinGlyph, …)</c>;
+    /// the state colors are computed before the modifier). Owned: none.</summary>
+    public const string PartSpinGlyph = "SpinGlyph";
+
     public Signal<double>? Value;          // caller-owned numeric value (NaN = cleared); null -> internal seeded from Initial
     public double Initial = double.NaN;
     public double Minimum = double.MinValue;
@@ -73,6 +87,9 @@ public sealed class NumberBox : Component
     public Func<string, double?>? Parser;
     public Action<double, double>? OnValueChanged;   // (oldValue, newValue) — WinUI ValueChangedEventArgs
     public Style? StyleOverride;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     /// <summary>Dims from NumberBox.xaml / NumberBox_themeresources.xaml.</summary>
     public sealed record Style
@@ -297,17 +314,26 @@ public sealed class NumberBox : Component
         Element PopupBody()
         {
             // The host FlyoutSurface already supplies acrylic + 1px stroke + OverlayCornerRadius + shadow.
-            BoxEl PopupSpinButton(string glyph, double delta) => new()
+            BoxEl PopupSpinButton(string glyph, double delta)
             {
-                Width = s.PopupSpinButtonSize, Height = s.PopupSpinButtonSize,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = Radii.ControlAll, Repeats = true, Role = AutomationRole.Button,
-                HoverFill = s.SpinHoverFill, PressedFill = s.SpinPressedFill,
-                OnClick = () => Step(delta),
-                // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
-                // (NumberBox.xaml:125–146 RepeatButton* remap).
-                Children = [new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor }],
-            };
+                Action step = () => Step(delta);
+                var b = new BoxEl
+                {
+                    Width = s.PopupSpinButtonSize, Height = s.PopupSpinButtonSize,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Corners = Radii.ControlAll, Repeats = true, Role = AutomationRole.Button,
+                    HoverFill = s.SpinHoverFill, PressedFill = s.SpinPressedFill,
+                    OnClick = step,
+                    // Popup spin glyph: FontSize 16 (NumberBox.xaml:201), TextControlButtonForeground → pressed Tertiary
+                    // (NumberBox.xaml:125–146 RepeatButton* remap).
+                    Children = [Parts.Apply(PartSpinGlyph,
+                        new TextEl(glyph) { Size = s.PopupSpinGlyphSize, FontFamily = Theme.IconFont, Color = s.SpinGlyphColor, PressedColor = s.SpinGlyphPressedColor })],
+                };
+                // Parts: restyle the button; the step mechanics (click + auto-repeat) always win.
+                if (Parts is { } sp)
+                    b = sp.Apply(PartSpinButton, b) with { OnClick = step, Repeats = true, Role = AutomationRole.Button };
+                return b;
+            }
             return new BoxEl
             {
                 // PopupUpSpinButton Margin 0,0,0,4 + PopupContentRoot Padding 6 (NumberBox.xaml:163 + :116).
@@ -331,23 +357,37 @@ public sealed class NumberBox : Component
             // (NumberBox.xaml:174–175): NumberBoxSpinButtonStyle MinWidth=32, FontSize=12, VerticalAlignment=Stretch
             // (NumberBox.xaml:185–189), UpSpinButton Margin="4", DownSpinButton Margin="0,4,4,4", CornerRadius =
             // ControlCornerRadius (4). State ramp = the RepeatButton*→TextControlButton* remap (NumberBox.xaml:65–98).
-            BoxEl SpinCell(string glyph, double delta, bool enabled, Edges4 margin) => new()
+            BoxEl SpinCell(string glyph, double delta, bool enabled, Edges4 margin)
             {
-                Width = s.SpinButtonWidth, Margin = margin,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                HoverFill = enabled ? s.SpinHoverFill : ColorF.Transparent,
-                PressedFill = enabled ? s.SpinPressedFill : ColorF.Transparent,
-                Corners = Radii.ControlAll,
-                Repeats = enabled,
-                Role = AutomationRole.Button,
-                OnClick = enabled ? (Action)(() => Step(delta)) : null,
-                Children = [new TextEl(glyph)
+                Action? step = enabled ? (Action)(() => Step(delta)) : null;
+                var b = new BoxEl
                 {
-                    Size = s.SpinGlyphSize, FontFamily = Theme.IconFont,   // FontSize 12 (NumberBox.xaml:189)
-                    Color = enabled ? s.SpinGlyphColor : s.SpinGlyphDisabledColor,
-                    PressedColor = enabled ? s.SpinGlyphPressedColor : s.SpinGlyphDisabledColor,
-                }],
-            };
+                    Width = s.SpinButtonWidth, Margin = margin,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    HoverFill = enabled ? s.SpinHoverFill : ColorF.Transparent,
+                    PressedFill = enabled ? s.SpinPressedFill : ColorF.Transparent,
+                    Corners = Radii.ControlAll,
+                    Repeats = enabled,
+                    Role = AutomationRole.Button,
+                    // The inline spin pair mounts INSIDE the EditableText root (its I-beam would inherit down):
+                    // explicit Arrow masks it — WinUI's spin RepeatButtons are siblings of the TextBox part
+                    // (NumberBox.xaml:174-175) so they get the arrow naturally; ours needs the forced mask, same
+                    // as the TextBox delete button (TextBox_Partial.cpp:884).
+                    Cursor = CursorId.Arrow,
+                    OnClick = step,
+                    Children = [Parts.Apply(PartSpinGlyph, new TextEl(glyph)
+                    {
+                        Size = s.SpinGlyphSize, FontFamily = Theme.IconFont,   // FontSize 12 (NumberBox.xaml:189)
+                        Color = enabled ? s.SpinGlyphColor : s.SpinGlyphDisabledColor,
+                        PressedColor = enabled ? s.SpinGlyphPressedColor : s.SpinGlyphDisabledColor,
+                    })],
+                };
+                // Parts: restyle the button (the enabled-state fills above are pre-modifier); step mechanics + the
+                // I-beam-masking Arrow always win.
+                if (Parts is { } sp)
+                    b = sp.Apply(PartSpinButton, b) with { OnClick = step, Repeats = enabled, Role = AutomationRole.Button, Cursor = CursorId.Arrow };
+                return b;
+            }
             affix = new BoxEl
             {
                 Direction = 0, AlignSelf = FlexAlign.Stretch, AlignItems = FlexAlign.Stretch,
@@ -422,13 +462,27 @@ public sealed class NumberBox : Component
 
         // The field wrapper: the Compact popup's anchor node + the keyboard stepping handler (Up/Down/PageUp/PageDown
         // bubble out of the single-line EditableText to here).
-        Element fieldRow = new BoxEl
+        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        Element[] fieldKids = [field];
+        var fieldBox = new BoxEl
         {
             Direction = 0, Width = Width,
-            OnRealized = h => anchor.Value = h,
+            OnRealized = anchorCapture,
             OnKeyDown = IsEnabled ? HandleStepKeys : null,
-            Children = [field],
+            Children = fieldKids,
         };
+        // Parts: restyle the wrapper; the anchor capture, stepping keys and EditableText mount always win.
+        Element fieldRow = fieldBox;
+        if (Parts is { } fp)
+        {
+            var m = fp.Apply(PartField, fieldBox);
+            fieldRow = m with
+            {
+                OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
+                OnKeyDown = IsEnabled ? (Action<KeyEventArgs>)HandleStepKeys : null,
+                Children = fieldKids,
+            };
+        }
 
         // ── Header / Description wrapper (NumberBox.xaml:113 + :176) ─────────────────────────────────────────────
         if (Header is null && Description is null) return fieldRow;

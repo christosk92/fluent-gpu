@@ -18,7 +18,9 @@ re-record cheap world transforms — no relayout, no re-diff. That's the "compos
    (re-realize virtual windows that crossed a scroll boundary)
 6  layout          full Run only on first-frame/resize/DPI/root change; else SCOPED relayout of dirty subtrees
 6.5 layout effects UseLayoutEffect (Bounds valid) — seeds animations on nodes
-7  animation       AnimEngine.Tick: write transform/opacity/presented-size; FLIP projections; smooth scroll
+7  animation       AnimEngine.Tick: write transform/opacity/presented-size; FLIP projections (PARENT-RELATIVE: an
+                   ancestor reflow moves Animate-nodes rigidly, only LOCAL moves project); SizeMode.Reflow writes the
+                   interpolated LAYOUT size + re-solves its boundary scope, so siblings reflow smoothly; smooth scroll
 8  record          SceneRecorder walks scene → DrawList (clips, world transforms, glyphs, images)
 10 submit          DrawList → GPU command list
 11 present         swapchain commit

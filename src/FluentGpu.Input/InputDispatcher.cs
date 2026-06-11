@@ -28,7 +28,9 @@ public sealed class InputDispatcher
     private NodeHandle _scrollDragNode;
     private float _scrollDragGrab;
     private NodeHandle _contextDown;   // right-button press target — context menu fires on release over the same chain
-    private NodeHandle _spaceArmed;    // focused clickable held via Space — activates on key-UP (WinUI semantics)
+    private NodeHandle _middleDown;    // middle-button press target — delivered on release over the same node (TabView close)
+    private NodeHandle _keyArmed;      // focused clickable held via Space/Enter — pressed while held, activates on key-UP
+    private int _keyArmedKey;          // which key armed it (Space or Enter) — any OTHER key-down cancels without firing
     private bool _accessKeyMode;       // Alt tapped → the next letter invokes a matching AccessKey mnemonic
     private bool _altPending;          // Alt is down with no intervening key (candidate for access-key-mode toggle)
     private readonly List<NodeHandle> _focusScopes = new();
@@ -97,6 +99,11 @@ public sealed class InputDispatcher
     /// <summary>Set by the host: a RepeatButton was pressed (held) / released — drives the RepeatTicker auto-repeat.</summary>
     public Action<NodeHandle>? OnRepeatArmed;
     public Action<NodeHandle>? OnRepeatReleased;
+    /// <summary>Set by the host: the held pointer left / re-entered the armed repeat node — the ticker pauses off-node
+    /// and resumes with a FRESH initial delay on re-entry, never an immediate re-fire (RepeatButton_Partial.cpp:530-574).
+    /// Both are idempotent per move.</summary>
+    public Action<NodeHandle>? OnRepeatPaused;
+    public Action<NodeHandle>? OnRepeatResumed;
 
     /// <summary>Set by the host: a global key preview run before focus routing (returns true = consumed). Lets a tree-level
     /// concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.</summary>
@@ -136,6 +143,7 @@ public sealed class InputDispatcher
         if (!_focused.IsNull && !_scene.IsLive(_focused)) _focused = NodeHandle.Null;
         if (!_hovered.IsNull && !_scene.IsLive(_hovered)) _hovered = NodeHandle.Null;
         if (!_pressed.IsNull && !_scene.IsLive(_pressed)) _pressed = NodeHandle.Null;
+        if (!_keyArmed.IsNull && !_scene.IsLive(_keyArmed)) { _keyArmed = NodeHandle.Null; _keyArmedKey = 0; }
         if (!_dragTarget.IsNull && !_scene.IsLive(_dragTarget)) _dragTarget = NodeHandle.Null;
         if (!_scrollHovered.IsNull && !_scene.IsLive(_scrollHovered)) _scrollHovered = NodeHandle.Null;
         if (!_scrollDragNode.IsNull && !_scene.IsLive(_scrollDragNode)) _scrollDragNode = NodeHandle.Null;
@@ -176,6 +184,24 @@ public sealed class InputDispatcher
                         break;
                     }
                     SetState(ref _hovered, HitTest(e.PositionPx), NodeFlags.Hovered);
+                    // While a press is held WITHOUT a capture-drag (no OnDrag target / scrollbar drag), the pressed
+                    // visual tracks whether the pointer is still over the pressed node — drag-off un-presses,
+                    // drag-back re-presses (ButtonBase_Partial.cpp:629-638 IsPressed = IsValidPointerPosition). A
+                    // continuous OnDrag gesture (slider scrub) keeps its pressed state — WinUI's captured thumb does.
+                    if (!_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && _scene.IsLive(_down))
+                    {
+                        var dr = _scene.AbsoluteRect(_down);
+                        bool overDown = e.PositionPx.X >= dr.X && e.PositionPx.X < dr.X + dr.W
+                                     && e.PositionPx.Y >= dr.Y && e.PositionPx.Y < dr.Y + dr.H;
+                        SetState(ref _pressed, overDown ? _down : NodeHandle.Null, NodeFlags.Pressed);
+                        // Auto-repeat pauses off-node and resumes with a FRESH delay on re-entry — no immediate
+                        // re-fire (RepeatButton_Partial.cpp:530-548, :565-574). Idempotent per move.
+                        if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0)
+                        {
+                            if (overDown) OnRepeatResumed?.Invoke(_down);
+                            else OnRepeatPaused?.Invoke(_down);
+                        }
+                    }
                     UpdateScrollHover(e.PositionPx);
                     if (DragScrollbar(e.PositionPx))
                     {
@@ -200,7 +226,12 @@ public sealed class InputDispatcher
                         _contextDown = HitTestAny(e.PositionPx);
                         break;
                     }
-                    if (e.Button != 0) break;   // middle button: no default interaction
+                    if (e.Button == 2)   // middle button: tracked for release-over-same delivery (TabView middle-click
+                    {                    // close commits on RELEASE over the tab, TabViewItem.cpp:418-462) — no press
+                        _middleDown = HitTestAny(e.PositionPx);   // visual, no focus move, no click
+                        break;
+                    }
+                    if (e.Button != 0) break;
 
                     if (TryScrollbarPointerDown(e.PositionPx))
                     {
@@ -215,6 +246,16 @@ public sealed class InputDispatcher
                     SetState(ref _pressed, _down, NodeFlags.Pressed);
                     if (!_down.IsNull)
                     {
+                        // Pointer focus moves on the PRESS edge (WinUI Focus(FocusState_Pointer) + CapturePointer in
+                        // OnPointerPressed, ButtonBase_Partial.cpp:700-709), never on release. Nearest focusable
+                        // self-or-ancestor, without the focus ring; an AllowFocusOnInteraction=False node blocks the
+                        // move entirely (focus stays put — AppBarButton_themeresources.xaml:136). IsTabStop=False
+                        // parts (PasswordBox reveal / TextBox delete) still fall through to the field root.
+                        var focusTarget = NearestFocusable(_down);
+                        if (!focusTarget.IsNull &&
+                            (_scene.Interaction(focusTarget).HandlerMask & InteractionInfo.NoPointerFocusBit) == 0)
+                            SetFocus(focusTarget, visual: false);
+
                         var local = LocalPos(_down, e.PositionPx);
                         _scene.GetPointerDown(_down)?.Invoke(local);                 // press-to-set
                         if ((_scene.Interaction(_down).HandlerMask & InteractionInfo.PressedBit) != 0)
@@ -239,6 +280,13 @@ public sealed class InputDispatcher
                         var ctxHit = HitTestAny(e.PositionPx);
                         if (!ctxHit.IsNull && ctxHit == _contextDown && DispatchContextRequest(ctxHit, e.PositionPx)) handled++;
                         _contextDown = NodeHandle.Null;
+                        break;
+                    }
+                    if (e.Button == 2)   // middle release over the same node → typed pointer args with Button=2 on the
+                    {                    // nearest OnPointerPressed in the chain (WinUI TabViewItem middle-click close
+                        var midHit = HitTestAny(e.PositionPx);   // commits on PointerReleased, TabViewItem.cpp:418-462)
+                        if (!midHit.IsNull && midHit == _middleDown && DispatchMiddleRelease(midHit, in e)) handled++;
+                        _middleDown = NodeHandle.Null;
                         break;
                     }
                     if (e.Button != 0) break;
@@ -273,14 +321,8 @@ public sealed class InputDispatcher
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     if (!up.IsNull && up == _down)
                     {
-                        // Pointer activation focuses the nearest FOCUSABLE self-or-ancestor (not the raw hit node) and
-                        // does NOT show the focus ring. A non-focusable template part (the PasswordBox RevealButton /
-                        // TextBox DeleteButton — IsTabStop=False, PasswordBox_themeresources.xaml:193 /
-                        // TextBox_themeresources.xaml:339 — or the light-dismiss layer) therefore never steals focus
-                        // from the control root above it; no focusable in the chain → focus stays UNCHANGED (WinUI:
-                        // clicking non-focusable space does not move focus).
-                        var focusTarget = NearestFocusable(up);
-                        if (!focusTarget.IsNull) SetFocus(focusTarget, visual: false);
+                        // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
+                        // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
                         if (!wasRepeat) _scene.GetClickHandler(up)?.Invoke();   // repeat nodes already fired via the ticker
                         handled++;
                     }
@@ -293,12 +335,13 @@ public sealed class InputDispatcher
                         // its release/commit edge (RatingControl.cpp:875-906 capture → commit-on-release incl. the
                         // drag-off-left clear; Slider_Partial.cpp:478-543/580-623 CapturePointer → PerformPointerUpAction).
                         // PointerCancel still skips this (capture loss is not a commit), matching WinUI's cancel path.
-                        // Same pointer-focus resolution as the click path above: the nearest focusable self-or-ancestor.
-                        var dragFocus = NearestFocusable(_dragTarget);
-                        if (!dragFocus.IsNull) SetFocus(dragFocus, visual: false);
+                        // (Focus moved on the press edge, like every pointer gesture.)
                         _scene.GetClickHandler(_dragTarget)?.Invoke();
                         handled++;
                     }
+                    // Touch has no resting hover: lifting the finger clears the hover state a contact-move set
+                    // (mouse/pen keep hovering the node under the cursor).
+                    if (e.Pointer == PointerKind.Touch) SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
                     _down = NodeHandle.Null;
                     _dragTarget = NodeHandle.Null;
                     break;
@@ -316,6 +359,9 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.Wheel:
+                    // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
+                    // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
+                    if (DispatchWheel(in e)) { handled++; break; }
                     if (ScrollAt(e.PositionPx, e.ScrollDelta)) handled++;
                     break;
 
@@ -325,7 +371,7 @@ public sealed class InputDispatcher
 
                 case InputKind.WindowBlur:
                     CancelPointer();
-                    CancelSpaceArm(fire: false);
+                    CancelKeyArm(fire: false);
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
                     _accessKeyMode = false; _altPending = false;
                     OnWindowBlur?.Invoke();
@@ -343,10 +389,14 @@ public sealed class InputDispatcher
         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
         if (!_down.IsNull && (_scene.IsLive(_down) && (_scene.Interaction(_down).HandlerMask & InteractionInfo.RepeatBit) != 0))
             OnRepeatReleased?.Invoke(_down);
+        // The captured OnDrag gesture owner learns its gesture died (WinUI PointerCaptureLost): controls reset the
+        // scrub/hover preview in OnPointerExit — a RatingControl alt-tabbed mid-sweep must not keep its downRef.
+        if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget)) _scene.GetPointerExit(_dragTarget)?.Invoke();
         _down = NodeHandle.Null;
         _dragTarget = NodeHandle.Null;
         _scrollDragNode = NodeHandle.Null;
         _contextDown = NodeHandle.Null;
+        _middleDown = NodeHandle.Null;
     }
 
     /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
@@ -371,6 +421,40 @@ public sealed class InputDispatcher
             if ((_scene.Interaction(n).HandlerMask & InteractionInfo.ContextBit) == 0) continue;
             _scene.GetContextRequested(n)?.Invoke(LocalPos(n, abs));
             return true;
+        }
+        return false;
+    }
+
+    /// <summary>Middle-button release over the press target: typed pointer args (Button=2) on the nearest enabled
+    /// <c>OnPointerPressed</c> in the chain — the WinUI commit-on-release middle-click (TabViewItem.cpp:418-462).</summary>
+    private bool DispatchMiddleRelease(NodeHandle node, in InputEvent e)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.PressedBit) == 0) continue;
+            _scene.GetPointerPressed(n)?.Invoke(new PointerEventArgs
+            {
+                Local = LocalPos(n, e.PositionPx), ClickCount = 1, Mods = e.Mods, Button = 2, Kind = e.Pointer,
+            });
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Element-level wheel routing (WinUI PointerWheelChanged bubbling): every enabled WheelBit handler up the
+    /// chain sees the event until one sets Handled — which also stops the enclosing viewport from scrolling.</summary>
+    private bool DispatchWheel(in InputEvent e)
+    {
+        WheelEventArgs? args = null;
+        for (var n = HitTestAny(e.PositionPx); !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) == 0) continue;
+            args ??= new WheelEventArgs { Delta = e.ScrollDelta, Mods = e.Mods };
+            args.Local = LocalPos(n, e.PositionPx);
+            _scene.GetPointerWheel(n)?.Invoke(args);
+            if (args.Handled) return true;
         }
         return false;
     }
@@ -638,7 +722,10 @@ public sealed class InputDispatcher
         else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
     }
 
-    /// <summary>Resolve the cursor for the hover chain (nearest explicit <c>Cursor</c> / clickable hand) and notify on change.</summary>
+    /// <summary>Resolve the cursor for the hover chain — the nearest enabled node with an EXPLICIT <c>Cursor</c>
+    /// (CursorBit) wins and stops the walk, so a child's Arrow masks an ancestor I-beam/hand (WinUI's forced
+    /// SetCursor(MouseCursorArrow) on TextBox's delete button, TextBox_Partial.cpp:884). No explicit cursor anywhere
+    /// in the chain ⇒ system arrow — clickability does NOT imply the hand (WinUI: only HyperlinkButton shows it).</summary>
     private void UpdateCursor(NodeHandle hover)
     {
         CursorId resolved = CursorId.Arrow;
@@ -646,7 +733,7 @@ public sealed class InputDispatcher
         {
             if (!_scene.IsLive(n)) break;
             ref InteractionInfo ii = ref _scene.Interaction(n);
-            if (ii.Cursor != CursorId.Arrow && (_scene.Flags(n) & NodeFlags.Disabled) == 0) { resolved = ii.Cursor; break; }
+            if ((ii.HandlerMask & InteractionInfo.CursorBit) != 0 && (_scene.Flags(n) & NodeFlags.Disabled) == 0) { resolved = ii.Cursor; break; }
         }
         if (resolved == _lastCursor) return;
         _lastCursor = resolved;
@@ -697,15 +784,18 @@ public sealed class InputDispatcher
 
         if (OnKeyPreview is not null && OnKeyPreview(key)) return;   // an open overlay can swallow Escape here
 
+        // ANY other key while a Space/Enter press is held cancels it without firing, and the new key then routes
+        // normally (ButtonBaseKeyProcess.h:64-70). Escape is handled below as the explicit, CONSUMED cancel.
+        if (!_keyArmed.IsNull && key != _keyArmedKey && key != Keys.Escape) CancelKeyArm(fire: false);
+
         if (key == Keys.Tab)
         {
-            CancelSpaceArm(fire: false);
             MoveFocus(forward: (e.Mods & KeyModifiers.Shift) == 0);
             return;
         }
 
-        // Escape cancels a held Space-activation without firing (WinUI button semantics).
-        if (key == Keys.Escape && !_spaceArmed.IsNull) { CancelSpaceArm(fire: false); return; }
+        // Escape cancels a held Space/Enter-activation without firing (WinUI button semantics).
+        if (key == Keys.Escape && !_keyArmed.IsNull) { CancelKeyArm(fire: false); return; }
 
         // Context-menu key (VK_APPS) / Shift+F10 → context request on the focused node (keyboard passes its centre).
         if ((key == Keys.Apps || (key == Keys.F10 && (e.Mods & KeyModifiers.Shift) != 0)) && !_focused.IsNull)
@@ -719,25 +809,25 @@ public sealed class InputDispatcher
             bool clickable = (_scene.Flags(_focused) & NodeFlags.Disabled) == 0 &&
                              (_scene.Interaction(_focused).HandlerMask & InteractionInfo.ClickBit) != 0;
 
-            // Modality 2 (WinUI semantics): Enter activates on key-DOWN; Space shows pressed while held and activates on
-            // key-UP (a RepeatButton instead fires on every Space repeat, mirroring its pointer press-and-hold).
-            if (key == Keys.Enter && clickable)
+            // Modality 2 — keyboard activation with WinUI ButtonBase semantics (ButtonBaseKeyProcess.h): the FIRST
+            // Space/Enter key-down arms the press (pressed visual); held-key auto-repeats are ignored, so a held key
+            // yields exactly ONE activation; the click fires on key-UP (ClickMode.Release reentrancy rule,
+            // ButtonBase_Partial.cpp:475-483). A RepeatButton is ClickMode.Press (RepeatButton_Partial.cpp:29): its
+            // click fires on the DOWN edge — Space additionally arms the engine repeat timer (never the OS key-repeat
+            // rate), Enter never repeats (RepeatButton_Partial.cpp:212-217). Space-only controls (CheckBox/
+            // RadioButton/ToggleSwitch — NoEnterActivateBit) let Enter fall through to normal key routing.
+            if ((key == Keys.Space || key == Keys.Enter) && clickable &&
+                (key == Keys.Space || (_scene.Interaction(_focused).HandlerMask & InteractionInfo.NoEnterActivateBit) == 0))
             {
-                _scene.GetClickHandler(_focused)?.Invoke();
-                return;
-            }
-            if (key == Keys.Space && clickable)
-            {
+                if (e.IsRepeat || !_keyArmed.IsNull) return;   // held key / second activation key: one press only
+                _keyArmed = _focused;
+                _keyArmedKey = key;
+                _scene.Flags(_focused) |= NodeFlags.Pressed;
+                OnPressChanged?.Invoke(_focused, true);
                 if ((_scene.Interaction(_focused).HandlerMask & InteractionInfo.RepeatBit) != 0)
                 {
-                    _scene.GetClickHandler(_focused)?.Invoke();   // RepeatButton: every keydown (incl. auto-repeat) fires
-                    return;
-                }
-                if (!e.IsRepeat && _spaceArmed.IsNull)
-                {
-                    _spaceArmed = _focused;
-                    _scene.Flags(_focused) |= NodeFlags.Pressed;
-                    OnPressChanged?.Invoke(_focused, true);
+                    if (key == Keys.Space) OnRepeatArmed?.Invoke(_focused);   // fires once now + repeats while held
+                    else _scene.GetClickHandler(_focused)?.Invoke();          // Enter: exactly one click, down edge
                 }
                 return;
             }
@@ -761,22 +851,38 @@ public sealed class InputDispatcher
 
     private void OnKeyUp(in InputEvent e)
     {
-        if (e.KeyCode == Keys.Alt)
+        int key = e.KeyCode;
+        // The gamepad A/B translation must mirror OnKey's, or a GamepadA-armed press would never release.
+        if (key == Keys.GamepadA) key = Keys.Enter;
+        else if (key == Keys.GamepadB) key = Keys.Escape;
+
+        if (key == Keys.Alt)
         {
             if (_altPending) _accessKeyMode = !_accessKeyMode;   // bare Alt tap toggles access-key mode
             _altPending = false;
             return;
         }
-        if (e.KeyCode == Keys.Space && !_spaceArmed.IsNull)
-            CancelSpaceArm(fire: true);   // Space released over the armed node → activate (WinUI key-up semantics)
+        if ((key == Keys.Space || key == Keys.Enter) && !_keyArmed.IsNull && key == _keyArmedKey)
+        {
+            // Released over the armed node → activate (ClickMode.Release). Repeat nodes already fired on the down
+            // edge (Enter) or through the ticker (Space) — their release only clears the press, never re-fires.
+            bool repeats = _scene.IsLive(_keyArmed) &&
+                           (_scene.Interaction(_keyArmed).HandlerMask & InteractionInfo.RepeatBit) != 0;
+            CancelKeyArm(fire: !repeats);
+        }
     }
 
-    /// <summary>Release a held Space-activation: clear the pressed visual; <paramref name="fire"/> = invoke the click.</summary>
-    private void CancelSpaceArm(bool fire)
+    /// <summary>Release a held Space/Enter-activation: clear the pressed visual, stop a keyboard-armed repeat ticker;
+    /// <paramref name="fire"/> = invoke the click (key-up over the armed node).</summary>
+    private void CancelKeyArm(bool fire)
     {
-        var node = _spaceArmed;
-        _spaceArmed = NodeHandle.Null;
+        var node = _keyArmed;
+        int key = _keyArmedKey;
+        _keyArmed = NodeHandle.Null;
+        _keyArmedKey = 0;
         if (node.IsNull || !_scene.IsLive(node)) return;
+        if (key == Keys.Space && (_scene.Interaction(node).HandlerMask & InteractionInfo.RepeatBit) != 0)
+            OnRepeatReleased?.Invoke(node);
         _scene.Flags(node) &= ~NodeFlags.Pressed;
         OnPressChanged?.Invoke(node, false);
         if (fire && node == _focused && (_scene.Flags(node) & NodeFlags.Disabled) == 0)
@@ -915,7 +1021,7 @@ public sealed class InputDispatcher
     public void SetFocus(NodeHandle node, bool visual = false)
     {
         if (!node.IsNull && (_scene.Flags(node) & NodeFlags.Disabled) != 0) return;   // can't focus a disabled node — keep current focus
-        if (!_spaceArmed.IsNull && node != _spaceArmed) CancelSpaceArm(fire: false);  // focus moved while Space held → no activation
+        if (!_keyArmed.IsNull && node != _keyArmed) CancelKeyArm(fire: false);  // focus moved while Space/Enter held → no activation
         var prev = _focused;
         bool repaint = false;
         if (!_focused.IsNull && _scene.IsLive(_focused))
@@ -1057,8 +1163,11 @@ public sealed class InputDispatcher
         if (result.IsNull)
         {
             ref InteractionInfo ii = ref _scene.Interaction(node);
+            // CursorBit makes a node hover-resolvable in its own right (WinUI: SetCursor applies on direct hover of
+            // any hit-testable element — XAML hit-testing is background-gated, not handler-gated), so an editing
+            // surface's own padding/gaps still show its I-beam. Harmless for clicks: no handler ⇒ nothing fires.
             if ((flags & NodeFlags.Disabled) == 0 &&   // disabled nodes don't hit-test (gates click/pointer/drag/repeat)
-                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit)) != 0 &&
+                (ii.HandlerMask & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit | InteractionInfo.DragBit | InteractionInfo.CursorBit)) != 0 &&
                 rect.Contains(p))
             {
                 result = node;

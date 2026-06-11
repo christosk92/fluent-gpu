@@ -86,6 +86,10 @@ sealed class ContentDialogPage : Component
 
 sealed class TextOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Text",
-        "Text input and display controls: NumberBox (TextBox, AutoSuggestBox, PasswordBox are in progress).");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Text", "Text input and display controls.",
+            GalleryPage.CategoryGrid("Text", navigate));
+    }
 }

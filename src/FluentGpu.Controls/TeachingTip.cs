@@ -55,6 +55,24 @@ public sealed class TeachingTip : Component
     /// <summary>Which tip edge carries the tail (derived from the placement: the edge that faces the target).</summary>
     internal enum TailSide : byte { None, Top, Bottom, Left, Right }
 
+    // ── Template parts (see TemplateParts) — each const's doc lists the props the control OWNS (re-asserted
+    // after any modifier — a Parts customization cannot win those). ──────────────────────────────────────────
+    /// <summary>The solid callout card (WinUI ContentRootGrid): fill, border, corners, shadow, min/max sizes…
+    /// The tail/beak and the 1px top highlight are composed AGAINST the card OUTSIDE this part (tail mechanics
+    /// stay control-owned — restyling the card fill does not recolor the beak). Owned: Children (the
+    /// hero · content · footer structure).</summary>
+    public const string PartBubble = "Bubble";
+    /// <summary>The title text — a TextEl part: customize via
+    /// <c>Parts.Set&lt;TextEl&gt;(TeachingTip.PartTitle, t =&gt; t with { … })</c>. Owned: none (pure styling).</summary>
+    public const string PartTitle = "Title";
+    /// <summary>Whichever close button is in use: the 40×40 header (alternate) close button when
+    /// <see cref="CloseButtonContent"/> is empty, else the labelled footer close (WinUI AlternateCloseButton /
+    /// CloseButton). Owned: OnClick (the Closing→Closed pipeline), Role.</summary>
+    public const string PartCloseButton = "CloseButton";
+    /// <summary>The full-bleed hero banner wrapper (WinUI HeroContentPresenter host). Owned: Children (the
+    /// <see cref="HeroContent"/>/<see cref="HeroImage"/> slot).</summary>
+    public const string PartHero = "Hero";
+
     // ── Content model (TeachingTip.idl) ─────────────────────────────────────────────────────────────────────
     public string TriggerLabel = "Show tip";
     public string Title = "";
@@ -105,6 +123,10 @@ public sealed class TeachingTip : Component
     /// aborts the close (the synchronous slice of the deferral pipeline).</summary>
     public Action<ClosingEventArgs>? Closing;
     public Action<CloseReason>? Closed;
+
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     /// <summary>WinUI <c>TeachingTipClosingEventArgs</c> (synchronous Cancel slice; async Deferral is deep-deferred).</summary>
     public sealed class ClosingEventArgs
@@ -328,7 +350,7 @@ public sealed class TeachingTip : Component
         // ── Title / subtitle stack (TitlesStackPanel) ──────────────────────────────────────────────────────────
         var titleStack = new List<Element>(2);
         if (hasTitle)
-            titleStack.Add(new TextEl(Title) { Size = TitleSize, Bold = true, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords });
+            titleStack.Add(Parts.Apply(PartTitle, new TextEl(Title) { Size = TitleSize, Bold = true, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords }));
         if (hasSubtitle)
             titleStack.Add(new TextEl(Subtitle) { Size = SubtitleSize, Color = Tok.TextPrimary, Wrap = TextWrap.WrapWholeWords });
 
@@ -388,6 +410,9 @@ public sealed class TeachingTip : Component
         {
             void OnHeaderClose() { CloseButtonClick?.Invoke(); requestClose(CloseReason.CloseButton); }
             var headerCloseStyle = IconButton.DefaultStyle with { Size = AltCloseSize, GlyphSize = AltCloseGlyph, CornerRadius = Radii.Control };
+            // Restyle via [PartCloseButton]; the close pipeline (OnClick) always wins.
+            var headerClose = Parts.Apply(PartCloseButton, IconButton.Create(Icons.Cancel, OnHeaderClose, headerCloseStyle))
+                with { OnClick = OnHeaderClose, Role = AutomationRole.Button };
             // ZStack: content under a top-right-pinned 40×40 close button (NonHeroContentRootGrid layering).
             nonHero = new BoxEl
             {
@@ -399,7 +424,7 @@ public sealed class TeachingTip : Component
                     new BoxEl
                     {
                         Grow = 1f, Direction = 0, AlignItems = FlexAlign.Start, Justify = FlexJustify.End,
-                        Children = [IconButton.Create(Icons.Cancel, OnHeaderClose, headerCloseStyle)],
+                        Children = [headerClose],
                     },
                 ],
             };
@@ -416,7 +441,7 @@ public sealed class TeachingTip : Component
         if (hasHero)
         {
             Element heroInner = HeroContent ?? Ui.Image(HeroImage, MaxW, 100f, 0f);
-            hero = new BoxEl
+            var heroBox = new BoxEl
             {
                 Width = MaxW,
                 Height = HeroContent is null ? 100f : float.NaN,
@@ -424,6 +449,7 @@ public sealed class TeachingTip : Component
                 Corners = heroTop ? Radii.OverlayTop : Radii.OverlayBottom,
                 Children = [heroInner],
             };
+            hero = Parts.Apply(PartHero, heroBox) with { Children = heroBox.Children };   // structure = the hero slot
         }
 
         // The 1px top highlight (TeachingTipTopHighlightBrush): hugs the inside of the top edge, inset past the
@@ -450,6 +476,8 @@ public sealed class TeachingTip : Component
             ClipToBounds = true,
             Children = bodyChildren.ToArray(),
         };
+        // Restyle the card via [PartBubble]; the beak/top-highlight composition (tail mechanics) stays control-owned.
+        card = Parts.Apply(PartBubble, card) with { Children = card.Children };
 
         // Card + top highlight overlay (the highlight rides INSIDE the border, full width minus the corner inset).
         var cardWithHighlight = new BoxEl
@@ -660,13 +688,16 @@ public sealed class TeachingTip : Component
         // ActionButtonStyle default = DefaultButtonStyle (TeachingTip.xaml:10) — STANDARD chrome unless the app
         // opts into the accent style (ActionButtonIsAccent, the gallery-sample override).
         BoxEl ActionBtn() => ActionButtonIsAccent ? Button.Accent(actionLabel, OnAction) : Button.Standard(actionLabel, OnAction);
+        // Footer close: restyle via [PartCloseButton]; the close pipeline (OnClick) always wins.
+        BoxEl FooterCloseBtn() => Parts.Apply(PartCloseButton, Button.Standard(closeLabel, OnFooterClose) with { Grow = 1f, Justify = FlexJustify.Center })
+            with { OnClick = OnFooterClose, Role = AutomationRole.Button };
 
         var buttons = new List<Element>(2);
         if (hasAction && closeInFooter)
         {
             // BothButtonsVisible: Action on the left, Close (standard) on the right; equal-width split.
             buttons.Add(ActionBtn() with { Grow = 1f, Justify = FlexJustify.Center, Margin = new Edges4(0, 0, BothButtonsGap, 0) });
-            buttons.Add(Button.Standard(closeLabel, OnFooterClose) with { Grow = 1f, Justify = FlexJustify.Center });
+            buttons.Add(FooterCloseBtn());
         }
         else if (hasAction)
         {
@@ -676,7 +707,7 @@ public sealed class TeachingTip : Component
         else
         {
             // CloseButtonVisible: full-width standard close (ColumnSpan 2).
-            buttons.Add(Button.Standard(closeLabel, OnFooterClose) with { Grow = 1f, Justify = FlexJustify.Center });
+            buttons.Add(FooterCloseBtn());
         }
 
         return new BoxEl

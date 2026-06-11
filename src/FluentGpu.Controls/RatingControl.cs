@@ -133,6 +133,23 @@ public sealed class RatingControl : Component
     /// <summary>The WinUI <c>c_noValueSetSentinel</c>: <see cref="Value"/> &lt;= this means "unset".</summary>
     public const float NoValueSet = -1f;
 
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The returned control root (star strip + caption). Owned: OnKeyDown (the arrow/Home/End rating keys),
+    /// Role, Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The interactive star strip (WinUI RatingBackgroundStackPanel). Owned: OnHoverMove, OnPointerDown,
+    /// OnPointerPressed, OnDrag, OnClick, OnPointerExit (the hover/sweep/commit lifecycle), Children. NOTE: the sweep
+    /// math maps pointer X over the STOCK width (<see cref="StarSize"/>/<see cref="ItemSpacing"/>) — resizing this
+    /// part skews the star-under-pointer mapping.</summary>
+    public const string PartStarRow = "StarRow";
+    /// <summary>Each star cell (applied to EVERY star — full, empty and partial alike). Owned: TransformBind +
+    /// TransformOriginX/Y (the focal hover-scale expression about the cell centre).</summary>
+    public const string PartStarCell = "StarCell";
+    /// <summary>The trailing caption (WinUI Caption TextBlock) — a <see cref="TextEl"/> part
+    /// (<c>Parts.Set&lt;TextEl&gt;(…)</c>). No owned props.</summary>
+    public const string PartCaption = "Caption";
+
     public FloatSignal Value = new(NoValueSet);   // caller-owned; -1 == unset (a page can read it)
     public int MaxRating = 5;                     // RatingControl MaxRating default = 5
     public float PlaceholderValue = NoValueSet;   // shown (Placeholder state) until a real Value is set; -1 == none
@@ -142,6 +159,9 @@ public sealed class RatingControl : Component
     public bool ReadOnly;                         // IsReadOnly: fixed rating, no interaction
     public bool IsEnabled = true;                 // disabled gate + disabled foreground brush
     public Action<float>? OnChange;               // ValueChanged
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     // ── WinUI sizing (RatingControl.h / _themeresources) ──
     // ActualRatingFontSize == RenderingRatingFontSize / 2 == 32/2 == 16 (the on-screen glyph size).
@@ -306,16 +326,22 @@ public sealed class RatingControl : Component
             // Per-star hover scale about the cell centre, driven compositor-only by the live `focal` pointer X and the
             // device pointerScalar (mouse 0.8 / touch 1.0). Scaling the WHOLE cell (a single glyph, or the
             // self-contained outline+clipped-fill) keeps every layer aligned → no halo.
-            stars[i] = cell with
+            Func<Affine2D> scaleBind = () =>
+            {
+                float s = RatingControlTemplateSettings.StarScale(starCenter, focal.Value, pointerScalar.Value);
+                return Affine2D.Scale(s, s);
+            };
+            var star = cell with
             {
                 Margin = leadGap,
                 TransformOriginX = 0.5f, TransformOriginY = 0.5f,
-                TransformBind = () =>
-                {
-                    float s = RatingControlTemplateSettings.StarScale(starCenter, focal.Value, pointerScalar.Value);
-                    return Affine2D.Scale(s, s);
-                },
+                TransformBind = scaleBind,
             };
+            // Parts: restyle every cell (margins, fills…); the focal hover-scale bind always wins.
+            if (Parts is { } sp)
+                star = sp.Apply(PartStarCell, star) with
+                { TransformOriginX = 0.5f, TransformOriginY = 0.5f, TransformBind = scaleBind };
+            stars[i] = star;
         }
 
         // Whole-panel interaction (RatingControl.cpp): OnHoverMove = bare mouse-over fill (:807-822); OnPointerDown
@@ -336,6 +362,18 @@ public sealed class RatingControl : Component
             OnPointerExit = interactive ? ClearPreview : null,
             Children = stars,
         };
+        // Parts: restyle the strip; the hover/sweep/commit lifecycle (and its interactive gating) always wins.
+        if (Parts is { } rp)
+            starRow = rp.Apply(PartStarRow, starRow) with
+            {
+                OnHoverMove = interactive ? Sweep : null,
+                OnPointerDown = interactive ? Sweep : null,
+                OnPointerPressed = interactive ? PressInfo : null,
+                OnDrag = interactive ? Sweep : null,
+                OnClick = interactive ? Commit : null,
+                OnPointerExit = interactive ? ClearPreview : null,
+                Children = stars,
+            };
 
         // ── Caption (CaptionStackPanel -> Caption TextBlock) ──
         Element[] rowChildren = string.IsNullOrEmpty(Caption)
@@ -343,16 +381,16 @@ public sealed class RatingControl : Component
             : new Element[]
             {
                 starRow,
-                new TextEl(Caption)
+                Parts.Apply(PartCaption, new TextEl(Caption)
                 {
                     Size = CaptionFontSize,                         // 12 (CaptionTextBlockStyle)
                     Color = Tok.TextSecondary,                      // RatingControlCaptionForeground = TextFillColorSecondaryBrush
                     Margin = new Edges4(CaptionSpacing, 0, 0, 0),   // c_captionSpacing = 12 before the caption
                     AlignSelf = FlexAlign.Center,
-                },
+                }),
             };
 
-        return new BoxEl
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -363,6 +401,11 @@ public sealed class RatingControl : Component
             OnKeyDown = interactive ? OnKey : null,
             Children = rowChildren,
         };
+        // Parts: restyle the root; the rating keys, the automation role and the structure always win.
+        if (Parts is { } pr)
+            root = pr.Apply(PartRoot, root) with
+            { OnKeyDown = interactive ? OnKey : null, Role = AutomationRole.Rating, Children = rowChildren };
+        return root;
 
         // ── Local helpers (RatingControl.cpp ChangeRatingBy / SetRatingTo) ──
         void ChangeRatingBy(float change)

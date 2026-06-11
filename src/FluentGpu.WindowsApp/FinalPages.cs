@@ -47,13 +47,13 @@ sealed class ToolTipPage : Component
 {
     public override Element Render() => GalleryPage.Shell("ToolTip",
         "A short description shown in a small popup, anchored to its target.",
-        ControlExample.Build("A ToolTip (click the target)",
+        ControlExample.Build("A ToolTip (hover the target)",
             ToolTip.Wrap(
                 new BoxEl
                 {
                     Padding = new Edges4(11, 6, 11, 6), Corners = Radii.ControlAll, Fill = Tok.FillControlDefault,
                     BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillControlSecondary,
-                    Children = [new TextEl("Click me") { Size = 14f, Color = Tok.TextPrimary }],
+                    Children = [new TextEl("Hover over me") { Size = 14f, Color = Tok.TextPrimary }],
                 },
                 "I am a ToolTip with helpful information.")));
 }

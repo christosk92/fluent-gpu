@@ -71,6 +71,9 @@ public static class ItemContainer
     /// chord — a composing control (ItemsView) routes it through its selector. The returned tree is plain (recyclable);
     /// realize-time closures are the only managed cost.
     /// </summary>
+    // Per-item chrome customization goes through the composing control's ContainerFactory seam, NOT TemplateParts —
+    // per-item part modifiers in recycled scroll paths are an allocation/recycling hazard
+    // (docs/guide/control-fidelity.md §6).
     public static BoxEl Build(
         Element child,
         bool isSelected,

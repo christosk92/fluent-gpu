@@ -174,6 +174,8 @@ public sealed class GridView : Component
         var onItemClick = OnItemClick;
         bool canReorder = CanReorderItems;
 
+        // Per-item chrome customization goes through the ContainerFactory seam, NOT TemplateParts — per-item part
+        // modifiers in recycled scroll paths are an allocation/recycling hazard (docs/guide/control-fidelity.md §6).
         BoxEl Chrome(int slot, Element content, ItemChromeState state,
                      Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged)
         {

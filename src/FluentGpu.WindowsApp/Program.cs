@@ -80,7 +80,6 @@ sealed class DemoApp : Component
     }
 }
 
-// The entire app: define components, then one line to run. No PAL/RHI/AppHost/Mica/accent/loop to think about.
 static class Program
 {
     static void Main(string[] args)

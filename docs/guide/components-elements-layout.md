@@ -55,6 +55,39 @@ text.Foreground(c).FontSize(px).Strong().Font(family).Wrapped().NoWrap().Trim().
 These return a `with`-copy — they don't fork a control's default style, so e.g. `Button.Accent(...).Rounded(20)`
 just tweaks that one instance.
 
+### Template parts (`src/FluentGpu.Dsl/TemplateParts.cs`) — lightweight styling of CONTROL internals
+
+The one generic door into a control's template — CSS `::part` / WinUI lightweight styling, signals-native. Controls
+export part-name consts (`Expander.PartHeader/PartChevron/PartClip/PartContent/PartRoot`) and a `Parts` field; app
+code layers **any element props** onto any named part with a `with` expression:
+
+```csharp
+var stuck = new Signal<bool>(false);
+new Expander
+{
+    Parts = new()
+    {
+        [Expander.PartHeader] = b => b with
+        {
+            StickyTop = 8f,                                    // CSS position:sticky, top: 8px
+            OnPinned  = p => stuck.Value = p,                  // the :stuck observable (engine fires per transition)
+            Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal — reading subscribes
+            BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades (implicit brush transition)
+        },
+        [Expander.PartContent] = c => c with { Padding = Edges4.All(0) },   // edge-to-edge content
+    },
+}
+```
+
+Rules: (1) a modifier is a PURE `with`-copy of its input; (2) signal **reads** inside subscribe the owning control —
+the granular `:stuck` restyle loop; never **write** a signal in a modifier, and use binds (`FillBind`/`TransformBind`)
+for per-frame-hot values; (3) type-preserving — a modifier that changes the record type is ignored (parts *style*,
+content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't reshape `Children`; (5) the control
+re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
+each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
+don't put `StickyTop`/`TransformBind` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
+
 ## Layout
 
 Flexbox (Yoga-style) is the default; CSS-grid is available via `GridEl`. Key `BoxEl` layout props:

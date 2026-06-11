@@ -38,6 +38,26 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class ScrollBar
 {
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those). Both surfaces take a trailing `TemplateParts? parts` and
+    // route the same vocabulary (the legacy panning variant has only the thumb). Const VALUES happen to match the
+    // internal reconcile Keys; the Keys themselves stay literal on the elements (never derived from these consts).
+    /// <summary>The draggable thumb (WinUI VerticalThumb). Owned (Anatomy): Key, Width + WidthBind (the
+    /// conscious-expand eased cross-axis width — bind-driven geometry, not style), TransformBind (the
+    /// compositor-bound scroll position). On the legacy panning variant everything is style (drag lives on the
+    /// rail, no binds).</summary>
+    public const string PartThumb = "sb-thumb";
+    /// <summary>The always-mounted acrylic track (WinUI VerticalTrackRect). Owned: Key, OpacityBind (the 83ms
+    /// chrome fade).</summary>
+    public const string PartTrack = "sb-track";
+    /// <summary>The BOTTOM arrow cell (WinUI VerticalSmallIncrease — glyph EDDC, scrolls down). Owned: Key,
+    /// OpacityBind (the chrome fade), Repeats + OnClick (the small-change repeat step), OnHoverMove/OnPointerExit
+    /// (the conscious hover lane).</summary>
+    public const string PartIncreaseButton = "sb-down";
+    /// <summary>The TOP arrow cell (WinUI VerticalSmallDecrease — glyph EDDB, scrolls up). Owned: same set as
+    /// <see cref="PartIncreaseButton"/>.</summary>
+    public const string PartDecreaseButton = "sb-up";
+
     // WinUI ScrollBar_themeresources.xaml metrics (line cites in the class doc).
     public const float RailSize = 12f;            // ScrollBarSize (:180)
     public const float CollapsedThumb = 2f;       // visible: ThumbMinWidth 8 − stroke 6 (:182/:185)
@@ -74,8 +94,9 @@ public static partial class ScrollBar
     };
 
     /// <summary>The legacy thin panning-indicator scrollbar (see the class doc): a draggable thumb on an invisible
-    /// rail; press/drag maps the pointer to an absolute 0..1 position. Kept source-compatible.</summary>
-    public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200f, Style? style = null, bool disabled = false)
+    /// rail; press/drag maps the pointer to an absolute 0..1 position. Kept source-compatible.
+    /// <paramref name="parts"/> = per-part styling (only <see cref="PartThumb"/> exists on this variant).</summary>
+    public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200f, Style? style = null, bool disabled = false, TemplateParts? parts = null)
     {
         var s = style ?? DefaultStyle;
         fraction = Math.Clamp(fraction, 0.05f, 1f);
@@ -90,6 +111,8 @@ public static partial class ScrollBar
             HoverScale = disabled ? 1f : s.ThumbHoverScale,
             PressScale = disabled ? 1f : s.ThumbPressScale,
         };
+        // Parts: the legacy panning thumb is pure style (no Key/binds; drag lives on the rail) — nothing to re-assert.
+        thumb = parts.Apply(PartThumb, thumb);
         return new BoxEl
         {
             Width = s.ThumbWidth, Height = height, Direction = 1, Role = AutomationRole.ScrollBar,
@@ -109,8 +132,8 @@ public static partial class ScrollBar
     /// app-controlled position).
     /// </summary>
     public static Element Anatomy(float fraction, float position, Action<float> onScroll,
-                                  float length = 200f, bool disabled = false)
-        => Anatomy(fraction, new Signal<float>(Math.Clamp(position, 0f, 1f)), onScroll, length, disabled);
+                                  float length = 200f, bool disabled = false, TemplateParts? parts = null)
+        => Anatomy(fraction, new Signal<float>(Math.Clamp(position, 0f, 1f)), onScroll, length, disabled, parts);
 
     /// <summary>
     /// The full WinUI mouse-scrollbar anatomy (see the class doc for cites). <paramref name="fraction"/> =
@@ -118,10 +141,11 @@ public static partial class ScrollBar
     /// through a signal so writes move the thumb compositor-instantly (no re-render); <paramref name="onScroll"/>
     /// receives the new position for every interaction: thumb drag (absolute), track-click paging (±viewport·0.875
     /// per repeat), and arrow small-change (page/8 per repeat — the engine RepeatTicker cadence stands in for the
-    /// template's Interval=50 RepeatButtons, :681-711).
+    /// template's Interval=50 RepeatButtons, :681-711). <paramref name="parts"/> = per-part styling keyed by the
+    /// <c>PartXxx</c> consts (see <see cref="TemplateParts"/> for the contract).
     /// </summary>
     public static Element Anatomy(float fraction, Signal<float> position, Action<float> onScroll,
-                                  float length = 200f, bool disabled = false)
+                                  float length = 200f, bool disabled = false, TemplateParts? parts = null)
         => Embed.Comp(() => new ScrollBarAnatomy
         {
             Fraction = fraction,
@@ -129,6 +153,7 @@ public static partial class ScrollBar
             OnScroll = onScroll,
             Length = length,
             Disabled = disabled,
+            Parts = parts,
         });
 }
 
@@ -149,6 +174,9 @@ internal sealed class ScrollBarAnatomy : Component
     public Action<float>? OnScroll;
     public float Length = 200f;
     public bool Disabled;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>ScrollBar.PartXxx</c> consts;
+    /// see <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     // Engine-time step per ticker frame — the UseAnimatedValue convention (RenderContext.cs: Elapsed += 16f per
     // render) and the headless FixedFrameTimeSource step. Deterministic in the VerticalSlice harness.
@@ -217,19 +245,34 @@ internal sealed class ScrollBarAnatomy : Component
         // WinUI's instant Thumb position. The cross-axis WIDTH is a WidthBind on the conscious-ticker signal
         // (scoped relayout per eased step — WinUI's EnableDependentAnimation width keyframes, :585-588); the static
         // Width carries the CURRENT eased value so a re-render's column write never clobbers the bound width.
+        Func<float> thumbWidthBind = () => widthSig.Value;
+        Func<Affine2D> thumbPositionBind = () => Affine2D.Translation(0f, Math.Clamp(Position.Value, 0f, 1f) * travel);
         var thumb = new BoxEl
         {
             Key = "sb-thumb",
             Width = widthSig.Peek(),                            // eased by the conscious ticker (167ms, :173/:587)
-            WidthBind = () => widthSig.Value,
+            WidthBind = thumbWidthBind,
             Height = thumbLen,
             Corners = CornerRadius4.All(3f),                    // ScrollBarCornerRadius (:190)
             Fill = Disabled ? Tok.FillControlStrongDisabled : Tok.FillControlStrong,   // (:26/:29) — no hover recolor
             Margin = new Edges4(0f, 0f, ScrollBar.ThumbInset, 0f),   // fill right edge inset 3 in BOTH states (:185)
             AlignSelf = FlexAlign.End,                          // cross-axis END in a flex COLUMN (right edge anchored)
             HitTestVisible = false,                             // the strip owns the pointer
-            TransformBind = () => Affine2D.Translation(0f, Math.Clamp(Position.Value, 0f, 1f) * travel),
+            TransformBind = thumbPositionBind,
         };
+        // Parts: restyle anything (fill, corners, the 3px inset…); the Key and the bind-driven geometry always win —
+        // the eased Width (+ its static carrier) and the compositor position bind ARE the scrollbar, not style.
+        if (Parts is { } tp)
+        {
+            var m = tp.Apply(ScrollBar.PartThumb, thumb);
+            thumb = m with
+            {
+                Key = "sb-thumb",
+                Width = widthSig.Peek(),
+                WidthBind = thumbWidthBind,
+                TransformBind = thumbPositionBind,
+            };
+        }
 
         var column = new BoxEl
         {
@@ -259,15 +302,19 @@ internal sealed class ScrollBarAnatomy : Component
 
         // Acrylic track, full rail (VerticalTrackRect :702): AcrylicInAppFillColorDefaultBrush (:31/:143), Opacity 0
         // resting (:702) — ALWAYS mounted; only its opacity fades (83ms after the debounced flip, :575-584).
+        Func<float> trackFadeBind = () => chromeSig.Value;
         var track = new BoxEl
         {
             Key = "sb-track",
             Corners = CornerRadius4.All(6f),                    // CornerRadius 3 × the Scale=2 converter (:193-194/:702)
             Acrylic = Tok.AcrylicFlyout,
             Fill = Tok.AcrylicFlyout.Fallback,
-            OpacityBind = () => chromeSig.Value,
+            OpacityBind = trackFadeBind,
             HitTestVisible = false,
         };
+        // Parts: restyle anything (acrylic, fill, corners…); the Key and the 83ms chrome-fade bind always win.
+        if (Parts is not null)
+            track = Parts.Apply(ScrollBar.PartTrack, track) with { Key = "sb-track", OpacityBind = trackFadeBind };
 
         return new BoxEl
         {
@@ -371,7 +418,12 @@ internal sealed class ScrollBarAnatomy : Component
     /// background SubtleFillColorTransparent in EVERY state (:14 — the storyboards recolor only the foreground),
     /// pressed arrow scale 0.875 (:187). Auto-repeats while held (engine RepeatTicker); only its OPACITY fades.</summary>
     private Element ArrowButton(bool up, Signal<float> chrome, Action onClick)
-        => new BoxEl
+    {
+        Func<float> fadeBind = () => chrome.Value;              // 83ms fade (the conscious ticker eases the signal)
+        Action? click = Disabled ? null : onClick;
+        Action<Point2>? laneHover = Disabled ? null : _ => LaneHover();   // the arrow cell is part of the hover lane
+        Action? laneLeave = Disabled ? null : () => LaneLeave();
+        var cell = new BoxEl
         {
             Key = up ? "sb-up" : "sb-down",
             Width = ScrollBar.RailSize,
@@ -380,14 +432,14 @@ internal sealed class ScrollBarAnatomy : Component
             Justify = FlexJustify.Center,
             Padding = up ? new Edges4(0f, 4f, 0f, 0f) : new Edges4(0f, 0f, 0f, 4f),   // (:197-198)
             Fill = ColorF.Transparent,                          // ScrollBarButtonBackground, ALL states (:14)
-            OpacityBind = () => chrome.Value,                   // 83ms fade (the conscious ticker eases the signal)
+            OpacityBind = fadeBind,
             Repeats = true,
             TabStop = false,                                    // IsTabStop=False on every part (:681-711)
-            OnClick = Disabled ? null : onClick,
+            OnClick = click,
             IsEnabled = !Disabled,
             PressScale = ScrollBar.ArrowScalePressed,           // (:187)
-            OnHoverMove = Disabled ? null : _ => LaneHover(),   // the arrow cell is part of the hover lane
-            OnPointerExit = Disabled ? null : () => LaneLeave(),
+            OnHoverMove = laneHover,
+            OnPointerExit = laneLeave,
             Children =
             [
                 new TextEl(up ? "" : "")            // VerticalDecrement EDDB / Increment EDDC (:387/:344)
@@ -400,6 +452,24 @@ internal sealed class ScrollBarAnatomy : Component
                 },
             ],
         };
+        // Parts: restyle anything (fill, padding, the glyph ramp via the TextEl child…); the Key, the chrome-fade
+        // bind, the repeat-step click and the hover-lane handlers always win — clobbering them would break the
+        // conscious expand/contract on arrow hover.
+        if (Parts is { } ap)
+        {
+            var m = ap.Apply(up ? ScrollBar.PartDecreaseButton : ScrollBar.PartIncreaseButton, cell);
+            cell = m with
+            {
+                Key = up ? "sb-up" : "sb-down",
+                OpacityBind = fadeBind,
+                Repeats = true,
+                OnClick = click,
+                OnHoverMove = laneHover,
+                OnPointerExit = laneLeave,
+            };
+        }
+        return cell;
+    }
 }
 
 /// <summary>Per-frame stepper for the conscious scrollbar (the DebounceTicker idiom): mounted only while a dwell or

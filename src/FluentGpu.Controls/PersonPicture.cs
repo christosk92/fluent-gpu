@@ -52,8 +52,11 @@ public static class PersonPicture
     /// <param name="displayName">Contact display name; initials are generated from it (strip-trailing-brackets, first
     /// letter of first + last word, uppercased) only when <paramref name="initials"/> is empty.</param>
     /// <param name="isGroup">When true, the avatar shows the People (group) glyph regardless of initials.</param>
-    /// <param name="badgeNumber">When &gt; 0, draws an accent number badge (top-right). ≤99 shows the number, &gt;99 shows "99+".</param>
-    /// <param name="badgeGlyph">When set (and no badge number), draws an accent glyph badge (top-right) in the symbol font.</param>
+    /// <param name="badgeNumber">When &gt; 0, draws an accent number badge (top-right): ≤99 shows the number, &gt;99 shows
+    /// "99+". A NEGATIVE value shows no badge at all (WinUI: a non-zero BadgeNumber owns the badge slot and ≤0 maps to
+    /// NoBadge — the glyph never substitutes, PersonPicture.cpp:191-198).</param>
+    /// <param name="badgeGlyph">When set (and <paramref name="badgeNumber"/> is 0), draws an accent glyph badge
+    /// (top-right) in the symbol font.</param>
     /// <param name="imageSourcePath">When set, shows a circular-cropped photo (UniformToFill) instead of initials/glyph
     /// — WinUI ProfilePicture. Takes precedence over initials, but not over <paramref name="isGroup"/>.</param>
     /// <param name="fill">Override the ellipse fill (default <c>ControlAltFillColorQuarternary</c>); also the photo placeholder tint.</param>
@@ -74,7 +77,9 @@ public static class PersonPicture
             !string.IsNullOrWhiteSpace(displayName) ? InitialsFromDisplayName(displayName!) :
             "";
 
-        bool hasPhoto = !string.IsNullOrEmpty(imageSourcePath);
+        // Group OUTRANKS the photo (UpdateIfReady's GoToState order, PersonPicture.cpp:162-170): isGroup shows the
+        // People glyph even when a photo is supplied.
+        bool hasPhoto = !string.IsNullOrEmpty(imageSourcePath) && !isGroup;
 
         // Visual-state resolution mirroring UpdateIfReady's GoToState order:
         //   Group  >  Photo  >  Initials  >  NoPhotoOrInitials
@@ -91,6 +96,10 @@ public static class PersonPicture
 
         // The face layer: either the photo (PersonPictureEllipse / ActualImageBrush, UniformToFill, circular-cropped) or
         // the initials/glyph TextBlock. FontWeight SemiBold == Bold. IsTextScaleFactorEnabled=False ⇒ fixed font size.
+        // The text rides in a SIZED flex wrapper because ZStack pins children HORIZONTALLY at the content origin
+        // (only the vertical axis honors AlignSelf/AlignItems — FlexLayout.ArrangeZStack) — WinUI centers the
+        // InitialsTextBlock both ways (PersonPicture.xaml:66 HorizontalAlignment/VerticalAlignment="Center"); the
+        // sized wrapper's own flex centering places the measured run in the middle of the circle on both axes.
         Element face = hasPhoto
             ? new ImageEl
             {
@@ -100,17 +109,32 @@ public static class PersonPicture
                 Corners = circle,                                  // circular crop (Ellipse-clipped photo)
                 Placeholder = fill ?? Tok.FillControlAltQuaternary,
             }
-            : new TextEl(actualText)
+            : new BoxEl
             {
-                Size = ts.InitialsFontSize,                        // Width * 0.42 (WinUI OnSizeChanged), min 1
-                Bold = true,                                       // InitialsTextBlock FontWeight=SemiBold in EVERY state (initials AND Group/Contact glyph)
-                Color = Tok.TextPrimary,                           // PersonPictureForegroundThemeBrush = TextFillColorPrimary
-                FontFamily = useSymbolFont ? Theme.IconFont        // SymbolThemeFontFamily for Group / NoPhotoOrInitials
-                                           : Theme.BodyFont,       // ContentControlThemeFontFamily for initials
+                Width = size,
+                Height = size,
+                AlignItems = FlexAlign.Center,
+                Justify = FlexJustify.Center,
+                Children =
+                [
+                    new TextEl(actualText)
+                    {
+                        Size = ts.InitialsFontSize,                // Width * 0.42 (WinUI OnSizeChanged), min 1
+                        Bold = true,                               // InitialsTextBlock FontWeight=SemiBold in EVERY state (initials AND Group/Contact glyph)
+                        Color = Tok.TextPrimary,                   // PersonPictureForegroundThemeBrush = TextFillColorPrimary
+                        FontFamily = useSymbolFont ? Theme.IconFont // SymbolThemeFontFamily for Group / NoPhotoOrInitials
+                                                   : Theme.BodyFont, // ContentControlThemeFontFamily for initials
+                    },
+                ],
             };
 
-        var children = badgeNumber > 0 || !string.IsNullOrEmpty(badgeGlyph)
-            ? new[] { face, BuildBadge(ts, badgeNumber, badgeGlyph) }
+        // Badge resolution (PersonPicture.cpp:191-198, :227-232): a non-zero BadgeNumber OWNS the badge slot — positive
+        // shows the number, negative shows NOTHING (the glyph is never a fallback for a bad number); the glyph renders
+        // only when BadgeNumber == 0.
+        bool numberBadge = badgeNumber > 0;
+        bool glyphBadge = badgeNumber == 0 && !string.IsNullOrEmpty(badgeGlyph);
+        var children = numberBadge || glyphBadge
+            ? new[] { face, BuildBadge(ts, size, badgeNumber, glyphBadge ? badgeGlyph : null) }
             : new[] { face };
 
         return new BoxEl
@@ -124,7 +148,8 @@ public static class PersonPicture
             ZStack = true,                                         // face fills; badge floats top-right over it
             AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Center,
-            ClipToBounds = true,                                  // circular clip of the photo / overflowing glyph
+            // NO ClipToBounds: WinUI's RootGrid is unclipped (PersonPicture.xaml:68) — the badge deliberately
+            // overflows the circle by 4px top/right; the photo is already circle-cropped by ImageEl.Corners.
             // WinUI sets AutomationProperties.AccessibilityView=Raw + IsTabStop=False: a passive, non-focusable image
             // surface (no special control role, not in the control tree). Map to None (raw) + the default non-focusable BoxEl.
             Role = AutomationRole.None,
@@ -134,9 +159,9 @@ public static class PersonPicture
 
     // BadgeStates: BadgeWithoutImageSource. Badge plate = 50% of the control, top-right, margin 0,-4,-4,0.
     // Fill = AccentFillColorDefault; foreground = TextOnAccentFillColorPrimary; stroke = transparent (2px, invisible).
-    private static BoxEl BuildBadge(PersonPictureTemplateSettings ts, int badgeNumber, string? badgeGlyph)
+    private static BoxEl BuildBadge(PersonPictureTemplateSettings ts, float size, int badgeNumber, string? badgeGlyph)
     {
-        bool isGlyph = badgeNumber <= 0 && !string.IsNullOrEmpty(badgeGlyph);
+        bool isGlyph = !string.IsNullOrEmpty(badgeGlyph);   // caller resolved precedence: glyph only when badgeNumber == 0
         string text = isGlyph ? badgeGlyph! : (badgeNumber <= 99 ? badgeNumber.ToString() : "99+");
 
         var label = new TextEl(text)
@@ -148,11 +173,11 @@ public static class PersonPicture
         };
 
         // Position at the top-right corner. WinUI: BadgeGrid VerticalAlignment=Top, HorizontalAlignment=Right,
-        // Margin 0,-4,-4,0. A centred ZStack would vertically CENTER the explicitly-sized plate; pin it to the top with
-        // AlignSelf=Start (matching VerticalAlignment=Top) so its top edge is the control's top edge, then translate it.
-        // Horizontally: the control half-width is size/2 == plate (plate = size*0.5), so push the plate's centre out to
-        // the right corner with +plate, plus the -4 right margin nudging it 4px further outward (OffsetX = plate + 4).
-        // Vertically: AlignSelf=Start already puts it at the top; the -4 top margin lifts it 4px above that (OffsetY = -4).
+        // Margin 0,-4,-4,0 (PersonPicture.xaml:68) → the plate's RIGHT edge sits 4px outside the control's right edge,
+        // i.e. left = size + 4 − plate. The engine's ZStack lays every layer at the content origin (left 0, and
+        // AlignSelf=Start pins the top), so the full target offset is applied as a translation — computed from the
+        // CONTROL size, not from any assumption that plate == size/2, so it survives a plate-fraction change.
+        // Vertically the -4 top margin lifts the plate 4px above the top edge (OffsetY = -4).
         float plate = ts.BadgePlateSize;
         return new BoxEl
         {
@@ -166,7 +191,7 @@ public static class PersonPicture
             AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Center,
             ClipToBounds = true,
-            OffsetX = plate + 4f,                                  // out to the right corner + the 4px outward (-4 right) margin
+            OffsetX = size + 4f - plate,                           // right-aligned + the 4px outward (-4 right) margin
             OffsetY = -4f,                                         // the -4 top margin lifts it 4px above the top edge
             Children = [label],
         };

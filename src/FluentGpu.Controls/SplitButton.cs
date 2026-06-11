@@ -18,6 +18,21 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class SplitButton : Component
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts, docs/guide/control-fidelity.md §6). Each part's
+    // doc lists the props the control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The joined chrome (WinUI RootGrid + Border): fill, border, corners, clip. Owned: OnKeyDown (the
+    /// Space/Enter/Down/F4 chords), OnRealized (flyout anchor capture, chained), Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The primary half (WinUI PrimaryButton). Owned: OnClick (<see cref="OnInvoke"/>), Role,
+    /// Children (the <see cref="PrimaryContent"/> slot).</summary>
+    public const string PartPrimaryButton = "PrimaryButton";
+    /// <summary>The dropdown half (WinUI SecondaryButton). Owned: OnClick (the flyout toggle), Role, Children.</summary>
+    public const string PartSecondaryButton = "SecondaryButton";
+    /// <summary>The 1px divider between the halves (WinUI DividerBackgroundGrid). Owned: none.</summary>
+    public const string PartDivider = "Divider";
+    /// <summary>The 12×12 chevron box inside the dropdown half (the AnimatedIcon column). Owned: none.</summary>
+    public const string PartChevron = "Chevron";
+
     // ── WinUI geometry (SplitButton.xaml / _themeresources.xaml) ──
     public const float PrimaryButtonMinWidth = 35f;   // SplitButtonPrimaryButtonSize (PrimaryButtonColumn MinWidth)
     public const float SecondaryButtonSize   = 35f;    // SplitButtonSecondaryButtonSize (SecondaryButtonColumn Width)
@@ -38,6 +53,9 @@ public sealed class SplitButton : Component
     public IReadOnlyList<MenuFlyoutItem> Items = [];
     public bool IsEnabled = true;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
         => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph, IsEnabled = isEnabled });
@@ -138,13 +156,15 @@ public sealed class SplitButton : Component
             Role = AutomationRole.Button, IsEnabled = enabled, OnClick = OnInvoke,
             Children = primaryChildren,
         };
+        // Parts: restyle anything; the invoke mechanics and the primary content slot always win.
+        primary = Parts.Apply(PartPrimaryButton, primary) with { OnClick = OnInvoke, Role = AutomationRole.Button, Children = primary.Children };
 
         // DividerBackgroundGrid: 1px, SplitButtonBorderBrushDivider = ControlStrokeColorDefaultBrush = StrokeControlDefault.
-        var divider = new BoxEl
+        var divider = Parts.Apply(PartDivider, new BoxEl
         {
             Width = DividerWidth, Height = DividerHeight, AlignSelf = FlexAlign.Stretch,
             Fill = enabled ? Tok.StrokeControlDefault : ColorF.Transparent,
-        };
+        });
 
         // Secondary half: chevron, foreground SplitButtonForegroundSecondary = TextSecondary; PointerOver → TextPrimary
         // (SplitButtonForegroundPointerOver), Pressed → SplitButtonForegroundSecondaryPressed = TextTertiary.
@@ -161,7 +181,7 @@ public sealed class SplitButton : Component
             Role = AutomationRole.Button, IsEnabled = enabled, OnClick = ToggleMenu,
             Children =
             [
-                new BoxEl
+                Parts.Apply(PartChevron, new BoxEl
                 {
                     Width = ChevronSize, Height = ChevronSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Children =
@@ -173,15 +193,18 @@ public sealed class SplitButton : Component
                             FontFamily = Theme.IconFont,
                         },
                     ],
-                },
+                }),
             ],
         };
+        // Parts: restyle anything; the flyout-toggle mechanics and the chevron mount always win.
+        drop = Parts.Apply(PartSecondaryButton, drop) with { OnClick = ToggleMenu, Role = AutomationRole.Button, Children = drop.Children };
 
         // ── Joined chrome (RootGrid + Border) ──
         // Background = SplitButtonBackground = ControlFillColorDefaultBrush; BorderBrush = ControlElevationBorderBrush;
         // BorderThickness = 1; CornerRadius = ControlCornerRadius (4). Disabled: transparent fill + StrokeControlDefault
         // border (SplitButtonBorderBrushDisabled), per the Disabled VisualState.
-        return new BoxEl
+        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        var root = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
             // SplitButtonStyle sets HorizontalAlignment="Left" (SplitButton.xaml:8): the control HUGS its content in
@@ -199,8 +222,17 @@ public sealed class SplitButton : Component
             // Button a11y role (PrimaryButton / SecondaryButton); the chrome itself is not a separate button role.
             Focusable = enabled, IsEnabled = enabled,
             OnKeyDown = OnKey,
-            OnRealized = h => anchor.Value = h,
+            OnRealized = anchorCapture,
             Children = [primary, divider, drop],
+        };
+        // Parts: restyle the joined chrome; the keyboard/focus/anchor mechanics and the half mounts always win.
+        var rootM = Parts.Apply(PartRoot, root);
+        return rootM with
+        {
+            Focusable = enabled, IsEnabled = enabled,
+            OnKeyDown = OnKey,
+            OnRealized = TemplateParts.Chain(anchorCapture, rootM.OnRealized),
+            Children = root.Children,
         };
     }
 }

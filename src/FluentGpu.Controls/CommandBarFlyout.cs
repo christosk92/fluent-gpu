@@ -63,12 +63,32 @@ public sealed record AppBarCommand(
 /// generic.xaml:16987).</summary>
 public sealed class CommandBarFlyout : Component
 {
+    // Template parts (the WinUI x:Name vocabulary where one exists; see TemplateParts). Each part's doc lists the
+    // props the control OWNS (re-asserted after any modifier — a Parts customization cannot win those). The popup
+    // parts are popup-built each open, so their modifiers run inside the overlay body's render.
+    /// <summary>The trigger button that opens the flyout (engine-local — WinUI flyouts have no built-in trigger).
+    /// Owned: OnClick (the open toggle), Role, OnRealized (the popup anchor capture, chained).</summary>
+    public const string PartTrigger = "Trigger";
+    /// <summary>The popup body root. Owned: ClipToBounds (the expand clip+translate must never paint past the
+    /// popup's rounded corners), Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The horizontal primary icon row (WinUI PrimaryItemsRoot). Owned: Children.</summary>
+    public const string PartPrimaryRow = "PrimaryRow";
+    /// <summary>The trailing … ellipsis expand toggle (WinUI MoreButton). Owned: OnClick (expand/collapse), Role.</summary>
+    public const string PartMoreButton = "MoreButton";
+    /// <summary>The overflow region of labeled rows (WinUI OverflowContentRoot). Owned: OnRealized (the expand
+    /// clip+translate storyboard's node capture, chained), ClipToBounds, Children.</summary>
+    public const string PartOverflow = "Overflow";
+
     public string TriggerLabel = "Commands";
     public IReadOnlyList<AppBarCommand> PrimaryCommands = [];
     public IReadOnlyList<AppBarCommand> SecondaryCommands = [];
     /// <summary>WinUI V2 AlwaysExpanded: keep the overflow menu shown and hide the … More button.</summary>
     public bool AlwaysExpanded = false;
     public FlyoutPlacement Placement = FlyoutPlacement.BottomLeft;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract. Threaded into the popup body each open.</summary>
+    public TemplateParts? Parts;
 
     public static Element Create(
         string triggerLabel,
@@ -125,16 +145,18 @@ public sealed class CommandBarFlyout : Component
                     AlwaysExpanded = AlwaysExpanded,
                     Expanded = expanded,
                     Close = () => handle.Value?.Close(),
+                    Parts = Parts,
                 }),
                 Placement,
                 // ShouldConstrainToRootBounds=False on the CommandBarFlyout popup (generic.xaml:16987).
                 new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
         }
 
-        return new BoxEl
+        Action<NodeHandle> anchorCapture = x => anchor.Value = x;
+        var trigger = new BoxEl
         {
             AlignSelf = FlexAlign.Start,
-            OnRealized = x => anchor.Value = x,
+            OnRealized = anchorCapture,
             OnClick = Toggle,
             Role = AutomationRole.Button,
             Direction = 0,
@@ -153,6 +175,13 @@ public sealed class CommandBarFlyout : Component
                 new TextEl(Icons.ChevronDown) { Size = 10f, Color = Tok.TextSecondary, FontFamily = Theme.IconFont },
             ],
         };
+        // Parts: restyle the trigger freely; the open toggle and the popup anchor capture always win.
+        if (Parts is { } tp)
+        {
+            var m = tp.Apply(PartTrigger, trigger);
+            trigger = m with { OnClick = Toggle, Role = AutomationRole.Button, OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized) };
+        }
+        return trigger;
     }
 }
 
@@ -168,6 +197,8 @@ internal sealed class CommandBarFlyoutBody : Component
     public bool AlwaysExpanded;
     public Signal<bool> Expanded = new(false);
     public Action Close = () => { };
+    /// <summary>The owning <see cref="CommandBarFlyout"/>'s part modifiers (keyed by its <c>PartXxx</c> consts).</summary>
+    public TemplateParts? Parts;
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: OverflowTextLabel.Padding 0,9,0,11 + check glyph margin
     /// 12,10,12,10 (CommandBarFlyout_themeresources.xaml:464-465) instead of the pointer metrics.</summary>
     public bool TouchInputMode;
@@ -248,16 +279,18 @@ internal sealed class CommandBarFlyoutBody : Component
             Corners = showOverflow ? Radii.OverlayTop : Radii.OverlayAll,
             Children = primaryChildren.ToArray(),
         };
+        primaryRow = Parts.Apply(CommandBarFlyout.PartPrimaryRow, primaryRow) with { Children = primaryRow.Children };
 
         if (!showOverflow)
         {
-            return new BoxEl
+            var collapsedRoot = new BoxEl
             {
                 Direction = 1,
                 AlignSelf = FlexAlign.Start,
                 MaxWidth = FlyoutMaxWidth,
                 Children = [primaryRow],
             };
+            return Parts.Apply(CommandBarFlyout.PartRoot, collapsedRoot) with { Children = collapsedRoot.Children };
         }
 
         // The collapse clock unmounts the region once the 167ms reverse storyboard settles.
@@ -278,7 +311,7 @@ internal sealed class CommandBarFlyoutBody : Component
         };
         if (collapseClock is not null) children.Add(collapseClock);
 
-        return new BoxEl
+        var root = new BoxEl
         {
             Direction = 1,
             AlignSelf = FlexAlign.Start,
@@ -286,6 +319,7 @@ internal sealed class CommandBarFlyoutBody : Component
             ClipToBounds = true,   // the expand clip+translate must never paint past the popup's rounded corners
             Children = children.ToArray(),
         };
+        return Parts.Apply(CommandBarFlyout.PartRoot, root) with { ClipToBounds = true, Children = root.Children };
     }
 
     // ── A single primary (icon-only) AppBarButton — CommandBarFlyoutAppBarButtonStyleBase metrics + the 83ms
@@ -322,7 +356,7 @@ internal sealed class CommandBarFlyoutBody : Component
     }
 
     // ── The trailing … ellipsis toggle (EllipsisButton: Width 44, glyph E712 @16, inner margin 2,2,6,2). ─────────
-    Element MoreButton(Action toggle) => new BoxEl
+    Element MoreButton(Action toggle) => Parts.Apply(CommandBarFlyout.PartMoreButton, new BoxEl
     {
         Direction = 0,
         AlignItems = FlexAlign.Center,
@@ -342,7 +376,7 @@ internal sealed class CommandBarFlyoutBody : Component
         [
             new TextEl(Icons.More) { Size = 16f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, FontFamily = Theme.IconFont },
         ],
-    };
+    }) with { OnClick = toggle, Role = AutomationRole.Button };
 
     // ── OverflowRegion: vertical labeled rows (CommandBarOverflowPresenter, ItemsPresenter margin 0,4,0,4). ───────
     Element BuildOverflow()
@@ -362,7 +396,8 @@ internal sealed class CommandBarFlyoutBody : Component
                 ? OverflowSeparator()
                 : OverflowRow(cmd, hasIconColumn, hasCheckColumn));
 
-        return new BoxEl
+        Action<NodeHandle> regionCapture = h => { if (_overflowNode is { } r) r.Value = h; };
+        var region = new BoxEl
         {
             Direction = 1,
             MinWidth = OverflowMinWidth,
@@ -371,9 +406,16 @@ internal sealed class CommandBarFlyoutBody : Component
             // Bottom corners stay rounded; the top meets the primary row flush.
             Corners = Radii.OverlayBottom,
             ClipToBounds = true,
-            OnRealized = h => { if (_overflowNode is { } r) r.Value = h; },
+            OnRealized = regionCapture,         // the expand/collapse clip+translate storyboards drive this node
             Children = rows.ToArray(),
         };
+        // Parts: restyle the overflow chrome; the storyboard node capture, the clip and the rows always win.
+        if (Parts is { } op)
+        {
+            var m = op.Apply(CommandBarFlyout.PartOverflow, region);
+            region = m with { ClipToBounds = true, Children = region.Children, OnRealized = TemplateParts.Chain(regionCapture, m.OnRealized) };
+        }
+        return region;
     }
 
     static Element OverflowSeparator() => AppBarSeparator.Create(overflow: true);

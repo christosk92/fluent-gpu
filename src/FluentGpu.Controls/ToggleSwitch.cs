@@ -32,6 +32,27 @@ public static partial class ToggleSwitch
     /// base threshold <c>Input.DragController</c> uses (ListViewBaseItem_Partial.cpp:1871-1877).</summary>
     public const float DragThresholdPx = 4f;
 
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The interactive row (track + side content) — the template's tap/drag surface. Owned: OnClick,
+    /// OnPointerDown, OnDrag, OnPointerExit, OnHoverMove, OnKeyDown (the tap/drag-to-toggle lifecycle), Role,
+    /// Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The 40×20 pill track (WinUI OuterBorder/SwitchKnobBounds). Owned: Children (the leading spacer IS
+    /// the knob translation — restyle the pill freely, the spacer+host structure always wins).</summary>
+    public const string PartTrack = "Track";
+    /// <summary>The 20×20 knob positioning host (WinUI SwitchKnob). Owned: Animate (the 167ms travel reposition),
+    /// Justify (the pressed near-edge pin), Children.</summary>
+    public const string PartKnobHost = "KnobHost";
+    /// <summary>The knob itself (WinUI SwitchKnobOn/SwitchKnobOff — one node, both states). Owned: Animate (the
+    /// 83ms hover/press size FLIP), Margin (the pressed 3px edge pin).</summary>
+    public const string PartKnob = "Knob";
+    /// <summary>The On/OffContent label (WinUI Off/OnContentPresenter) — a <see cref="TextEl"/> part
+    /// (<c>Parts.Set&lt;TextEl&gt;(…)</c>). No owned props.</summary>
+    public const string PartContentLabel = "ContentLabel";
+    /// <summary>The header label (WinUI HeaderContentPresenter) — a <see cref="TextEl"/> part. No owned props.</summary>
+    public const string PartHeader = "Header";
+
     public sealed record Style
     {
         public float TrackWidth { get; init; } = 40f;        // OuterBorder Width (template:507)
@@ -95,15 +116,16 @@ public static partial class ToggleSwitch
     /// <summary>Controlled props, carried to the stateful core via context (a ComponentEl reuse never re-runs its
     /// factory — Reconciler.cs:211-219 — so props MUST flow through a provider, the NavigationView pattern).</summary>
     internal sealed record Props(bool IsOn, Action OnToggle, string? Header, string? OnContent, string? OffContent,
-                                 bool IsEnabled, Style Style)
+                                 bool IsEnabled, Style Style, TemplateParts? Parts = null)
     {
         internal static readonly Context<Props?> Channel = new(null);
     }
 
     public static Element Create(bool isOn, Action onToggle, string? header = null, string? onContent = null,
-                                 string? offContent = null, bool isEnabled = true, Style? style = null)
+                                 string? offContent = null, bool isEnabled = true, Style? style = null,
+                                 TemplateParts? parts = null)
         => Ctx.Provide(Props.Channel,
-                       new Props(isOn, onToggle, header, onContent, offContent, isEnabled, style ?? DefaultStyle),
+                       new Props(isOn, onToggle, header, onContent, offContent, isEnabled, style ?? DefaultStyle, parts),
                        Embed.Comp(() => new ToggleSwitchCore()));
 }
 
@@ -134,19 +156,16 @@ internal sealed class ToggleSwitchCore : Component
         var (dragX, setDragX) = UseState(float.NaN);     // NaN = not dragging; else the knob translation (0..travel)
         var (hovered, setHovered) = UseState(false);
         var (pressed, setPressed) = UseState(false);
-        var prevOn = UseRef(props?.IsOn ?? false);
 
         if (props is null) return new BoxEl();
         var s = props.Style;
+        var parts = props.Parts;
         bool isOn = props.IsOn;
         bool enabled = props.IsEnabled;
         float travel = s.KnobTravel;
         bool dragging = !float.IsNaN(dragX);
         bool isHovered = hovered && enabled;
         bool isPressed = pressed && enabled;
-        // A toggle commit (isOn flipped since the last render) is the knob-TRAVEL commit → 167ms dynamics.
-        bool traveled = prevOn.Value != isOn;
-        prevOn.Value = isOn;
 
         // ── gesture handlers (ToggleSwitch_Partial.cpp drag lifecycle over OnPointerDown/OnDrag/OnClick/OnPointerExit;
         //    the engine keeps routing OnDrag to the pressed node while held, so the knob follows even outside bounds) ──
@@ -228,14 +247,25 @@ internal sealed class ToggleSwitchCore : Component
         // ── knob geometry for THIS commit (the storyboard targets) ──
         float knobW = isPressed ? s.KnobPressedWidth : isHovered ? s.KnobHoverSize : s.KnobRestSize;
         float knobH = isPressed ? s.KnobPressedHeight : isHovered ? s.KnobHoverSize : s.KnobRestSize;
-        // Per-commit dynamics: snap-follow while dragging (keeps BoundsAnimated armed so the RELEASE commit FLIPs from
-        // the dragged spot — WinUI DraggingToOn/Off RepositionThemeAnimation, template:374-417); 167ms travel; 250ms
-        // disabled return (template:357-368); 83ms FastOutSlowIn for hover/press size+anchor (template:231-322).
-        TransitionDynamics dyn =
+        // Two transitions, two owners (FLIP projections are PARENT-RELATIVE, so each fires only on its own local move):
+        //   travel = the HOST's X within the track (the spacer commit) — 167ms RepositionThemeAnimation (template:418-439);
+        //            snap-follow while dragging (keeps BoundsAnimated armed so the RELEASE commit FLIPs from the dragged
+        //            spot — WinUI DraggingToOn/Off, template:374-417); 250ms disabled return (template:357-368).
+        //   knob   = its own size/anchor within the host — 83ms FastOutSlowIn hover/press grow + 3px pin (template:231-322).
+        TransitionDynamics travelDyn =
             dragging ? TransitionDynamics.Tween(1f, Easing.Linear)
-            : traveled ? TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentPopOpen)
+            : !enabled ? TransitionDynamics.Tween(Motion.ControlNormal, Easing.FluentPopOpen)
+            : TransitionDynamics.Tween(Motion.ControlFast, Easing.FluentPopOpen);
+        TransitionDynamics knobDyn =
+            dragging ? TransitionDynamics.Tween(1f, Easing.Linear)
             : !enabled ? TransitionDynamics.Tween(Motion.ControlNormal, Easing.FluentPopOpen)
             : TransitionDynamics.Tween(Motion.ControlFaster, Easing.FluentPopOpen);
+        // Pressed pins 3px from the near edge (template:284-287); rest/hover center in the 20×20 host. (WinUI's
+        // ±1 rest margins put the knob at x=3.5, we center at 4 — a 0.5px layout-rounding deviation.)
+        Edges4 knobPin = isPressed || dragging
+            ? (isOn ? new Edges4(0f, 0f, s.PressedKnobEdgeMargin, 0f) : new Edges4(s.PressedKnobEdgeMargin, 0f, 0f, 0f))
+            : default;
+        var knobAnim = new LayoutTransition(TransitionChannels.Bounds, knobDyn, SizeMode.ScaleCorrect);
         var knob = new BoxEl
         {
             Width = knobW, Height = knobH,
@@ -249,26 +279,40 @@ internal sealed class ToggleSwitchCore : Component
             // (Border.h:247) — wired so themes/apps can opt the rim visible via Style.KnobStrokeOnWidth.
             BorderBrush = isOn ? s.KnobStrokeOn : null,
             BorderWidth = isOn && s.KnobStrokeOn is not null ? s.KnobStrokeOnWidth : 0f,
-            // Pressed pins 3px from the near edge (template:284-287); rest/hover center in the 20×20 host. (WinUI's
-            // ±1 rest margins put the knob at x=3.5, we center at 4 — a 0.5px layout-rounding deviation.)
-            Margin = isPressed || dragging
-                ? (isOn ? new Edges4(0f, 0f, s.PressedKnobEdgeMargin, 0f) : new Edges4(s.PressedKnobEdgeMargin, 0f, 0f, 0f))
-                : default,
-            Animate = new LayoutTransition(TransitionChannels.Bounds, dyn, SizeMode.ScaleCorrect),
+            Margin = knobPin,
+            Animate = knobAnim,
         };
+        // Parts: restyle the knob (fill, corners, rim…); the size FLIP and the pressed pin always win.
+        if (parts is { } kp)
+            knob = kp.Apply(ToggleSwitch.PartKnob, knob) with { Margin = knobPin, Animate = knobAnim };
 
         // SwitchKnob 20×20 positioning host (template:509): a leading spacer drives its X = the knob translation.
+        // The host owns the TRAVEL transition: the spacer commit moves the host within the track, and that host-local
+        // X delta is what the (parent-relative) FLIP projects over 167ms. The knob inside never moves host-relative
+        // during travel, so its own transition stays silent and it rides the host rigidly.
+        var hostJustify = isPressed || dragging
+            ? (isOn ? FlexJustify.End : FlexJustify.Start)        // Pressed setters (template:284-287)
+            : FlexJustify.Center;                                 // HorizontalAlignment=Center at rest (template:510/515)
+        var travelAnim = new LayoutTransition(TransitionChannels.Position, travelDyn);
+        Element[] hostKids = [knob];
         var host = new BoxEl
         {
             Width = s.KnobHostSize, Height = s.KnobHostSize,
             Direction = 0, AlignItems = FlexAlign.Center,
-            Justify = isPressed || dragging
-                ? (isOn ? FlexJustify.End : FlexJustify.Start)    // Pressed setters (template:284-287)
-                : FlexJustify.Center,                             // HorizontalAlignment=Center at rest (template:510/515)
-            Children = [knob],
+            Justify = hostJustify,
+            Animate = travelAnim,
+            Children = hostKids,
         };
+        // Parts: restyle the host; the travel reposition, the pressed pin and the knob child always win.
+        if (parts is { } hp)
+            host = hp.Apply(ToggleSwitch.PartKnobHost, host) with { Justify = hostJustify, Animate = travelAnim, Children = hostKids };
         float knobX = dragging ? dragX : (isOn ? travel : 0f);
 
+        Element[] trackKids =
+        [
+            new BoxEl { Width = knobX },   // leading spacer = KnobTranslateTransform.X (0..20)
+            host,
+        ];
         var track = new BoxEl
         {
             Direction = 0,
@@ -288,18 +332,19 @@ internal sealed class ToggleSwitchCore : Component
             // The On↔Off track swap is an 83ms opacity cross-fade of the two overlaid rects in WinUI
             // (OuterBorder/SwitchKnobBounds, template:426-438/:446-457) — one rect + an 83ms brush cross-fade here.
             BrushTransitionMs = Motion.ControlFaster,
-            Children =
-            [
-                new BoxEl { Width = knobX },   // leading spacer = KnobTranslateTransform.X (0..20)
-                host,
-            ],
+            Children = trackKids,
         };
+        // Parts: restyle the pill (fills, stroke, corners…); the spacer+host structure (the knob translation) always wins.
+        if (parts is { } tp)
+            track = tp.Apply(ToggleSwitch.PartTrack, track) with { Children = trackKids };
 
         var row = new List<Element> { track };
         string? side = isOn ? props.OnContent : props.OffContent;   // ContentStates Off/OnContent swap (template:461-486)
         if (side is { Length: > 0 })
-            row.Add(new TextEl(side) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.ForegroundDisabled });
+            row.Add(parts.Apply(ToggleSwitch.PartContentLabel,
+                new TextEl(side) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.ForegroundDisabled }));
 
+        Element[] rowKids = row.ToArray();
         var control = new BoxEl
         {
             Direction = 0,
@@ -311,14 +356,29 @@ internal sealed class ToggleSwitchCore : Component
             IsEnabled = enabled,
             Focusable = true,                                     // UseSystemFocusVisuals (template:198)
             FocusVisualMargin = s.FocusVisualMargin,              // −7,−3,−7,−3 (template:200)
+            // Space ONLY (ToggleSwitch_Partial.cpp:1002-1007 handles KEY_SPACE) — Enter routes on.
+            ActivateOnEnter = false,
             OnClick = Release,
             OnPointerDown = Down,
             OnDrag = Drag,
             OnPointerExit = Exit,
             OnHoverMove = HoverMove,
             OnKeyDown = Arrows,
-            Children = row.ToArray(),
+            Children = rowKids,
         };
+        // Parts: restyle the row (min sizes, gap, focus margin…); the tap/drag-to-toggle lifecycle always wins.
+        if (parts is { } rp)
+            control = rp.Apply(ToggleSwitch.PartRoot, control) with
+            {
+                OnClick = Release,
+                OnPointerDown = Down,
+                OnDrag = Drag,
+                OnPointerExit = Exit,
+                OnHoverMove = HoverMove,
+                OnKeyDown = Arrows,
+                Role = AutomationRole.ToggleSwitch,
+                Children = rowKids,
+            };
 
         if (props.Header is { Length: > 0 })
             return new BoxEl
@@ -327,7 +387,8 @@ internal sealed class ToggleSwitchCore : Component
                 Gap = s.HeaderGap,                                // ToggleSwitchTopHeaderMargin 0,0,0,4 (template:185)
                 Children =
                 [
-                    new TextEl(props.Header) { Size = s.FontSize, Color = enabled ? s.HeaderColor : s.HeaderColorDisabled },
+                    parts.Apply(ToggleSwitch.PartHeader,
+                        new TextEl(props.Header) { Size = s.FontSize, Color = enabled ? s.HeaderColor : s.HeaderColorDisabled }),
                     control,
                 ],
             };

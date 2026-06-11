@@ -55,6 +55,26 @@ public enum TextChangeReason : byte { UserInput, ProgrammaticChange, SuggestionC
 /// </summary>
 public sealed class EditableText : Component
 {
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The focusable field-chrome root (WinUI BorderElement). Owned: OnFocusChanged/OnKeyDown/OnCharInput/
+    /// OnPointerPressed/OnDrag (the edit mechanics), IsEnabled, Focusable, Role, ZStack, Children, OnRealized
+    /// (chained). The state fills/border/corners are recomputed per render BEFORE the modifier — restyle freely.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The padded, clipping content viewport (WinUI ContentElement). Owned: ClipToBounds (the caret-follow
+    /// crop), Children (the scroller wrapper carrying the −ScrollX TransformBind + the caret/IME text node),
+    /// OnRealized (chained). Padding IS stylable here — the public path the internal LanePadding composer seam maps to.</summary>
+    public const string PartLane = "Lane";
+    /// <summary>The visible text run (a TextEl — use <c>Parts.Set&lt;TextEl&gt;(PartText, …)</c>). Owned: TextBind/
+    /// ColorBind (the document/placeholder display), Wrap + Width (the AcceptsReturn wrap mechanics).</summary>
+    public const string PartText = "Text";
+    /// <summary>The ✕ clear button (WinUI DeleteButton), mounted while focused ∧ non-empty. Owned: OnClick (the
+    /// clear-keep-focus mechanics), TabStop (false — pointer focus must resolve to the field), Role.</summary>
+    public const string PartDeleteButton = "DeleteButton";
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
+
     // ── public surface (source-compatible with every existing call site) ─────────────────────────────────────────────
     public Signal<string>? Text;             // caller-owned (two-way); null → an internal signal seeded from Initial
     public string Initial = "";
@@ -118,8 +138,10 @@ public sealed class EditableText : Component
     public bool Chromeless;
     /// <summary>Content-lane padding override (WinUI TextBox <c>Padding</c>). Null = the TextBox default 10,5,6,6. The
     /// editable ComboBox passes ComboBoxEditableTextPadding 11,5,38,6 (ComboBox_themeresources.xaml:342) so the text
-    /// clears the 38px chevron column while the part spans the field's FULL width (:580 <c>Grid.ColumnSpan="2"</c>).</summary>
-    public Edges4? LanePadding;
+    /// clears the 38px chevron column while the part spans the field's FULL width (:580 <c>Grid.ColumnSpan="2"</c>).
+    /// INTERNAL (the composer seam stays in-assembly): the PUBLIC path is a <see cref="PartLane"/> modifier — apps
+    /// style parts through <see cref="TemplateParts"/>, never one-off styling knobs.</summary>
+    internal Edges4? LanePadding;
     /// <summary>Cancelable insert gate (WinUI <c>BeforeTextChanging</c>): receives the PROPOSED full text; return false
     /// to reject. Gates typing/paste/IME-commit/newline (deletions and undo are not cancelable here).</summary>
     public Func<string, bool>? BeforeTextChanging;
@@ -246,8 +268,28 @@ public sealed class EditableText : Component
             TextBind = BindDisplay,
             ColorBind = BindColor,
         };
+        // Parts: restyle the run (font family, size…); the display binds + wrap mechanics always win (caret/hit-test
+        // math reads the node's committed TextStyle, so a modifier-changed face flows into the geometry correctly).
+        textEl = Parts.Apply(PartText, textEl) with
+        {
+            Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
+            Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,
+            TextBind = BindDisplay,
+            ColorBind = BindColor,
+        };
 
         // lane (padded, clipping viewport) > scroller (carries the -ScrollX caret-follow transform) > text leaf.
+        Action<NodeHandle> laneCapture = h => _laneNode = h;
+        Element[] laneKids =
+        [
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center,
+                TransformBind = () => Affine2D.Translation(-scroll.Value, 0f),
+                OnRealized = h => _scrollerNode = h,
+                Children = [textEl],
+            },
+        ];
         var lane = new BoxEl
         {
             Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
@@ -255,18 +297,19 @@ public sealed class EditableText : Component
             // ComboBoxEditableTextPadding 11,5,38,6); the affix is a FULL-HEIGHT sibling outside this padding.
             Padding = LanePadding ?? new Edges4(10, 5, 6, 6),
             ClipToBounds = true,
-            OnRealized = h => _laneNode = h,
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 0, AlignItems = FlexAlign.Center,
-                    TransformBind = () => Affine2D.Translation(-scroll.Value, 0f),
-                    OnRealized = h => _scrollerNode = h,
-                    Children = [textEl],
-                },
-            ],
+            OnRealized = laneCapture,
+            Children = laneKids,
         };
+        if (Parts is { } lp)
+        {
+            var m = lp.Apply(PartLane, lane);
+            lane = m with
+            {
+                ClipToBounds = true,    // the caret-follow viewport must crop
+                Children = laneKids,    // the scroller wrapper IS the mechanism (−ScrollX TransformBind + caret/IME node)
+                OnRealized = TemplateParts.Chain(laneCapture, m.OnRealized),
+            };
+        }
 
         var rowChildren = new List<Element> { lane };
         if (RightAffix is not null)
@@ -299,7 +342,9 @@ public sealed class EditableText : Component
                 Fill = Tok.AccentDefault, Corners = CornerRadius4.All(0f),
             });
 
-        return new BoxEl
+        Action<NodeHandle> rootCapture = h => _rootNode = h;
+        Element[] rootKids = children.ToArray();
+        var root = new BoxEl
         {
             ZStack = true,
             Width = Width,
@@ -331,14 +376,33 @@ public sealed class EditableText : Component
             Focusable = IsEnabled,
             Role = AutomationRole.Text,
             Cursor = CursorId.IBeam,
-            OnRealized = h => _rootNode = h,
+            OnRealized = rootCapture,
             OnFocusChanged = HandleFocus,
             OnKeyDown = HandleKey,
             OnCharInput = HandleChar,
             OnPointerPressed = HandlePressed,
             OnDrag = HandleDrag,
-            Children = children.ToArray(),
+            Children = rootKids,
         };
+        if (Parts is { } rp)
+        {
+            var m = rp.Apply(PartRoot, root);
+            root = m with
+            {
+                ZStack = true,                 // the focus underline overlays the content row
+                IsEnabled = IsEnabled,         // the engine input gate
+                Focusable = IsEnabled,
+                Role = AutomationRole.Text,
+                OnFocusChanged = HandleFocus,
+                OnKeyDown = HandleKey,
+                OnCharInput = HandleChar,
+                OnPointerPressed = HandlePressed,
+                OnDrag = HandleDrag,
+                Children = rootKids,
+                OnRealized = TemplateParts.Chain(rootCapture, m.OnRealized),
+            };
+        }
+        return root;
     }
 
     // ── the WinUI TextControlButton inner-button family (TextBox DeleteButton / PasswordBox RevealButton) ──────────
@@ -359,6 +423,8 @@ public sealed class EditableText : Component
         HoverFill = Tok.FillSubtleSecondary,
         PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button,
+        // Explicit Arrow MASKS the field root's I-beam (CursorBit stops the dispatcher's hover walk) — WinUI forces
+        // exactly this on the affix buttons: SetCursor(MouseCursorArrow), TextBox_Partial.cpp:884 / PasswordBox_Partial.cpp:571.
         Cursor = CursorId.Arrow,
         // WinUI: both inner buttons are IsTabStop=False (DeleteButton TextBox_themeresources.xaml:339 + perf2026:293;
         // RevealButton PasswordBox_themeresources.xaml:193 + perf2026:135) — they can NEVER take focus, by Tab or by
@@ -380,7 +446,11 @@ public sealed class EditableText : Component
     };
 
     // The WinUI TextBox DeleteButton (TextBox_themeresources.xaml:205–251): GlyphElement E894 @ TextBoxIconFontSize=12.
-    private BoxEl DeleteButton() => InnerButton(Icons.ClearText, 12f, ClearAllKeepFocus);
+    private BoxEl DeleteButton()
+        => Parts.Apply(PartDeleteButton, InnerButton(Icons.ClearText, 12f, ClearAllKeepFocus)) with
+        {
+            OnClick = ClearAllKeepFocus, TabStop = false, Role = AutomationRole.Button,
+        };
 
     private void ClearAllKeepFocus()
     {

@@ -38,6 +38,10 @@ sealed class CalendarDatePickerPage : Component
 
 sealed class DateTimeOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Date & time",
-        "Controls for entering dates and times: CalendarView, CalendarDatePicker, DatePicker, TimePicker.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Date & time", "Controls for entering dates and times.",
+            GalleryPage.CategoryGrid("Date & time", navigate));
+    }
 }

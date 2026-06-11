@@ -94,6 +94,9 @@ public static class Repeater
     /// ElementIndexChanged), fired with item indices at realize time; <paramref name="visibleRange"/> is the prefetch
     /// hook (first,last); <paramref name="transition"/> maps ItemCollectionTransition onto the FLIP/Animate pipeline.
     /// </summary>
+    // Per-item chrome customization goes through the item-template seam (the ContainerFactory analogue), NOT
+    // TemplateParts — per-item part modifiers in recycled scroll paths are an allocation/recycling hazard
+    // (docs/guide/control-fidelity.md §6).
     public static Element ItemsRepeater(int count, Func<int, Element> template, in RepeatLayout layout,
                                         Func<int, string>? keyOf = null, int overscan = 4,
                                         Action<int>? elementPrepared = null, Action<int>? elementClearing = null,

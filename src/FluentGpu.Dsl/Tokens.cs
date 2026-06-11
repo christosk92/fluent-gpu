@@ -199,14 +199,21 @@ public static class Tok
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
     public static ColorF StrokeControlOnAccentTertiary => T.StrokeControlOnAccentTertiary;
 
-    /// <summary>WinUI ControlElevationBorderBrush: a 2-stop vertical gradient (secondary edge → default edge) — the
-    /// signature Fluent control border. Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
+    /// <summary>WinUI ControlElevationBorderBrush: a 2-stop vertical gradient — the signature Fluent control border.
+    /// Dark runs secondary→default top-down (Common_themeresources_any.xaml:186-191); LIGHT carries a ScaleTransform
+    /// ScaleY=-1 (:382-390) that mirrors it, anchoring the darker secondary edge at the BOTTOM. We have no brush
+    /// transform, so the light set emits the stops mirrored (offset p → 1−p: [0.33 Sec, 1 Def] → [0 Def, 0.67 Sec]).
+    /// Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
     public static GradientSpec ControlElevationBorder =>
-        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlSecondary), new GradientStop(1f, StrokeControlDefault)]);
+        Theme == ThemeKind.Light
+            ? new(GradientShape.Linear, 90f, [new GradientStop(0f, StrokeControlDefault), new GradientStop(0.67f, StrokeControlSecondary)])
+            : new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlSecondary), new GradientStop(1f, StrokeControlDefault)]);
 
-    /// <summary>WinUI AccentControlElevationBorderBrush: the on-accent variant (for accent buttons / checked toggles).</summary>
+    /// <summary>WinUI AccentControlElevationBorderBrush (accent buttons / checked toggles): BOTH themes carry the
+    /// ScaleY=-1 mirror (Common_themeresources_any.xaml:198-205 dark / :397-404 light) — the darker on-accent
+    /// secondary edge sits at the BOTTOM. Emitted with the stops mirrored ([0.33 Sec, 1 Def] → [0 Def, 0.67 Sec]).</summary>
     public static GradientSpec AccentControlElevationBorder =>
-        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlOnAccentSecondary), new GradientStop(1f, StrokeControlOnAccentDefault)]);
+        new(GradientShape.Linear, 90f, [new GradientStop(0f, StrokeControlOnAccentDefault), new GradientStop(0.67f, StrokeControlOnAccentSecondary)]);
 
     /// <summary>WinUI CircleElevationBorderBrush (Common_themeresources_any.xaml:192-198 dark / :391-397 light): a
     /// RelativeToBoundingBox vertical 2-stop gradient — ControlStrokeColorDefault @0.50 → ControlStrokeColorSecondary

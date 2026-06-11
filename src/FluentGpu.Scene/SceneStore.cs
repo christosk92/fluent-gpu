@@ -63,6 +63,7 @@ public sealed class SceneStore : ISceneBackend
     private Action<Point2>?[] _hoverMove;     // position-aware bare-hover move (no press) — RatingControl preview, etc.
     private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
     private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
+    private Action<WheelEventArgs>?[] _pointerWheel;        // element-level wheel hook (pre-viewport-scroll; NumberBox)
     private Action<Point2>?[] _contextRequested;           // right-click / Menu-key context request (local coords)
     private Action<bool>?[] _focusChanged;                 // dispatcher focus moved onto (true) / off (false) this node (GotFocus/LostFocus)
     // Drag-reorder lifecycle (E5): fired by Input.DragController once a CanDrag press crosses the drag threshold.
@@ -145,6 +146,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove = new Action<Point2>?[capacity];
         _pointerExit = new Action?[capacity];
         _pointerPressed = new Action<PointerEventArgs>?[capacity];
+        _pointerWheel = new Action<WheelEventArgs>?[capacity];
         _contextRequested = new Action<Point2>?[capacity];
         _focusChanged = new Action<bool>?[capacity];
         _dragStarted = new Action<DragEventArgs>?[capacity];
@@ -182,6 +184,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
+        _pointerWheel[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
         _dragStarted[idx] = null;
@@ -218,6 +221,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
+        _pointerWheel[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
         _dragStarted[idx] = null;
@@ -330,35 +334,59 @@ public sealed class SceneStore : ISceneBackend
     public ref NodeFlags Flags(NodeHandle h) => ref _flags[h.Raw.Index];
     public ushort ElementTypeId(NodeHandle h) => _elementTypeId[h.Raw.Index];
 
-    public void SetClickHandler(NodeHandle h, Action? handler) => _click[h.Raw.Index] = handler;
-    public Action? GetClickHandler(NodeHandle h) => _click[h.Raw.Index];
-    public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[h.Raw.Index] = handler;
-    public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[h.Raw.Index];
-    public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[h.Raw.Index] = handler;
-    public Action<CharEventArgs>? GetCharHandler(NodeHandle h) => _charHandler[h.Raw.Index];
-    public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[h.Raw.Index] = handler;
-    public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
-    public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
-    public Action<Point2>? GetDrag(NodeHandle h) => _drag[h.Raw.Index];
-    public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[h.Raw.Index] = handler;
-    public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[h.Raw.Index];
-    public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[h.Raw.Index] = handler;
-    public Action? GetPointerExit(NodeHandle h) => _pointerExit[h.Raw.Index];
-    public void SetPointerPressed(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerPressed[h.Raw.Index] = handler;
-    public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[h.Raw.Index];
-    public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[h.Raw.Index] = handler;
-    public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[h.Raw.Index];
-    public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[h.Raw.Index] = handler;
-    public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[h.Raw.Index];
+    private int LiveIndex(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        if (raw > 0 && raw < (uint)_high)
+        {
+            int idx = (int)raw;
+            if (_gen[idx] == h.Raw.Gen) return idx;
+        }
+        throw new InvalidOperationException($"Node handle {h} is not live in this SceneStore.");
+    }
+
+    private int LiveIndexOrZero(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        if (raw > 0 && raw < (uint)_high)
+        {
+            int idx = (int)raw;
+            if (_gen[idx] == h.Raw.Gen) return idx;
+        }
+        return 0;
+    }
+
+    public void SetClickHandler(NodeHandle h, Action? handler) => _click[LiveIndex(h)] = handler;
+    public Action? GetClickHandler(NodeHandle h) => _click[LiveIndexOrZero(h)];
+    public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[LiveIndex(h)] = handler;
+    public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[LiveIndexOrZero(h)];
+    public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[LiveIndex(h)] = handler;
+    public Action<CharEventArgs>? GetCharHandler(NodeHandle h) => _charHandler[LiveIndexOrZero(h)];
+    public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[LiveIndex(h)] = handler;
+    public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[LiveIndexOrZero(h)];
+    public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[LiveIndex(h)] = handler;
+    public Action<Point2>? GetDrag(NodeHandle h) => _drag[LiveIndexOrZero(h)];
+    public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[LiveIndex(h)] = handler;
+    public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[LiveIndexOrZero(h)];
+    public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[LiveIndex(h)] = handler;
+    public Action? GetPointerExit(NodeHandle h) => _pointerExit[LiveIndexOrZero(h)];
+    public void SetPointerPressed(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerPressed[LiveIndex(h)] = handler;
+    public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[LiveIndexOrZero(h)];
+    public void SetPointerWheel(NodeHandle h, Action<WheelEventArgs>? handler) => _pointerWheel[LiveIndex(h)] = handler;
+    public Action<WheelEventArgs>? GetPointerWheel(NodeHandle h) => _pointerWheel[LiveIndexOrZero(h)];
+    public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[LiveIndex(h)] = handler;
+    public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[LiveIndexOrZero(h)];
+    public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[LiveIndex(h)] = handler;
+    public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[LiveIndexOrZero(h)];
     // Drag-reorder lifecycle columns (E5) — set by the reconciler from BoxEl.CanDrag, read by Input.DragController.
-    public void SetDragStarted(NodeHandle h, Action<DragEventArgs>? handler) => _dragStarted[h.Raw.Index] = handler;
-    public Action<DragEventArgs>? GetDragStarted(NodeHandle h) => _dragStarted[h.Raw.Index];
-    public void SetDragDelta(NodeHandle h, Action<DragEventArgs>? handler) => _dragDelta[h.Raw.Index] = handler;
-    public Action<DragEventArgs>? GetDragDelta(NodeHandle h) => _dragDelta[h.Raw.Index];
-    public void SetDragCompleted(NodeHandle h, Action<DragEventArgs>? handler) => _dragCompleted[h.Raw.Index] = handler;
-    public Action<DragEventArgs>? GetDragCompleted(NodeHandle h) => _dragCompleted[h.Raw.Index];
-    public void SetDragCanceled(NodeHandle h, Action? handler) => _dragCanceled[h.Raw.Index] = handler;
-    public Action? GetDragCanceled(NodeHandle h) => _dragCanceled[h.Raw.Index];
+    public void SetDragStarted(NodeHandle h, Action<DragEventArgs>? handler) => _dragStarted[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragStarted(NodeHandle h) => _dragStarted[LiveIndexOrZero(h)];
+    public void SetDragDelta(NodeHandle h, Action<DragEventArgs>? handler) => _dragDelta[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragDelta(NodeHandle h) => _dragDelta[LiveIndexOrZero(h)];
+    public void SetDragCompleted(NodeHandle h, Action<DragEventArgs>? handler) => _dragCompleted[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragCompleted(NodeHandle h) => _dragCompleted[LiveIndexOrZero(h)];
+    public void SetDragCanceled(NodeHandle h, Action? handler) => _dragCanceled[LiveIndex(h)] = handler;
+    public Action? GetDragCanceled(NodeHandle h) => _dragCanceled[LiveIndexOrZero(h)];
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
@@ -555,6 +583,29 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
 
+    // ── sticky registry (CSS position:sticky, top edge) ─────────────────────────────────────────
+    // Node index → (handle, top inset, pin-state observer). The reconciler Set/Clears it from BoxEl.StickyTop each
+    // reconcile (slot reuse self-cleans like the transition side-table); the host's phase-7 sticky pass iterates it
+    // and writes the pin offset as the node's LocalTransform — so HIT-TESTING follows the PINNED position
+    // (AbsoluteRect sums transforms) — and fires OnPinned on engage/release transitions (the CSS :stuck observable).
+    private readonly Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> _sticky = new();
+    /// <summary>All sticky-declared nodes, keyed by slot index — consumed by the host's per-frame sticky pass.</summary>
+    public Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> StickyNodes => _sticky;
+    public void SetSticky(NodeHandle h, float inset, Action<bool>? onPinned = null) => _sticky[(int)h.Raw.Index] = (h, inset, onPinned);
+    public void ClearSticky(NodeHandle h)
+    {
+        if (!_sticky.Remove((int)h.Raw.Index)) return;
+        if (!IsLive(h)) return;
+        // Un-declaring while pinned: release the pin transform and the paint-order boost.
+        ref NodePaint p = ref Paint(h);
+        if (p.LocalTransform.Dy != 0f || p.LocalTransform.Dx != 0f)
+        {
+            p.LocalTransform = Affine2D.Identity;
+            Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        Unmark(h, NodeFlags.StickyPinned);
+    }
+
     /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
     public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)
     {
@@ -689,7 +740,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
-        Array.Resize(ref _pointerPressed, n); Array.Resize(ref _contextRequested, n);
+        Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);
         Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
         Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);

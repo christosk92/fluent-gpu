@@ -29,30 +29,31 @@ public static partial class RadioButtons
     public const float RowSpacing = 8f;      // RadioButtonsRowSpacing (RadioButtons_themeresources.xaml:19)
     public const float HeaderGap = 8f;       // RadioButtonsTopHeaderMargin 0,0,0,8 (RadioButtons_themeresources.xaml:20)
 
-    /// <summary>String items (the WinUI ItemsSource-of-strings shape).</summary>
+    /// <summary>String items (the WinUI ItemsSource-of-strings shape). <paramref name="parts"/> = the per-item
+    /// <see cref="RadioButton"/> template parts (PartRing/PartDot/…), applied to EVERY item (not virtualized).</summary>
     public static Element Create(IReadOnlyList<string> items, int selectedIndex, Action<int> onSelect,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
-                                 RadioButton.Style? style = null)
+                                 RadioButton.Style? style = null, TemplateParts? parts = null)
         => Ctx.Provide(Props.Channel,
                        new Props(items.Count, items, null, selectedIndex, onSelect, header, maxColumns, isEnabled,
-                                 style ?? RadioButton.DefaultStyle),
+                                 style ?? RadioButton.DefaultStyle, parts),
                        Embed.Comp(() => new RadioButtonsCore()));
 
     /// <summary>Element-factory items: <paramref name="itemContent"/>(i) renders each item's content in place of the
     /// text label (the WinUI arbitrary-content item wrapped in a RadioButton).</summary>
     public static Element Create(int itemCount, Func<int, Element> itemContent, int selectedIndex, Action<int> onSelect,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
-                                 RadioButton.Style? style = null)
+                                 RadioButton.Style? style = null, TemplateParts? parts = null)
         => Ctx.Provide(Props.Channel,
                        new Props(itemCount, null, itemContent, selectedIndex, onSelect, header, maxColumns, isEnabled,
-                                 style ?? RadioButton.DefaultStyle),
+                                 style ?? RadioButton.DefaultStyle, parts),
                        Embed.Comp(() => new RadioButtonsCore()));
 
     /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory (Reconciler.cs:211-219),
     /// so props must flow through a provider.</summary>
     internal sealed record Props(int Count, IReadOnlyList<string>? Labels, Func<int, Element>? Content, int Selected,
                                  Action<int> OnSelect, string? Header, int MaxColumns, bool IsEnabled,
-                                 RadioButton.Style Style)
+                                 RadioButton.Style Style, TemplateParts? Parts = null)
     {
         internal static readonly Context<Props?> Channel = new(null);
     }
@@ -142,7 +143,8 @@ internal sealed class RadioButtonsCore : Component
                 s, p.IsEnabled,
                 focusable: i == tabStop,                                   // roving single tab stop (RadioButtons.xaml:5-6)
                 onKeyDown: a => OnItemKey(idx, a),
-                onRealized: h => { while (handles.Count <= idx) handles.Add(NodeHandle.Null); handles[idx] = h; });
+                onRealized: h => { while (handles.Count <= idx) handles.Add(NodeHandle.Null); handles[idx] = h; },
+                parts: p.Parts);
         }
 
         // Columns of items, column-major (ArrangeOverride, ColumnMajorUniformToLargestGridLayout.cpp:48-120).

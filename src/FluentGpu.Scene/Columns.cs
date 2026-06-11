@@ -87,6 +87,10 @@ public struct NodePaint
     // Authored clip-rect (node-local space): when not Infinite, the recorder intersects the child clip with it (composes
     // with ClipsToBounds). Animated by AnimEngine ClipL/T/R/B (e.g. an Expander/CommandBarFlyout reveal). Default Infinite.
     public RectF ClipRect;
+    // Child-group offset (a SizeMode.Reflow Trailing anchor): when non-zero, the recorder shifts every CHILD's origin
+    // by this amount while the node's own fill/border/clip stay put — so the content's end edge rides the animated
+    // layout edge (the Expander slide-from-under-the-header). Written by the reflow re-solve each tick; 0 at rest.
+    public float ChildShiftX, ChildShiftY;
     public float StrokeTrimStart, StrokeTrimEnd;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
@@ -257,7 +261,11 @@ public struct TextEditState
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key, bit2 = pointer, bit3 = char, bit4 = repeat, bit5 = pressed, bit6 = context
+    public ushort HandlerMask;    // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
+                                  // bit7 focus, bit8 drag, bit9 explicit cursor, bit10 no-Enter-activate,
+                                  // bit11 no-pointer-focus, bit12 wheel
+    /// <summary>Meaningful only while <see cref="CursorBit"/> is set (an element-declared cursor); without the bit the
+    /// dispatcher's hover walk skips this node and falls through to the system arrow — there is no clickable⇒hand default.</summary>
     public CursorId Cursor;
     public AutomationRole Role;   // semantic control role (set by control factories) → UIA ControlType / devtools / tests
     public bool Focusable;
@@ -282,4 +290,18 @@ public struct InteractionInfo
                                           // dispatcher skip the handler-column lookup on every focus move
     public const ushort DragBit = 256;    // drag-reorder source (BoxEl.CanDrag): hit-testable; a press arms
                                           // Input.DragController and the drag lifecycle columns fire past the 4px box
+    public const ushort CursorBit = 512;  // element declared an explicit Cursor (WinUI SetCursor): the hover walk
+                                          // resolves it and STOPS here — an explicit Arrow masks an ancestor I-beam/hand
+                                          // (TextBox delete button / PasswordBox reveal over the field's I-beam)
+    public const ushort NoEnterActivateBit = 1024;  // clickable opts OUT of Enter activation (WinUI KeyPress::Button
+                                                    // bAcceptsReturn=false — CheckBox/RadioButton/ToggleSwitch are
+                                                    // Space-only; Enter falls through to normal key routing)
+    public const ushort NoPointerFocusBit = 2048;   // WinUI AllowFocusOnInteraction=False: a press never moves focus
+                                                    // to (or past) this focusable — Tab still reaches it
+    public const ushort WheelBit = 4096;            // element-level OnPointerWheel handler (NumberBox value stepping):
+                                                    // consulted before the viewport scroll; Handled stops the scroll
+
+    /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
+    /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>
+    public float RepeatDelayMs, RepeatIntervalMs;
 }

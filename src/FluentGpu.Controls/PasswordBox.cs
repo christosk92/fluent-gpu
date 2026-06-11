@@ -39,6 +39,24 @@ public enum PasswordRevealMode : byte { Peek = 0, Hidden = 1, Visible = 2 }
 /// </summary>
 public sealed class PasswordBox : Component
 {
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The returned column root (pure layout: header / field / description / peek watcher). Owned: Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The header label (WinUI HeaderContentPresenter; a TextEl — use <c>Parts.Set&lt;TextEl&gt;</c>). Owned: none.</summary>
+    public const string PartHeader = "Header";
+    /// <summary>The description label (WinUI DescriptionPresenter; a TextEl). Owned: none.</summary>
+    public const string PartDescription = "Description";
+    /// <summary>The press-and-hold reveal "eye" (WinUI RevealButton). Owned: OnClick + OnPointerDown (the peek
+    /// mechanics), TabStop (false — pointer focus must resolve to the field), OnRealized (the Pressed-flag watcher
+    /// capture, chained). NOTE: built ONCE and cached (the SetRightAffix identity seam), so the modifier runs at the
+    /// FIRST render only — keep it static (no signal-driven restyling here).</summary>
+    public const string PartRevealButton = "RevealButton";
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract. The inner field chrome is the composed <see cref="EditableText"/>'s
+    /// own (not forwarded — its part names would collide with this control's).</summary>
+    public TemplateParts? Parts;
+
     public string Placeholder = "Password";
     public float Width = 280f;
     public string? Header;
@@ -65,13 +83,14 @@ public sealed class PasswordBox : Component
         string? description = null,
         Signal<string>? password = null,
         Action<string>? onPasswordChanged = null,
-        Action<string>? onCommit = null)
+        Action<string>? onCommit = null,
+        TemplateParts? parts = null)
         => Embed.Comp(() => new PasswordBox
         {
             Placeholder = placeholder, Width = width, Header = header,
             RevealMode = revealMode, PasswordChar = passwordChar, MaxLength = maxLength, IsEnabled = isEnabled,
             Description = description, Password = password,
-            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit,
+            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit, Parts = parts,
         });
 
     private EditableText? _edit;
@@ -118,10 +137,23 @@ public sealed class PasswordBox : Component
         // RevealButton: U+F78D @ 12 (PasswordBox_themeresources.xaml:100 + PasswordBoxIconFontSize :9), Width 30
         // stretch (:193), the shared TextControlButton chrome. Press-and-hold = reveal on pointer DOWN; the release
         // watcher below re-masks when the engine Pressed flag drops (release inside, outside, or drag-off).
-        _revealButton ??= EditableText.InnerButton(Icons.RevealPassword, 12f,
-            onClick: Remask,
-            onPointerDown: _ => { revealed.Value = true; _edit?.SetRevealed(true); },
-            onRealized: h => _revealNode = h);
+        if (_revealButton is null)
+        {
+            Action<NodeHandle> revealCapture = h => _revealNode = h;
+            Action<Point2> peekDown = _ => { revealed.Value = true; _edit?.SetRevealed(true); };
+            var eye = EditableText.InnerButton(Icons.RevealPassword, 12f,
+                onClick: Remask, onPointerDown: peekDown, onRealized: revealCapture);
+            if (Parts is { } rp)
+            {
+                var m = rp.Apply(PartRevealButton, eye);
+                eye = m with
+                {
+                    OnClick = Remask, OnPointerDown = peekDown, TabStop = false,
+                    OnRealized = TemplateParts.Chain(revealCapture, m.OnRealized),
+                };
+            }
+            _revealButton = eye;
+        }
 
         var field = Embed.Comp(() =>
         {
@@ -175,17 +207,18 @@ public sealed class PasswordBox : Component
             // HeaderContentPresenter: TextControlHeaderForeground (BaseHigh, generic.xaml:886+207/4132); Disabled →
             // TextControlHeaderForegroundDisabled (PasswordBox_themeresources.xaml:111–112 + generic.xaml:887);
             // Margin = PasswordBoxTopHeaderMargin 0,0,0,8 (PasswordBox_themeresources.xaml:8); FontSize inherits 14.
-            children.Add(new TextEl(Header)
+            children.Add(Parts.Apply(PartHeader, new TextEl(Header)
             {
                 Size = 14f,
                 Color = IsEnabled ? Tok.TextControlHeaderForeground : Tok.TextControlHeaderForegroundDisabled,
                 Margin = new Edges4(0, 0, 0, 8f),
-            });
+            }));
         children.Add(field);
         if (Description is not null)
             // DescriptionPresenter (PasswordBox_themeresources.xaml:194): SystemControlDescriptionTextForegroundBrush
             // (BaseMedium, generic.xaml:327+209/4134).
-            children.Add(new TextEl(Description) { Size = 14f, Color = Tok.TextControlDescriptionForeground });
+            children.Add(Parts.Apply(PartDescription,
+                new TextEl(Description) { Size = 14f, Color = Tok.TextControlDescriptionForeground }));
 
         // Peek release watcher: mounted only while revealed — re-masks the moment the reveal button stops being
         // pressed (engine NodeFlags.Pressed drops on PointerUp/cancel), covering release-outside and drag-off, which
@@ -199,8 +232,10 @@ public sealed class PasswordBox : Component
             }));
 
         // The root shape stays a STABLE BoxEl across renders: mounting the watcher must not flip the root element
-        // type (ComponentEl ↔ BoxEl), which would remount the field and drop focus mid-peek.
-        return new BoxEl { Direction = 1, Children = children.ToArray() };
+        // type (ComponentEl ↔ BoxEl), which would remount the field and drop focus mid-peek (Apply is type-preserving,
+        // so a Parts modifier cannot flip it either).
+        Element[] kids = children.ToArray();
+        return Parts.Apply(PartRoot, new BoxEl { Direction = 1, Children = kids }) with { Children = kids };
     }
 }
 

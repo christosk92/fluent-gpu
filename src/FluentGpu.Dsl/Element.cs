@@ -61,8 +61,14 @@ public sealed record BoxEl : Element
     public KeyAccelerator? Accelerator { get; init; }
     /// <summary>Access-key mnemonic (WinUI AccessKey): Alt+letter invokes <see cref="OnClick"/>. Uppercase 'A'..'Z'/'0'..'9'.</summary>
     public char AccessKey { get; init; }
-    /// <summary>Pointer cursor shown while hovering this node (overrides the OnClick hand default). Null = inherit.</summary>
+    /// <summary>Pointer cursor shown while hovering this node or any cursor-less descendant (WinUI SetCursor). Null =
+    /// inherit from the nearest declaring ancestor, else the system arrow — clickability does NOT imply the hand. An
+    /// explicit value (Arrow included) terminates the lookup, masking an ancestor's I-beam/hand (the TextBox delete
+    /// button / PasswordBox reveal force Arrow over the field's I-beam — TextBox_Partial.cpp:884).</summary>
     public CursorId? Cursor { get; init; }
+    /// <summary>Element-level wheel hook (WinUI PointerWheelChanged), consulted BEFORE the enclosing viewport scrolls;
+    /// set <c>Handled</c> to consume (NumberBox value stepping). Unhandled keeps walking up (routed-event semantics).</summary>
+    public Action<WheelEventArgs>? OnPointerWheel { get; init; }
     /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
     /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
     public Action<Point2>? OnHoverMove { get; init; }
@@ -103,8 +109,21 @@ public sealed record BoxEl : Element
     /// click/pointer hit-testable.</summary>
     public DropTargetSpec? DropTarget { get; init; }
     /// <summary>Opt this clickable node into auto-repeat: while held, the host's RepeatTicker re-invokes <see cref="OnClick"/>
-    /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Cancels on release / drag-off.</summary>
+    /// after an initial delay, then at a fixed interval (WinUI RepeatButton). Pauses while the held pointer leaves the
+    /// node (fresh delay on re-entry — RepeatButton_Partial.cpp:530-574); a held Space arms the same engine timer.</summary>
     public bool Repeats { get; init; }
+    /// <summary>WinUI RepeatButton <c>Delay</c>/<c>Interval</c> (ms) for <see cref="Repeats"/> nodes. NaN = the WinUI
+    /// DP defaults (500/33); the ScrollBar template arrows use Interval=50 (ScrollBar_themeresources.xaml).</summary>
+    public float RepeatDelayMs { get; init; } = float.NaN;
+    public float RepeatIntervalMs { get; init; } = float.NaN;
+    /// <summary>WinUI <c>KeyPress::Button bAcceptsReturn</c>: false = Enter does NOT activate this clickable (it falls
+    /// through to normal key routing) — CheckBox (CheckBox_Partial.cpp:27), RadioButton (RadioButton_Partial.cpp:30)
+    /// and ToggleSwitch (ToggleSwitch_Partial.cpp:1002-1007) toggle on Space only. Space activation is unaffected.</summary>
+    public bool ActivateOnEnter { get; init; } = true;
+    /// <summary>WinUI <c>AllowFocusOnInteraction</c>: false = a pointer press never moves focus to this focusable (and
+    /// never falls past it to an ancestor — focus stays where it was, AppBarButton_themeresources.xaml:136); keyboard
+    /// Tab still reaches it. True (default) = press focuses the nearest focusable self-or-ancestor.</summary>
+    public bool AllowFocusOnInteraction { get; init; } = true;
     public bool HitTestVisible { get; init; } = true;
     /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
     /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
@@ -181,6 +200,20 @@ public sealed record BoxEl : Element
     /// laid-out rect each commit and drives the residual through the spec's channels/dynamics (no relayout, no
     /// per-frame re-render). Null ⇒ snap (the default). See <see cref="FluentGpu.Foundation.LayoutTransition"/>.</summary>
     public LayoutTransition? Animate { get; init; }
+
+    /// <summary>CSS <c>position: sticky; top: N</c> — the box scrolls normally until its top edge reaches N device-
+    /// independent pixels below its nearest scroll viewport's top, then PINS there while its PARENT (the containing
+    /// block) is in view; it never escapes the parent's bounds. The pin is a per-frame LocalTransform written by the
+    /// host (compositor-only, no relayout) and hit-testing follows the pinned position; while pinned the node paints
+    /// ABOVE its siblings so content scrolls underneath. One transform owner per node: do not combine with
+    /// <see cref="TransformBind"/> or transform-channel animations. Null = not sticky (the default).</summary>
+    public float? StickyTop { get; init; }
+
+    /// <summary>Observable pin state for a <see cref="StickyTop"/> box — the signals-native CSS <c>:stuck</c>: the
+    /// host invokes this whenever the box transitions pinned ↔ unpinned. Wire it to a signal and restyle ANYTHING off
+    /// it (an opaque fill so content can't show through, a shadow, a compact variant, different children) — strictly
+    /// more flexible than a fixed pinned style. Fired at most once per transition, never per frame.</summary>
+    public Action<bool>? OnPinned { get; init; }
 
     /// <summary>Optional shared-element key: a node with the same MorphId across reconciles morphs from the old node's
     /// rect to the new one (matched-geometry / Hero). Reserved for v1.1.</summary>
@@ -286,7 +319,11 @@ public sealed record TextEl(string Text) : Element
 
     public float Size { get; init; } = 14f;
     public bool Bold { get; init; }
-    public ColorF Color { get; init; } = ColorF.FromRgba(0xE6, 0xE6, 0xE6);
+    /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (WinUI TextBlock default foreground —
+    /// dark #FFFFFF / light #E4000000), resolved at element CONSTRUCTION. NOTE: a runtime <c>Tok.Use</c> switch does
+    /// not itself re-render — the theme is set at startup today; a live theme switcher must force a full re-render
+    /// or every construction-resolved color (this default, control Style records) goes stale.</summary>
+    public ColorF Color { get; init; } = Tok.TextPrimary;
     // Stateful foreground ramps (WinUI dims/recolors label & glyph foreground on hover/press/disabled/focus). A==0 ⇒
     // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
     // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).

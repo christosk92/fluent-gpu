@@ -230,6 +230,8 @@ public sealed class ListView : Component
         // L4 chrome around the L3 substrate. Slot → item projection rides the template + key functions, so a
         // dwell-committed live reorder MOVES keyed nodes (the FLIP pipeline animates the displaced siblings while
         // DragController re-anchors the pointer-held visual).
+        // Per-item chrome customization goes through the ContainerFactory seam, NOT TemplateParts — per-item part
+        // modifiers in recycled scroll paths are an allocation/recycling hazard (docs/guide/control-fidelity.md §6).
         BoxEl Chrome(int slot, Element content, ItemChromeState state,
                      Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged)
         {

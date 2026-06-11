@@ -66,6 +66,31 @@ public sealed class AutoSuggestBox : Component
     public const float QueryButtonLeftMargin = 2f;
     public const float TextChangedDebounceMs = 150f;
 
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The field surface root (the chrome + popup anchor). Owned: OnKeyDown (the Up/Down suggestion nav),
+    /// Role, Children, OnRealized (the anchor capture, chained). The open-state corner squaring (KeepInteriorCornersSquare)
+    /// is recomputed per render BEFORE the modifier — override Corners to opt out.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The query-button plate (WinUI QueryButton — the INNER presenter that carries the TextControlButton
+    /// chrome; the fixed 32×28 outer slot is not a part). Owned: OnClick (submit), Role.</summary>
+    public const string PartQueryButton = "QueryButton";
+    /// <summary>The query glyph (a TextEl — use <c>Parts.Set&lt;TextEl&gt;</c>; the glyph STRING is the
+    /// <see cref="QueryIcon"/> prop). Owned: none.</summary>
+    public const string PartQueryIcon = "QueryIcon";
+    /// <summary>The popup scroll host (WinUI SuggestionsList; a ScrollEl — use <c>Parts.Set&lt;ScrollEl&gt;</c>).
+    /// Owned: Content (the row column), ContentSized (the size-to-rows mechanic). Modifiers run inside the popup
+    /// body's render, so they re-evaluate per keystroke.</summary>
+    public const string PartSuggestionsList = "SuggestionsList";
+    /// <summary>EVERY suggestion row plate (a repeated part — the popup list is built per render, NOT
+    /// virtualized/recycled). Owned: OnClick (choose + submit), Role. The keyboard-cursor/selected Fill is recomputed
+    /// per render BEFORE the modifier.</summary>
+    public const string PartSuggestionItem = "SuggestionItem";
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract. The inner field chrome is the composed <see cref="EditableText"/>'s
+    /// own (not forwarded — its part names would collide with this control's).</summary>
+    public TemplateParts? Parts;
+
     public IReadOnlyList<string> Suggestions = [];
     public string Placeholder = "Search";
     public float Width = 280f;
@@ -96,13 +121,14 @@ public sealed class AutoSuggestBox : Component
         float maxPopupHeight = MaxPopupHeight,
         float debounceMs = TextChangedDebounceMs,
         Action<string, TextChangeReason>? textChanged = null,
-        bool updateTextOnSelect = true)
+        bool updateTextOnSelect = true,
+        TemplateParts? parts = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, Placeholder = placeholder, Width = width, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
-            TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect,
+            TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts,
         });
 
     // Re-filter helper shared by the root (open-decision) and the popup body (render). Case-insensitive substring;
@@ -341,27 +367,27 @@ public sealed class AutoSuggestBox : Component
             // (generic.xaml:889), hover = SubtleFillColorSecondary #0FFFFFFF/#09000000, press = SubtleFillColorTertiary
             // #0AFFFFFF/#06000000 (TextBox_themeresources.xaml:40–41/147–148); glyph E721 @ AutoSuggestBoxIconFontSize
             // 12, TextFillColorSecondary → pressed TextFillColorTertiary (:45–47/152–154).
+            var queryPlate = new BoxEl
+            {
+                Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = Radii.ControlAll, Role = AutomationRole.Button,
+                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                OnClick = SubmitQuery,
+                Children = [Parts.Apply(PartQueryIcon, new TextEl(QueryIcon!)
+                {
+                    Size = IconFontSize, FontFamily = Theme.IconFont,
+                    Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
+                })],
+            };
+            // Parts: restyle the plate (fills, corners, plate inset…); the submit mechanics always win.
+            queryPlate = Parts.Apply(PartQueryButton, queryPlate) with { OnClick = SubmitQuery, Role = AutomationRole.Button };
             children.Add(new BoxEl
             {
                 Width = QueryButtonWidth, Height = QueryButtonHeight,
                 Margin = new Edges4(QueryButtonLeftMargin, 0, RightButtonMargin, 0),
                 AlignItems = FlexAlign.Stretch,
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
-                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = Radii.ControlAll, Role = AutomationRole.Button,
-                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-                        OnClick = SubmitQuery,
-                        Children = [new TextEl(QueryIcon!)
-                        {
-                            Size = IconFontSize, FontFamily = Theme.IconFont,
-                            Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
-                        }],
-                    },
-                ],
+                Children = [queryPlate],
             });
         }
 
@@ -380,16 +406,30 @@ public sealed class AutoSuggestBox : Component
             ? new CornerRadius4(Radii.Control, Radii.Control, 0f, 0f)
             : Radii.ControlAll;
 
-        return new BoxEl
+        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        Element[] rootKids = children.ToArray();
+        var root = new BoxEl
         {
             // WinUI AutoSuggestBox field surface: ControlCornerRadius, 1px ControlStrokeColorDefault, ControlFillColorDefault.
             Direction = 0, Width = Width, MinHeight = 32f, AlignItems = FlexAlign.Center,
             Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
             Role = AutomationRole.ComboBox,
-            OnRealized = h => anchor.Value = h,
+            OnRealized = anchorCapture,
             OnKeyDown = HandleNavKeys,                 // Up/Down bubble up to here from the focused field
-            Children = children.ToArray(),
+            Children = rootKids,
         };
+        if (Parts is { } rp)
+        {
+            var m = rp.Apply(PartRoot, root);
+            root = m with
+            {
+                Role = AutomationRole.ComboBox,
+                OnKeyDown = HandleNavKeys,
+                Children = rootKids,
+                OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
+            };
+        }
+        return root;
     }
 
     private void RaiseTextChanged(string text, TextChangeReason reason)
@@ -440,12 +480,14 @@ internal sealed class SuggestionsList : Component
                 ],
             };
 
+        var parts = Owner.Parts;   // popup-local, NON-virtualized rows: per-row part modifiers are safe here
         var rows = new Element[matches.Count];
         for (int i = 0; i < matches.Count; i++)
         {
             int idx = i;
             bool selected = idx == hi;
-            rows[i] = new BoxEl
+            Action choose = () => OnChoose(idx);
+            var row = new BoxEl
             {
                 MinHeight = AutoSuggestBox.ItemMinHeight,   // ListViewItemMinHeight = 40 (ListViewItem_themeresources.xaml:14)
                 AlignItems = FlexAlign.Center,
@@ -459,9 +501,12 @@ internal sealed class SuggestionsList : Component
                 Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // keyboard-cursor / selected fill
                 HoverFill = Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
-                OnClick = () => OnChoose(idx),
+                OnClick = choose,
                 Children = [new TextEl(matches[idx]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
             };
+            if (parts is not null)
+                row = parts.Apply(AutoSuggestBox.PartSuggestionItem, row) with { OnClick = choose, Role = AutomationRole.MenuItem };
+            rows[i] = row;
         }
 
         // Cap the list at AutoSuggestListMaxHeight (374), clipping the overflow; size to content. AutoSuggestListPadding
@@ -474,7 +519,7 @@ internal sealed class SuggestionsList : Component
             MinWidth = Owner.Width,
             Margin = new Edges4(-1, 0, -1, 0), Children = rows,
         };
-        return new ScrollEl
+        var list = new ScrollEl
         {
             Content = column,
             ContentSized = true,
@@ -482,6 +527,9 @@ internal sealed class SuggestionsList : Component
             MinWidth = Owner.Width,
             MaxHeight = Owner.MaxHeight,
         };
+        if (parts is not null)
+            list = parts.Apply(AutoSuggestBox.PartSuggestionsList, list) with { Content = column, ContentSized = true };
+        return list;
     }
 }
 

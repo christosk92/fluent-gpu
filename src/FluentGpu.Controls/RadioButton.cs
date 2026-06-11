@@ -14,6 +14,24 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class RadioButton
 {
+    // Template parts (the TemplateParts door; see Expander for the reference adoption). Each part's doc lists the
+    // props the control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The returned clickable row (WinUI RootGrid). Owned: OnClick (the select), OnKeyDown (the container's
+    /// arrow roving), OnRealized (handle capture, chained), Role, TabStop (the roving single-tab-stop contract),
+    /// Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The 20px outer ellipse (WinUI OuterEllipse/CheckOuterEllipse). Owned: Children (the conditional dot
+    /// mount — CheckGlyph when selected, PressedCheckGlyph when not).</summary>
+    public const string PartRing = "Ring";
+    /// <summary>The selected accent dot (WinUI CheckGlyph). Owned: Key (reconcile identity), Animate (the
+    /// disabled-entry 12→14 resize spec).</summary>
+    public const string PartDot = "Dot";
+    /// <summary>The unchecked-pressed 4px proto-dot (WinUI PressedCheckGlyph). Owned: Key (reconcile identity).</summary>
+    public const string PartPressedDot = "PressedDot";
+    /// <summary>The default text label (a <see cref="TextEl"/> — use <c>Parts.Set&lt;TextEl&gt;(RadioButton.PartLabel, …)</c>);
+    /// not applied when a content element fills the slot (slots restructure, parts style). Owned: none.</summary>
+    public const string PartLabel = "Label";
+
     internal static class RadioButtonMotion
     {
         public const float ControlFastMs = 167f;     // Common_themeresources_any.xaml:604 ControlFastAnimationDuration
@@ -76,9 +94,10 @@ public static partial class RadioButton
         OnRingDisabled = Tok.AccentDisabled, DotDisabled = Tok.TextOnAccentPrimary,
     };
 
-    public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null, bool isEnabled = true)
+    public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null, bool isEnabled = true,
+                               TemplateParts? parts = null)
         => Build(label, null, selected, onSelect, style ?? DefaultStyle, isEnabled,
-                 focusable: true, onKeyDown: null, onRealized: null);
+                 focusable: true, onKeyDown: null, onRealized: null, parts: parts);
 
     /// <summary>
     /// The shared item factory — also the <see cref="RadioButtons"/> container seam: <paramref name="content"/>
@@ -87,7 +106,8 @@ public static partial class RadioButton
     /// <paramref name="onKeyDown"/>/<paramref name="onRealized"/> wire the arrow-key roving focus.
     /// </summary>
     internal static BoxEl Build(string? label, Element? content, bool selected, Action onSelect, Style s, bool isEnabled,
-                                bool focusable, Action<KeyEventArgs>? onKeyDown, Action<NodeHandle>? onRealized)
+                                bool focusable, Action<KeyEventArgs>? onKeyDown, Action<NodeHandle>? onRealized,
+                                TemplateParts? parts = null)
     {
         float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
         float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
@@ -97,6 +117,54 @@ public static partial class RadioButton
         ColorF ringFill = !isEnabled ? (selected ? s.OnRingDisabled : s.OffFillDisabled) : (selected ? s.OnRing : s.OffFill);
         ColorF ringBorder = !isEnabled ? (selected ? s.OnRingDisabled : s.OffBorderDisabled) : (selected ? s.OnBorder : s.OffBorder);
         float dotSize = isEnabled ? s.DotSize : s.DotDisabledSize;
+        // Disabled entry animates the resize 12→14 over 167ms FastOutSlowIn (template:338-343); the spec is attached
+        // only on the disabled render, so re-enabling reverts instantly (no Normal-state keyframes).
+        LayoutTransition? dotResize = isEnabled
+            ? null
+            : new LayoutTransition(TransitionChannels.Bounds,
+                                   TransitionDynamics.Tween(RadioButtonMotion.ControlFastMs, Easing.FluentPopOpen),
+                                   SizeMode.ScaleCorrect);
+        Element[] ringKids;
+        if (selected)
+        {
+            var dot = new BoxEl
+            {
+                Key = "CheckGlyph",
+                Width = dotSize, Height = dotSize,
+                Corners = Radii.Circle(dotSize),
+                Fill = !isEnabled ? s.DotDisabled : s.Dot,
+                BorderBrush = !isEnabled ? s.DotBorderDisabled : s.DotBorder,   // StrokeChecked / StrokeCheckedDisabled (template:42/45)
+                BorderWidth = (isEnabled ? s.DotBorder : s.DotBorderDisabled) is null ? 0f : 1f,   // Ellipse default StrokeThickness = 1
+                HoverScale = isEnabled ? hoverScale : 1f,
+                PressScale = isEnabled ? pressScale : 1f,
+                HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
+                PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
+                HoverEasing = RadioButtonMotion.FastOutSlowIn,
+                PressEasing = RadioButtonMotion.FastOutSlowIn,
+                Animate = dotResize,
+            };
+            // Parts: restyle the dot (fill, size, the grow/shrink ramp); identity + the disabled resize spec win.
+            ringKids = [parts.Apply(PartDot, dot) with { Key = "CheckGlyph", Animate = dotResize }];
+        }
+        else
+        {
+            var pressedDot = new BoxEl
+            {
+                Key = "PressedCheckGlyph",
+                Width = s.PressedDotSize, Height = s.PressedDotSize,
+                Corners = Radii.Circle(s.PressedDotSize),
+                Fill = !isEnabled ? s.DotDisabled : s.Dot,             // PressedCheckGlyph Background = RadioButtonCheckGlyphFill (template:376)
+                BorderBrush = s.PressedDotBorder,                      // BorderBrush = RadioButtonCheckGlyphStroke → CircleElevation (template:38/376)
+                BorderWidth = s.PressedDotBorder is null ? 0f : 1f,
+                Opacity = 0f,
+                PressedOpacity = 1f,                                   // Opacity → 1 at KeyTime 0 (template:298-300)
+                PressScale = pressedDotScale,                          // 4 → 10 (template:301-306)
+                PressDurationMs = RadioButtonMotion.ControlFastMs,     // 167ms
+                PressEasing = RadioButtonMotion.FastOutSlowIn,
+            };
+            ringKids = [parts.Apply(PartPressedDot, pressedDot) with { Key = "PressedCheckGlyph" }];
+        }
+
         var ring = new BoxEl
         {
             Width = s.RingSize, Height = s.RingSize,
@@ -112,46 +180,20 @@ public static partial class RadioButton
             Fill = ringFill,
             HoverFill = selected ? s.OnHover : s.OffHover,
             PressedFill = selected ? s.OnPressed : s.OffPressed,
-            Children = selected
-                ? [new BoxEl
-                {
-                    Key = "CheckGlyph",
-                    Width = dotSize, Height = dotSize,
-                    Corners = Radii.Circle(dotSize),
-                    Fill = !isEnabled ? s.DotDisabled : s.Dot,
-                    BorderBrush = !isEnabled ? s.DotBorderDisabled : s.DotBorder,   // StrokeChecked / StrokeCheckedDisabled (template:42/45)
-                    BorderWidth = (isEnabled ? s.DotBorder : s.DotBorderDisabled) is null ? 0f : 1f,   // Ellipse default StrokeThickness = 1
-                    HoverScale = isEnabled ? hoverScale : 1f,
-                    PressScale = isEnabled ? pressScale : 1f,
-                    HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
-                    PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
-                    HoverEasing = RadioButtonMotion.FastOutSlowIn,
-                    PressEasing = RadioButtonMotion.FastOutSlowIn,
-                    // Disabled entry animates the resize 12→14 over 167ms FastOutSlowIn (template:338-343); the spec is
-                    // attached only on the disabled render, so re-enabling reverts instantly (no Normal-state keyframes).
-                    Animate = isEnabled
-                        ? null
-                        : new LayoutTransition(TransitionChannels.Bounds,
-                                               TransitionDynamics.Tween(RadioButtonMotion.ControlFastMs, Easing.FluentPopOpen),
-                                               SizeMode.ScaleCorrect),
-                }]
-                : [new BoxEl
-                {
-                    Key = "PressedCheckGlyph",
-                    Width = s.PressedDotSize, Height = s.PressedDotSize,
-                    Corners = Radii.Circle(s.PressedDotSize),
-                    Fill = !isEnabled ? s.DotDisabled : s.Dot,             // PressedCheckGlyph Background = RadioButtonCheckGlyphFill (template:376)
-                    BorderBrush = s.PressedDotBorder,                      // BorderBrush = RadioButtonCheckGlyphStroke → CircleElevation (template:38/376)
-                    BorderWidth = s.PressedDotBorder is null ? 0f : 1f,
-                    Opacity = 0f,
-                    PressedOpacity = 1f,                                   // Opacity → 1 at KeyTime 0 (template:298-300)
-                    PressScale = pressedDotScale,                          // 4 → 10 (template:301-306)
-                    PressDurationMs = RadioButtonMotion.ControlFastMs,     // 167ms
-                    PressEasing = RadioButtonMotion.FastOutSlowIn,
-                }],
+            Children = ringKids,
         };
+        // Parts: restyle the ellipse (the per-state ramps above sit BEFORE the modifier); the dot mount always wins.
+        ring = parts.Apply(PartRing, ring) with { Children = ringKids };
 
-        return new BoxEl
+        Element[] children =
+        [
+            ring,
+            // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
+            content ?? parts.Apply(PartLabel,
+                new TextEl(label ?? "") { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground }),
+        ];
+
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -166,27 +208,40 @@ public static partial class RadioButton
             // radio in the tab order instead of only the selected one.
             TabStop = focusable && isEnabled,
             FocusVisualMargin = s.FocusVisualMargin,                       // −7,−3,−7,−3 (template:196)
+            // Space ONLY (bAcceptsReturn=false, RadioButton_Partial.cpp:30) — Enter routes on (dialog default button).
+            ActivateOnEnter = false,
             OnClick = onSelect,
             OnKeyDown = onKeyDown,
             OnRealized = onRealized,
-            // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
-            Children =
-            [
-                ring,
-                content ?? new TextEl(label ?? "") { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground },
-            ],
+            Children = children,
         };
+        if (parts is { } pp)
+        {
+            // Parts: restyle anything on the row; the select/roving mechanics and structure always win.
+            var m = pp.Apply(PartRoot, root);
+            root = m with
+            {
+                OnClick = onSelect,
+                OnKeyDown = onKeyDown,
+                OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
+                Role = AutomationRole.RadioButton,
+                TabStop = focusable && isEnabled,
+                Children = children,
+            };
+        }
+        return root;
     }
 
     /// <summary>A mutually-exclusive group: renders one radio per option; clicking option i invokes <paramref name="onSelect"/>(i).
     /// Ad-hoc (every item is a tab stop, no arrow roving) — prefer <see cref="RadioButtons"/> for the WinUI container semantics.</summary>
-    public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null, bool isEnabled = true)
+    public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null, bool isEnabled = true,
+                              TemplateParts? parts = null)
     {
         var children = new Element[options.Count];
         for (int i = 0; i < options.Count; i++)
         {
             int idx = i;
-            children[i] = Create(options[i], i == selected, () => onSelect(idx), style, isEnabled);
+            children[i] = Create(options[i], i == selected, () => onSelect(idx), style, isEnabled, parts);
         }
         return new BoxEl { Direction = horizontal ? (byte)0 : (byte)1, Gap = horizontal ? 16f : 4f, Children = children };
     }

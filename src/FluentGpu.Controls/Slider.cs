@@ -29,6 +29,33 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class Slider
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those). All three factories
+    // (Create/Bind/Ranged) take a trailing `TemplateParts? parts` and route the same vocabulary.
+    /// <summary>The interactive full-size track surface (WinUI SliderContainer): the hit target carrying the scrub +
+    /// keyboard (and, on <see cref="Ranged"/>, tooltip) mechanics. Owned: OnPointerDown, OnDrag, OnKeyDown, Role,
+    /// Children — and on <see cref="Ranged"/> also OnRealized (track ref, chained) plus the tooltip wiring
+    /// (OnClick/OnHoverMove/OnPointerExit/OnFocusChanged) while the tooltip is enabled.</summary>
+    public const string PartContainer = "Container";
+    /// <summary>The 4px resting rail (WinUI HorizontalTrackRect / VerticalTrackRect). Owned: nothing — pure styling
+    /// (the hover/press fill pins are stock state styling a modifier may override).</summary>
+    public const string PartRail = "Rail";
+    /// <summary>The accent value fill (WinUI HorizontalDecreaseRect / VerticalDecreaseRect). Owned: the value-position
+    /// geometry — Width (horizontal) / Height+OffsetY (vertical) on the layout paths; Width+TransformBind on the
+    /// signal-bound <see cref="Bind"/> path (the grow-from-left math assumes the full track Width).</summary>
+    public const string PartValueFill = "ValueFill";
+    /// <summary>The static 22px thumb ring (WinUI HorizontalThumb / VerticalThumb). Owned: Children (the inner dot),
+    /// OnRealized (the Ranged tooltip anchor, chained), TransformBind on the <see cref="Bind"/> path, and the
+    /// value-position OffsetX/OffsetY on the vertical <see cref="Ranged"/> path.</summary>
+    public const string PartThumb = "Thumb";
+    /// <summary>The 12px animated accent dot inside the thumb (WinUI SliderInnerThumb — the only animated thumb part).
+    /// Owned: the storyboard scale ramp — ScaleX/ScaleY (the rest/disabled base), HoverScale, PressScale; colors,
+    /// size and durations stay restylable.</summary>
+    public const string PartInnerDot = "InnerDot";
+    /// <summary>Every tick bar on <see cref="Ranged"/> (WinUI TopTickBar/BottomTickBar/HorizontalInlineTickBar — one
+    /// part name, applied to every mounted instance). Owned: Children (the marks sit at value positions).</summary>
+    public const string PartTickBar = "TickBar";
+
     public sealed record Style
     {
         public float TrackHeight { get; init; } = 4f;                    // SliderTrackThemeHeight (Slider_themeresources.xaml:6)
@@ -206,13 +233,31 @@ public static partial class Slider
     /// what drives the WinUI dot COLOR (control CommonStates, lines 285-289/310-314); WinUI's dot SCALE is thumb-local
     /// hover, not reachable while drag handlers must stay on the track (documented engine concession).
     /// </summary>
-    private static BoxEl BuildThumb(Style s, bool isEnabled, Action<NodeHandle>? onRealized, Func<Affine2D>? transformBind)
+    private static BoxEl BuildThumb(Style s, bool isEnabled, Action<NodeHandle>? onRealized, Func<Affine2D>? transformBind, TemplateParts? parts)
     {
         ColorF dot = isEnabled ? s.ThumbFill : s.ThumbFillDisabled;
         ColorF dotHover = isEnabled ? s.ThumbFillPointerOver : s.ThumbFillDisabled;   // SliderThumbBackgroundPointerOver (line 15)
         ColorF dotPress = isEnabled ? s.ThumbFillPressed : s.ThumbFillDisabled;       // SliderThumbBackgroundPressed (line 16)
         float rest = isEnabled ? s.InnerRestScale : s.InnerDisabledScale;
-        return new BoxEl
+        float hoverScale = isEnabled ? s.InnerHoverScale / s.InnerRestScale : 1f;     // net 1.167 (14px) on hover
+        float pressScale = isEnabled ? s.InnerPressScale / s.InnerRestScale : 1f;     // net 0.71 (8.5px) on press
+        var inner = new BoxEl
+        {
+            Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter,
+            Corners = Radii.Circle(s.InnerThumbDiameter),
+            Fill = dot, HoverFill = dotHover, PressedFill = dotPress,
+            ScaleX = rest, ScaleY = rest,                                  // Normal 0.86 / Disabled 1.167 static base
+            HoverScale = hoverScale, PressScale = pressScale,
+            HoverDurationMs = 250f, PressDurationMs = 250f,                // ControlNormalAnimationDuration (Common_themeresources_any.xaml:603)
+        };
+        // PartInnerDot: colors/size/durations restylable; the storyboard scale ramp IS the thumb mechanism.
+        if (parts is not null)
+            inner = parts.Apply(PartInnerDot, inner) with
+            {
+                ScaleX = rest, ScaleY = rest, HoverScale = hoverScale, PressScale = pressScale,
+            };
+        Element[] thumbKids = [inner];
+        var ring = new BoxEl
         {
             Width = s.ThumbRingDiameter, Height = s.ThumbRingDiameter,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -223,20 +268,20 @@ public static partial class Slider
             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
             OnRealized = onRealized,
             TransformBind = transformBind,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = s.InnerThumbDiameter, Height = s.InnerThumbDiameter,
-                    Corners = Radii.Circle(s.InnerThumbDiameter),
-                    Fill = dot, HoverFill = dotHover, PressedFill = dotPress,
-                    ScaleX = rest, ScaleY = rest,                                  // Normal 0.86 / Disabled 1.167 static base
-                    HoverScale = isEnabled ? s.InnerHoverScale / s.InnerRestScale : 1f,   // net 1.167 (14px) on hover
-                    PressScale = isEnabled ? s.InnerPressScale / s.InnerRestScale : 1f,   // net 0.71 (8.5px) on press
-                    HoverDurationMs = 250f, PressDurationMs = 250f,                // ControlNormalAnimationDuration (Common_themeresources_any.xaml:603)
-                },
-            ],
+            Children = thumbKids,
         };
+        // PartThumb: restyle the ring; the inner-dot structure, ref capture and value-position bind always win.
+        if (parts is not null)
+        {
+            var m = parts.Apply(PartThumb, ring);
+            ring = m with
+            {
+                OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
+                TransformBind = transformBind ?? m.TransformBind,   // the value-position bind (Bind path) always wins
+                Children = thumbKids,
+            };
+        }
+        return ring;
     }
 
     /// <summary>Optional header row above the control body — WinUI HeaderContentPresenter
@@ -271,7 +316,7 @@ public static partial class Slider
     /// Internally a stateful component (the tooltip's overlay lifetime spans re-renders); props are pushed through a
     /// context provider — the engine's sanctioned prop channel for embedded components.
     /// </summary>
-    public static BoxEl Ranged(float value, Action<float> onChange, Options o, float length = 220f, float thickness = 32f, Style? style = null, bool isEnabled = true)
+    public static BoxEl Ranged(float value, Action<float> onChange, Options o, float length = 220f, float thickness = 32f, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
         => new()
         {
             Direction = 1,
@@ -279,7 +324,7 @@ public static partial class Slider
             [
                 Ctx.Provide(
                     RangedSliderProps.Channel,
-                    new RangedSliderProps(value, onChange, o, length, thickness, style ?? DefaultStyle, isEnabled),
+                    new RangedSliderProps(value, onChange, o, length, thickness, style ?? DefaultStyle, isEnabled, parts),
                     Embed.Comp(() => new RangedSlider())),
             ],
         };
@@ -293,7 +338,7 @@ public static partial class Slider
     /// (Slider_themeresources.xaml:184), optional <paramref name="header"/>. No value tooltip (that lives on
     /// <see cref="Ranged"/>, the WinUI-parity surface).
     /// </summary>
-    public static BoxEl Create(float value, Action<float> onChange, float width = 200f, float height = 24f, Style? style = null, bool isEnabled = true, string? header = null)
+    public static BoxEl Create(float value, Action<float> onChange, float width = 200f, float height = 24f, Style? style = null, bool isEnabled = true, string? header = null, TemplateParts? parts = null)
     {
         var s = style ?? DefaultStyle;
         float v = Math.Clamp(value, 0f, 1f);
@@ -312,6 +357,15 @@ public static partial class Slider
                 onChange(next);
         }
 
+        // Rail: PointerOver/Pressed == the resting fill (SliderTrackFillPointerOver/Pressed = SliderTrackFill,
+        // lines 21-22) — pinned explicitly so the recorder's auto-lighten fallback can't drift it. Pure styling.
+        var rail = parts.Apply(PartRail,
+            new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (height - s.TrackHeight) * 0.5f });
+        // Value fill: Accent Default → Secondary (hover) → Tertiary (press) with the CONTROL-wide state
+        // (SliderTrackValueFill*, lines 24-26), eased by the track's interaction progress.
+        var fill = new BoxEl { Width = v * width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, OffsetY = (height - s.TrackHeight) * 0.5f };
+        if (parts is not null) fill = parts.Apply(PartValueFill, fill) with { Width = v * width };   // the value position always wins
+
         var track = new BoxEl
         {
             Width = width, Height = height, ZStack = true, Role = AutomationRole.Slider, IsEnabled = isEnabled,
@@ -325,15 +379,7 @@ public static partial class Slider
                 new BoxEl
                 {
                     ZStack = true, Width = width, Height = height,
-                    Children =
-                    [
-                        // Rail: PointerOver/Pressed == the resting fill (SliderTrackFillPointerOver/Pressed = SliderTrackFill,
-                        // lines 21-22) — pinned explicitly so the recorder's auto-lighten fallback can't drift it.
-                        new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (height - s.TrackHeight) * 0.5f },
-                        // Value fill: Accent Default → Secondary (hover) → Tertiary (press) with the CONTROL-wide state
-                        // (SliderTrackValueFill*, lines 24-26), eased by the track's interaction progress.
-                        new BoxEl { Width = v * width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, OffsetY = (height - s.TrackHeight) * 0.5f },
-                    ],
+                    Children = [rail, fill],
                 },
                 // thumb, layout-positioned by a leading spacer (so it tracks the value) + vertically centred by the row.
                 // It is NOT interactive (drag stays on the track); only the inner dot animates (see BuildThumb).
@@ -343,11 +389,22 @@ public static partial class Slider
                     Children =
                     [
                         new BoxEl { Width = MathF.Max(0f, MathF.Min(v * width - half, width - ringD)) },   // ring centred at the value, clamped inside the track
-                        BuildThumb(s, isEnabled, onRealized: null, transformBind: null),
+                        BuildThumb(s, isEnabled, onRealized: null, transformBind: null, parts),
                     ],
                 },
             ],
         };
+        // PartContainer: restyle the interactive surface; the scrub/keyboard mechanics and structure always win.
+        if (parts is not null)
+        {
+            var m = parts.Apply(PartContainer, track);
+            track = m with
+            {
+                OnPointerDown = Set, OnDrag = Set, OnKeyDown = OnKey,
+                Role = AutomationRole.Slider,
+                Children = track.Children,
+            };
+        }
         return WithHeader(header, isEnabled, track);
     }
 
@@ -360,7 +417,7 @@ public static partial class Slider
     /// signal the same compositor-only way. No value tooltip: opening/observing one requires a re-render path, which
     /// would break this overload's zero-re-render contract — use <see cref="Ranged"/> for the WinUI-parity surface.
     /// </summary>
-    public static BoxEl Bind(FloatSignal value, Action<float>? onChange = null, float width = 200f, float height = 24f, Style? style = null, bool isEnabled = true, string? header = null)
+    public static BoxEl Bind(FloatSignal value, Action<float>? onChange = null, float width = 200f, float height = 24f, Style? style = null, bool isEnabled = true, string? header = null, TemplateParts? parts = null)
     {
         var s = style ?? DefaultStyle;
         float ringD = s.ThumbRingDiameter, half = ringD * 0.5f;
@@ -382,7 +439,25 @@ public static partial class Slider
             }
         }
 
-        return WithHeader(header, isEnabled, new BoxEl
+        // Rail (pure styling) + value fill: full width, grown from the left by a composited ScaleX bound to the signal — no layout.
+        var rail = parts.Apply(PartRail,
+            new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (height - s.TrackHeight) * 0.5f });
+        Func<Affine2D> fillBind = () =>
+        {
+            float v = MathF.Max(Math.Clamp(value.Value, 0f, 1f), 1e-4f);
+            return Affine2D.Translation(-width * (1f - v) * 0.5f, 0f).Multiply(Affine2D.Scale(v, 1f));   // grow from the left
+        };
+        var fill = new BoxEl
+        {
+            Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius),
+            Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress,   // SliderTrackValueFill* (lines 24-26)
+            OffsetY = (height - s.TrackHeight) * 0.5f,
+            TransformBind = fillBind,
+        };
+        if (parts is not null)
+            fill = parts.Apply(PartValueFill, fill) with { Width = width, TransformBind = fillBind };   // the signal bind + its full-width basis always win
+
+        var track = new BoxEl
         {
             Width = width, Height = height, ZStack = true, Role = AutomationRole.Slider, IsEnabled = isEnabled,
             Focusable = true,
@@ -391,25 +466,10 @@ public static partial class Slider
             OnKeyDown = OnKey,
             Children =
             [
-                // rail + value fill (full width, grown from the left by a composited ScaleX bound to the signal — no layout)
                 new BoxEl
                 {
                     ZStack = true, Width = width, Height = height,
-                    Children =
-                    [
-                        new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (height - s.TrackHeight) * 0.5f },
-                        new BoxEl
-                        {
-                            Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius),
-                            Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress,   // SliderTrackValueFill* (lines 24-26)
-                            OffsetY = (height - s.TrackHeight) * 0.5f,
-                            TransformBind = () =>
-                            {
-                                float v = MathF.Max(Math.Clamp(value.Value, 0f, 1f), 1e-4f);
-                                return Affine2D.Translation(-width * (1f - v) * 0.5f, 0f).Multiply(Affine2D.Scale(v, 1f));   // grow from the left
-                            },
-                        },
-                    ],
+                    Children = [rail, fill],
                 },
                 // thumb at x=0, slid to the value by a composited OffsetX bound to the signal (no leading spacer, no layout)
                 new BoxEl
@@ -419,11 +479,24 @@ public static partial class Slider
                     [
                         BuildThumb(s, isEnabled,
                             onRealized: null,
-                            transformBind: () => Affine2D.Translation(Math.Clamp(value.Value * width - half, 0f, MathF.Max(0f, width - ringD)), 0f)),
+                            transformBind: () => Affine2D.Translation(Math.Clamp(value.Value * width - half, 0f, MathF.Max(0f, width - ringD)), 0f),
+                            parts),
                     ],
                 },
             ],
-        });
+        };
+        // PartContainer: restyle the interactive surface; the scrub/keyboard mechanics and structure always win.
+        if (parts is not null)
+        {
+            var m = parts.Apply(PartContainer, track);
+            track = m with
+            {
+                OnPointerDown = Set, OnDrag = Set, OnKeyDown = OnKey,
+                Role = AutomationRole.Slider,
+                Children = track.Children,
+            };
+        }
+        return WithHeader(header, isEnabled, track);
     }
 }
 
@@ -433,7 +506,7 @@ public static partial class Slider
 /// components). The component re-renders granularly when the record changes.
 /// </summary>
 internal sealed record RangedSliderProps(
-    float Value, Action<float> OnChange, Slider.Options O, float Length, float Thickness, Slider.Style S, bool IsEnabled)
+    float Value, Action<float> OnChange, Slider.Options O, float Length, float Thickness, Slider.Style S, bool IsEnabled, TemplateParts? Parts = null)
 {
     public static readonly Context<RangedSliderProps?> Channel = new(null);
 }
@@ -464,6 +537,7 @@ internal sealed class RangedSlider : Component
 
         var o = props.O;
         var s = props.S;
+        var parts = props.Parts;
         bool isEnabled = props.IsEnabled;
         float length = props.Length, thickness = props.Thickness;
         float min = o.Min;
@@ -627,9 +701,11 @@ internal sealed class RangedSlider : Component
                     ? new BoxEl { Width = 4f, Height = 1f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetY = (1f - tt) * length }
                     : new BoxEl { Width = 1f, Height = 4f, Fill = tickFill, HoverFill = tickFill, PressedFill = tickFill, OffsetX = tt * length });
             }
-            return o.Vertical
+            var bar = o.Vertical
                 ? new BoxEl { ZStack = true, Width = 4f, Height = length, Children = marks.ToArray() }
                 : new BoxEl { ZStack = true, Width = length, Height = 4f, Children = marks.ToArray() };
+            // PartTickBar: restyle the bar; the marks ARE the tick mechanism (positions in value space).
+            return parts is null ? bar : parts.Apply(Slider.PartTickBar, bar) with { Children = bar.Children };
         }
 
         Element InlineTicks()
@@ -644,9 +720,11 @@ internal sealed class RangedSlider : Component
                     ? new BoxEl { Width = s.TrackHeight, Height = 1f, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetY = (1f - tt) * length }
                     : new BoxEl { Width = 1f, Height = s.TrackHeight, Fill = s.InlineTickFill, HoverFill = s.InlineTickFill, PressedFill = s.InlineTickFill, OffsetX = tt * length });
             }
-            return o.Vertical
+            var bar = o.Vertical
                 ? new BoxEl { ZStack = true, Width = s.TrackHeight, Height = length, OffsetX = (thickness - s.TrackHeight) * 0.5f, Children = marks.ToArray() }
                 : new BoxEl { ZStack = true, Width = length, Height = s.TrackHeight, OffsetY = (thickness - s.TrackHeight) * 0.5f, Children = marks.ToArray() };
+            // PartTickBar (the inline instance): same vocabulary as the outside bars; the marks always win.
+            return parts is null ? bar : parts.Apply(Slider.PartTickBar, bar) with { Children = bar.Children };
         }
 
         bool hasTicks = o.TickFrequency > 0f && o.TickPlacement != Slider.TickPlacement.None;
@@ -658,11 +736,12 @@ internal sealed class RangedSlider : Component
         BoxEl track;
         if (o.Vertical)
         {
-            var children = new List<Element>
-            {
-                new BoxEl { Width = s.TrackHeight, Height = length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetX = (thickness - s.TrackHeight) * 0.5f },
-                new BoxEl { Width = s.TrackHeight, Height = t * length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, OffsetX = (thickness - s.TrackHeight) * 0.5f, OffsetY = (1f - t) * length },
-            };
+            var rail = parts.Apply(Slider.PartRail,
+                new BoxEl { Width = s.TrackHeight, Height = length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetX = (thickness - s.TrackHeight) * 0.5f });
+            var fill = new BoxEl { Width = s.TrackHeight, Height = t * length, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress, OffsetX = (thickness - s.TrackHeight) * 0.5f, OffsetY = (1f - t) * length };
+            if (parts is not null)
+                fill = parts.Apply(Slider.PartValueFill, fill) with { Height = t * length, OffsetY = (1f - t) * length };   // the value position always wins
+            var children = new List<Element> { rail, fill };
             if (inlineTicks) children.Add(InlineTicks());
             children.Add(BuildThumbAt(o.Vertical, t));
 

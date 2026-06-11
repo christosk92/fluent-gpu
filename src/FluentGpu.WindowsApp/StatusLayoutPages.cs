@@ -54,17 +54,25 @@ sealed class PipsPagerPage : Component
     }
 }
 
-// Minimal category overview pages (the expandable group keys land here when selected).
+// Category overview pages (the expandable group keys land here when selected) — WinUI tile grids per category.
 sealed class StatusInfoOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Status & info",
-        "Controls that surface state and notifications: InfoBadge, InfoBar, ProgressBar.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Status & info", "Controls that surface state and notifications.",
+            GalleryPage.CategoryGrid("Status & info", navigate));
+    }
 }
 
 sealed class LayoutOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Layout",
-        "Controls for arranging and revealing content: Expander.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Layout", "Controls and panels for arranging and revealing content.",
+            GalleryPage.CategoryGrid("Layout", navigate));
+    }
 }
 
 sealed class ScrollingOverviewPage : Component
@@ -75,8 +83,11 @@ sealed class ScrollingOverviewPage : Component
         // Hover the rail and dwell 400ms → the thumb expands 2px→6px over 167ms and the arrows/track fade in 83ms;
         // leave → it contracts after 500ms (ScrollBar_themeresources.xaml begin times). Position is signal-bound.
         var pos = UseSignal(0.3f);
+        var navigate = UseContext(NavigationView.Nav);
         return GalleryPage.Shell("Scrolling",
             "Controls for paging and scrolling content: PipsPager, ScrollBar, AnnotatedScrollBar.",
+            GalleryPage.CategoryGrid("Scrolling", navigate),
+            new BoxEl { Height = 12f },
             ControlExample.Build("The standalone ScrollBar (hover the rail to expand; arrows page by a small change)",
                 new BoxEl
                 {

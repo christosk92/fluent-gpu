@@ -72,18 +72,30 @@ sealed class FlyoutPage : Component
 // Category overview pages (the expandable group keys land here when selected).
 sealed class NavigationOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Navigation",
-        "Controls for moving through app content: BreadcrumbBar, SelectorBar, TabView.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Navigation", "Controls for moving through app content.",
+            GalleryPage.CategoryGrid("Navigation", navigate));
+    }
 }
 
 sealed class DialogsOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Dialogs & flyouts",
-        "Contextual popups and dialogs: Flyout.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Dialogs & flyouts", "Contextual popups and dialogs.",
+            GalleryPage.CategoryGrid("Dialogs & flyouts", navigate));
+    }
 }
 
 sealed class MediaOverviewPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("Media",
-        "Media controls: PersonPicture, Image.");
+    public override Element Render()
+    {
+        var navigate = UseContext(NavigationView.Nav);
+        return GalleryPage.Shell("Media", "Media and people controls.",
+            GalleryPage.CategoryGrid("Media", navigate));
+    }
 }

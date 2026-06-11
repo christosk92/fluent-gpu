@@ -38,7 +38,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("typography", Icons.Font, "Typography"),
-                new("icons", Icons.Star, "Icons & fonts"),
+                new("icons", Icons.Star, "Iconography"),
                 new("images", Icons.Picture, "Images"),
             ],
         },
@@ -175,24 +175,31 @@ sealed class GalleryApp : Component
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
 
-    // Maps a Basic-input control key to its bundled WinUI-Gallery tile image (note the casing: "CheckBox" → "Checkbox.png").
-    public static readonly (string Key, string Title, string Image)[] BasicInputCatalog =
+    // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
+    // (tile image + subtitle come from the PageInfo registry).
+    public static readonly (string Title, string[] Keys)[] ControlCatalog =
     {
-        ("Button", "Button", "Button.png"),
-        ("DropDownButton", "DropDownButton", "DropDownButton.png"),
-        ("HyperlinkButton", "HyperlinkButton", "HyperlinkButton.png"),
-        ("RepeatButton", "RepeatButton", "RepeatButton.png"),
-        ("ToggleButton", "ToggleButton", "ToggleButton.png"),
-        ("SplitButton", "SplitButton", "SplitButton.png"),
-        ("ToggleSplitButton", "ToggleSplitButton", "ToggleSplitButton.png"),
-        ("CheckBox", "CheckBox", "Checkbox.png"),
-        ("ColorPicker", "ColorPicker", "ColorPicker.png"),
-        ("ComboBox", "ComboBox", "ComboBox.png"),
-        ("RadioButton", "RadioButton", "RadioButton.png"),
-        ("RatingControl", "RatingControl", "RatingControl.png"),
-        ("Slider", "Slider", "Slider.png"),
-        ("ToggleSwitch", "ToggleSwitch", "ToggleSwitch.png"),
+        ("Basic input", ["Button", "DropDownButton", "HyperlinkButton", "RepeatButton", "ToggleButton", "SplitButton",
+                         "ToggleSplitButton", "CheckBox", "ColorPicker", "ComboBox", "RadioButton", "RatingControl",
+                         "Slider", "ToggleSwitch"]),
+        ("Status & info", ["InfoBadge", "InfoBar", "ProgressBar", "ProgressRing", "ToolTip"]),
+        ("Layout", ["Expander", "SplitView", "Viewbox", "Border", "Canvas", "RelativePanel", "VariableSizedWrapGrid"]),
+        ("Scrolling", ["PipsPager", "AnnotatedScrollBar"]),
+        ("Navigation", ["BreadcrumbBar", "SelectorBar", "TabView", "Pivot"]),
+        ("Dialogs & flyouts", ["Flyout", "ContentDialog", "TeachingTip", "Popup"]),
+        ("Text", ["TextBox", "PasswordBox", "AutoSuggestBox", "NumberBox", "TextBlock", "RichTextBlock"]),
+        ("Media", ["PersonPicture", "MediaPlayerElement"]),
+        ("Collections", ["ListView", "GridView", "FlipView", "TreeView", "ItemsView"]),
+        ("Menus & toolbars", ["MenuBar", "AppBarButton", "AppBarToggleButton", "CommandBar", "AppBarSeparator",
+                              "CommandBarFlyout", "SwipeControl"]),
+        ("Date & time", ["CalendarView", "CalendarDatePicker", "DatePicker", "TimePicker"]),
     };
+
+    public static string[] CategoryKeys(string title)
+    {
+        foreach (var (t, keys) in ControlCatalog) if (t == title) return keys;
+        return [];
+    }
 
     // Initial nav page (default = Home). Overridable so the --screenshot harness can deep-link a control page.
     public string InitialPage = "welcome";

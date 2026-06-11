@@ -38,6 +38,18 @@ public enum CommandBarDisplayMode : byte { Compact = 0, Minimal = 1, Hidden = 2 
 /// </summary>
 public sealed class CommandBar : Component
 {
+    // Template parts (the WinUI x:Name vocabulary where one exists; see TemplateParts). Each part's doc lists the
+    // props the control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The bar root row (the WinUI LayoutRoot grid). Owned: Animate (the open/close height tween —
+    /// Bounds+Reveal on the WinUI storyboard timings), Children (the command row).</summary>
+    public const string PartBar = "Bar";
+    /// <summary>The trailing … More button (WinUI MoreButton). Owned: OnClick (the open/close toggle), Role,
+    /// OnRealized (the overflow anchor capture, chained with any modifier-supplied handler).</summary>
+    public const string PartOverflowButton = "OverflowButton";
+    /// <summary>The overflow popup body (the CommandBarOverflowPresenter content — popup-built each open, so
+    /// modifiers run inside the overlay body's render). Owned: Children (the secondary command rows).</summary>
+    public const string PartOverflowMenu = "OverflowMenu";
+
     public IReadOnlyList<AppBarCommand> PrimaryCommands = [];
     public IReadOnlyList<AppBarCommand> SecondaryCommands = [];
     public CommandBarDisplayMode ClosedDisplayMode = CommandBarDisplayMode.Compact;
@@ -48,6 +60,9 @@ public sealed class CommandBar : Component
     public bool OpenOnMount;   // deterministic visual-shot hook
     /// <summary>WinUI Opening/Closing pair, collapsed to one callback (true = opening).</summary>
     public Action<bool>? OnOpenChanged;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     // ── WinUI metrics (CommandBar_themeresources.xaml unless noted) ──
     public const float CompactHeight = 48f;       // AppBarThemeCompactHeight (:72)
@@ -156,7 +171,7 @@ public sealed class CommandBar : Component
                     if (c.Kind != AppBarCommandKind.ToggleButton) CloseBar();
                 }));
             }
-            return new BoxEl
+            var menu = new BoxEl
             {
                 Direction = 1,
                 MinWidth = OverflowMinWidth,
@@ -164,6 +179,8 @@ public sealed class CommandBar : Component
                 Padding = new Edges4(0, 2, 0, 2),   // ItemsPresenter margin inside the overflow presenter
                 Children = rows.ToArray(),
             };
+            // Parts: restyle the overflow chrome (widths, padding…); the secondary rows are the mechanism.
+            return Parts.Apply(PartOverflowMenu, menu) with { Children = menu.Children };
         }
 
         // ── The bar ──
@@ -193,7 +210,8 @@ public sealed class CommandBar : Component
         // Spacer pins the … More button to the right edge (PrimaryItemsControl is right-anchored next to the
         // MoreButton column in the WinUI grid, :821 — left-flow + right-pinned More reads identically here).
         children.Add(new BoxEl { Grow = 1f });
-        children.Add(new BoxEl
+        Action<NodeHandle> moreCapture = h => moreAnchor.Value = h;
+        var more = new BoxEl
         {
             Width = MoreButtonWidth,                            // AppBarExpandButtonThemeWidth 48 (generic.xaml:23)
             AlignSelf = FlexAlign.Stretch,                      // open: MoreButton VerticalAlignment=Stretch (:135)
@@ -209,7 +227,7 @@ public sealed class CommandBar : Component
             Focusable = true,
             FocusVisualMargin = Edges4.All(-3f),                // EllipsisButton FocusVisualMargin -3 (:16)
             Role = AutomationRole.Button,
-            OnRealized = h => moreAnchor.Value = h,
+            OnRealized = moreCapture,                           // capture: the overflow popup anchors to this node
             OnClick = Toggle,
             Children =
             [
@@ -220,9 +238,16 @@ public sealed class CommandBar : Component
                     DisabledColor = Tok.TextDisabled,           // CommandBarEllipsisIconForegroundDisabled (:15)
                 },
             ],
-        });
+        };
+        // Parts: restyle the … button freely; the open/close toggle and the overflow anchor capture always win.
+        if (Parts is { } mp)
+        {
+            var m = mp.Apply(PartOverflowButton, more);
+            more = m with { OnClick = Toggle, Role = AutomationRole.Button, OnRealized = TemplateParts.Chain(moreCapture, m.OnRealized) };
+        }
+        children.Add(more);
 
-        return new BoxEl
+        var bar = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -248,5 +273,7 @@ public sealed class CommandBar : Component
             ClipToBounds = isOpen,
             Children = children.ToArray(),
         };
+        // Parts: restyle the bar chrome (acrylic, border, padding…); the open/close tween + the command row always win.
+        return Parts.Apply(PartBar, bar) with { Animate = bar.Animate, Children = bar.Children };
     }
 }

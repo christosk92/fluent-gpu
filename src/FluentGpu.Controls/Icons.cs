@@ -47,6 +47,10 @@ public static class Icons
     public const string Folder = "\uE8B7";
     public const string Tag = "\uE8EC";
     public const string Document = "\uE8A5";
+    public const string Copy = "\uE8C8";
+    public const string Link = "\uE71B";
+    public const string Globe = "\uE774";
+    public const string OpenInNewWindow = "\uE8A7";
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
     public const string Movie = "\uE8B2";

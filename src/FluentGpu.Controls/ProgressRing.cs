@@ -24,6 +24,14 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static class ProgressRing
 {
+    // Template parts (see TemplateParts). The part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The accent ring arc (the Lottie ellipse — determinate sweep / indeterminate spinner). The ArcSpec
+    /// (color, stroke weight, sweep) is stock per-render computed styling a modifier sees and may override
+    /// (<c>b =&gt; b with { Arc = … }</c>). Owned: OnRealized (the indeterminate trim-loop ref, chained with any
+    /// modifier-supplied handler; the determinate arc owns nothing).</summary>
+    public const string PartRing = "Ring";
+
     // WinUI defaults (ProgressRing.xaml): Width/Height = 32, MinWidth/MinHeight = 16.
     public const float DefaultSize = 32f;
     public const float MinSize = 16f;
@@ -67,9 +75,10 @@ public static class ProgressRing
 
     /// <summary>A determinate ring: the accent arc's sweep is <c>value·360°</c> from 12 o'clock clockwise, over a track
     /// ring. WinUI's default Background is <c>ControlFillColorTransparentBrush</c>, so the track is invisible unless a
-    /// <paramref name="track"/> color is supplied. <paramref name="foreground"/> defaults to AccentFillColorDefault.</summary>
+    /// <paramref name="track"/> color is supplied. <paramref name="foreground"/> defaults to AccentFillColorDefault.
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the accent arc).</summary>
     public static BoxEl Determinate(float value /*0..1*/, float size = DefaultSize, bool isActive = true,
-                                    ColorF? foreground = null, ColorF? track = null)
+                                    ColorF? foreground = null, ColorF? track = null, TemplateParts? parts = null)
     {
         var ts = ProgressRingTemplateSettings.ForDeterminate(size, value);
         ColorF fg = foreground ?? Tok.AccentDefault;
@@ -81,21 +90,25 @@ public static class ProgressRing
             Children = new Element[]
             {
                 new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(tk, ts.Stroke, 0f, 360f, RoundCaps: false) },             // track ring
-                new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true) }, // accent sweep (round caps, like the Lottie)
+                parts.Apply(PartRing,                                                                                                      // accent sweep (round caps, like the Lottie)
+                    new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true) }),
             },
         };
     }
 
     /// <summary>An indeterminate spinner: a round-capped accent arc rotating continuously at the WinUI cadence
-    /// (900° per 2.0s with the Lottie cubic-bezier spline). <paramref name="isActive"/>=false fades it out (Inactive).</summary>
-    public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null)
-        => Embed.Comp(() => new SpinnerRing { Size = size, IsActive = isActive, Foreground = foreground });
+    /// (900° per 2.0s with the Lottie cubic-bezier spline). <paramref name="isActive"/>=false fades it out (Inactive).
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the spinning arc).</summary>
+    public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null,
+                                        TemplateParts? parts = null)
+        => Embed.Comp(() => new SpinnerRing { Size = size, IsActive = isActive, Foreground = foreground, Parts = parts });
 
     internal sealed class SpinnerRing : Component
     {
         public float Size = DefaultSize;
         public bool IsActive = true;
         public ColorF? Foreground;
+        public TemplateParts? Parts;
 
         public override Element Render()
         {
@@ -137,19 +150,24 @@ public static class ProgressRing
                 }, IndeterminateDurationMs, loop: true);
             }, Size);
 
+            Action<NodeHandle> arcCapture = h => arcRef.Value = h;
+            var arc = new BoxEl
+            {
+                Width = ts.Size, Height = ts.Size,
+                Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true),
+                OnRealized = arcCapture,
+            };
+            if (Parts is { } p)   // restyle the arc (the ArcSpec is stock — override-able); the trim-loop ref always wins (chained)
+            {
+                var m = p.Apply(PartRing, arc);
+                arc = m with { OnRealized = TemplateParts.Chain(arcCapture, m.OnRealized) };
+            }
+
             return new BoxEl
             {
                 ZStack = true, Width = ts.Size, Height = ts.Size,
                 Opacity = IsActive ? 1f : 0f,   // Inactive visual state: LayoutRoot.Opacity = 0
-                Children = new Element[]
-                {
-                    new BoxEl
-                    {
-                        Width = ts.Size, Height = ts.Size,
-                        Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true),
-                        OnRealized = h => arcRef.Value = h,
-                    },
-                },
+                Children = new Element[] { arc },
             };
         }
     }

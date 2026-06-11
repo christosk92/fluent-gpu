@@ -72,24 +72,43 @@ public static class MenuFlyout
     static readonly Edges4 ItemPadding    = new(11, 8, 11, 9);     // MenuFlyoutItemThemePadding (themeresources:261)
     static readonly Edges4 ChevronMargin  = new(24, 0, 0, 0);      // MenuFlyoutItemChevronMargin 24,0,0,-1 (themeresources:257; the -1 optical nudge is sub-px here)
 
-    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth)
-        => Build(items, close, minWidth, onNavigate: null);
+    // ── Template parts (see TemplateParts) — threaded into EVERY presenter level, so cascading sub-menus inherit the
+    //    same modifiers. The popup body is popup-built each open: modifiers run inside the presenter's render. Each
+    //    part's doc lists the props the control OWNS (re-asserted after any modifier — a modifier cannot win those).
+    /// <summary>The scrollable viewport (WinUI MenuFlyoutPresenterScrollViewer) — a <see cref="ScrollEl"/>, so style
+    /// it via the generic map: <c>Parts.Set&lt;ScrollEl&gt;(MenuFlyout.PartScrollViewer, s => s with { MaxHeight = … })</c>.
+    /// Owned: Content (the items column), ContentSized.</summary>
+    public const string PartScrollViewer = "ScrollViewer";
+    /// <summary>The items column inside the viewport (WinUI ItemsPresenter). Owned: OnCharInput (first-letter jump),
+    /// Children (the rows + cascade timers).</summary>
+    public const string PartPresenter = "Presenter";
+    /// <summary>EVERY command/toggle/radio/sub-menu row — ONE modifier restyles all rows (popup-built each open, not
+    /// recycled). Owned: Role, TabIndex, OnClick, OnKeyDown (roving), OnHoverMove (cascade bookkeeping), OnRealized
+    /// (row-node capture, chained), Children (the check/icon/label/accelerator/chevron columns).</summary>
+    public const string PartItem = "Item";
+    /// <summary>A separator row (pure chrome — no owned props).</summary>
+    public const string PartSeparator = "Separator";
+
+    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
+        TemplateParts? parts = null)
+        => Build(items, close, minWidth, onNavigate: null, parts);
 
     /// <summary><paramref name="onNavigate"/>: Left(-1)/Right(+1) pressed while the menu is open and the focused row is
     /// not a sub-menu boundary — MenuBar uses it to move between adjacent open menus (MenuBarItem.cpp:205-228
     /// OnPresenterKeyDown → OpenFlyoutFrom).</summary>
-    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate)
-        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate });
+    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate,
+        TemplateParts? parts = null)
+        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts });
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────
-    internal static Element Separator() => new BoxEl
+    internal static Element Separator(TemplateParts? parts = null) => parts.Apply(PartSeparator, new BoxEl
     {
         Direction = 1,
         Justify = FlexJustify.Center,
         Padding = new Edges4(0, 1, 0, 1),                          // SeparatorThemePadding vertical (1 top, 1 bottom)
         Children = [new BoxEl { Height = SeparatorHeight, Margin = new Edges4(-4, 0, -4, 0), Fill = Tok.StrokeDividerDefault }],
-    };
+    });
 
     // ── A single command/toggle/radio/sub-menu row. <paramref name="highlighted"/> = the keyboard cursor (Up/Down) →
     //    renders the WinUI PointerOver fill so arrow-roving looks identical to a mouse hover. <paramref name="subOpen"/>
@@ -97,7 +116,7 @@ public static class MenuFlyout
     internal static Element Row(
         MenuFlyoutItem it, int index, Action activate, bool checkColumn, bool iconColumn, bool highlighted,
         Action<int>? onKeyMove, Action<KeyEventArgs>? onRowKey, Action<Point2>? onHover, Action<NodeHandle>? onRealized,
-        bool subOpen = false)
+        bool subOpen = false, TemplateParts? parts = null)
     {
         bool enabled = it.Enabled;
         // MenuFlyoutItemForeground = TextPrimary; Disabled = TextDisabled. PointerOver/Pressed foreground stay Primary
@@ -148,7 +167,7 @@ public static class MenuFlyout
         // (MenuFlyoutSubItemBackgroundSubMenuOpened = SubtleFillColorSecondary) so they read identically to a hover.
         ColorF rest = enabled && (highlighted || subOpen) ? Tok.FillSubtleSecondary : Tok.FillSubtleTransparent;
 
-        return new BoxEl
+        var row = new BoxEl
         {
             Direction = 0,
             Height = RowHeight,                                    // 36 (= MinHeight 32 clamped up by the 14px line + 8/9 padding)
@@ -186,6 +205,21 @@ public static class MenuFlyout
             },
             Children = children.ToArray(),
         };
+        // [PartItem]: one modifier restyles EVERY row; the roving/cascade mechanics and the column structure always
+        // win. The state-driven rest fill (highlight/SubMenuOpened) sits in the stock build, so a modifier may
+        // override it off `b.Fill`.
+        if (parts is { } rp)
+        {
+            var m = rp.Apply(PartItem, row);
+            row = m with
+            {
+                Role = row.Role, TabIndex = row.TabIndex,
+                OnClick = row.OnClick, OnKeyDown = row.OnKeyDown, OnHoverMove = row.OnHoverMove,
+                OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
+                Children = row.Children,
+            };
+        }
+        return row;
     }
 }
 
@@ -212,6 +246,9 @@ internal sealed class MenuFlyoutPresenter : Component
     /// <summary>Keyboard-opened menus put the cursor + focus on the FIRST selectable row after mount (WinUI
     /// CascadingMenuHelper keyboard open focuses the first MenuFlyoutItem; MenuBar Down-open does the same).</summary>
     public bool FocusFirstOnMount;
+    /// <summary>Part modifiers keyed by the <see cref="MenuFlyout"/> <c>PartXxx</c> consts — inherited by every
+    /// cascading sub-menu level.</summary>
+    public TemplateParts? Parts;
 
     // WinUI MenuFlyoutPresenter ScrollViewer max before internal scroll (mirrors the flyout's content cap; AutoSuggest
     // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls.
@@ -321,6 +358,7 @@ internal sealed class MenuFlyoutPresenter : Component
                     CloseSelf = () => CloseSub(),        // Left arrow closes one cascade level
                     OnChildHover = () => pendingClose.Value = false,   // pointer inside the child cancels delay-close
                     FocusFirstOnMount = focusFirst,      // keyboard open → cursor + focus on the first sub item
+                    Parts = Parts,                       // part modifiers cascade into every sub-menu level
                 }),
                 FlyoutPlacement.RightEdgeAlignedTop,
                 new PopupOptions(Chrome: PopupChrome.Flyout) { ConstrainToRootBounds = false });
@@ -389,7 +427,7 @@ internal sealed class MenuFlyoutPresenter : Component
             int idx = i;
             if (it.IsSeparator)
             {
-                rows[i] = MenuFlyout.Separator();
+                rows[i] = MenuFlyout.Separator(Parts);
                 continue;
             }
             // Activation: a sub-menu row OPENS its cascade (WinUI MenuFlyoutSubItem click); other rows invoke + close.
@@ -403,7 +441,8 @@ internal sealed class MenuFlyoutPresenter : Component
                 onRowKey: OnRowKey,
                 onHover: _ => OnRowHover(idx),
                 onRealized: h => rowNodes.Value[idx] = h,
-                subOpen: i == subOpen);
+                subOpen: i == subOpen,
+                parts: Parts);
         }
 
         var children = new List<Element>(rows.Length + 2);

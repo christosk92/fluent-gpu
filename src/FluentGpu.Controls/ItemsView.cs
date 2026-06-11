@@ -96,6 +96,8 @@ public sealed class ItemsView : Component
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
     public Func<int, bool>? IsItemEnabled;
     /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (ListView/GridView/TreeView).</summary>
+    // Per-item chrome customization goes through the ContainerFactory seam, NOT TemplateParts — per-item part
+    // modifiers in recycled scroll paths are an allocation/recycling hazard (docs/guide/control-fidelity.md §6).
     public ItemContainerFactory? ContainerFactory;
     /// <summary>Stable per-item keys for the keyed diff (reorder projections need item-identity keys).</summary>
     public Func<int, string>? KeyOf;

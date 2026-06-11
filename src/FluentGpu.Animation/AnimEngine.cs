@@ -4,8 +4,10 @@ using FluentGpu.Scene;
 namespace FluentGpu.Animation;
 
 /// <summary>Animatable channels. Transform channels compose into LocalTransform (TransformDirty); Opacity + the presented
-/// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. None relayout.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB }
+/// SizeW/SizeH (the "Reveal" presented extent the recorder draws the fill + child-clip at) → PaintDirty. LayoutW/LayoutH
+/// are the one deliberate exception to "animation never relays out": a SizeMode.Reflow track writes the interpolated
+/// size into LayoutInput each tick and the host re-solves the nearest layout boundary, so neighbours reflow smoothly.</summary>
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH }
 
 // Easing (the enum + evaluator) now lives in FluentGpu.Foundation (a foundational motion primitive shared by Dsl/Scene/
 // Render + the image cross-fade). Animation imports Foundation, so `Easing` here resolves to FluentGpu.Foundation.Easing.
@@ -83,13 +85,24 @@ public sealed class AnimEngine
         public SpringParams Spring;
         public bool Done;
         public float Value;   // value computed this tick (folded after advancing all tracks)
+        // SizeMode.Reflow (LayoutW/LayoutH) and SizeMode.Relayout (SizeW/SizeH with RestoreLayout) bookkeeping: the
+        // element-DECLARED LayoutInput value stashed at seed time (restored at settle so layout ownership returns to
+        // normal — without it the node stays frozen at the last interpolated solve, e.g. an auto height never re-wraps),
+        // and whether the spec anchors content trailing.
+        public float RestoreTo;
+        public bool RestoreLayout;
+        public bool TrailingAnchor;
+
+        /// <summary>The destination this track is flying to (spring target / last keyframe value).</summary>
+        public float TargetValue => Mode == IntegrationMode.Spring ? Target : (Keys.Length > 0 ? Keys[^1].Value : 0f);
     }
 
     private struct Accum
     {
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
         public float ClipL, ClipT, ClipR, ClipB;   // authored clip-rect edges (node-local); NaN = that edge not animated
-        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN };
+        public float Lw, Lh;                       // SizeMode.Reflow interpolated LAYOUT size; NaN = axis not reflowing
+        public static Accum Default => new() { Tx = 0, Ty = 0, Sx = 1, Sy = 1, Rot = 0, Op = 1, Sw = float.NaN, Sh = float.NaN, TrimStart = float.NaN, TrimEnd = float.NaN, ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN, Lw = float.NaN, Lh = float.NaN };
         public static Accum FromPaint(in NodePaint p)
         {
             // Preserve channels that do NOT have an active track this tick. Without this, a longer scale/size track can
@@ -105,6 +118,7 @@ public sealed class AnimEngine
                 Sw = p.PresentedW, Sh = p.PresentedH,
                 TrimStart = p.StrokeTrimStart, TrimEnd = p.StrokeTrimEnd,
                 ClipL = float.NaN, ClipT = float.NaN, ClipR = float.NaN, ClipB = float.NaN,
+                Lw = float.NaN, Lh = float.NaN,
             };
             if (!p.ClipRect.IsInfinite)
             {
@@ -134,6 +148,8 @@ public sealed class AnimEngine
                 case AnimChannel.ClipT: ClipT = v; break;
                 case AnimChannel.ClipR: ClipR = v; break;
                 case AnimChannel.ClipB: ClipB = v; break;
+                case AnimChannel.LayoutW: Lw = v; break;    // reflow layout size — replace (one owner per axis)
+                case AnimChannel.LayoutH: Lh = v; break;
             }
         }
     }
@@ -167,6 +183,7 @@ public sealed class AnimEngine
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
         t.DelayRemainingMs = MathF.Max(0f, delayMs);
         t.Loop = loop; t.DrivenRef = -1; t.Done = false; t.JustSeeded = true;
+        t.RestoreLayout = false;   // reused track: the seeder re-opts-in per mode (Relayout/Reflow set it after seeding)
         if (Diag.Enabled) Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
     }
 
@@ -190,10 +207,12 @@ public sealed class AnimEngine
             if (Diag.Enabled) Diag.Event("anim", $"spring RETARGET {channel} pos={existing.Pos:0.###} vel={existing.Vel:0.##} → {to:0.###}");
             existing.Target = to; existing.Spring = spring; existing.Done = false; existing.Composite = composite; existing.JustSeeded = false;
             existing.DelayRemainingMs = 0f;   // interruption/retarget keeps moving; do not re-delay a live spring
+            existing.RestoreLayout = false;   // the seeder re-opts-in per mode
             return;   // keep Pos + Vel → smooth handoff
         }
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
+        t.RestoreLayout = false;
         // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
         t.Pos = initial ?? CurrentValue(node, channel); t.Vel = 0f; t.Done = false; t.JustSeeded = true;
         t.DelayRemainingMs = MathF.Max(0f, delayMs);
@@ -213,6 +232,8 @@ public sealed class AnimEngine
             AnimChannel.Opacity => p.Opacity,
             AnimChannel.SizeW => !float.IsNaN(p.PresentedW) ? p.PresentedW : _scene.Bounds(node).W,
             AnimChannel.SizeH => !float.IsNaN(p.PresentedH) ? p.PresentedH : _scene.Bounds(node).H,
+            AnimChannel.LayoutW => _scene.Bounds(node).W,
+            AnimChannel.LayoutH => _scene.Bounds(node).H,
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : (_scene.TryGetPolylineStroke(node, out var ps) ? ps.TrimStart : 0f),
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : (_scene.TryGetPolylineStroke(node, out var pe) ? pe.TrimEnd : 1f),
             _ => 0f,   // Rotation: not cleanly recoverable from a scaled matrix; springs from 0
@@ -265,11 +286,61 @@ public sealed class AnimEngine
                 case SizeMode.Relayout:        // re-solve the subtree at the interpolated size each tick (live reflow)
                     RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
                     RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
+                    // The host writes the interpolated size into LayoutInput each tick (RunIncrementalLayout), so the
+                    // DECLARED value must be stashed and restored at settle — else an auto axis stays frozen at the
+                    // last solve. Seed/retarget time is when LayoutInput provably holds the declared value.
+                    if (Find(node, AnimChannel.SizeW) is { } tw) { tw.RestoreTo = _scene.Layout(node).Width; tw.RestoreLayout = true; }
+                    if (Find(node, AnimChannel.SizeH) is { } th) { th.RestoreTo = _scene.Layout(node).Height; th.RestoreLayout = true; }
                     _scene.Mark(node, NodeFlags.Relayouting);
+                    break;
+                case SizeMode.Reflow:          // the interpolated size participates in PARENT layout — neighbours reflow
+                    ReflowSize(node, AnimChannel.LayoutW, fromAbs.W, toAbs.W, spec);
+                    ReflowSize(node, AnimChannel.LayoutH, fromAbs.H, toAbs.H, spec);
                     break;
             }
         }
     }
+
+    // SizeMode.Reflow seeding/retargeting. Two guards kill the inherent feedback loop (the track itself writes the
+    // layout size, so on every reconcile frame the host's projection diff sees "old size ≠ new size" again):
+    //   target guard — phase-6 re-solved to the SAME destination (a no-op recommit mid-flight): keep flying;
+    //   echo guard   — layout still holds OUR OWN interp (the node's scope wasn't re-solved this commit): keep flying.
+    // Only a genuinely new destination passes both → retarget (tween restarts from the current interp — the WinUI
+    // fixed-duration storyboard feel; a spring keeps Pos+Vel). Shrink legs select ExitDynamics (asymmetric open/close).
+    private void ReflowSize(NodeHandle node, AnimChannel ch, float from, float to, in LayoutTransition spec)
+    {
+        Track? ex = Find(node, ch);
+        if (ex is not null)
+        {
+            if (MathF.Abs(ex.TargetValue - to) < 0.5f) return;
+            if (MathF.Abs(ex.Value - to) < 0.5f) return;
+            from = ex.Value;                                  // genuine retarget — depart from the current interp
+        }
+        else if (MathF.Abs(from - to) < 0.5f) return;         // no change and nothing in flight
+
+        TransitionDynamics dyn = Normalize(to < from && spec.ExitDynamics is { } ed ? ed : spec.Dynamics);
+        // Stash the element-DECLARED LayoutInput value before the track starts overwriting it. At seed/retarget time
+        // it provably holds the declared value (NaN/auto or explicit): the commit that produced this new target has
+        // just rewritten it. Restored at settle so the node returns to normal layout ownership.
+        float declared = ch == AnimChannel.LayoutW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        if (dyn.Kind == DynamicsKind.Spring)
+            Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: from, delayMs: spec.DelayMs);
+        else
+            Animate(node, ch, from, to, dyn.DurationMs, dyn.Easing, delayMs: spec.DelayMs);
+        Track t = Find(node, ch);
+        t.RestoreTo = declared;
+        t.TrailingAnchor = spec.Anchor == SizeAnchor.Trailing;
+        if (Diag.Enabled) Diag.Event("anim", $"reflow SEED {ch} {from:0.#} → {to:0.#} restore={declared:0.#}");
+    }
+
+    /// <summary>Nodes whose REFLOW size advanced this tick — the host re-solves their boundary scope, then refreshes
+    /// the Trailing child-shift from the fresh bounds. Cleared by the host after it consumes them.</summary>
+    public List<NodeHandle> ReflowRoots { get; } = new();
+
+    private bool _reflowWrote;
+    /// <summary>True if any reflow track wrote LayoutInput this tick (interp advance or settle restore) — the host
+    /// runs a boundary-scoped re-solve before record. Self-clearing.</summary>
+    public bool ConsumeReflowWrites() { bool w = _reflowWrote; _reflowWrote = false; return w; }
 
     /// <summary>Nodes whose presented SIZE changed this tick under SizeMode.Relayout — the host re-solves just these
     /// subtrees (scoped layout) so their text re-wraps live. Cleared by the host after it consumes them.</summary>
@@ -336,14 +407,21 @@ public sealed class AnimEngine
         return false;
     }
 
-    /// <summary>A default-constructed spec (all-zero dynamics) means "use the defaults" — fill them in.</summary>
+    /// <summary>A default-constructed spec (all-zero dynamics) means "use the defaults" — fill them in. A spring with
+    /// no response gets the standard 0.30s/0.85ζ; a zero damping ratio is treated as unset too (an undamped spring at
+    /// any stiffness never settles and destabilizes the integrator). A default EasingSpec (no curve chosen) becomes
+    /// FluentDecelerate, the engine's transition default.</summary>
     private static TransitionDynamics Normalize(in TransitionDynamics d)
-        => d.Kind == DynamicsKind.Spring
-            ? (d.Response > 0f ? d : TransitionDynamics.Default)
+    {
+        var n = d.Kind == DynamicsKind.Spring
+            ? (d.Response > 0f ? (d.DampingRatio > 0f ? d : d with { DampingRatio = 0.85f }) : TransitionDynamics.Default)
             : (d.DurationMs > 0f ? d : TransitionDynamics.Tween(200f, d.Easing));
+        return n.Kind == DynamicsKind.Tween && n.Easing.IsDefault ? n with { Easing = Easing.FluentDecelerate } : n;
+    }
 
     private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn, float delayMs = 0f)
     {
+        if (MathF.Abs(delta) < 0.01f && Find(node, ch) is null) return;   // no move and nothing in flight — mirror RevealSize's deadband
         if (dyn.Kind == DynamicsKind.Spring)
         {
             var sp = SpringParams.FromResponse(dyn.Response, dyn.DampingRatio);
@@ -500,6 +578,19 @@ public sealed class AnimEngine
             _scene.Mark(kv.Key, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if ((!float.IsNaN(acc.Sw) || !float.IsNaN(acc.Sh)) && (_scene.Flags(kv.Key) & NodeFlags.Relayouting) != 0)
                 IncrementalRoots.Add(kv.Key);
+            // SizeMode.Reflow: write the interpolated size into LAYOUT input and dirty the PARENT (the node itself
+            // could self-classify as a boundary once its size is explicit) — the host re-solves the boundary scope
+            // right after this tick, so siblings reflow at the eased size before record.
+            if (!float.IsNaN(acc.Lw) || !float.IsNaN(acc.Lh))
+            {
+                ref LayoutInput li = ref _scene.Layout(kv.Key);
+                if (!float.IsNaN(acc.Lw)) li.Width = acc.Lw;
+                if (!float.IsNaN(acc.Lh)) li.Height = acc.Lh;
+                var rp = _scene.Parent(kv.Key);
+                _scene.Mark(rp.IsNull ? kv.Key : rp, NodeFlags.LayoutDirty);
+                _reflowWrote = true;
+                ReflowRoots.Add(kv.Key);   // one entry per node per tick (scratch is per-node)
+            }
         }
 
         // free finished tracks (eased non-loop completion / settled springs). Driven + loop tracks persist.
@@ -509,10 +600,33 @@ public sealed class AnimEngine
         {
             Track t = _tracks[i];
             if (!t.Done) continue;
+            // A settled REFLOW track restores the element-DECLARED LayoutInput (NaN/auto or explicit) — numerically
+            // equal to the just-reached target, so the final boundary re-solve is visually a no-op — and returns the
+            // node to normal layout ownership. The Trailing child-shift rests at 0.
+            if (t.Channel is AnimChannel.LayoutW or AnimChannel.LayoutH && _scene.IsLive(t.Node))
+            {
+                ref LayoutInput rli = ref _scene.Layout(t.Node);
+                if (t.Channel == AnimChannel.LayoutW) rli.Width = t.RestoreTo; else rli.Height = t.RestoreTo;
+                ref NodePaint rp = ref _scene.Paint(t.Node);
+                rp.ChildShiftX = 0f; rp.ChildShiftY = 0f;
+                var rpar = _scene.Parent(t.Node);
+                _scene.Mark(rpar.IsNull ? t.Node : rpar, NodeFlags.LayoutDirty);
+                _scene.Mark(t.Node, NodeFlags.PaintDirty);
+                _reflowWrote = true;
+            }
             bool isReveal = t.Channel is AnimChannel.SizeW or AnimChannel.SizeH or AnimChannel.StrokeTrimStart or AnimChannel.StrokeTrimEnd
                 or AnimChannel.ClipL or AnimChannel.ClipT or AnimChannel.ClipR or AnimChannel.ClipB;
             if (isReveal && _scene.IsLive(t.Node))
             {
+                // A settled Relayout-mode size track restores the element-DECLARED LayoutInput (the host overwrote it
+                // with the interpolated value every tick) and queues one final re-solve at the declared value.
+                if (t.RestoreLayout && t.Channel is AnimChannel.SizeW or AnimChannel.SizeH)
+                {
+                    ref LayoutInput rli = ref _scene.Layout(t.Node);
+                    if (t.Channel == AnimChannel.SizeW) rli.Width = t.RestoreTo; else rli.Height = t.RestoreTo;
+                    _scene.Mark(t.Node, NodeFlags.LayoutDirty);
+                    _reflowWrote = true;   // the host's phase-7 layout pass consumes this frame's marks
+                }
                 ref NodePaint p = ref _scene.Paint(t.Node);
                 if (t.Channel == AnimChannel.SizeW) { p.PresentedW = float.NaN; _scene.Unmark(t.Node, NodeFlags.Relayouting); }
                 else if (t.Channel == AnimChannel.SizeH) p.PresentedH = float.NaN;

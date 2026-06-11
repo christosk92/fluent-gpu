@@ -50,6 +50,24 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class ComboBox : Component
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The field root — the template's Background border (editable: the single ColumnSpan=2 chrome box;
+    /// non-editable: the closed field row). State fills/borders (rest/hover/pressed/focused/error ramps) are computed
+    /// per render BEFORE the modifier — override at will. Owned: OnRealized (anchor capture, chained), OnClick
+    /// (toggle, non-editable), OnKeyDown/OnCharInput/OnFocusChanged, Focusable, Role, Children (value label / TextBox
+    /// part + overlay + glyph).</summary>
+    public const string PartField = "Field";
+    /// <summary>The 12×12 DropDownGlyph cell (both modes). Owned: HitTestVisible (the glyph is decoration — the
+    /// field / DropDownOverlay button owns the click).</summary>
+    public const string PartChevron = "Chevron";
+    /// <summary>One dropdown row (the ComboBoxItem LayoutRoot) — popup-built each open, NOT recycled, so per-row
+    /// modifiers are safe. State fills (selected/cursor rest + hover/press ramp) are computed per render BEFORE the
+    /// modifier. Owned: OnClick (commit), Role, Children (pill + content).</summary>
+    public const string PartItemRow = "ItemRow";
+    /// <summary>The 3×16 accent pill (ComboBoxItemPill), mounted only on the selected row. Owned: none.</summary>
+    public const string PartItemPill = "ItemPill";
+
     // ── WinUI dims (ComboBox_themeresources.xaml) ──
     public const float MinHeight = 32f;          // ComboBoxMinHeight
     public const float ThemeMinWidth = 64f;      // ComboBoxThemeMinWidth
@@ -97,6 +115,9 @@ public sealed class ComboBox : Component
     /// default: exact-match the items case-insensitively and select on a hit (cpp:2516–2543), else the text stays as a
     /// custom value with <see cref="SelectedIndex"/> = −1.</summary>
     public Func<string, bool>? OnTextSubmitted;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
@@ -427,6 +448,8 @@ public sealed class ComboBox : Component
             : IsEnabled ? Tok.ControlElevationBorder
             : GradientSpec.Solid(Tok.StrokeControlDefault);
 
+        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+
         // WinUI DropDownGlyph: AnimatedChevronDownSmall (12×12), foreground TextFillColorSecondary →
         // disabled TextFillColorDisabled. The AnimatedIcon's Pressed segment nudges the chevron — until the real
         // AnimatedIcon state machine lands (Wave 4), the eased PressScale on the glyph box is the engine stand-in.
@@ -450,6 +473,8 @@ public sealed class ComboBox : Component
                 },
             ],
         };
+        // Parts: restyle the glyph cell (press-nudge, margin, colors via the inner TextEl…); it stays decoration.
+        if (Parts is { } cp) chevron = cp.Apply(PartChevron, chevron) with { HitTestVisible = false };
 
         // Header (HeaderContentPresenter, generic.xaml:9155-9166) / Description (DescriptionPresenter :9233-9239) /
         // error message rows around the field. Returns the bare field when none are set (the common case).
@@ -475,6 +500,30 @@ public sealed class ComboBox : Component
 
         if (Editable)
         {
+            // DropDownGlyph (:582–587): 12×12 E70D, Margin 0,0,14,0, IsHitTestVisible=False, painted ABOVE the
+            // overlay (tree order = paint order). Foreground stays TextFillColorSecondary in every editable state
+            // (ComboBoxDropDownGlyphForeground :58 = ComboBoxEditableDropDownGlyphForeground :105/:315); disabled
+            // = TextFillColorDisabled (:59). No press nudge: the EditableModeStates only recolor the overlay/glyph.
+            var editGlyph = new BoxEl
+            {
+                Width = ChevronGlyphSize, Height = ChevronGlyphSize,
+                OffsetX = w - ChevronGlyphSize - ChevronRightInset,
+                OffsetY = (MinHeight - ChevronGlyphSize) * 0.5f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                HitTestVisible = false,
+                Children =
+                [
+                    new TextEl(Icons.ChevronDown)
+                    {
+                        Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
+                        Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
+                        DisabledColor = Tok.TextDisabled,
+                    },
+                ],
+            };
+            // Parts: restyle the glyph cell; it stays decoration (the DropDownOverlay below owns the click).
+            if (Parts is { } gp) editGlyph = gp.Apply(PartChevron, editGlyph) with { HitTestVisible = false };
+
             // ── ONE box owns ALL the chrome (the WinUI template: a single Background border spans BOTH grid columns,
             // ComboBox_themeresources.xaml:571 Grid.ColumnSpan="2"; the TextBox part sits INSIDE it with
             // BorderBrush="Transparent" + Style=ComboBoxTextBoxStyle, :580). The chromeless part paints only the
@@ -552,27 +601,8 @@ public sealed class ComboBox : Component
                     TabStop = false,
                     OnClick = OverlayToggle,
                 },
-                // DropDownGlyph (:582–587): 12×12 E70D, Margin 0,0,14,0, IsHitTestVisible=False, painted ABOVE the
-                // overlay (tree order = paint order). Foreground stays TextFillColorSecondary in every editable state
-                // (ComboBoxDropDownGlyphForeground :58 = ComboBoxEditableDropDownGlyphForeground :105/:315); disabled
-                // = TextFillColorDisabled (:59). No press nudge: the EditableModeStates only recolor the overlay/glyph.
-                new BoxEl
-                {
-                    Width = ChevronGlyphSize, Height = ChevronGlyphSize,
-                    OffsetX = w - ChevronGlyphSize - ChevronRightInset,
-                    OffsetY = (MinHeight - ChevronGlyphSize) * 0.5f,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    HitTestVisible = false,
-                    Children =
-                    [
-                        new TextEl(Icons.ChevronDown)
-                        {
-                            Size = ChevronGlyphSize, FontFamily = Theme.IconFont,
-                            Color = IsEnabled ? Tok.TextSecondary : Tok.TextDisabled,
-                            DisabledColor = Tok.TextDisabled,
-                        },
-                    ],
-                },
+                // The DropDownGlyph cell (editGlyph above — built before the list so PartChevron routes it).
+                editGlyph,
             };
             // Focused: the 2px accent bottom bar on the OUTER box (TextControlBorderThemeThicknessFocused 1,1,1,2 +
             // the TextControlElevationBorderFocusedBrush accent bottom stop — the 2px-bottom-bar equivalence; the
@@ -580,7 +610,8 @@ public sealed class ComboBox : Component
             if (editFocused && IsEnabled)
                 editChildren.Add(new BoxEl { Width = w, Height = 2f, OffsetY = MinHeight - 2f, Fill = Tok.AccentDefault });
 
-            return WithChrome(new BoxEl
+            var editKids = editChildren.ToArray();
+            var editField = new BoxEl
             {
                 ZStack = true, Width = w, Height = MinHeight,
                 Corners = editableCorners, BorderWidth = 1f,
@@ -592,15 +623,42 @@ public sealed class ComboBox : Component
                 ClipToBounds = true,
                 IsEnabled = IsEnabled,
                 Role = AutomationRole.ComboBox,
-                OnRealized = h => anchor.Value = h,
+                OnRealized = anchorCapture,
                 OnKeyDown = IsEnabled ? HandleEditableKeys : null,   // Up/Down bubble out of the single-line field
-                Children = editChildren.ToArray(),
-            });
+                Children = editKids,
+            };
+            // Parts: restyle the chrome box; the anchor capture, arrow preview and part structure always win.
+            if (Parts is { } ep)
+            {
+                var m = ep.Apply(PartField, editField);
+                editField = m with
+                {
+                    OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
+                    OnKeyDown = IsEnabled ? (Action<KeyEventArgs>)HandleEditableKeys : null,
+                    Role = AutomationRole.ComboBox,
+                    Children = editKids,
+                };
+            }
+            return WithChrome(editField);
         }
 
         string label = sel >= 0 && sel < Items.Count ? Items[sel] : Placeholder;
         bool isPlaceholder = sel < 0 || sel >= Items.Count;
-        return WithChrome(new BoxEl
+        Element[] fieldKids =
+        [
+            new TextEl(label)
+            {
+                Size = 14f, Grow = 1f,
+                // ComboBoxForeground=Primary / placeholder=Secondary; pressed ramps to Secondary/Tertiary; disabled=Disabled.
+                // Focused keeps Primary / placeholder Secondary (ComboBoxForegroundFocused /
+                // ComboBoxPlaceHolderForegroundFocused, ComboBox_themeresources.xaml:44/:52) — no swap needed.
+                Color = !IsEnabled ? Tok.TextDisabled : (isPlaceholder ? Tok.TextSecondary : Tok.TextPrimary),
+                PressedColor = isPlaceholder ? Tok.TextTertiary : Tok.TextSecondary,
+                DisabledColor = Tok.TextDisabled,
+            },
+            chevron,
+        ];
+        var field = new BoxEl
         {
             Direction = 0, Width = w, MinHeight = MinHeight, AlignItems = FlexAlign.Center, Padding = new Edges4(12, 5, 0, 7),
             Corners = Radii.ControlAll, BorderWidth = 1f,   // non-editable: popup overlaps the field; field keeps full ControlCornerRadius
@@ -615,26 +673,30 @@ public sealed class ComboBox : Component
             IsEnabled = IsEnabled,
             Focusable = IsEnabled,
             Role = AutomationRole.ComboBox,
-            OnRealized = h => anchor.Value = h,
+            OnRealized = anchorCapture,
             OnClick = Toggle,
             OnFocusChanged = IsEnabled ? OnFieldFocus : null,
             OnKeyDown = IsEnabled ? (Action<KeyEventArgs>)HandleKey : null,
             OnCharInput = IsEnabled ? (Action<CharEventArgs>)HandleChar : null,
-            Children =
-            [
-                new TextEl(label)
-                {
-                    Size = 14f, Grow = 1f,
-                    // ComboBoxForeground=Primary / placeholder=Secondary; pressed ramps to Secondary/Tertiary; disabled=Disabled.
-                    // Focused keeps Primary / placeholder Secondary (ComboBoxForegroundFocused /
-                    // ComboBoxPlaceHolderForegroundFocused, ComboBox_themeresources.xaml:44/:52) — no swap needed.
-                    Color = !IsEnabled ? Tok.TextDisabled : (isPlaceholder ? Tok.TextSecondary : Tok.TextPrimary),
-                    PressedColor = isPlaceholder ? Tok.TextTertiary : Tok.TextSecondary,
-                    DisabledColor = Tok.TextDisabled,
-                },
-                chevron,
-            ],
-        });
+            Children = fieldKids,
+        };
+        // Parts: restyle anything (the state fills/borders above are pre-modifier); the open/nav mechanics always win.
+        if (Parts is { } fp)
+        {
+            var m = fp.Apply(PartField, field);
+            field = m with
+            {
+                OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
+                OnClick = Toggle,
+                OnFocusChanged = IsEnabled ? (Action<bool>)OnFieldFocus : null,
+                OnKeyDown = IsEnabled ? (Action<KeyEventArgs>)HandleKey : null,
+                OnCharInput = IsEnabled ? (Action<CharEventArgs>)HandleChar : null,
+                Focusable = IsEnabled,
+                Role = AutomationRole.ComboBox,
+                Children = fieldKids,
+            };
+        }
+        return WithChrome(field);
     }
 }
 
@@ -705,14 +767,16 @@ internal sealed class ComboBoxList : Component
                 Children = [label],
             };
             Element[] rowChildren = selected
-                ? [new BoxEl { Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center }, content]
+                ? [Owner.Parts.Apply(ComboBox.PartItemPill,
+                       new BoxEl { Width = 3f, Height = 16f, Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault, AlignSelf = FlexAlign.Center }), content]
                 : [content];
 
             // Item state matrix (ComboBox_themeresources): unselected rest=Transparent, hover=SubtleSecondary,
             // press=SubtleTertiary; selected rest=SubtleSecondary, hover=SubtleTertiary, press=SubtleSecondary.
             // The keyboard cursor (Highlight) reads as the hover/selected fill so arrow nav is visible without a pointer.
             ColorF rest = selected || cursor ? Tok.FillSubtleSecondary : ColorF.Transparent;
-            rows[i] = new BoxEl
+            Action choose = () => OnChoose(idx);
+            var row = new BoxEl
             {
                 ZStack = true,
                 Width = MathF.Max(0f, Width - 10f),   // LayoutRoot Margin 5,2,5,2 inside a width-matched popup
@@ -723,9 +787,14 @@ internal sealed class ComboBoxList : Component
                 Fill = rest,
                 HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
                 PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-                OnClick = () => OnChoose(idx),
+                OnClick = choose,
                 Children = rowChildren,
             };
+            // Rows are popup-built per render (NOT recycled — no virtualization hazard), so per-row Parts routing is
+            // safe; the state fills above are pre-modifier, the commit mechanics always win.
+            rows[i] = Owner.Parts is { } rp
+                ? rp.Apply(ComboBox.PartItemRow, row) with { OnClick = choose, Role = AutomationRole.MenuItem, Children = rowChildren }
+                : row;
         }
 
         // Inner column. WinUI's

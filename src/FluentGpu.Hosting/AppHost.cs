@@ -88,7 +88,14 @@ public sealed class AppHost : IDisposable
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
-    private readonly Dictionary<NodeHandle, RectF> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
+    private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
+
+    /// <summary>FLIP "First" snapshot of a BoundsAnimated node, in PARENT-RELATIVE presented space (its own layout
+    /// origin + in-flight LocalTransform). Parent-relative is what makes projections respond only to LOCAL movement:
+    /// an ancestor reflow (an Expander reveal, a pane resize) shifts parent and child equally, the relative rect is
+    /// unchanged, and the node rides the reflow RIGIDLY instead of re-FLIPping every frame. The parent handle is kept
+    /// purely as a reparent guard — across different parents the relative frames are incomparable, so we snap.</summary>
+    private readonly record struct ProjCapture(RectF Rel, NodeHandle Parent);
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
@@ -239,6 +246,8 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
+        _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
+        _dispatcher.OnRepeatResumed = _repeat.Resume;   // re-entered → fresh initial delay, no immediate re-fire
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
@@ -427,10 +436,12 @@ public sealed class AppHost : IDisposable
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
+            RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _interact.Tick(dtMs);                              // 7 eased hover/press
             _scene.AdvanceBrushAnims(dtMs);                    // 7 implicit BrushTransition (logical state flips)
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + scrollbar fade
+            ApplyStickyOffsets();                              // 7 CSS position:sticky pins (after every scroll write)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
@@ -594,27 +605,50 @@ public sealed class AppHost : IDisposable
         if (_frameStatsSig.HasSubscribers) _frameStatsSig.Value = stats;   // box only when a consumer (HUD) reads it
     }
 
-    // FLIP "First" capture — every BoundsAnimated node's presented absolute rect, snapshotted BEFORE this commit.
+    /// <summary>The node's presented rect in its PARENT's frame: layout origin + its own in-flight LocalTransform.
+    /// Because <see cref="SceneStore.AbsoluteRect"/> is a pure translation sum up the chain, this is the absolute rect
+    /// minus every ancestor contribution — computable with no ancestor walk.</summary>
+    private RectF RelRect(NodeHandle n)
+    {
+        ref readonly RectF b = ref _scene.Bounds(n);
+        ref readonly NodePaint p = ref _scene.Paint(n);
+        return new RectF(b.X + p.LocalTransform.Dx, b.Y + p.LocalTransform.Dy, b.W, b.H);
+    }
+
+    // FLIP "First" capture — every BoundsAnimated node's presented PARENT-RELATIVE rect, snapshotted BEFORE this commit.
     private void CaptureProjections(NodeHandle n)
     {
         if (n.IsNull) return;
         if ((_scene.Flags(n) & NodeFlags.BoundsAnimated) != 0)
-            _projectBefore[n] = _scene.AbsoluteRect(n);
+            _projectBefore[n] = new ProjCapture(RelRect(n), _scene.Parent(n));
         for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
             CaptureProjections(c);
     }
 
     private void ApplyProjections()
     {
+        // Deadbands: below these the commit didn't move/resize the node WITHIN ITS PARENT, so it must ride any
+        // ancestor reflow rigidly. The skip is required for correctness, not a fast path — AnimateBounds on a
+        // zero delta RESTARTS a full-duration tween from the current value (and seeds throwaway spring tracks),
+        // which is exactly the "knob lags its own track during a reveal" desync. In-flight tracks keep running.
+        const float PosEps = 0.05f;
+        const float SizeEps = 0.5f;   // matches RevealSize's no-change deadband (AnimEngine)
         bool reduced = Motion.ReducedMotion;
         foreach (var kv in _projectBefore)
         {
             var n = kv.Key;
             if (n == _dispatcher.Drag.ActiveNode) continue;   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            if (_scene.Parent(n) != kv.Value.Parent) continue;   // reparented: rel frames incomparable — snap
+            RectF from = kv.Value.Rel, to = RelRect(n);
+            if (MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
+                && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
+                continue;                                     // no LOCAL change ⇒ ancestor-driven move only
             if (!_anim.TryGetTransition(n, out var spec)) continue;
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
-            _anim.AnimateBounds(n, kv.Value, _scene.AbsoluteRect(n), spec);
+            // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
+            // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
+            _anim.AnimateBounds(n, from, to, spec);
         }
         _projectBefore.Clear();
     }
@@ -634,6 +668,87 @@ public sealed class AppHost : IDisposable
             _layout.RunSubtree(r);
         }
         roots.Clear();
+    }
+
+    /// <summary>SizeMode.Reflow (phase 7): a reflow track just wrote its interpolated size into LayoutInput and dirtied
+    /// the PARENT — re-solve those scopes through the standard boundary firewall so siblings reflow at the eased size
+    /// before record, then refresh each Trailing-anchored node's child-shift from the fresh bounds (the content's end
+    /// edge rides the animated edge). Runs only on frames where a reflow track wrote — zero work otherwise.</summary>
+    private void RunReflowLayout(Size2 layoutSize)
+    {
+        var roots = _anim.ReflowRoots;
+        if (!_anim.ConsumeReflowWrites()) { roots.Clear(); return; }
+        if (_scene.AnyLayoutDirty)
+        {
+            _invalidator.RunDirty(layoutSize);
+            _scene.ClearLayoutDirty();
+        }
+        for (int i = 0; i < roots.Count; i++)
+        {
+            var r = roots[i];
+            if (!_scene.IsLive(r)) continue;
+            if (!_anim.TryGetTransition(r, out var spec) || spec.Anchor != SizeAnchor.Trailing) continue;
+            float extent = 0f;
+            for (var c = _scene.FirstChild(r); !c.IsNull; c = _scene.NextSibling(c))
+            {
+                ref RectF cb = ref _scene.Bounds(c);
+                extent = MathF.Max(extent, cb.Y + cb.H);
+            }
+            ref NodePaint p = ref _scene.Paint(r);
+            p.ChildShiftY = extent <= 0f ? 0f : MathF.Min(0f, _scene.Bounds(r).H - extent);
+            _scene.Mark(r, NodeFlags.PaintDirty);
+        }
+        roots.Clear();
+    }
+
+    /// <summary>CSS <c>position: sticky; top: inset</c> (phase 7, after every scroll write this frame): for each
+    /// sticky-declared node, compute its pure-LAYOUT position inside its nearest scroll viewport's content and pin it
+    /// with a LocalTransform once the scroll would carry it past the viewport top — clamped so it never escapes its
+    /// PARENT (the containing block). Compositor-only (no relayout); hit-testing follows because AbsoluteRect sums
+    /// LocalTransforms; the recorder paints pinned nodes after their siblings so content scrolls underneath. Writes
+    /// only on change, so idle frames stay zero-work.</summary>
+    private void ApplyStickyOffsets()
+    {
+        var reg = _scene.StickyNodes;
+        if (reg.Count == 0) return;
+        foreach (var kv in reg)
+        {
+            var n = kv.Value.Node;
+            if (!_scene.IsLive(n)) continue;
+            float shift = 0f;
+            var vp = _scene.Parent(n);
+            while (!vp.IsNull && (_scene.Flags(vp) & NodeFlags.Scrollable) == 0) vp = _scene.Parent(vp);
+            if (!vp.IsNull && _scene.TryGetScroll(vp, out var sc) && !sc.ContentNode.IsNull)
+            {
+                // The node's pure-layout Y within the scroll CONTENT (transforms excluded — the pin itself must not feed back).
+                float yN = 0f;
+                bool inContent = false;
+                for (var a = n; !a.IsNull && a != vp; a = _scene.Parent(a))
+                {
+                    if (a == sc.ContentNode) { inContent = true; break; }
+                    yN += _scene.Bounds(a).Y;
+                }
+                var par = _scene.Parent(n);
+                if (inContent && !par.IsNull)
+                {
+                    float yPar = yN - _scene.Bounds(n).Y;                       // parent's Y within the content
+                    float limit = MathF.Max(0f, (yPar + _scene.Bounds(par).H) - (yN + _scene.Bounds(n).H));
+                    shift = Math.Clamp(sc.OffsetY + kv.Value.Inset - yN, 0f, limit);
+                }
+            }
+            ref NodePaint p = ref _scene.Paint(n);
+            if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)
+            {
+                bool wasPinned = (_scene.Flags(n) & NodeFlags.StickyPinned) != 0;
+                bool pinned = shift > 0f;
+                p.LocalTransform = pinned ? Affine2D.Translation(0f, shift) : Affine2D.Identity;
+                _scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                if (pinned) _scene.Mark(n, NodeFlags.StickyPinned); else _scene.Unmark(n, NodeFlags.StickyPinned);
+                // The CSS :stuck observable — once per engage/release transition, never per frame. The callback
+                // typically writes a signal; the restyle lands next frame (signals-first, no synchronous re-render).
+                if (pinned != wasPinned) kv.Value.OnPinned?.Invoke(pinned);
+            }
+        }
     }
 
     private void ReclaimSettledOrphans()

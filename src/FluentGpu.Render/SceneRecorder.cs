@@ -436,8 +436,24 @@ public static class SceneRecorder
             }
         }
 
+        // Child-group shift (SizeMode.Reflow Trailing anchor): every child rides this offset while the node's own
+        // fill/border/clip stay put — the content's end edge tracks the animated layout edge under the already-pushed
+        // clip (the Expander slide-from-under-the-header). Zero at rest; compositor-composed, no per-child knowledge.
+        Affine2D childWorld = p.ChildShiftX != 0f || p.ChildShiftY != 0f
+            ? world.Multiply(Affine2D.Translation(p.ChildShiftX, p.ChildShiftY))
+            : world;
+        // Sticky pin paint order: a PINNED child (position:sticky engaged) is emitted AFTER its siblings so the
+        // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
+        bool anyPinned = false;
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
+        {
+            if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
+        }
+        if (anyPinned)
+            for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+                if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
+                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a

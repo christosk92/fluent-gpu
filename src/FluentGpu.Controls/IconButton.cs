@@ -14,6 +14,17 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class IconButton
 {
+    // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
+    // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The rounded-square chrome. Owned: OnClick, Role, Children (the icon wrapper mount).</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The inner glyph wrapper carrying the AnimatedIcon-analogue hover/press scale (the scales are
+    /// style-driven — a modifier may override them). Owned: Children (the glyph mount).</summary>
+    public const string PartIcon = "Icon";
+    /// <summary>The glyph run — a <see cref="TextEl"/>, so customize via <c>parts.Set&lt;TextEl&gt;(IconButton.PartGlyph, …)</c>.
+    /// Owned: none.</summary>
+    public const string PartGlyph = "Glyph";
+
     public sealed record Style
     {
         public float Size { get; init; } = 36f;
@@ -49,10 +60,30 @@ public static partial class IconButton
         DisabledFill = Tok.FillSubtleTransparent,
     };
 
-    public static BoxEl Create(string glyph, Action onClick, Style? style = null, bool isEnabled = true)
+    public static BoxEl Create(string glyph, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
     {
         var s = style ?? DefaultStyle;
-        return new BoxEl
+        // Inline glyph wrapper (mirrors AnimatedIcon.Glyph) so the TextEl carries the foreground interaction ramps
+        // and the wrapper carries the AnimatedIcon-analogue scale (rides the button's eased hover/press progress).
+        var icon = new BoxEl
+        {
+            Width = s.GlyphSize, Height = s.GlyphSize, Direction = 0,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            HoverScale = s.IconHoverScale, PressScale = s.IconPressScale,
+            Children =
+            [
+                parts.Apply(PartGlyph, new TextEl(glyph)
+                {
+                    Size = s.GlyphSize, FontFamily = s.IconFont,
+                    Color = s.Foreground,                // P2 foreground ramp: rest → hover → pressed; disabled via the gate
+                    HoverColor = s.HoverForeground,
+                    PressedColor = s.PressedForeground,
+                    DisabledColor = s.DisabledForeground,
+                }),
+            ],
+        };
+        icon = parts.Apply(PartIcon, icon) with { Children = icon.Children };
+        var root = new BoxEl
         {
             Width = s.Size, Height = s.Size, Direction = 0, Role = AutomationRole.Button,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -63,33 +94,17 @@ public static partial class IconButton
             HoverFill = s.HoverFill, PressedFill = s.PressedFill,
             // WinUI UseSystemFocusVisuals + FocusVisualMargin −3 (AppBarButton_themeresources.xaml:134-135); engine-drawn (E1).
             Focusable = true,
+            // WinUI AppBarButton AllowFocusOnInteraction=False (AppBarButton_themeresources.xaml:136): clicking a
+            // toolbar icon never steals focus from the working surface; Tab still reaches it.
+            AllowFocusOnInteraction = false,
             FocusVisualMargin = s.FocusVisualMargin,
-            // WinUI buttons keep the ARROW cursor (only HyperlinkButton shows the hand — HyperLinkButton_Partial.cpp:32).
-            Cursor = CursorId.Arrow,
+            // No Cursor: WinUI buttons never call SetCursor — arrow by inheritance (only HyperlinkButton shows the
+            // hand, HyperLinkButton_Partial.cpp:32); unset also lets an ancestor's explicit cursor show through.
             IsEnabled = isEnabled,                            // P1 engine gate (no manual handler-nulling)
             OnClick = onClick,
-            // Inline glyph wrapper (mirrors AnimatedIcon.Glyph) so the TextEl carries the foreground interaction ramps
-            // and the wrapper carries the AnimatedIcon-analogue scale (rides the button's eased hover/press progress).
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = s.GlyphSize, Height = s.GlyphSize, Direction = 0,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    HoverScale = s.IconHoverScale, PressScale = s.IconPressScale,
-                    Children =
-                    [
-                        new TextEl(glyph)
-                        {
-                            Size = s.GlyphSize, FontFamily = s.IconFont,
-                            Color = s.Foreground,                // P2 foreground ramp: rest → hover → pressed; disabled via the gate
-                            HoverColor = s.HoverForeground,
-                            PressedColor = s.PressedForeground,
-                            DisabledColor = s.DisabledForeground,
-                        },
-                    ],
-                },
-            ],
+            Children = [icon],
         };
+        // Parts: restyle anything (fills, corners, size…); the click mechanics and the icon mount always win.
+        return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
     }
 }

@@ -16,6 +16,15 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class ToggleButton
 {
+    // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
+    // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The toggle chrome (the WinUI ContentPresenter root). Owned: OnClick (the state flip/cycle), Role,
+    /// Children (the label slot).</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The label run — a <see cref="TextEl"/>, so customize via <c>parts.Set&lt;TextEl&gt;(ToggleButton.PartLabel, …)</c>.
+    /// Owned: none (the per-state foreground ramp is recomputed each render before the modifier, which may override it).</summary>
+    public const string PartLabel = "Label";
+
     public sealed record Style
     {
         public float CornerRadius { get; init; } = Radii.Control;    // ControlCornerRadius = 4 (ToggleButton_themeresources.xaml:194)
@@ -90,11 +99,11 @@ public static partial class ToggleButton
         OffDisabledBorder = GradientSpec.Solid(Tok.StrokeControlDefault),
     };
 
-    public static BoxEl Create(string label, bool on, Action onToggle, Style? style = null, bool isEnabled = true)
-        => Build(label, on ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled);
+    public static BoxEl Create(string label, bool on, Action onToggle, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Build(label, on ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled, parts);
 
     /// <summary>Three-state toggle (adds the mixed "indeterminate" look). Click cycles Unchecked → Checked → Indeterminate.</summary>
-    public static BoxEl Create(string label, CheckState state, Action<CheckState> onCycle, Style? style = null, bool isEnabled = true)
+    public static BoxEl Create(string label, CheckState state, Action<CheckState> onCycle, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
     {
         var next = state switch
         {
@@ -102,10 +111,10 @@ public static partial class ToggleButton
             CheckState.Checked => CheckState.Indeterminate,
             _ => CheckState.Unchecked,
         };
-        return Build(label, state, _ => onCycle(next), style, isEnabled);
+        return Build(label, state, _ => onCycle(next), style, isEnabled, parts);
     }
 
-    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool isEnabled)
+    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool isEnabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
         bool on = state == CheckState.Checked;
@@ -121,7 +130,20 @@ public static partial class ToggleButton
         GradientSpec? hoverBorder = on ? s.OnHoverBorder : s.OffHoverBorder;
         GradientSpec? disBorder = on ? s.OnDisabledBorder : s.OffDisabledBorder;
         GradientSpec? pressBorder = on ? s.OnPressedBorder : s.OffPressedBorder;
-        return new BoxEl
+        Action click = () => onClick(state);
+        var labelEl = parts.Apply(PartLabel, new TextEl(label)
+        {
+            Size = s.FontSize,
+            Color = restFg,
+            // WinUI keeps the foreground UNCHANGED on hover in every state (PointerOver foreground == rest:
+            // lines 20/24/28) — pinned explicitly so the hover ramp can never drift the label.
+            HoverColor = restFg,
+            PressedColor = pressFg,
+            DisabledColor = disFg,
+            // Foreground state flips are discrete in WinUI (KeyTime=0 storyboards; the 83ms BrushTransition covers
+            // Background only) — so no BrushTransitionMs on the label.
+        });
+        var root = new BoxEl
         {
             Direction = 0, Role = AutomationRole.ToggleButton, Padding = s.Padding, MinHeight = s.MinHeight,
             Justify = FlexJustify.Center,     // WinUI HorizontalContentAlignment default Center (DependencyProperty.cpp:646-648)
@@ -139,23 +161,13 @@ public static partial class ToggleButton
             // WinUI UseSystemFocusVisuals + FocusVisualMargin −3 (ToggleButton_themeresources.xaml:192-193); engine-drawn (E1).
             Focusable = true,
             FocusVisualMargin = s.FocusVisualMargin,
-            // WinUI ToggleButton keeps the arrow cursor (no SetCursor in ToggleButton_Partial.cpp; only HyperlinkButton
-            // sets the hand — HyperLinkButton_Partial.cpp:32).
-            Cursor = CursorId.Arrow,
+            // No Cursor: WinUI ToggleButton never calls SetCursor (arrow by inheritance, ToggleButton_Partial.cpp;
+            // only HyperlinkButton sets the hand — HyperLinkButton_Partial.cpp:32).
             IsEnabled = isEnabled,
-            OnClick = () => onClick(state),
-            Children = [new TextEl(label)
-            {
-                Size = s.FontSize,
-                Color = restFg,
-                // WinUI keeps the foreground UNCHANGED on hover in every state (PointerOver foreground == rest:
-                // lines 20/24/28) — pinned explicitly so the hover ramp can never drift the label.
-                HoverColor = restFg,
-                PressedColor = pressFg,
-                DisabledColor = disFg,
-                // Foreground state flips are discrete in WinUI (KeyTime=0 storyboards; the 83ms BrushTransition covers
-                // Background only) — so no BrushTransitionMs on the label.
-            }],
+            OnClick = click,
+            Children = [labelEl],
         };
+        // Parts: restyle anything (fills, corners, padding…); the cycle mechanics and the label slot always win.
+        return parts.Apply(PartRoot, root) with { OnClick = click, Role = AutomationRole.ToggleButton, Children = root.Children };
     }
 }

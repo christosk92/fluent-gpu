@@ -9,7 +9,16 @@ namespace FluentGpu.Controls;
 /// leaving the content to fill the whole control.</summary>
 public static class SplitView
 {
-    public static BoxEl Create(Element pane, Element content, float paneWidth = 240f, bool isPaneOpen = true)
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The fixed-width side pane (WinUI PaneRoot) — built only while the pane is open. Owned: Children
+    /// (the pane content slot).</summary>
+    public const string PartPane = "Pane";
+    /// <summary>The flexible content area (WinUI ContentRoot). Owned: Children (the content slot).</summary>
+    public const string PartContent = "Content";
+
+    public static BoxEl Create(Element pane, Element content, float paneWidth = 240f, bool isPaneOpen = true,
+                               TemplateParts? parts = null)
     {
         var contentBox = new BoxEl
         {
@@ -17,6 +26,7 @@ public static class SplitView
             ClipToBounds = true,
             Children = [content],
         };
+        contentBox = parts.Apply(PartContent, contentBox) with { Children = contentBox.Children };   // structure = the content slot
 
         if (!isPaneOpen)
         {
@@ -35,6 +45,7 @@ public static class SplitView
             ClipToBounds = true,
             Children = [pane],
         };
+        paneBox = parts.Apply(PartPane, paneBox) with { Children = paneBox.Children };   // structure = the pane slot
 
         var divider = new BoxEl
         {
