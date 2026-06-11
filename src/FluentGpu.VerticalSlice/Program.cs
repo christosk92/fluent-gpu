@@ -10233,8 +10233,8 @@ static class Slice
                     {
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, FillBind = () => fill.Value, OnRealized = nh => nFill = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), Opacity = Prop.Of(() => op.Value), OnRealized = nh => nOp = nh },
-                        new BoxEl { Height = 10, BorderWidth = proof, WidthBind = () => w.Value, OnRealized = nh => nW = nh },
-                        new BoxEl { Width = 40, BorderWidth = proof, HeightBind = () => h.Value, OnRealized = nh => nH = nh },
+                        new BoxEl { Height = 10, BorderWidth = proof, Width = Prop.Of(() => w.Value), OnRealized = nh => nW = nh },
+                        new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
                         new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, TextBind = () => txt.Value } ] },
                         new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, ColorBind = () => col.Value } ] },

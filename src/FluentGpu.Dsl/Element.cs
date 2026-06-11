@@ -193,8 +193,6 @@ public sealed record BoxEl : Element
     // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).
     public Func<Affine2D>? TransformBind { init { if (value is not null) Transform = value; } }   // → LocalTransform (TransformDirty | PaintDirty)
     public Func<ColorF>? FillBind { init { if (value is not null) Fill = value; } }               // → Fill (PaintDirty)
-    public Func<float>? WidthBind { init { if (value is not null) Width = value; } }              // → LayoutInput.Width (LayoutDirty → scoped relayout)
-    public Func<float>? HeightBind { init { if (value is not null) Height = value; } }            // → LayoutInput.Height (LayoutDirty → scoped relayout)
 
     /// <summary>Called once when this box is realized into the scene, with its node handle — for a control factory to
     /// capture the handle (e.g. to wire a signal binding that needs the live node). Fires at mount only.</summary>

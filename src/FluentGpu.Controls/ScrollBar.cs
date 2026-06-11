@@ -314,9 +314,10 @@ internal sealed class ScrollBarAnatomy : Component
 
         // Position → pixels through the compositor only (rule: prefer a transform bind for hot values): a signal
         // write translates the thumb the SAME frame, with no re-render/reconcile/relayout and no FLIP capture —
-        // WinUI's instant Thumb position. The cross-axis SIZE is a Width/HeightBind on the conscious-ticker signal
-        // (scoped relayout per eased step — WinUI's EnableDependentAnimation width keyframes, :585-588); the static
-        // size carries the CURRENT eased value so a re-render's column write never clobbers the bound size.
+        // WinUI's instant Thumb position. The cross-axis SIZE is the bound Width/Height on the conscious-ticker
+        // signal (scoped relayout per eased step — WinUI's EnableDependentAnimation width keyframes, :585-588); the
+        // bound channel ignores any static, and the mount runNow fire seeds the size before the first layout.
+        // Ternary rule: the cast goes on the VALUE arm (Prop<float> ∪ Func<float> unify via the Func conversion).
         Func<float> thumbCrossBind = () => widthSig.Value;
         Func<Affine2D> thumbPositionBind = horiz
             ? () => Affine2D.Translation(Math.Clamp(Position.Value, 0f, 1f) * travel, 0f)
@@ -324,10 +325,8 @@ internal sealed class ScrollBarAnatomy : Component
         var thumb = new BoxEl
         {
             Key = "sb-thumb",
-            Width = horiz ? thumbLen : widthSig.Peek(),         // eased by the conscious ticker (167ms, :173/:587)
-            WidthBind = horiz ? null : thumbCrossBind,
-            Height = horiz ? widthSig.Peek() : thumbLen,
-            HeightBind = horiz ? thumbCrossBind : null,
+            Width = horiz ? (Prop<float>)thumbLen : thumbCrossBind,   // eased by the conscious ticker (167ms, :173/:587)
+            Height = horiz ? thumbCrossBind : (Prop<float>)thumbLen,
             Corners = CornerRadius4.All(3f),                    // ScrollBarCornerRadius (:190)
             Fill = Disabled ? Tok.FillControlStrongDisabled : Tok.FillControlStrong,   // (:26/:29) — no hover recolor
             // Disabled hides the mouse thumb: ThumbVisual Opacity → 0 over ScrollBarOpacityChangeDuration 83ms
@@ -348,10 +347,8 @@ internal sealed class ScrollBarAnatomy : Component
             thumb = m with
             {
                 Key = "sb-thumb",
-                Width = horiz ? thumbLen : widthSig.Peek(),
-                WidthBind = horiz ? null : thumbCrossBind,
-                Height = horiz ? widthSig.Peek() : thumbLen,
-                HeightBind = horiz ? thumbCrossBind : null,
+                Width = horiz ? (Prop<float>)thumbLen : thumbCrossBind,
+                Height = horiz ? thumbCrossBind : (Prop<float>)thumbLen,
                 TransformBind = thumbPositionBind,
             };
         }
