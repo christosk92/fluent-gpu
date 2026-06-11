@@ -66,17 +66,29 @@ public readonly record struct ColorF(float R, float G, float B, float A)
     public static ColorF Lerp(ColorF a, ColorF b, float t)
         => new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t, a.A + (b.A - a.A) * t);
 
-    /// <summary>Perceptually-correct interpolation in LINEAR light (matches the engine's linear-blend/premultiplied color
-    /// contract) — used for the control hover/press surface cross-fade so mid-transition colors don't go muddy. Alpha is
-    /// already linear, so it lerps straight. Alloc-free (static local helpers, no captures).</summary>
+    /// <summary>Perceptually-correct interpolation in LINEAR light, ALPHA-WEIGHTED (true premultiplied — the engine's
+    /// linear-blend/premultiplied color contract) — used for every surface/text cross-fade (hover/press ramps, implicit
+    /// BrushTransitions, gradient morphs). The weighting matters when the endpoints' alphas differ: a translucent
+    /// white-tinted card fill (#0DFFFFFF) cross-fading to an opaque dark solid must stay DARK mid-flight — a straight
+    /// per-channel lerp passes through bright half-transparent grey (the "white flash"). For SAME-alpha endpoints the
+    /// result is identical to the straight linear lerp. Alloc-free (static local helpers, no captures).</summary>
     public static ColorF LerpLinear(ColorF a, ColorF b, float t)
     {
         static float S2L(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
         static float L2S(float c) => c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(MathF.Max(c, 0f), 1f / 2.4f) - 0.055f;
+        float wa = a.A * (1f - t), wb = b.A * t;
+        float alpha = wa + wb;
+        if (alpha <= 1e-6f)   // transparent → transparent: no coverage to weight by; keep a plain RGB ramp
+            return new(
+                L2S(S2L(a.R) + (S2L(b.R) - S2L(a.R)) * t),
+                L2S(S2L(a.G) + (S2L(b.G) - S2L(a.G)) * t),
+                L2S(S2L(a.B) + (S2L(b.B) - S2L(a.B)) * t),
+                a.A + (b.A - a.A) * t);
+        float inv = 1f / alpha;
         return new(
-            L2S(S2L(a.R) + (S2L(b.R) - S2L(a.R)) * t),
-            L2S(S2L(a.G) + (S2L(b.G) - S2L(a.G)) * t),
-            L2S(S2L(a.B) + (S2L(b.B) - S2L(a.B)) * t),
+            L2S((S2L(a.R) * wa + S2L(b.R) * wb) * inv),
+            L2S((S2L(a.G) * wa + S2L(b.G) * wb) * inv),
+            L2S((S2L(a.B) * wa + S2L(b.B) * wb) * inv),
             a.A + (b.A - a.A) * t);
     }
 
@@ -182,4 +194,16 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
         M12 * o.M21 + M22 * o.M22,
         M11 * o.Dx + M21 * o.Dy + Dx,
         M12 * o.Dx + M22 * o.Dy + Dy);
+
+    /// <summary>Inverse-map a DEVICE point back through this transform into the pre-transform frame — the hit-test
+    /// mirror of <see cref="Transform"/> (scale-aware pointer routing into Viewbox/zoomed content). False when the
+    /// matrix is degenerate (a zero scale renders nothing hit-testable).</summary>
+    public bool TryInverseTransform(Point2 p, out Point2 inv)
+    {
+        float det = M11 * M22 - M21 * M12;
+        if (MathF.Abs(det) < 1e-6f) { inv = default; return false; }
+        float x = p.X - Dx, y = p.Y - Dy;
+        inv = new Point2((M22 * x - M21 * y) / det, (M11 * y - M12 * x) / det);
+        return true;
+    }
 }

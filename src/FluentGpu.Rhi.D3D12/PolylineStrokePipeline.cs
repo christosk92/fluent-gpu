@@ -256,7 +256,7 @@ float4 PSMain(VSOut i) : SV_Target
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
-        if (count == 0) return;
+        if (count <= 0) return;
         for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
         _cursor += count;
 

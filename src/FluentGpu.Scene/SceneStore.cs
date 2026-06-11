@@ -62,6 +62,15 @@ public sealed class SceneStore : ISceneBackend
     private Action<Point2>?[] _drag;
     private Action<Point2>?[] _hoverMove;     // position-aware bare-hover move (no press) — RatingControl preview, etc.
     private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
+    private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
+    private Action<WheelEventArgs>?[] _pointerWheel;        // element-level wheel hook (pre-viewport-scroll; NumberBox)
+    private Action<Point2>?[] _contextRequested;           // right-click / Menu-key context request (local coords)
+    private Action<bool>?[] _focusChanged;                 // dispatcher focus moved onto (true) / off (false) this node (GotFocus/LostFocus)
+    // Drag-reorder lifecycle (E5): fired by Input.DragController once a CanDrag press crosses the drag threshold.
+    private Action<DragEventArgs>?[] _dragStarted;         // threshold crossed → the gesture is a drag (WinUI DragStarting)
+    private Action<DragEventArgs>?[] _dragDelta;           // every pointer move while the drag is active (coords + velocity)
+    private Action<DragEventArgs>?[] _dragCompleted;       // released after an active drag (the click is suppressed)
+    private Action?[] _dragCanceled;                       // Escape / capture loss / window blur aborted the drag
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly Dictionary<int, ScrollState> _scroll = new();
@@ -85,8 +94,37 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, AcrylicSpec> _acrylics = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly Dictionary<int, TextMeasureCache> _measureCache = new();
+    // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
+    private readonly Dictionary<int, BrushAnim> _brushAnims = new();
+    private readonly List<int> _brushScratch = new();
+    // Text-edit decoration state (sparse, O(editors)): caret/IME/focus PODs + per-node POOLED decoration-rect slots
+    // (grow-only RectF[] reused across frames — a selection drag updates at pointer rate with ZERO steady alloc).
+    private readonly Dictionary<int, TextEditState> _textEdits = new();
+    private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditSelRects = new();
+    private readonly Dictionary<int, (RectF[]? Arr, int Count)> _textEditUnderlineRects = new();
+    // Span-text side-tables (sparse, O(span paragraphs) — rtb-01/rtb-02/api-04):
+    // the element's TextSpan array (hyperlink actions; the POD shaping overlay lives in SpanRunTable.Shared keyed by
+    // TextStyle.SpanRunId); the dispatcher-owned read-only selection range; the per-control selection highlight color.
+    private readonly Dictionary<int, TextSpan[]> _spanText = new();
+    private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
+    private readonly Dictionary<int, ColorF> _selectionHighlight = new();
+    // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
+    // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
+    private readonly Dictionary<int, DragSource> _dragSources = new();
+    private readonly Dictionary<int, DropTargetSpec> _dropTargets = new();
 
     public NodeHandle Root { get; set; }
+
+    /// <summary>The node currently lifted by an active item-drag (E5 ghost) — set/cleared by
+    /// <c>Input.DragController</c> at promotion/restore (the node also carries <see cref="NodeFlags.DragGhost"/>).
+    /// The recorder EXCLUDES it from the clipped main pass and re-walks its subtree in an UNCLIPPED top band emitted
+    /// last, so the lifted visual escapes every ancestor scissor and paints above overlays. Null = no drag.</summary>
+    public NodeHandle DragGhost { get; set; }
+
+    /// <summary>Optional interner for text-id lifetime accounting: when set, freeing a node (or rewriting its dynamic
+    /// text) releases its <c>paint.Text</c> / <c>TextStyle.Family</c> refs so streamed virtual-list text is reclaimed
+    /// instead of accumulating for the process lifetime. Wired by the reconciler at composition.</summary>
+    public StringTable? Strings { get; set; }
 
     public SceneStore(int capacity = 64)
     {
@@ -113,6 +151,14 @@ public sealed class SceneStore : ISceneBackend
         _drag = new Action<Point2>?[capacity];
         _hoverMove = new Action<Point2>?[capacity];
         _pointerExit = new Action?[capacity];
+        _pointerPressed = new Action<PointerEventArgs>?[capacity];
+        _pointerWheel = new Action<WheelEventArgs>?[capacity];
+        _contextRequested = new Action<Point2>?[capacity];
+        _focusChanged = new Action<bool>?[capacity];
+        _dragStarted = new Action<DragEventArgs>?[capacity];
+        _dragDelta = new Action<DragEventArgs>?[capacity];
+        _dragCompleted = new Action<DragEventArgs>?[capacity];
+        _dragCanceled = new Action?[capacity];
     }
 
     public int LiveCount { get; private set; }
@@ -143,6 +189,14 @@ public sealed class SceneStore : ISceneBackend
         _drag[idx] = null;
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
+        _pointerPressed[idx] = null;
+        _pointerWheel[idx] = null;
+        _contextRequested[idx] = null;
+        _focusChanged[idx] = null;
+        _dragStarted[idx] = null;
+        _dragDelta[idx] = null;
+        _dragCompleted[idx] = null;
+        _dragCanceled[idx] = null;
         LiveCount++;
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
@@ -160,6 +214,12 @@ public sealed class SceneStore : ISceneBackend
             c = next;
         }
         DetachFromParent(idx);
+        if (Strings is { } st)
+        {
+            st.Release(_paint[idx].Text);
+            st.Release(_layout[idx].TextStyle.FontFamily);
+        }
+        ReleaseSpanRun(_layout[idx].TextStyle.SpanRunId);   // span-run + per-span family lifetime (rtb-01)
         _click[idx] = null;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
@@ -167,10 +227,19 @@ public sealed class SceneStore : ISceneBackend
         _drag[idx] = null;
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
+        _pointerPressed[idx] = null;
+        _pointerWheel[idx] = null;
+        _contextRequested[idx] = null;
+        _focusChanged[idx] = null;
+        _dragStarted[idx] = null;
+        _dragDelta[idx] = null;
+        _dragCompleted[idx] = null;
+        _dragCanceled[idx] = null;
         ClearDynamicText(idx);
         _scroll.Remove(idx);
         _extents.Remove(idx);
         _grids.Remove(idx);
+        _hitPassThrough.Remove(idx);
         _interact.Remove(idx);
         _shadows.Remove(idx);
         _arcs.Remove(idx);
@@ -183,6 +252,16 @@ public sealed class SceneStore : ISceneBackend
         _pressedBorderBrushes.Remove(idx);
         _acrylics.Remove(idx);
         _measureCache.Remove(idx);
+        _brushAnims.Remove(idx);
+        _textEdits.Remove(idx);
+        _textEditSelRects.Remove(idx);
+        _textEditUnderlineRects.Remove(idx);
+        _spanText.Remove(idx);
+        _textSelection.Remove(idx);
+        _selectionHighlight.Remove(idx);
+        _dragSources.Remove(idx);
+        _dropTargets.Remove(idx);
+        if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -266,20 +345,238 @@ public sealed class SceneStore : ISceneBackend
     public ref NodeFlags Flags(NodeHandle h) => ref _flags[h.Raw.Index];
     public ushort ElementTypeId(NodeHandle h) => _elementTypeId[h.Raw.Index];
 
-    public void SetClickHandler(NodeHandle h, Action? handler) => _click[h.Raw.Index] = handler;
-    public Action? GetClickHandler(NodeHandle h) => _click[h.Raw.Index];
-    public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[h.Raw.Index] = handler;
-    public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[h.Raw.Index];
-    public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[h.Raw.Index] = handler;
-    public Action<CharEventArgs>? GetCharHandler(NodeHandle h) => _charHandler[h.Raw.Index];
-    public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[h.Raw.Index] = handler;
-    public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[h.Raw.Index];
-    public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[h.Raw.Index] = handler;
-    public Action<Point2>? GetDrag(NodeHandle h) => _drag[h.Raw.Index];
-    public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[h.Raw.Index] = handler;
-    public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[h.Raw.Index];
-    public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[h.Raw.Index] = handler;
-    public Action? GetPointerExit(NodeHandle h) => _pointerExit[h.Raw.Index];
+    private int LiveIndex(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        if (raw > 0 && raw < (uint)_high)
+        {
+            int idx = (int)raw;
+            if (_gen[idx] == h.Raw.Gen) return idx;
+        }
+        throw new InvalidOperationException($"Node handle {h} is not live in this SceneStore.");
+    }
+
+    private int LiveIndexOrZero(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        if (raw > 0 && raw < (uint)_high)
+        {
+            int idx = (int)raw;
+            if (_gen[idx] == h.Raw.Gen) return idx;
+        }
+        return 0;
+    }
+
+    public void SetClickHandler(NodeHandle h, Action? handler) => _click[LiveIndex(h)] = handler;
+    public Action? GetClickHandler(NodeHandle h) => _click[LiveIndexOrZero(h)];
+    public void SetKeyHandler(NodeHandle h, Action<KeyEventArgs>? handler) => _keyHandler[LiveIndex(h)] = handler;
+    public Action<KeyEventArgs>? GetKeyHandler(NodeHandle h) => _keyHandler[LiveIndexOrZero(h)];
+    public void SetCharHandler(NodeHandle h, Action<CharEventArgs>? handler) => _charHandler[LiveIndex(h)] = handler;
+    public Action<CharEventArgs>? GetCharHandler(NodeHandle h) => _charHandler[LiveIndexOrZero(h)];
+    public void SetPointerDown(NodeHandle h, Action<Point2>? handler) => _pointerDown[LiveIndex(h)] = handler;
+    public Action<Point2>? GetPointerDown(NodeHandle h) => _pointerDown[LiveIndexOrZero(h)];
+    public void SetDrag(NodeHandle h, Action<Point2>? handler) => _drag[LiveIndex(h)] = handler;
+    public Action<Point2>? GetDrag(NodeHandle h) => _drag[LiveIndexOrZero(h)];
+    public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[LiveIndex(h)] = handler;
+    public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[LiveIndexOrZero(h)];
+    public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[LiveIndex(h)] = handler;
+    public Action? GetPointerExit(NodeHandle h) => _pointerExit[LiveIndexOrZero(h)];
+    public void SetPointerPressed(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerPressed[LiveIndex(h)] = handler;
+    public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[LiveIndexOrZero(h)];
+    public void SetPointerWheel(NodeHandle h, Action<WheelEventArgs>? handler) => _pointerWheel[LiveIndex(h)] = handler;
+    public Action<WheelEventArgs>? GetPointerWheel(NodeHandle h) => _pointerWheel[LiveIndexOrZero(h)];
+    public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[LiveIndex(h)] = handler;
+    public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[LiveIndexOrZero(h)];
+    public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[LiveIndex(h)] = handler;
+    public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[LiveIndexOrZero(h)];
+    // Drag-reorder lifecycle columns (E5) — set by the reconciler from BoxEl.CanDrag, read by Input.DragController.
+    public void SetDragStarted(NodeHandle h, Action<DragEventArgs>? handler) => _dragStarted[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragStarted(NodeHandle h) => _dragStarted[LiveIndexOrZero(h)];
+    public void SetDragDelta(NodeHandle h, Action<DragEventArgs>? handler) => _dragDelta[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragDelta(NodeHandle h) => _dragDelta[LiveIndexOrZero(h)];
+    public void SetDragCompleted(NodeHandle h, Action<DragEventArgs>? handler) => _dragCompleted[LiveIndex(h)] = handler;
+    public Action<DragEventArgs>? GetDragCompleted(NodeHandle h) => _dragCompleted[LiveIndexOrZero(h)];
+    public void SetDragCanceled(NodeHandle h, Action? handler) => _dragCanceled[LiveIndex(h)] = handler;
+    public Action? GetDragCanceled(NodeHandle h) => _dragCanceled[LiveIndexOrZero(h)];
+
+    // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
+    public bool HasBrushAnims => _brushAnims.Count > 0;
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims[(int)h.Raw.Index] = ba;
+    public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGetValue((int)h.Raw.Index, out ba);
+
+    /// <summary>Advance every active brush transition by <paramref name="dtMs"/>, mark the nodes PaintDirty, and drop
+    /// settled rows. Called by the host at phase 7 (next to the interaction animator). 0-alloc (reused scratch).</summary>
+    public void AdvanceBrushAnims(float dtMs)
+    {
+        if (_brushAnims.Count == 0) return;
+        _brushScratch.Clear();
+        foreach (var kv in _brushAnims) _brushScratch.Add(kv.Key);
+        for (int i = 0; i < _brushScratch.Count; i++)
+        {
+            int idx = _brushScratch[i];
+            if (_gen[idx] == 0) { _brushAnims.Remove(idx); continue; }
+            var ba = _brushAnims[idx];
+            ba.T = ba.DurationMs <= 0f ? 1f : MathF.Min(1f, ba.T + dtMs / ba.DurationMs);
+            _flags[idx] |= NodeFlags.PaintDirty;
+            if (ba.T >= 1f) _brushAnims.Remove(idx);
+            else _brushAnims[idx] = ba;
+        }
+    }
+
+    // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
+    /// <summary>Get-or-create the text-edit row for an editor's text node (caret/IME/focus PODs).</summary>
+    public ref TextEditState TextEditRef(NodeHandle h)
+        => ref CollectionsMarshal.GetValueRefOrAddDefault(_textEdits, (int)h.Raw.Index, out _);
+
+    public bool HasTextEdit(NodeHandle h) => _textEdits.ContainsKey((int)h.Raw.Index);
+
+    /// <summary>Read the text-edit row by value (false + default if the node is not an editor).</summary>
+    public bool TryGetTextEdit(NodeHandle h, out TextEditState s) => _textEdits.TryGetValue((int)h.Raw.Index, out s);
+
+    /// <summary>Drop the node's text-edit row AND its pooled decoration-rect slots (editor unmounted / no longer editable).</summary>
+    public void ClearTextEdit(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        _textEdits.Remove(idx);
+        _textEditSelRects.Remove(idx);
+        _textEditUnderlineRects.Remove(idx);
+    }
+
+    /// <summary>Any editor currently focused with a blink-visible caret (cheap host gate; O(editors), usually 0–1).</summary>
+    public bool AnyTextEditCaretVisible
+    {
+        get
+        {
+            const byte on = TextEditState.CaretVisible | TextEditState.Focused;
+            foreach (var kv in _textEdits)
+                if ((kv.Value.Flags & on) == on) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Publish this frame's selection-highlight + IME-clause-underline rects for an editor's text node (TEXT-NODE-LOCAL
+    /// coords, computed by the control at edit/drag time). Backing arrays are per-node pooled and grow-only — reused
+    /// across frames so a selection drag at pointer rate is 0-alloc once grown. Empty spans clear (count → 0, array kept).
+    /// </summary>
+    public void SetTextEditRects(NodeHandle node, ReadOnlySpan<RectF> selection, ReadOnlySpan<RectF> compUnderlines)
+    {
+        int idx = (int)node.Raw.Index;
+        StoreRects(_textEditSelRects, idx, selection);
+        StoreRects(_textEditUnderlineRects, idx, compUnderlines);
+    }
+
+    /// <summary>The node's published selection-highlight rects (empty span when no selection).</summary>
+    public ReadOnlySpan<RectF> GetTextEditSelectionRects(NodeHandle h)
+        => _textEditSelRects.TryGetValue((int)h.Raw.Index, out var s) && s.Arr is not null
+            ? s.Arr.AsSpan(0, s.Count) : default;
+
+    /// <summary>The node's published IME composition-underline rects (empty span when no composition).</summary>
+    public ReadOnlySpan<RectF> GetTextEditUnderlineRects(NodeHandle h)
+        => _textEditUnderlineRects.TryGetValue((int)h.Raw.Index, out var s) && s.Arr is not null
+            ? s.Arr.AsSpan(0, s.Count) : default;
+
+    // ── span-text side-tables (rtb-01 inline runs / rtb-02 read-only selection / api-04 highlight color) ────────────
+
+    /// <summary>Attach a span paragraph's element spans (hyperlink OnClick lookup; written by the reconciler from
+    /// <c>SpanTextEl.Spans</c> — the POD shaping overlay rides <c>TextStyle.SpanRunId</c> instead). Null clears.</summary>
+    public void SetSpanText(NodeHandle node, TextSpan[]? spans)
+    {
+        int idx = (int)node.Raw.Index;
+        if (spans is null) _spanText.Remove(idx);
+        else _spanText[idx] = spans;
+    }
+
+    public bool TryGetSpanText(NodeHandle h, out TextSpan[] spans)
+        => _spanText.TryGetValue((int)h.Raw.Index, out spans!);
+
+    /// <summary>Swap a text node's span-run id with ownership accounting (the scene row owns one table ref plus one
+    /// StringTable ref per span family — mirroring the <c>paint.Text</c> discipline). Reconciler rewrite path; the
+    /// free path releases via <see cref="ReleaseSpanRun"/>.</summary>
+    public void ReleaseSpanRun(int id)
+    {
+        if (id == 0) return;
+        if (Strings is { } st && SpanRunTable.Shared.Resolve(id) is { } run)
+            for (int i = 0; i < run.Spans.Length; i++) st.Release(run.Spans[i].FontFamily);
+        SpanRunTable.Shared.Release(id);
+    }
+
+    /// <summary>The dispatcher-owned read-only selection range on a selectable text node (UTF-16 [start, end) of the
+    /// node's paint text). Mirrors what the published selection rects show; consumers (Ctrl+C copy) read it back.</summary>
+    public void SetTextSelection(NodeHandle node, int start, int end)
+        => _textSelection[(int)node.Raw.Index] = (start, end);
+
+    public bool TryGetTextSelection(NodeHandle h, out int start, out int end)
+    {
+        if (_textSelection.TryGetValue((int)h.Raw.Index, out var r)) { start = r.Start; end = r.End; return true; }
+        start = end = 0;
+        return false;
+    }
+
+    public void ClearTextSelection(NodeHandle h) => _textSelection.Remove((int)h.Raw.Index);
+
+    /// <summary>Per-node selection-highlight override (api-04, WinUI TextBlock.SelectionHighlightColor —
+    /// TextBlock.cpp:266/330). A==0 clears back to the host theme brush (TextEditStyle.SelectionFill — the system
+    /// accent, TextSelectionManager.cpp:52-56).</summary>
+    public void SetSelectionHighlight(NodeHandle node, ColorF color)
+    {
+        int idx = (int)node.Raw.Index;
+        if (color.A <= 0f) _selectionHighlight.Remove(idx);
+        else _selectionHighlight[idx] = color;
+    }
+
+    public bool TryGetSelectionHighlight(NodeHandle h, out ColorF color)
+        => _selectionHighlight.TryGetValue((int)h.Raw.Index, out color);
+
+    private static void StoreRects(Dictionary<int, (RectF[]? Arr, int Count)> table, int idx, ReadOnlySpan<RectF> rects)
+    {
+        if (rects.IsEmpty)
+        {
+            // Clear without dropping the pooled array; never create an entry just to say "empty".
+            ref var existing = ref CollectionsMarshal.GetValueRefOrNullRef(table, idx);
+            if (!System.Runtime.CompilerServices.Unsafe.IsNullRef(ref existing)) existing.Count = 0;
+            return;
+        }
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(table, idx, out _);
+        RectF[]? arr = slot.Arr;
+        if (arr is null || arr.Length < rects.Length)
+        {
+            int cap = arr is { Length: > 0 } ? arr.Length : 4;
+            while (cap < rects.Length) cap *= 2;
+            arr = new RectF[cap];   // grow-only; steady-state (selection drags) reuses with zero alloc
+            slot.Arr = arr;
+        }
+        rects.CopyTo(arr);
+        slot.Count = rects.Length;
+    }
+
+    /// <summary>First live, enabled, visible node whose keyboard-accelerator chord matches — cold keydown path, O(high).</summary>
+    public NodeHandle FindAccelerator(int key, KeyModifiers mods)
+    {
+        for (int i = 1; i < _high; i++)
+        {
+            if (_gen[i] == 0 || _interaction[i].AccelKey != key || _interaction[i].AccelMods != mods) continue;
+            var h = new NodeHandle(new Handle((uint)i, _gen[i]));
+            if (!IsLive(h)) continue;
+            if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            return h;
+        }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>First live, enabled, visible node whose access-key mnemonic matches (Alt+letter) — cold path, O(high).</summary>
+    public NodeHandle FindAccessKey(char key)
+    {
+        for (int i = 1; i < _high; i++)
+        {
+            if (_gen[i] == 0 || _interaction[i].AccessKey != key) continue;
+            var h = new NodeHandle(new Handle((uint)i, _gen[i]));
+            if (!IsLive(h)) continue;
+            if ((_flags[i] & (NodeFlags.Visible | NodeFlags.Disabled)) != NodeFlags.Visible) continue;
+            return h;
+        }
+        return NodeHandle.Null;
+    }
 
     public bool HasDynamicText => _dynamicTextCount > 0;
 
@@ -300,7 +597,10 @@ public sealed class SceneStore : ISceneBackend
         {
             var kind = _dynamicText[i];
             if (kind == DynamicTextKind.None) continue;
-            _paint[i].Text = resolve(kind);
+            var next = resolve(kind);
+            if (next == _paint[i].Text) continue;
+            if (Strings is { } st) { st.AddRef(next); st.Release(_paint[i].Text); }   // per-frame ids (FPS/ms) reclaim instead of accreting
+            _paint[i].Text = next;
         }
     }
 
@@ -345,6 +645,45 @@ public sealed class SceneStore : ISceneBackend
     public bool HasScroll(NodeHandle h) => _scroll.ContainsKey((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGetValue((int)h.Raw.Index, out s);
+
+    // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
+    // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there
+    // bypasses the scrim and reaches the content beneath (the MenuBar hover-switches titles with a menu open,
+    // FlyoutBase_Partial.cpp:3922-3938). Sparse — O(open scrims), cleared on free.
+    private readonly Dictionary<int, NodeHandle> _hitPassThrough = new();
+
+    public void SetHitTestPassThrough(NodeHandle node, NodeHandle target)
+    {
+        if (!IsLive(node)) return;
+        if (target.IsNull) _hitPassThrough.Remove((int)node.Raw.Index);
+        else _hitPassThrough[(int)node.Raw.Index] = target;
+    }
+
+    public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
+        => _hitPassThrough.TryGetValue((int)node.Raw.Index, out target);
+
+    // ── sticky registry (CSS position:sticky, top edge) ─────────────────────────────────────────
+    // Node index → (handle, top inset, pin-state observer). The reconciler Set/Clears it from BoxEl.StickyTop each
+    // reconcile (slot reuse self-cleans like the transition side-table); the host's phase-7 sticky pass iterates it
+    // and writes the pin offset as the node's LocalTransform — so HIT-TESTING follows the PINNED position
+    // (AbsoluteRect sums transforms) — and fires OnPinned on engage/release transitions (the CSS :stuck observable).
+    private readonly Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> _sticky = new();
+    /// <summary>All sticky-declared nodes, keyed by slot index — consumed by the host's per-frame sticky pass.</summary>
+    public Dictionary<int, (NodeHandle Node, float Inset, Action<bool>? OnPinned)> StickyNodes => _sticky;
+    public void SetSticky(NodeHandle h, float inset, Action<bool>? onPinned = null) => _sticky[(int)h.Raw.Index] = (h, inset, onPinned);
+    public void ClearSticky(NodeHandle h)
+    {
+        if (!_sticky.Remove((int)h.Raw.Index)) return;
+        if (!IsLive(h)) return;
+        // Un-declaring while pinned: release the pin transform and the paint-order boost.
+        ref NodePaint p = ref Paint(h);
+        if (p.LocalTransform.Dy != 0f || p.LocalTransform.Dx != 0f)
+        {
+            p.LocalTransform = Affine2D.Identity;
+            Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        Unmark(h, NodeFlags.StickyPinned);
+    }
 
     /// <summary>Get-or-create the variable-height extent table for a viewport, (re)building it on item-count change.</summary>
     public ExtentTable ExtentTableFor(NodeHandle h, int itemCount, float estimate)
@@ -410,6 +749,42 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGetValue((int)h.Raw.Index, out a);
     public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
 
+    // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
+    /// <summary>Set (or clear, null) the node's typed drag-source spec — the reconciler writes it from
+    /// <c>BoxEl.Draggable</c>; the L2 context resolves the nearest one up the chain at L1 promotion.</summary>
+    public void SetDragSource(NodeHandle h, DragSource? s)
+    {
+        int idx = (int)h.Raw.Index;
+        if (s is null) _dragSources.Remove(idx);
+        else _dragSources[idx] = s;
+    }
+
+    public bool TryGetDragSource(NodeHandle h, out DragSource? s)
+    {
+        bool found = _dragSources.TryGetValue((int)h.Raw.Index, out var v);
+        s = v;
+        return found;
+    }
+
+    /// <summary>Set (or clear, null) the node's drop-target spec — the reconciler writes it from
+    /// <c>BoxEl.DropTarget</c>; the L2 context walks the hit chain per move for the nearest ACCEPTING one.</summary>
+    public void SetDropTarget(NodeHandle h, DropTargetSpec? t)
+    {
+        int idx = (int)h.Raw.Index;
+        if (t is null) _dropTargets.Remove(idx);
+        else _dropTargets[idx] = t;
+    }
+
+    public bool TryGetDropTarget(NodeHandle h, out DropTargetSpec? t)
+    {
+        bool found = _dropTargets.TryGetValue((int)h.Raw.Index, out var v);
+        t = v;
+        return found;
+    }
+
+    /// <summary>Cheap per-move gate: any drop target in the scene at all (skips the chain walk for plain reorders).</summary>
+    public bool HasDropTargets => _dropTargets.Count > 0;
+
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
         => ref CollectionsMarshal.GetValueRefOrAddDefault(_measureCache, (int)h.Raw.Index, out _);
@@ -444,6 +819,10 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
         Array.Resize(ref _click, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
+        Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
+        Array.Resize(ref _focusChanged, n);
+        Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
+        Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

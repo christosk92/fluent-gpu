@@ -24,6 +24,14 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static class ProgressRing
 {
+    // Template parts (see TemplateParts). The part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The accent ring arc (the Lottie ellipse — determinate sweep / indeterminate spinner). The ArcSpec
+    /// (color, stroke weight, sweep) is stock per-render computed styling a modifier sees and may override
+    /// (<c>b =&gt; b with { Arc = … }</c>). Owned: OnRealized (the indeterminate trim-loop ref, chained with any
+    /// modifier-supplied handler; the determinate arc owns nothing).</summary>
+    public const string PartRing = "Ring";
+
     // WinUI defaults (ProgressRing.xaml): Width/Height = 32, MinWidth/MinHeight = 16.
     public const float DefaultSize = 32f;
     public const float MinSize = 16f;
@@ -67,9 +75,10 @@ public static class ProgressRing
 
     /// <summary>A determinate ring: the accent arc's sweep is <c>value·360°</c> from 12 o'clock clockwise, over a track
     /// ring. WinUI's default Background is <c>ControlFillColorTransparentBrush</c>, so the track is invisible unless a
-    /// <paramref name="track"/> color is supplied. <paramref name="foreground"/> defaults to AccentFillColorDefault.</summary>
+    /// <paramref name="track"/> color is supplied. <paramref name="foreground"/> defaults to AccentFillColorDefault.
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the accent arc).</summary>
     public static BoxEl Determinate(float value /*0..1*/, float size = DefaultSize, bool isActive = true,
-                                    ColorF? foreground = null, ColorF? track = null)
+                                    ColorF? foreground = null, ColorF? track = null, TemplateParts? parts = null)
     {
         var ts = ProgressRingTemplateSettings.ForDeterminate(size, value);
         ColorF fg = foreground ?? Tok.AccentDefault;
@@ -81,75 +90,106 @@ public static class ProgressRing
             Children = new Element[]
             {
                 new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(tk, ts.Stroke, 0f, 360f, RoundCaps: false) },             // track ring
-                new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true) }, // accent sweep (round caps, like the Lottie)
+                parts.Apply(PartRing,                                                                                                      // accent sweep (round caps, like the Lottie)
+                    new BoxEl { Width = ts.Size, Height = ts.Size, Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true) }),
             },
         };
     }
 
     /// <summary>An indeterminate spinner: a round-capped accent arc rotating continuously at the WinUI cadence
-    /// (900° per 2.0s with the Lottie cubic-bezier spline). <paramref name="isActive"/>=false fades it out (Inactive).</summary>
-    public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null)
-        => Embed.Comp(() => new SpinnerRing { Size = size, IsActive = isActive, Foreground = foreground });
+    /// (900° per 2.0s with the Lottie cubic-bezier spline). <paramref name="isActive"/>=false fades it out (Inactive).
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the spinning arc).</summary>
+    public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null,
+                                        TemplateParts? parts = null)
+        => Ctx.Provide(Props.Channel, new Props(size, isActive, foreground, parts), Embed.Comp(() => new SpinnerRing()));
+
+    /// <summary>Controlled props, carried to the stateful core via context (a reused ComponentEl never re-runs its
+    /// factory, so runtime-changeable props must flow through a provider).</summary>
+    internal sealed record Props(float Size, bool IsActive, ColorF? Foreground, TemplateParts? Parts)
+    {
+        internal static readonly Context<Props?> Channel = new(null);
+    }
 
     internal sealed class SpinnerRing : Component
     {
-        public float Size = DefaultSize;
-        public bool IsActive = true;
-        public ColorF? Foreground;
-
         public override Element Render()
         {
-            var ts = ProgressRingTemplateSettings.ForIndeterminate(Size);
-            ColorF fg = Foreground ?? Tok.AccentDefault;
+            var props = UseContext(Props.Channel) ?? new Props(DefaultSize, true, null, null);
+            var Parts = props.Parts;
+            bool IsActive = props.IsActive;
+            var ts = ProgressRingTemplateSettings.ForIndeterminate(props.Size);
+            ColorF fg = props.Foreground ?? Tok.AccentDefault;
 
             // WinUI ProgressRingIndeterminate: 2.0s loop. RotationAngleInDegrees 0 → 450 (0.5) → 900 (1.0), each half on
             // the Lottie spline — this loop track spins the whole host (and the arc child with it).
-            UseKeyframes(AnimChannel.Rotation, new Keyframe[]
-            {
-                new(0f, 0f, Easing.Linear),
-                new(0.5f, 450f, IndeterminateSpline),
-                new(1f, 900f, IndeterminateSpline),
-            }, IndeterminateDurationMs, loop: true);
-
             // The breathing arc-length lives on the ARC child, not the host (the host has no stroke). Capture the child
             // handle and drive the two StrokeTrim channels directly (UseKeyframes only targets HostNode). Visible arc =
             // TrimEnd−TrimStart: TrimEnd 0→0.5 over the first half (grows 0°→180°), then TrimStart 0→0.5 over the second
             // (shrinks 180°→0°) — exactly the Lottie TrimStart/TrimEnd 0→0.5 cadence over the 2.0s loop.
             var arcRef = UseRef<NodeHandle>(default);
-            UseEffect(() =>
+            UseLayoutEffect(() =>
             {
                 var anim = Context.Anim;
                 var scene = Context.Scene;
-                if (anim is null || scene is null || arcRef.Value.IsNull || !scene.IsLive(arcRef.Value)) return;
+                if (anim is null || scene is null) return;
 
-                anim.Keyframes(arcRef.Value, AnimChannel.StrokeTrimEnd, new Keyframe[]
+                var host = Context.HostNode;
+                if (!host.IsNull && scene.IsLive(host))
+                {
+                    if (props.IsActive)
+                        anim.Keyframes(host, AnimChannel.Rotation, new Keyframe[]
+                        {
+                            new(0f, 0f, Easing.Linear),
+                            new(0.5f, 450f, IndeterminateSpline),
+                            new(1f, 900f, IndeterminateSpline),
+                        }, IndeterminateDurationMs, loop: true);
+                    else
+                        anim.Cancel(host, AnimChannel.Rotation);
+                }
+
+                var arcNode = arcRef.Value;
+                if (arcNode.IsNull || !scene.IsLive(arcNode)) return;
+
+                if (!props.IsActive)
+                {
+                    anim.Cancel(arcNode, AnimChannel.StrokeTrimEnd);
+                    anim.Cancel(arcNode, AnimChannel.StrokeTrimStart);
+                    return;
+                }
+
+                anim.Keyframes(arcNode, AnimChannel.StrokeTrimEnd, new Keyframe[]
                 {
                     new(0f, 0.0001f, Easing.Linear),                 // Lottie TrimEnd seed 9.99999975E-05F
                     new(0.5f, 0.5f, IndeterminateSpline),            // grows to 0.5 (180°) at the half
                     new(1f, 0.5f, Easing.Linear),                    // hold 0.5 through the second half
                 }, IndeterminateDurationMs, loop: true);
 
-                anim.Keyframes(arcRef.Value, AnimChannel.StrokeTrimStart, new Keyframe[]
+                anim.Keyframes(arcNode, AnimChannel.StrokeTrimStart, new Keyframe[]
                 {
                     new(0f, 0f, Easing.Linear),
                     new(0.5f, 0f, Easing.Linear),                    // held 0 through the first half
                     new(1f, 0.5f, IndeterminateSpline),              // catches up to 0.5 (collapses the visible arc)
                 }, IndeterminateDurationMs, loop: true);
-            }, Size);
+            }, props.Size, props.IsActive);
+
+            Action<NodeHandle> arcCapture = h => arcRef.Value = h;
+            var arc = new BoxEl
+            {
+                Width = ts.Size, Height = ts.Size,
+                Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true),
+                OnRealized = arcCapture,
+            };
+            if (Parts is { } p)   // restyle the arc (the ArcSpec is stock — override-able); the trim-loop ref always wins (chained)
+            {
+                var m = p.Apply(PartRing, arc);
+                arc = m with { OnRealized = TemplateParts.Chain(arcCapture, m.OnRealized) };
+            }
 
             return new BoxEl
             {
                 ZStack = true, Width = ts.Size, Height = ts.Size,
                 Opacity = IsActive ? 1f : 0f,   // Inactive visual state: LayoutRoot.Opacity = 0
-                Children = new Element[]
-                {
-                    new BoxEl
-                    {
-                        Width = ts.Size, Height = ts.Size,
-                        Arc = new ArcSpec(fg, ts.Stroke, ts.StartDeg, ts.Sweep, RoundCaps: true),
-                        OnRealized = h => arcRef.Value = h,
-                    },
-                },
+                Children = new Element[] { arc },
             };
         }
     }

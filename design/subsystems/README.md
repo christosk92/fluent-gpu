@@ -106,7 +106,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | Seam | Authority |
 |------|-----------|
 | IPlatformApp, IPlatformWindow, IPlatformAppLoop, NativeHandle(Kind), InputEventRing/WindowEvent shape | pal-rhi.md |
-| IClipboard, IImeSession | pal-rhi.md (seam definition) / input-a11y.md (consumer + IME caret/clipboard/dragdrop use) |
+| IClipboard, IImeSession | pal-rhi.md (seam definition) / input-a11y.md (consumer + IME caret/clipboard/dragdrop use) — *AS-BUILT: `IClipboard` (SetText/TryGetText/SequenceNumber) on `IPlatformApp`; the IME session ships as `IPlatformTextInput` + `ITextInputSink`/`ImeClause` on `IPlatformWindow` (Imm32 impl, event-shaped so TSF/ITextStoreACP can replace it; full in-place TSF remains the hardening item). Selection/caret/IME-underline rendering rides the as-built `TextEditState` scene side-table + pooled rect slabs emitted as plain fills/clipped glyph re-emits (the spec'd dedicated opcodes remain the production target).* |
 | **IPlatformWindow.SetCursor(CursorId) + RegisterCustomCursor** | pal-rhi.md (seam) / input-a11y.md (CursorResolver arbitration along the hit route) |
 | **IPlatformLocale** (Epoch/snapshot, modeled on ISystemColors) | pal-rhi.md (seam) / text.md + dsl-aot.md (edge-localization consumer) |
 | ISystemColors (accent + HC + Epoch) | pal-rhi.md (seam) / theming.md (consumer + EpochContext) |
@@ -127,6 +127,9 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show + the *Bind reactive element props | reconciler-hooks.md §0bis |
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
+| IVirtualLayout / IMeasuredVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Scene\VirtualLayout.cs) |
+| VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
+| SelectionModel / ItemContainer / ItemsView (E11-L3) | controls.md (selection semantics cite WinUI controls\dev\ItemsView selectors; as-built: src\FluentGpu.Controls) |
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |
 | UseTheme / UseSystemColors / UseHighContrast / UseDerivedBrush / UseDynamicColor | theming.md (UseDynamicColor's wantPalette trigger half: media-pipeline.md) |
 | UseFocus / UseElementRef / UseCommand / UseAccelerator / UseGesture / UseAnnounce | input-a11y.md |

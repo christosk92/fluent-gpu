@@ -44,6 +44,19 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
 {
     public const int MaxStops = 4;
 
+    /// <summary>WinUI <c>MappingMode="Absolute"</c> (StartPoint 0,0 EndPoint 0,N): the stop ramp occupies this many
+    /// PHYSICAL px along the axis — outside the band the edge stop's color holds — instead of stretching over the
+    /// node's full extent. The ControlElevationBorder confines its blend to a 3px band
+    /// (Common_themeresources_any.xaml:186). 0 (default) = relative-to-bounds. Applied as a record-time stop-offset
+    /// remap, so the POD command and the gradient shader are unchanged.</summary>
+    public float AxisLengthPx { get; init; }
+
+    /// <summary>Anchor the absolute band at the END of the axis instead of the start — the engine encoding of WinUI's
+    /// <c>RelativeTransform ScaleTransform ScaleY="-1"</c> mirror on elevation brushes (light ControlElevationBorder,
+    /// Common_themeresources_any.xaml:382-390; AccentControlElevationBorder both themes :198-205/:397-404): the
+    /// darker secondary edge sits at the BOTTOM. Only meaningful with <see cref="AxisLengthPx"/> &gt; 0.</summary>
+    public bool AnchorEnd { get; init; }
+
     /// <summary>A solid "gradient" (one stop) - so a flat border and a gradient border are the SAME knob (BorderBrush).</summary>
     public static GradientSpec Solid(ColorF color) => new(GradientShape.Linear, 0f, [new GradientStop(0f, color)]);
 
@@ -68,6 +81,8 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
 
     // MenuFlyoutPresenter and CommandBarFlyoutPresenter use DesktopAcrylicTransparentBrush plus
     // AcrylicBackgroundFillColorDefaultBackdrop. In-canvas reproduction uses that same acrylic recipe.
+    // NOTE: Flyout/FlyoutLight are the per-theme RAW recipes — controls should read the theme-aware
+    // `Tok.AcrylicFlyout` (FluentGpu.Dsl Tokens.cs) instead of hard-binding the dark constant.
     public static AcrylicSpec Flyout => InAppDefault;
     public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }

@@ -10,6 +10,14 @@ public readonly record struct FocusVisualStyle(ColorF Outer, ColorF Inner, float
     public bool Enabled => Outer.A > 0f || Inner.A > 0f;
 }
 
+/// <summary>The text-edit decoration brushes (WinUI TextControlSelectionHighlightColor = AccentFillColorSelectedTextBackgroundBrush,
+/// TextOnAccentFillColorSelectedTextBrush, and the caret = the text foreground). Passed into the recorder by the host
+/// (which reads the theme), like <see cref="FocusVisualStyle"/>; default = disabled, so existing paths are untouched.</summary>
+public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF SelectedText, ColorF CaretColor)
+{
+    public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
+}
+
 public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount);
 
 /// <summary>
@@ -25,6 +33,19 @@ public static class SceneRecorder
     private static int _scrollLogFrame;
     private static bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
 
+    // Overlay-scrollbar arrow glyphs: the host pre-interns the four Segoe Fluent arrow chars + the icon family once
+    // at startup (AppHost ctor) so EmitScrollbar draws the SAME solid-triangle glyphs as the standalone ScrollBar
+    // control (ScrollBar_themeresources.xaml :387/:344/:301/:258) — one scrollbar visual language, not two. A host
+    // that never configures them (bare recorder tests) falls back to the stroked-chevron primitive.
+    private static StringId _sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily;
+    private static bool _sbArrowGlyphsSet;
+
+    public static void ConfigureScrollbarArrowGlyphs(StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
+    {
+        _sbUpGlyph = up; _sbDownGlyph = down; _sbLeftGlyph = left; _sbRightGlyph = right; _sbIconFamily = iconFamily;
+        _sbArrowGlyphsSet = true;
+    }
+
     private struct RecordAccumulator
     {
         public int NodesVisited;
@@ -34,15 +55,32 @@ public static class SceneRecorder
         public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount);
     }
 
+    /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
+    /// into their own popup window instead (E4 windowed popups; see <see cref="RecordSubtree"/>). The subtrees stay in
+    /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
     public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
-                                          ColorF scrollThumb = default, ColorF scrollTrack = default)
+                                          ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
+                                          ReadOnlySpan<NodeHandle> skipRoots = default)
     {
         dl.Reset();
         if (scene.Root.IsNull) return default;
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+
+        // E5 drag ghost: the lifted drag visual (SceneStore.DragGhost, set by Input.DragController at promotion; the
+        // node also carries NodeFlags.DragGhost) is EXCLUDED from the clipped main pass and re-walked below in an
+        // UNCLIPPED top band — it escapes every ancestor scissor (a row dragged out of a clipped list keeps drawing)
+        // and, emitted LAST, paints above everything including overlays (the Flutter/rbd ghost layer). A ghost inside
+        // a skipped popup subtree stays with its popup window (no main-window hoist).
+        var ghost = scene.DragGhost;
+        bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
+        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1];
+        skipRoots.CopyTo(skips);
+        int skipCount = skipRoots.Length;
+        if (hasGhost) skips[skipCount++] = ghost;
+
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skips[..skipCount], ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -50,15 +88,75 @@ public static class SceneRecorder
         for (int i = 0; i < scene.OrphanCount; i++)
         {
             var o = scene.OrphanAt(i, out float px, out float py);
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, scrollThumb, scrollTrack, 1f, 1f, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
+        }
+
+        // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
+        // translations included — AbsoluteRect minus the node's own bounds offset and translate; Walk re-applies
+        // both) with an INFINITE clip. Emitted last ⇒ the painter draws it over the whole frame.
+        if (hasGhost)
+        {
+            var abs = scene.AbsoluteRect(ghost);
+            ref RectF gb = ref scene.Bounds(ghost);
+            ref NodePaint gp = ref scene.Paint(ghost);
+            Walk(scene, dl, images, ghost,
+                 Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
         }
         return stats.ToStats();
     }
 
-    private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
-                             int depth, RectF clip, in FocusVisualStyle focus, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, ref RecordAccumulator stats)
+    /// <summary>
+    /// Record ONE subtree into its own DrawList, re-origined so the subtree's on-screen top-left lands at the
+    /// DrawList's (0,0) — the root-override path for E4 out-of-bounds popup windows (the popup subtree stays in the
+    /// single SceneStore; the host presents this list on the popup window's own swapchain). <paramref name="originDip"/>
+    /// is the subtree's window-DIP top-left (= the popup's placed position): the walk starts at the subtree root with
+    /// a parent-world translation of (parentAbs − origin), so every node's own bounds/transform chain composes exactly
+    /// as in the main pass, shifted into popup-window space. No orphan pass — exit orphans belong to the main window.
+    /// </summary>
+    public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus,
+                                                 ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit,
+                                                 NodeHandle root, Point2 originDip)
     {
+        dl.Reset();
+        if (root.IsNull || !scene.IsLive(root)) return default;
+
+        float pax = 0f, pay = 0f;
+        var parent = scene.Parent(root);
+        if (!parent.IsNull)
+        {
+            var pr = scene.AbsoluteRect(parent);   // translation-only ancestor chain (the overlay positioning hosts)
+            pax = pr.X;
+            pay = pr.Y;
+        }
+        var stats = new RecordAccumulator();
+        Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
+        return stats.ToStats();
+    }
+
+    private static bool ContainsNode(ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    {
+        for (int i = 0; i < roots.Length; i++)
+            if (roots[i] == node) return true;
+        return false;
+    }
+
+    /// <summary>True when <paramref name="node"/> is inside any skip-root subtree (a windowed-popup wrapper) — its
+    /// pixels belong to that popup's own pass, never the main window.</summary>
+    private static bool UnderAnySkipRoot(SceneStore scene, ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    {
+        if (roots.IsEmpty) return false;
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if (ContainsNode(roots, n)) return true;
+        return false;
+    }
+
+    private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
+                             int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
+                             float parentScaleX, float parentScaleY, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
+    {
+        if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
         stats.NodesVisited++;
@@ -106,6 +204,19 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
 
+        // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders
+        // at FULL alpha into a pooled offscreen RT and composites ONCE at the group alpha — overlapping children
+        // (a fading dialog's plate + buttons, a stacked badge) don't double-blend. The cumulative opacity resets to 1
+        // for everything this node emits (self, children, border, focus ring, scrollbar — all inside the group); the
+        // PushLayer carries the would-be cumulative alpha as GroupAlpha. Skipped at alpha ≈ 1 (composite would be a
+        // no-op) and ≈ 0 (invisible — but still walked, matching the non-group path's behavior for hit/anim state). ──
+        bool isOpacityGroup = p.OpacityGroup && opacity < 0.999f && deviceBounds.Overlaps(clip);
+        if (isOpacityGroup)
+        {
+            dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key);
+            opacity = 1f;
+        }
+
         // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
         //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
@@ -137,7 +248,19 @@ public static class SceneRecorder
             childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
         if (wantClip)
         {
-            dl.PushClip(childClip, key);
+            // Tier-2 rounded clip (E9): a clipping node WITH rounded corners (an Expander/CommandBarFlyout surface
+            // running an AnimChannel.ClipL/T/R/B reveal, or a plain rounded ClipsToBounds) clips RoundRect-pipeline
+            // primitives to its rounded-box SDF as well as the scissor. The rounded box is the node's own device box;
+            // the (possibly animated) clip-rect keeps intersecting RECTANGULARLY into the scissor — so a reveal sweeps
+            // a straight edge while the surface's own corners stay round, exactly the WinUI composition-clip look.
+            // Uniform radius (TopLeft, the pipeline-wide convention — the RoundRect/acrylic shaders read one radius);
+            // scaled into device units by the axis-aligned world scale. Honest scope is documented on ClipCmd:
+            // glyphs/images/gradients/arcs/polylines still clip by scissor only.
+            float clipRadius = p.Corners.TopLeft;
+            if (clipRadius > 0f)
+                dl.PushClipRounded(childClip, deviceBounds, clipRadius * MathF.Abs(world.M11 != 0f ? world.M11 : 1f), key);
+            else
+                dl.PushClip(childClip, key);
             pushedClip = true;
         }
 
@@ -217,12 +340,117 @@ public static class SceneRecorder
                 }
                 break;
             }
-            case VisualKind.Text when !p.Text.IsEmpty:
+            case VisualKind.Text:
             {
                 ref var li = ref scene.Layout(node);
                 ColorF textColor = ResolveTextColor(scene, node, flags, in p);
-                dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Bold ? 1 : 0,
-                    (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines, world, opacity, key);
+
+                // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
+                // WinUI-exact emit order: selection highlight UNDER the glyphs → base glyph run → per-rect clipped
+                // glyph re-emit in the on-accent selected-text color → IME clause underline bars → the caret bar.
+                TextEditState tes = default;
+                bool hasEdit = textEdit.Enabled && scene.TryGetTextEdit(node, out tes);
+                ReadOnlySpan<RectF> selRects = hasEdit ? scene.GetTextEditSelectionRects(node) : default;
+
+                // (a) selection highlight: the per-node SelectionHighlightColor override (api-04, WinUI
+                // TextBlock.SelectionHighlightColor — TextBlock.cpp:266/330) wins over the host theme brush
+                // (TextControlSelectionHighlightColor ≡ the system accent, TextSelectionManager.cpp:52-56).
+                ColorF selFill = scene.TryGetSelectionHighlight(node, out var selOverride) ? selOverride : textEdit.SelectionFill;
+                if (selFill.A > 0f)
+                    for (int i = 0; i < selRects.Length; i++)
+                        dl.FillRoundRect(selRects[i], default, selFill, world, opacity, key);
+
+                // (b) the base glyph run. A span run (TextStyle.SpanRunId, rtb-01) rides the SAME op — the renderer
+                // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
+                int spanRunId = li.TextStyle.SpanRunId;
+                if (!p.Text.IsEmpty)
+                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                        li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                        world, opacity, key, spanRunId);
+
+                // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
+                // text seam published the laid bar rects on the run at measure (SpanRunRects — link bands are input's;
+                // Underline/Strikethrough entries are ready-positioned bars), so record stays 0-touch on the font
+                // seam. Bar color = the span's color when set, else the node's resolved foreground — the same
+                // same-brush-as-glyphs rule WinUI's TextDecorations follow.
+                if (spanRunId != 0 && SpanRunTable.Shared.Resolve(spanRunId) is { } spanRun && spanRun.Rects is { } spanRects)
+                {
+                    var arts = spanRects.Rects;
+                    for (int i = 0; i < arts.Length; i++)
+                    {
+                        if (arts[i].Kind == SpanStyle.LinkBit) continue;   // hit-test bands, not painted
+                        ColorF spanColor = spanRun.Spans[arts[i].Span].Color;
+                        dl.FillRoundRect(arts[i].Rect, default, spanColor.A > 0f ? spanColor : textColor, world, opacity, key | 0x8);
+                    }
+                }
+
+                // (b2) text decorations (TextEl.Underline/Strikethrough → NodePaint.TextDecorations, E9): bars placed
+                // by the FACE metrics the measure pass cached on TextMeasureCache (UnderlineY/UnderlineThickness/StrikeY
+                // — the DWrite underlinePosition/underlineThickness flipped top-down, TextLayoutEngine.cs:141-143;
+                // headless model documented at HeadlessFontSystem.cs:13). The bars span the measured run advance (not
+                // the stretched box) and ride the SAME resolved foreground as the glyphs (hover/press ramps +
+                // BrushTransition), like WinUI's TextDecorations underline. No new opcode — plain radius-0 fills.
+                // Scope (honest): single-line frame — a wrapped multi-line run gets the first line's bar only; per-line
+                // decoration belongs to the SpanTextEl/RichTextBlock rich-text pass (Wave 5).
+                if (p.TextDecorations != 0 && !p.Text.IsEmpty)
+                {
+                    // The measure pass get-or-created this row for every text leaf, so record never inserts (0-alloc).
+                    ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
+                    float barW = mc.Valid ? MathF.Min(mc.Size.Width, pw) : pw;
+                    // Fallbacks mirror the engine's font-metric conventions for backends that report none (GDI):
+                    // thickness max(1, size/14) = TextLayoutEngine.cs:142's own fallback; positions = the headless model.
+                    float thick = mc.Valid && mc.UnderlineThickness > 0f ? mc.UnderlineThickness : MathF.Max(1f, li.TextStyle.SizeDip / 14f);
+                    if ((p.TextDecorations & NodePaint.UnderlineBit) != 0 && barW > 0f)
+                    {
+                        float y = mc.Valid && mc.UnderlineY > 0f ? mc.UnderlineY : li.TextStyle.SizeDip * 1.1f + 1f;
+                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                    }
+                    if ((p.TextDecorations & NodePaint.StrikethroughBit) != 0 && barW > 0f)
+                    {
+                        float y = mc.Valid && mc.StrikeY > 0f ? mc.StrikeY : li.TextStyle.SizeDip * 0.8f;
+                        dl.FillRoundRect(new RectF(0f, y, barW, thick), default, textColor, world, opacity, key | 0x8);
+                    }
+                }
+
+                // (c) selected-text recolor: re-emit the SAME run scissored to each selection rect (device-space,
+                // intersected with the active clip like every PushClip the recorder emits). Glyph cost ×2 only while
+                // a selection exists — exactly WinUI's selected-text recolor, no per-glyph splitting.
+                if (!p.Text.IsEmpty && textEdit.SelectedText.A > 0f)
+                    for (int i = 0; i < selRects.Length; i++)
+                    {
+                        RectF selDevice = world.TransformBounds(selRects[i]).Intersect(childClip);
+                        if (selDevice.IsEmpty) continue;
+                        dl.PushClip(selDevice, key | 0x1);
+                        // forceColor: selected glyphs repaint UNIFORMLY in the on-accent color — span colors must not
+                        // bleed through the selection (WinUI's selected-text recolor).
+                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, key | 0x1, spanRunId, forceColor: true);
+                        dl.PopClip(key | 0x1);
+                    }
+
+                // (d) IME composition clause underlines: thin bars in the text foreground (the control computes
+                // thickness/position from the face metrics — the rects are used as given).
+                if (hasEdit)
+                {
+                    ReadOnlySpan<RectF> ulRects = scene.GetTextEditUnderlineRects(node);
+                    for (int i = 0; i < ulRects.Length; i++)
+                        dl.FillRoundRect(ulRects[i], default, textColor, world, opacity, key | 0x2);
+                }
+
+                // (e) the caret: a 1px bar, drawn only while focused AND blink-visible, pixel-snapped in device space
+                // (round the device X, push the delta back through the world scale).
+                if (hasEdit && textEdit.CaretColor.A > 0f && tes.CaretH > 0f
+                    && (tes.Flags & (TextEditState.CaretVisible | TextEditState.Focused))
+                       == (TextEditState.CaretVisible | TextEditState.Focused))
+                {
+                    float sx = world.M11 != 0f ? world.M11 : 1f;
+                    float devX = world.Transform(new Point2(tes.CaretX, tes.CaretTop)).X;
+                    float caretX = tes.CaretX + (MathF.Round(devX) - devX) / sx;
+                    dl.FillRoundRect(new RectF(caretX, tes.CaretTop, 1f, tes.CaretH), default, textEdit.CaretColor, world, opacity, key | 0x4);
+                }
                 break;
             }
             case VisualKind.Image:
@@ -248,8 +476,24 @@ public static class SceneRecorder
             }
         }
 
+        // Child-group shift (SizeMode.Reflow Trailing anchor): every child rides this offset while the node's own
+        // fill/border/clip stay put — the content's end edge tracks the animated layout edge under the already-pushed
+        // clip (the Expander slide-from-under-the-header). Zero at rest; compositor-composed, no per-child knowledge.
+        Affine2D childWorld = p.ChildShiftX != 0f || p.ChildShiftY != 0f
+            ? world.Multiply(Affine2D.Translation(p.ChildShiftX, p.ChildShiftY))
+            : world;
+        // Sticky pin paint order: a PINNED child (position:sticky engaged) is emitted AFTER its siblings so the
+        // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
+        bool anyPinned = false;
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-            Walk(scene, dl, images, c, world, opacity, depth + 1, childClip, in focus, scrollThumb, scrollTrack, childScaleX, childScaleY, ref stats);
+        {
+            if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
+        }
+        if (anyPinned)
+            for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+                if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
+                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a
@@ -263,12 +507,14 @@ public static class SceneRecorder
 
         if (isAcrylic) dl.PopLayer(deviceBounds, key);
 
-        // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children ──
-        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
-            EmitFocusRing(dl, b, p.Corners, world, opacity, in focus, key | 0x10);
-
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);
+
+        // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children. Emitted AFTER the
+        // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
+        // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
+        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && deviceBounds.Overlaps(clip))
+            EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
         // are not chopped at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar
@@ -284,6 +530,10 @@ public static class SceneRecorder
         if (scrollThumb.A > 0f && deviceBounds.Overlaps(clip) && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
+
+        // Close the flat opacity group LAST: everything this node emitted (shadow, fill, children, border, focus
+        // ring, scrollbar) flattens into the offscreen RT and composites once at the group alpha.
+        if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
     }
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
@@ -367,6 +617,14 @@ public static class SceneRecorder
             fill = p.HoverFill.A > 0f ? p.HoverFill : Lighten(fill, 0.08f);
             border = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(border, 0.08f);
         }
+
+        // Implicit BrushTransition (logical state flip): cross-fade from the previously-displayed color toward the
+        // state-resolved color above. Linear-light, like every other brush cross-fade (color canon).
+        if (scene.TryGetBrushAnim(node, out var ba))
+        {
+            if ((ba.Channels & BrushAnim.FillBit) != 0) fill = ColorF.LerpLinear(ba.FillFrom, fill, ba.T);
+            if ((ba.Channels & BrushAnim.BorderBit) != 0) border = ColorF.LerpLinear(ba.BorderFrom, border, ba.T);
+        }
     }
 
     /// <summary>Resolve a text/glyph node's foreground for this frame. Plain text (no state colors) returns instantly.
@@ -374,6 +632,15 @@ public static class SceneRecorder
     /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
     /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
     private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    {
+        ColorF resolved = ResolveTextColorCore(scene, node, flags, in p);
+        // Implicit BrushTransition on the foreground (logical state flip): cross-fade from the previously-displayed color.
+        if (scene.TryGetBrushAnim(node, out var ba) && (ba.Channels & BrushAnim.TextBit) != 0)
+            resolved = ColorF.LerpLinear(ba.TextFrom, resolved, ba.T);
+        return resolved;
+    }
+
+    private static ColorF ResolveTextColorCore(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
     {
         // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
         if (p.TextHoverColor.A == 0f && p.TextPressedColor.A == 0f && p.TextDisabledColor.A == 0f && p.TextFocusedColor.A == 0f)
@@ -446,7 +713,42 @@ public static class SceneRecorder
         // never a new GradientSpec). Differing stop counts blend only the shared prefix (rest of resting stops hold).
         if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
         if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
+        RemapAbsoluteAxis(in g, MathF.Abs(dx) * local.W + MathF.Abs(dy) * local.H, n,
+            ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3);
         dl.GradientRect(new DrawGradientRectCmd(local, corners, start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, world, opacity), key);
+    }
+
+    /// <summary>WinUI <c>MappingMode="Absolute"</c> (record-time emulation): squeeze the stop ramp into
+    /// <see cref="GradientSpec.AxisLengthPx"/> physical px of the node's axis extent — the shader's edge-clamp holds
+    /// the boundary stop across the rest (the ControlElevationBorder 3px band, Common_themeresources_any.xaml:186).
+    /// <see cref="GradientSpec.AnchorEnd"/> measures the band from the END of the axis (the ScaleY=-1 elevation
+    /// mirror), which reverses the stop order so offsets stay ascending. Stack-only, zero alloc.</summary>
+    private static void RemapAbsoluteAxis(in GradientSpec g, float extent, int n,
+        ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
+        ref float o0, ref float o1, ref float o2, ref float o3)
+    {
+        if (g.AxisLengthPx <= 0f || extent <= 0.01f) return;
+        float k = MathF.Min(1f, g.AxisLengthPx / extent);
+        if (!g.AnchorEnd)
+        {
+            o0 *= k;
+            if (n > 1) o1 *= k; else o1 = 1f;   // unused trailing slots stay at 1 (ascending, shader clamp intact)
+            if (n > 2) o2 *= k; else o2 = 1f;
+            if (n > 3) o3 *= k; else o3 = 1f;
+            return;
+        }
+        Span<float> os = stackalloc float[4];
+        Span<ColorF> cs = stackalloc ColorF[4];
+        os[0] = o0; os[1] = o1; os[2] = o2; os[3] = o3;
+        cs[0] = c0; cs[1] = c1; cs[2] = c2; cs[3] = c3;
+        for (int i = 0; i < n; i++) os[i] = 1f - os[i] * k;
+        for (int i = 0; i < n / 2; i++)
+        {
+            (os[i], os[n - 1 - i]) = (os[n - 1 - i], os[i]);
+            (cs[i], cs[n - 1 - i]) = (cs[n - 1 - i], cs[i]);
+        }
+        c0 = cs[0]; c1 = n > 1 ? cs[1] : c0; c2 = n > 2 ? cs[2] : c1; c3 = n > 3 ? cs[3] : c2;
+        o0 = os[0]; o1 = n > 1 ? os[1] : 1f; o2 = n > 2 ? os[2] : 1f; o3 = n > 3 ? os[3] : 1f;
     }
 
     // Blend the four stack-local gradient stops toward another spec's stops by t (linear-light color, linear offset).
@@ -464,7 +766,8 @@ public static class SceneRecorder
 
     /// <summary>A gradient-tinted border ring: the gradient PS sampled along the local axis, drawn as an SDF band of
     /// width <paramref name="bw"/> centered on a rect inset by bw/2 (so the stroke sits inside the bounds, WinUI-style).
-    /// The vertical axis spans the whole control, matching WinUI's ControlElevationBorderBrush.</summary>
+    /// Relative specs span the whole control; <see cref="GradientSpec.AxisLengthPx"/> specs confine the blend to the
+    /// WinUI absolute band (ControlElevationBorderBrush's 3px edge) via the record-time stop remap.</summary>
     private static void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
         in Affine2D world, float opacity, ulong key)
@@ -479,22 +782,41 @@ public static class SceneRecorder
         float o0 = s[0].Offset, o1 = n > 1 ? s[1].Offset : 1f, o2 = n > 2 ? s[2].Offset : 1f, o3 = n > 3 ? s[3].Offset : 1f;
         if (hasHover && hoverT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in hover, hoverT);
         if (hasPressed && pressT > 0.001f) LerpStops(ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3, n, in pressed, pressT);
+        RemapAbsoluteAxis(in g, MathF.Abs(dx) * b.W + MathF.Abs(dy) * b.H, n,
+            ref c0, ref c1, ref c2, ref c3, ref o0, ref o1, ref o2, ref o3);
         var ring = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
         dl.GradientStroke(new DrawGradientStrokeCmd(ring, InsetCorners(corners, bw * 0.5f), start, end, (int)g.Shape, n, c0, c1, c2, c3, o0, o1, o2, o3, bw, world, opacity), key);
     }
 
-    /// <summary>WinUI dual focus visual: a 1px inner secondary stroke at the control edge + a 2px outer primary stroke
-    /// just outside it. Real SDF strokes, so they're correct over any fill/background.</summary>
-    private static void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
+    /// <summary>WinUI dual focus visual, margin-aware: the focus rect is the bounds expanded by −FocusVisualMargin
+    /// (templates use −3 ⇒ 3px out; Slider −7,0,−7,0). The 2px PRIMARY (outer) stroke hugs the inside of the focus
+    /// rect's edge; the 1px SECONDARY (inner) stroke sits immediately inside it — with the default margin the pair
+    /// lands exactly on the control edge (edge → 1px inner → 2px outer). Centerline SDF strokes, so each rect insets
+    /// by half its thickness; corner radii grow with the expansion to stay concentric.</summary>
+    private static void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
     {
-        if (f.Inner.A > 0f)
-            dl.StrokeRoundRect(new RectF(0f, 0f, b.W, b.H), corners, f.Inner, 1f, world, opacity, key);
-        if (f.Outer.A > 0f)
+        // Per-side expansion (negative WinUI margin = grow outward). Clamp ≥ 0 — a positive margin never shrinks inside.
+        float eL = MathF.Max(0f, -margin.Left), eT = MathF.Max(0f, -margin.Top);
+        float eR = MathF.Max(0f, -margin.Right), eB = MathF.Max(0f, -margin.Bottom);
+        float tP = MathF.Max(1f, f.Thickness);   // primary (outer) thickness — WinUI FocusVisualPrimaryThickness = 2
+
+        // The focus rect in node-local space.
+        var fr = new RectF(-eL, -eT, b.W + eL + eR, b.H + eT + eB);
+        // Corner radius grows by the smaller adjacent expansion so the arc stays concentric with the control corner.
+        var fc = new CornerRadius4(
+            corners.TopLeft + MathF.Min(eL, eT), corners.TopRight + MathF.Min(eR, eT),
+            corners.BottomRight + MathF.Min(eR, eB), corners.BottomLeft + MathF.Min(eL, eB));
+
+        if (f.Outer.A > 0f)   // primary band [edge-tP .. edge] inside the focus rect → centerline inset tP/2
+            dl.StrokeRoundRect(
+                new RectF(fr.X + tP * 0.5f, fr.Y + tP * 0.5f, MathF.Max(0f, fr.W - tP), MathF.Max(0f, fr.H - tP)),
+                InsetCorners(fc, tP * 0.5f), f.Outer, tP, world, opacity, key);
+        if (f.Inner.A > 0f)   // secondary 1px band immediately inside the primary → centerline inset tP + 0.5
         {
-            float g = MathF.Max(1f, f.Thickness);
-            var grown = new RectF(-g, -g, b.W + 2f * g, b.H + 2f * g);
-            var gc = new CornerRadius4(corners.TopLeft + g, corners.TopRight + g, corners.BottomRight + g, corners.BottomLeft + g);
-            dl.StrokeRoundRect(grown, gc, f.Outer, f.Thickness, world, opacity, key);
+            float i = tP + 0.5f;
+            dl.StrokeRoundRect(
+                new RectF(fr.X + i, fr.Y + i, MathF.Max(0f, fr.W - 2f * i), MathF.Max(0f, fr.H - 2f * i)),
+                InsetCorners(fc, i), f.Inner, 1f, world, opacity, key);
         }
     }
 
@@ -512,9 +834,9 @@ public static class SceneRecorder
                 return;
             }
 
-            const float bar = 12f;          // ScrollBarSize (expanded gutter width)
-            const float collapsed = 6f;     // resting thumb width — visible (a 2px hairline was effectively invisible)
-            const float thumbOffset = 2f;   // ScrollBarThumbOffset: cross-axis inset in the collapsed state
+            const float bar = 12f;          // ScrollBarSize (ScrollBar_themeresources.xaml:180)
+            const float collapsed = 2f;     // VISIBLE collapsed thumb: ThumbMinWidth 8 (:182) − transparent stroke 6 (:185)
+            const float thumbOffset = 1f;   // collapsed fill rides 1px off the edge (8px rect, +2 translate, 6px stroke → [cross−3, cross−1])
             const float minExpanded = 30f;  // ScrollBarVerticalThumbMinHeight
             const float minCollapsed = 32f; // VerticalPanningThumb.MinHeight
             const float radius = 3f;        // ScrollBarCornerRadius
@@ -551,9 +873,10 @@ public static class SceneRecorder
                 dl.FillRoundRect(gutter, CornerRadius4.All(radius), trackCol, world, opacity, key);
             }
 
-            float thick = collapsed + (bar - collapsed) * expand;
-            float collapsedCrossPos = cross - collapsed - thumbOffset;
-            float expandedCrossPos = cross - bar;
+            const float expandedVisible = 6f;                       // ScrollBarSize 12 − stroke 6, centred (3px insets)
+            float thick = collapsed + (expandedVisible - collapsed) * expand;
+            float collapsedCrossPos = cross - collapsed - thumbOffset;   // [cross−3, cross−1]
+            float expandedCrossPos = cross - bar + 3f;                   // [cross−9, cross−3]
             float crossPos = collapsedCrossPos + (expandedCrossPos - collapsedCrossPos) * expand;
             RectF thumbRect = horizontal
                 ? new RectF(pos, crossPos, thumbLen, thick)
@@ -573,7 +896,25 @@ public static class SceneRecorder
             if (arrowOpacity > 0.04f)
             {
                 var arrow = thumb with { A = thumb.A * arrowOpacity };
-                if (horizontal)
+                if (_sbArrowGlyphsSet)
+                {
+                    // The standalone control's exact arrow anatomy (ScrollBar.ArrowButton): a 12px cell at each rail
+                    // end, FontSize 8 (:186), the glyph nudged 4px toward the track (margins :195-198) and centred on
+                    // the cross axis — so the overlay scrollbar and the ScrollBar element read as ONE control.
+                    const float glyphSize = 8f;
+                    float crossCentered = cross - bar + (bar - glyphSize) * 0.5f;
+                    RectF decRect = horizontal
+                        ? new RectF(4f, crossCentered, glyphSize, glyphSize)
+                        : new RectF(crossCentered, 4f, glyphSize, glyphSize);
+                    RectF incRect = horizontal
+                        ? new RectF(axis - bar, crossCentered, glyphSize, glyphSize)
+                        : new RectF(crossCentered, axis - bar, glyphSize, glyphSize);
+                    StringId dec = horizontal ? _sbLeftGlyph : _sbUpGlyph;
+                    StringId inc = horizontal ? _sbRightGlyph : _sbDownGlyph;
+                    dl.DrawGlyphRun(decRect, arrow, dec, _sbIconFamily, glyphSize, 400, 0, 0, 1, 0f, float.NaN, 0, 0, world, opacity, key | 0x2);
+                    dl.DrawGlyphRun(incRect, arrow, inc, _sbIconFamily, glyphSize, 400, 0, 0, 1, 0f, float.NaN, 0, 0, world, opacity, key | 0x3);
+                }
+                else if (horizontal)
                 {
                     EmitChevron(dl, new Point2(bar * 0.5f, cross - bar * 0.5f), horizontal: true, positive: false, arrow, world, opacity, key | 0x2);
                     EmitChevron(dl, new Point2(axis - bar * 0.5f, cross - bar * 0.5f), horizontal: true, positive: true, arrow, world, opacity, key | 0x3);

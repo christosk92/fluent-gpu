@@ -13,7 +13,7 @@ sealed class WelcomePage : Component
     {
         ("state", Icons.Refresh, "State & components", "Hooks, reducers, context"),
         ("typography", Icons.Font, "Typography", "The Fluent type ramp"),
-        ("icons", Icons.Star, "Icons & fonts", "Segoe Fluent glyphs"),
+        ("icons", Icons.Star, "Iconography", "All 1,500+ Segoe Fluent glyphs"),
         ("flex", Icons.Tag, "Flexbox", "justify · align · grow · wrap"),
         ("grid", Icons.Grid, "CSS Grid", "Track-based + uniform grid"),
         ("repeater", Icons.List, "ItemsRepeater", "Data-driven, virtualized"),
@@ -22,7 +22,7 @@ sealed class WelcomePage : Component
         ("inputs", Icons.Volume, "Inputs & sliders", "Sliders, scrollbars, toggles"),
         ("images", Icons.Picture, "Images", "Async album art + placeholders"),
         ("scrolling", Icons.Document, "Scrolling", "Smooth, inertial, auto-bars"),
-        ("animation", Icons.Movie, "Animation", "Springs · keyframes · driven"),
+        ("animation", Icons.Movie, "Animation", "Springs · keyframes · reflow · FLIP"),
         ("compositor", Icons.Brush, "Compositor", "GPU transform + opacity"),
         ("wavee", Icons.MusicNote, "Wavee skeleton", "The driving app"),
     };
@@ -90,6 +90,9 @@ sealed class HomeHero : Component
         {
             Height = 200, Direction = 1, Justify = FlexJustify.End, Gap = 4, Padding = new Edges4(36, 0, 36, 22),
             Gradient = LinearGradient(118f, new GradientStop(0f, Tok.HeroGradientTop), new GradientStop(1f, Tok.HeroGradientBottom)),
+            // The full-bleed hero sits at the NavigationView content's rounded top-left corner; gradients aren't rounded-
+            // clipped by the content frame, so round the fill itself to match (Radii.Overlay = ContentLeftTopCorner).
+            Corners = new(Radii.Overlay, 0f, 0f, 0f),
             Children =
             [
                 Caption("WinUI-style capability gallery").Secondary(),

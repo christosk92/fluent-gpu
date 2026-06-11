@@ -20,6 +20,17 @@ public enum ProgressBarState : byte { Normal = 0, Paused = 1, Error = 2 }
 /// </summary>
 public static class ProgressBar
 {
+    // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
+    // modifier — a Parts customization cannot win those).
+    /// <summary>The 1px under-track (WinUI ProgressBarTrack). Owned: none — its Opacity-0 in the indeterminate
+    /// states is stock per-render styling a modifier may override.</summary>
+    public const string PartTrack = "Track";
+    /// <summary>The foreground indicator (WinUI DeterminateProgressBarIndicator, and BOTH
+    /// IndeterminateProgressBarIndicator/2 — the modifier runs on each sweeping indicator). The value-driven Width
+    /// and the Paused/Error recolor are stock per-render styling (override-able). Owned: OnRealized (the
+    /// indeterminate sweep refs, chained with any modifier-supplied handler).</summary>
+    public const string PartFill = "Fill";
+
     // ── WinUI sizes/corners (ProgressBar_themeresources.xaml) ──────────────────────────────────────
     const float MinHeight = 3f;          // ProgressBarMinHeight
     const float TrackHeight = 1f;         // ProgressBarTrackHeight
@@ -51,8 +62,10 @@ public static class ProgressBar
 
     // ── Determinate ────────────────────────────────────────────────────────────────────────────────
     /// <summary>Determinate progress; <paramref name="value"/> is clamped to 0..1, indicator width = value * width.
-    /// <paramref name="state"/> selects the indicator color (Normal accent / Paused caution / Error critical).</summary>
-    public static BoxEl Determinate(float value, float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal)
+    /// <paramref name="state"/> selects the indicator color (Normal accent / Paused caution / Error critical).
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartTrack"/>/<see cref="PartFill"/>.</summary>
+    public static BoxEl Determinate(float value, float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
+                                    TemplateParts? parts = null)
     {
         float v = value < 0f ? 0f : value > 1f ? 1f : value;
         return new BoxEl
@@ -64,22 +77,23 @@ public static class ProgressBar
             Children =
             [
                 // ProgressBarTrack: 1px, ControlStrongStrokeColorDefault, 0.5px corner, vertically centered in the band.
-                new BoxEl
+                parts.Apply(PartTrack, new BoxEl
                 {
                     Width = width,
                     Height = TrackHeight,
                     OffsetY = (MinHeight - TrackHeight) / 2f,
                     Corners = CornerRadius4.All(TrackRadius),
                     Fill = Tok.StrokeControlStrongDefault,
-                },
-                // DeterminateProgressBarIndicator: foreground fill, 1.5px corner, left-aligned, width = v * track width.
-                new BoxEl
+                }),
+                // DeterminateProgressBarIndicator: foreground fill, 1.5px corner, left-aligned, width = v * track width
+                // (the value-driven Width/state recolor are stock — a PartFill modifier sees and may override them).
+                parts.Apply(PartFill, new BoxEl
                 {
                     Width = v * width,
                     Height = MinHeight,
                     Corners = CornerRadius4.All(IndicatorRadius),
                     Fill = ForegroundFor(state),
-                },
+                }),
             ],
         };
     }
@@ -87,9 +101,19 @@ public static class ProgressBar
     // ── Indeterminate ────────────────────────────────────────────────────────────────────────────
     /// <summary>Indeterminate progress: the two clipped accent indicators sweeping across the track on the WinUI
     /// ProgressBarTemplateSettings translate keyframes. In Paused/Error, the track hides and only indicator2 shows,
-    /// recolored to caution/critical (matching WinUI's IndeterminatePaused / IndeterminateError visual states).</summary>
-    public static Element Indeterminate(float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal)
-        => Embed.Comp(() => new IndeterminateBar { Width = width, State = state });
+    /// recolored to caution/critical (matching WinUI's IndeterminatePaused / IndeterminateError visual states).
+    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartTrack"/>/<see cref="PartFill"/> (the
+    /// PartFill modifier runs on BOTH sweeping indicators).</summary>
+    public static Element Indeterminate(float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
+                                        TemplateParts? parts = null)
+        => Ctx.Provide(Props.Channel, new Props(width, state, parts), Embed.Comp(() => new IndeterminateBar()));
+
+    /// <summary>Controlled props, carried to the stateful core via context (a reused ComponentEl never re-runs its
+    /// factory, so runtime-changeable props must flow through a provider).</summary>
+    internal sealed record Props(float Width, ProgressBarState State, TemplateParts? Parts)
+    {
+        internal static readonly Context<Props?> Channel = new(null);
+    }
 
     /// <summary>The computed translate positions WinUI binds from ProgressBarTemplateSettings into the indeterminate
     /// storyboards (ProgressBar.cpp UpdateWidthBasedTemplateSettings). Indicator widths follow SetProgressBarIndicatorWidth.</summary>
@@ -116,11 +140,12 @@ public static class ProgressBar
 
     private sealed class IndeterminateBar : Component
     {
-        public float Width = DefaultWidth;
-        public ProgressBarState State = ProgressBarState.Normal;
-
         public override Element Render()
         {
+            var props = UseContext(Props.Channel) ?? new Props(DefaultWidth, ProgressBarState.Normal, null);
+            float Width = props.Width;
+            var State = props.State;
+            var Parts = props.Parts;
             var ts = ProgressBarTemplateSettings.For(Width);
             bool nonNormal = State != ProgressBarState.Normal;   // Paused / Error: hide track + indicator1, recolor indicator2
             ColorF fg = ForegroundFor(State);
@@ -187,6 +212,48 @@ public static class ProgressBar
             // Indicator2 spans the full track in Paused/Error (SetProgressBarIndicatorWidth: 100%), else 60%.
             float ind2Width = nonNormal ? Width : ts.Indicator2Width;
 
+            Action<NodeHandle> ind1Capture = h => ind1Ref.Value = h;
+            Action<NodeHandle> ind2Capture = h => ind2Ref.Value = h;
+
+            // ProgressBarTrack — hidden (Opacity 0) in every indeterminate state in WinUI (stock state styling a
+            // PartTrack modifier sees and may override).
+            var track = Parts.Apply(PartTrack, new BoxEl
+            {
+                Width = Width,
+                Height = TrackHeight,
+                OffsetY = (MinHeight - TrackHeight) / 2f,
+                Corners = CornerRadius4.All(TrackRadius),
+                Fill = Tok.StrokeControlStrongDefault,
+                Opacity = 0f,
+            });
+
+            // IndeterminateProgressBarIndicator (40% width) — visible only in the Normal indeterminate state.
+            var ind1 = new BoxEl
+            {
+                Width = ts.Indicator1Width,
+                Height = MinHeight,
+                Corners = CornerRadius4.All(IndicatorRadius),
+                Fill = fg,
+                Opacity = nonNormal ? 0f : 1f,
+                OnRealized = ind1Capture,
+            };
+            // IndeterminateProgressBarIndicator2 (60% width, or 100% in Paused/Error) — always visible indeterminate.
+            var ind2 = new BoxEl
+            {
+                Width = ind2Width,
+                Height = MinHeight,
+                Corners = CornerRadius4.All(IndicatorRadius),
+                Fill = fg,
+                OnRealized = ind2Capture,
+            };
+            if (Parts is { } p)   // the PartFill modifier runs on BOTH indicators; the sweep refs always win (chained)
+            {
+                var m1 = p.Apply(PartFill, ind1);
+                ind1 = m1 with { OnRealized = TemplateParts.Chain(ind1Capture, m1.OnRealized) };
+                var m2 = p.Apply(PartFill, ind2);
+                ind2 = m2 with { OnRealized = TemplateParts.Chain(ind2Capture, m2.OnRealized) };
+            }
+
             return new BoxEl
             {
                 ZStack = true,
@@ -194,38 +261,7 @@ public static class ProgressBar
                 Height = MinHeight,
                 ClipToBounds = true,                 // Border Clip="...ClipRect" — the sweep is clipped to the track bounds
                 Role = AutomationRole.ProgressBar,
-                Children =
-                [
-                    // ProgressBarTrack — hidden (Opacity 0) in every indeterminate state in WinUI.
-                    new BoxEl
-                    {
-                        Width = Width,
-                        Height = TrackHeight,
-                        OffsetY = (MinHeight - TrackHeight) / 2f,
-                        Corners = CornerRadius4.All(TrackRadius),
-                        Fill = Tok.StrokeControlStrongDefault,
-                        Opacity = 0f,
-                    },
-                    // IndeterminateProgressBarIndicator (40% width) — visible only in the Normal indeterminate state.
-                    new BoxEl
-                    {
-                        Width = ts.Indicator1Width,
-                        Height = MinHeight,
-                        Corners = CornerRadius4.All(IndicatorRadius),
-                        Fill = fg,
-                        Opacity = nonNormal ? 0f : 1f,
-                        OnRealized = h => ind1Ref.Value = h,
-                    },
-                    // IndeterminateProgressBarIndicator2 (60% width, or 100% in Paused/Error) — always visible indeterminate.
-                    new BoxEl
-                    {
-                        Width = ind2Width,
-                        Height = MinHeight,
-                        Corners = CornerRadius4.All(IndicatorRadius),
-                        Fill = fg,
-                        OnRealized = h => ind2Ref.Value = h,
-                    },
-                ],
+                Children = [track, ind1, ind2],
             };
         }
     }

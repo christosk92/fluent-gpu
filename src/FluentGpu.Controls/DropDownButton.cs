@@ -23,11 +23,28 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class DropDownButton : Component
 {
+    // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
+    // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The button chrome (the WinUI RootGrid). Owned: OnClick (the flyout toggle), OnKeyDown (Down/F4 open
+    /// chords), OnRealized (anchor capture, chained), Role, Children.</summary>
+    public const string PartRoot = "Root";
+    /// <summary>The optional leading 14px glyph — a <see cref="TextEl"/> (mounted only when <see cref="Glyph"/> is set);
+    /// customize via <c>Parts.Set&lt;TextEl&gt;(DropDownButton.PartIcon, …)</c>. Owned: none.</summary>
+    public const string PartIcon = "Icon";
+    /// <summary>The label run — a <see cref="TextEl"/>; customize via <c>Parts.Set&lt;TextEl&gt;(DropDownButton.PartLabel, …)</c>.
+    /// Owned: none (the foreground ramp is state-driven and a modifier may override it).</summary>
+    public const string PartLabel = "Label";
+    /// <summary>The trailing 12×12 chevron box (the WinUI AnimatedIcon column). Owned: none.</summary>
+    public const string PartChevron = "Chevron";
+
     public string Label = "";
     public string? Glyph;
     public IReadOnlyList<MenuFlyoutItem> Items = [];
     public bool IsEnabled = true;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract.</summary>
+    public TemplateParts? Parts;
 
     // WinUI DropDownButton chevron AnimatedIcon fallback: FontIcon Glyph "" at FontSize 8 in a 12×12 box, Margin 8,0,0,0.
     const string ChevronGlyph = Icons.ChevronDownSmall;
@@ -54,7 +71,9 @@ public sealed class DropDownButton : Component
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss));
+                // WinUI menus are WINDOWED popups (FlyoutBase_Partial.cpp:3181-3205 SetIsWindowedPopup) — a tall
+                // menu may escape the window when the platform supports popup windows (constrained fallback otherwise).
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
@@ -72,21 +91,21 @@ public sealed class DropDownButton : Component
 
         var children = new List<Element>();
         if (Glyph is { Length: > 0 } g)
-            children.Add(new TextEl(g)
+            children.Add(Parts.Apply(PartIcon, new TextEl(g)
             {
                 Size = 14f, Color = restFg, FontFamily = Theme.IconFont,
                 HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,  // ButtonForeground ramp
-            });
+            }));
         if (Label.Length > 0)
-            children.Add(new TextEl(Label)
+            children.Add(Parts.Apply(PartLabel, new TextEl(Label)
             {
                 Size = 14f, Color = restFg, Grow = 1f,                          // ContentPresenter column = "*"
                 HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,  // ButtonForeground / ...PointerOver / ...Pressed / ...Disabled
-            });
+            }));
 
         // Chevron column ("Auto"): WinUI AnimatedIcon (12×12) over the FontIcon fallback (E96E @ 8), Margin 8,0,0,0. Foreground
         // ramp = DropDownButtonForegroundSecondary (TextSecondary) → ...PointerOver/Pressed (TextTertiary) → Disabled (TextDisabled).
-        children.Add(new BoxEl
+        children.Add(Parts.Apply(PartChevron, new BoxEl
         {
             Width = ChevronBoxSize,
             Height = ChevronBoxSize,
@@ -101,9 +120,11 @@ public sealed class DropDownButton : Component
                     HoverColor = Tok.TextTertiary, PressedColor = Tok.TextTertiary, DisabledColor = Tok.TextDisabled,
                 },
             ],
-        });
+        }));
 
-        return new BoxEl
+        Action<NodeHandle> anchorCapture = h => anchor.Value = h;
+        Action<KeyEventArgs> onKey = a => { if ((a.KeyCode == Keys.Down || a.KeyCode == Keys.F4) && handle.Value is not { IsOpen: true }) { Toggle(); a.Handled = true; } };
+        var root = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
@@ -115,6 +136,10 @@ public sealed class DropDownButton : Component
             Fill = IsEnabled ? Tok.FillControlDefault : Tok.FillControlDisabled,
             HoverFill = Tok.FillControlSecondary,
             PressedFill = Tok.FillControlTertiary,
+            // RootGrid BackgroundTransition = BrushTransition Duration 0:0:0.083 (DropDownButton.xaml:23) — the same
+            // explicit 83ms/FastOutSlowIn pair SplitButton/ToggleSplitButton carry (audit minor: was engine-default).
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
+            HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,   // ControlFastOutSlowInKeySpline = 0,0,0,1
             // ButtonBorderBrush (elevation) rest/hover; ButtonBorderBrushPressed/Disabled = StrokeControlDefault (solid).
             BorderBrush = IsEnabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
             HoverBorderBrush = Tok.ControlElevationBorder,
@@ -123,10 +148,25 @@ public sealed class DropDownButton : Component
             IsEnabled = IsEnabled,                            // engine gate: no hit-test/focus/keyboard/click while disabled
             Focusable = IsEnabled,                            // Tab reaches it → Enter/Space/Down open
             Role = AutomationRole.Button,                     // WinUI ControlType = Button (+ ExpandCollapse pattern)
-            OnRealized = h => anchor.Value = h,
+            OnRealized = anchorCapture,
             OnClick = Toggle,                                 // Enter/Space activation routes here via the engine
-            OnKeyDown = a => { if (a.KeyCode == Keys.Down && handle.Value is not { IsOpen: true }) { Toggle(); a.Handled = true; } },
+            // Down / Alt+Down / F4 open the flyout (WinUI DropDownButton + ComboBox-family open chords).
+            OnKeyDown = onKey,
             Children = children.ToArray(),
         };
+        // Parts: restyle anything (fills, corners, padding…); the toggle/open mechanics and the column structure win.
+        if (Parts is { } p)
+        {
+            var m = p.Apply(PartRoot, root);
+            root = m with
+            {
+                OnClick = Toggle,
+                OnKeyDown = onKey,
+                Role = AutomationRole.Button,
+                Children = root.Children,
+                OnRealized = TemplateParts.Chain(anchorCapture, m.OnRealized),
+            };
+        }
+        return root;
     }
 }

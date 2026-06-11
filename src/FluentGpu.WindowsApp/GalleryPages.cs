@@ -36,7 +36,8 @@ sealed class TypographyPage : Component
                     SizeScaleCard(),
                     WeightsCard(),
                     ColorsCard(),
-                    ParagraphCard()
+                    ParagraphCard(),
+                    FontFamiliesCard()
                 ]
             });
     }
@@ -166,6 +167,21 @@ sealed class TypographyPage : Component
                         ]
                     }
                 ]
+            });
+
+    // Font families (moved here from the old Icons & fonts page — Iconography is now the full glyph catalog).
+    Element FontFamiliesCard() =>
+        Section("Font families",
+            Text("Every text run has a FontFamily — a system name (\"Segoe UI\", \"Consolas\") or a custom file as \"path/to.ttf#Family Name\" (the WinUI FontIcon syntax).").Foreground(Grey).FontSize(13f),
+            new BoxEl
+            {
+                Direction = 1, Gap = 6f, Padding = Edges4.All(14), Corners = CornerRadius4.All(8f), Fill = ColorF.FromRgba(0x1A, 0x1A, 0x1A),
+                Children =
+                [
+                    Text("The quick brown fox — Segoe UI").Font("Segoe UI").FontSize(16f),
+                    Text("The quick brown fox — Consolas").Font("Consolas").FontSize(16f),
+                    Text("The quick brown fox — Georgia").Font("Georgia").FontSize(16f),
+                ],
             });
 
     Element ParagraphCard() =>
@@ -1077,7 +1093,10 @@ sealed class VirtualizationPage : Component
     // hammering the CDN with 100k unique downloads. 32px display → bucket 64 → these pack into the small-image atlas.
     static string Cover(int i) => $"https://picsum.photos/seed/fgrow{i % 120}/80/80";
 
-    Element Row(int i)
+    // BOUND row template (Virtual.ListBound): built ONCE per visible slot with an index SIGNAL — scrolling rebinds the
+    // slot by writing the signal, so only these TextBind/FillBind/SourceBind thunks re-run (no element rebuild, no
+    // reconcile, no node churn). This is the recycler fast path a 100k thumb-drag storm exercises.
+    static Element Row(FluentGpu.Signals.IReadSignal<int> idx)
     {
         return new BoxEl
         {
@@ -1086,16 +1105,21 @@ sealed class VirtualizationPage : Component
             Gap = 12f,
             AlignItems = FlexAlign.Center,
             Padding = new Edges4(16, 0, 16, 0),
-            Fill = (i % 2 == 0) ? RowEven : RowOdd,
+            FillBind = () => (idx.Value % 2 == 0) ? RowEven : RowOdd,
             HoverFill = RowHover,
             Children =
             [
                 new BoxEl
                 {
                     Width = 64f,
-                    Children = [new TextEl($"{i + 1}") { Size = 13f, Color = IndexGrey }],
+                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, TextBind = () => $"{idx.Value + 1}" }],
                 },
-                Image(Cover(i), 32f, 32f, 8f, TileTint(i)),   // real thumbnail; tint shows until it decodes, then cross-fades in
+                // real thumbnail; tint shows until it decodes, then cross-fades in
+                new ImageEl
+                {
+                    Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
+                    SourceBind = () => Cover(idx.Value), PlaceholderBind = () => TileTint(idx.Value),
+                },
                 new BoxEl
                 {
                     Direction = 1,
@@ -1104,7 +1128,7 @@ sealed class VirtualizationPage : Component
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl($"Item {i}") { Size = 14f, Color = Theme.WindowText },
+                        new TextEl("") { Size = 14f, Color = Theme.WindowText, TextBind = () => $"Item {idx.Value}" },
                         new TextEl("subtitle") { Size = 12f, Color = SubGrey },
                     ],
                 },
@@ -1123,181 +1147,15 @@ sealed class VirtualizationPage : Component
             Children =
             [
                 Heading("List virtualization"),
-                Text("100,000 rows with real CDN thumbnails — only the visible window is realized and recycled over a slab free-list; images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.")
+                Text("100,000 rows with real CDN thumbnails — visible slots are built once and REBOUND via index signals as you scroll (no element rebuild); images decode off-thread, pack into the atlas, and evict off-screen, so memory stays flat. Wheel to scroll.")
                     with { Wrap = TextWrap.Wrap },   // wraps to the content-frame width (the layout measures grow children against availW − fixed siblings)
-                Virtual.List(
-                    100000,
-                    48f,
-                    i => Row(i),
-                    keyOf: i => "r" + i) with { Grow = 1f },
+                Virtual.ListBound(100000, 48f, Row) with { Grow = 1f },
             ],
         };
     }
 }
 
-// ===== AnimationPage =====
-sealed class AnimationPage : Component
-{
-    public override Element Render()
-    {
-        return ScrollView(
-            new BoxEl
-            {
-                Direction = 1,
-                Gap = 18f,
-                Padding = Edges4.All(24),
-                Grow = 1f,
-                Children =
-                [
-                    Heading("Animation"),
-                    Text("Declarative motion hooks animate a component's OWN node. Each demo below is its own little sub-component so the hook has a single element to drive. Keyframes loop, transitions play once on mount, springs settle physically, and eased values interpolate color."),
-
-                    DemoBlock(
-                        "Looping pulse",
-                        "UseKeyframes drives ScaleX and ScaleY on a continuous loop, easing the box larger then back.",
-                        Embed.Comp(() => new AnimationPage_Pulse())),
-
-                    DemoBlock(
-                        "Fade + slide in",
-                        "UseTransition animates Opacity 0 -> 1 and TranslateY 16 -> 0 once when the element mounts.",
-                        Embed.Comp(() => new AnimationPage_FadeIn())),
-
-                    DemoBlock(
-                        "Spring on click",
-                        "Clicking flips a UseState bool; UseSpring snaps ScaleX/ScaleY toward the new target with a bouncy response.",
-                        Embed.Comp(() => new AnimationPage_SpringToggle())),
-
-                    DemoBlock(
-                        "Eased color",
-                        "UseAnimatedValue eases a 0..1 driver over 300ms; the Fill is a ColorF.Lerp between grey and the accent.",
-                        Embed.Comp(() => new AnimationPage_ColorEase()))
-                ]
-            });
-    }
-
-    Element DemoBlock(string title, string desc, Element demo)
-    {
-        return new BoxEl
-        {
-            Direction = 1,
-            Gap = 10f,
-            Padding = Edges4.All(16),
-            Fill = Theme.ControlFill,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Children =
-            [
-                new TextEl(title) { Size = 18f, Bold = true, Color = Theme.WindowText },
-                new TextEl(desc) { Size = 13f, Color = Theme.ControlText },
-                new BoxEl
-                {
-                    Direction = 0,
-                    AlignItems = FlexAlign.Center,
-                    Justify = FlexJustify.Start,
-                    Padding = Edges4.All(12),
-                    MinHeight = 96f,
-                    Children = [demo]
-                }
-            ]
-        };
-    }
-}
-
-sealed class AnimationPage_Pulse : Component
-{
-    public override Element Render()
-    {
-        UseKeyframes(AnimChannel.ScaleX, [
-            new(0f, 1f, Easing.EaseInOut),
-            new(0.5f, 1.25f, Easing.EaseInOut),
-            new(1f, 1f, Easing.EaseInOut)
-        ], 1400f, loop: true, "pulse");
-
-        UseKeyframes(AnimChannel.ScaleY, [
-            new(0f, 1f, Easing.EaseInOut),
-            new(0.5f, 1.25f, Easing.EaseInOut),
-            new(1f, 1f, Easing.EaseInOut)
-        ], 1400f, loop: true, "pulse");
-
-        return new BoxEl
-        {
-            Width = 60f,
-            Height = 60f,
-            Fill = Theme.Accent,
-            Corners = CornerRadius4.All(12f),
-        };
-    }
-}
-
-sealed class AnimationPage_FadeIn : Component
-{
-    public override Element Render()
-    {
-        UseTransition(AnimChannel.Opacity, 0f, 1f, 500f, Easing.EaseOut, "mount");
-        UseTransition(AnimChannel.TranslateY, 16f, 0f, 500f, Easing.EaseOut, "mount");
-
-        return new BoxEl
-        {
-            Width = 160f,
-            Height = 60f,
-            Padding = Edges4.All(12),
-            Fill = Theme.ControlFillHover,
-            BorderColor = Theme.AccentText,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            AlignItems = FlexAlign.Center,
-            Justify = FlexJustify.Center,
-            Children =
-            [
-                new TextEl("Faded in") { Size = 14f, Color = Theme.WindowText }
-            ]
-        };
-    }
-}
-
-sealed class AnimationPage_SpringToggle : Component
-{
-    public override Element Render()
-    {
-        var (on, setOn) = UseState(false);
-
-        UseSpring(AnimChannel.ScaleX, on ? 1.2f : 1f, SpringParams.FromResponse(0.3f, 0.5f), on);
-        UseSpring(AnimChannel.ScaleY, on ? 1.2f : 1f, SpringParams.FromResponse(0.3f, 0.5f), on);
-
-        return Button.Standard(on ? "Spring back" : "Spring up", () => setOn(!on));
-    }
-}
-
-sealed class AnimationPage_ColorEase : Component
-{
-    public override Element Render()
-    {
-        var (on, setOn) = UseState(false);
-        float t = UseAnimatedValue(on ? 1f : 0f, 300f);
-
-        var grey = ColorF.FromRgba(80, 80, 88);
-        var fill = ColorF.Lerp(grey, Theme.Accent, t);
-
-        return new BoxEl
-        {
-            Direction = 0,
-            Gap = 14f,
-            AlignItems = FlexAlign.Center,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 80f,
-                    Height = 60f,
-                    Fill = fill,
-                    Corners = CornerRadius4.All(10f),
-                },
-                Button.Accent(on ? "To grey" : "To accent", () => setOn(!on))
-            ]
-        };
-    }
-}
+// ===== AnimationPage lives in AnimationPage.cs — the complete AnimEngine showcase =====
 
 // ===== CompositorPage =====
 sealed class CompositorPage : Component
@@ -1500,308 +1358,418 @@ sealed class CompositorPage : Component
 }
 
 // ===== StatePage =====
+// The signals-first state model, demonstrated end to end: the three update mechanisms (binding / granular re-render /
+// reactive control flow), the state hooks (UseState, UseSignal, UseComputed, UseReducer, UseContext), and live
+// render-count instrumentation that PROVES which path re-renders. Canon: docs/guide/reactivity.md.
 sealed class StatePage : Component
 {
     public static readonly Context<int> ThemeLevel = new(1);
 
-    Element DemoBlock(string label, string desc, Element body) =>
-        new BoxEl
-        {
-            Direction = 1,
-            Gap = 10f,
-            Padding = Edges4.All(18),
-            Fill = Theme.ControlFill,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Children =
-            [
-                new TextEl(label) { Size = 16f, Bold = true, Color = Theme.WindowText },
-                new TextEl(desc) { Size = 12.5f, Color = Theme.ControlText with { A = 0.75f } },
-                body
-            ],
-        };
-
-    Element CounterDemo()
-    {
-        var (count, setCount) = UseState(0);
-        return DemoBlock(
-            "1 — UseState counter",
-            "A single piece of local state. The +/- buttons call setCount to drive a re-render.",
-            new BoxEl
-            {
-                Direction = 0,
-                Gap = 14f,
-                AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    IconButton.Create("-", () => setCount(count - 1), IconButton.DefaultStyle with { Size = 40f }),
-                    new BoxEl
-                    {
-                        MinWidth = 84f,
-                        Justify = FlexJustify.Center,
-                        AlignItems = FlexAlign.Center,
-                        Padding = Edges4.All(8),
-                        Fill = Theme.WindowBackground,
-                        Corners = CornerRadius4.All(8f),
-                        Children = [new TextEl(count.ToString()) { Size = 28f, Bold = true, Color = Theme.Accent }],
-                    },
-                    IconButton.Create("+", () => setCount(count + 1), IconButton.DefaultStyle with { Size = 40f })
-                ],
-            });
-    }
-
-    Element ReducerDemo()
-    {
-        var (s, dispatch) = UseReducer<int, int>((st, a) => st + a, 0);
-        return DemoBlock(
-            "2 — UseReducer",
-            "State transitions flow through a reducer. Each button dispatches a delta action.",
-            new BoxEl
-            {
-                Direction = 0,
-                Gap = 12f,
-                AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    Button.Accent("dispatch +5", () => dispatch(5)),
-                    Button.Standard("dispatch -3", () => dispatch(-3)),
-                    new BoxEl
-                    {
-                        MinWidth = 110f,
-                        Justify = FlexJustify.Center,
-                        AlignItems = FlexAlign.Center,
-                        Padding = Edges4.All(8),
-                        Fill = Theme.WindowBackground,
-                        Corners = CornerRadius4.All(8f),
-                        Children = [new TextEl($"total = {s}") { Size = 18f, Bold = true, Color = Theme.WindowText }],
-                    }
-                ],
-            });
-    }
-
-    Element NestedDemo() =>
-        DemoBlock(
-            "3 — Nested independent components",
-            "Two chips, each its own Component with its own UseState. Clicking one never affects the other.",
-            new BoxEl
-            {
-                Direction = 0,
-                Gap = 16f,
-                Wrap = true,
-                Children =
-                [
-                    Embed.Comp(() => new StatePage_Chip()),
-                    Embed.Comp(() => new StatePage_Chip()),
-                    Embed.Comp(() => new StatePage_Chip())
-                ],
-            });
-
-    Element ContextDemo()
-    {
-        var (level, setLevel) = UseState(1);
-        return DemoBlock(
-            "4 — Context",
-            "The page provides a value; a descendant reads it via UseContext without prop drilling.",
-            new BoxEl
-            {
-                Direction = 1,
-                Gap = 12f,
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Direction = 0,
-                        Gap = 10f,
-                        AlignItems = FlexAlign.Center,
-                        Children =
-                        [
-                            new TextEl("provided level:") { Size = 13f, Color = Theme.ControlText },
-                            Button.Standard("- level", () => setLevel(level - 1)),
-                            new TextEl(level.ToString()) { Size = 18f, Bold = true, Color = Theme.Accent },
-                            Button.Standard("+ level", () => setLevel(level + 1))
-                        ],
-                    },
-                    Ctx.Provide(ThemeLevel, level, Embed.Comp(() => new StatePage_Consumer()))
-                ],
-            });
-    }
-
     public override Element Render()
     {
-        return ScrollView(
-            new BoxEl
-            {
-                Direction = 1,
-                Gap = 16f,
-                Padding = Edges4.All(24),
-                Grow = 1f,
-                Children =
-                [
-                    Heading("State & components"),
-                    new TextEl("How fluent-gpu manages local state and composition: UseState for simple values, UseReducer for action-driven transitions, independent nested components, and Context for ambient values shared down the tree.")
-                    {
-                        Size = 14f,
-                        Color = Theme.ControlText with { A = 0.85f },
-                    },
-                    Embed.Comp(() => new StatePage_CounterHost()),
-                    Embed.Comp(() => new StatePage_ReducerHost()),
-                    NestedDemo(),
-                    Embed.Comp(() => new StatePage_ContextHost())
-                ],
-            });
+        return GalleryPage.ShellKeyed("state", "State & components",
+            "A change reaches pixels through one mechanism: a signal. Reading a signal subscribes the current reactive " +
+            "computation; writing it re-runs only the computations that read it — a property binding, one component's " +
+            "render, or a control-flow boundary. No full-tree re-render, no global dirty flag. Each demo below shows " +
+            "its own render counter as proof of what actually re-ran.",
+            ModelTable(),
+            new BoxEl { Height = 8 },
+            Embed.Comp(() => new StatePage_CounterHost()),
+            Embed.Comp(() => new StatePage_SignalHost()),
+            Embed.Comp(() => new StatePage_BindHost()),
+            Embed.Comp(() => new StatePage_MemoHost()),
+            Embed.Comp(() => new StatePage_ShowHost()),
+            Embed.Comp(() => new StatePage_ForHost()),
+            Embed.Comp(() => new StatePage_ReducerHost()),
+            NestedDemo(),
+            Embed.Comp(() => new StatePage_ContextHost()),
+            RulesCard());
     }
+
+    // The three update mechanisms, cheapest first (docs/guide/reactivity.md §"The three update mechanisms").
+    static Element ModelTable() => new BoxEl
+    {
+        Direction = 1, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+        Fill = Tok.FillSolidBase, ClipToBounds = true,
+        Children =
+        [
+            TableRow(true, "Mechanism", "Re-runs", "Cost"),
+            Divider(),
+            TableRow(false, "Binding — TransformBind / OpacityBind / FillBind / TextBind", "one effect → one node property", "compositor-only (no render, no reconcile, no layout)"),
+            Divider(),
+            TableRow(false, "Granular re-render — UseState / UseSignal read in Render()", "the owning component's subtree", "render + reconcile + scoped relayout of that subtree"),
+            Divider(),
+            TableRow(false, "Reactive control flow — Flow.For / Flow.Show", "one boundary effect → keyed diff", "structural reconcile of that boundary only"),
+        ],
+    };
+
+    static Element TableRow(bool header, string a, string b, string c)
+    {
+        TextEl Cell(string s) => header ? BodyStrong(s) : new TextEl(s) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap };
+        return new BoxEl
+        {
+            Direction = 0, Gap = 12f, Padding = new Edges4(16, 10, 16, 10), AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new BoxEl { Width = 360f, Children = [Cell(a)] },
+                new BoxEl { Width = 230f, Children = [Cell(b)] },
+                new BoxEl { Grow = 1f, Children = [Cell(c)] },
+            ],
+        };
+    }
+
+    static Element NestedDemo() => ControlExample.Build("Nested independent components",
+        new BoxEl
+        {
+            Direction = 0, Gap = 16f, Wrap = true,
+            Children =
+            [
+                Embed.Comp(() => new StatePage_Chip()),
+                Embed.Comp(() => new StatePage_Chip()),
+                Embed.Comp(() => new StatePage_Chip()),
+            ],
+        },
+        description: "Each chip is its own Component with its own UseState. Clicking one re-renders only that chip — parents and siblings never run (there is no prop-diffing cascade).",
+        code: """
+        // Each chip owns its state; a parent re-render never re-renders a child component.
+        HStack(16,
+            Embed.Comp(() => new Chip()),
+            Embed.Comp(() => new Chip()),
+            Embed.Comp(() => new Chip()))
+        """);
+
+    static Element RulesCard() => new BoxEl
+    {
+        Direction = 1, Gap = 8f, Padding = Edges4.All(18), Margin = new Edges4(0, 8, 0, 0),
+        Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Fill = Tok.FillCardDefault,
+        Children =
+        [
+            BodyStrong("Rules that prevent most state bugs"),
+            Rule(".Value subscribes the current computation; .Peek() reads without subscribing. A bind thunk must read .Value."),
+            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bind (TextBind = () => sig.Value), never Ui.Text(sig.Value)."),
+            Rule("Never write a signal during render (infinite loop) — write from an event handler or UseEffect."),
+            Rule("Parent→child data flows through signals or context, never constructor args — those freeze at mount."),
+            Rule("Prefer Transform/Opacity/Fill binds for hot values; Width/Height/Text binds cost a scoped relayout."),
+            Rule("Hooks run in stable call order — no hooks inside if/loops."),
+        ],
+    };
+
+    static Element Rule(string text) => new BoxEl
+    {
+        Direction = 0, Gap = 8f, AlignItems = FlexAlign.Start,
+        Children =
+        [
+            new TextEl("•") { Size = 13f, Color = Tok.AccentDefault },
+            new TextEl(text) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Grow = 1f },
+        ],
+    };
 }
 
+/// <summary>Granular re-render: UseState. The render counter increments per click — exactly this card re-ran.</summary>
 sealed class StatePage_CounterHost : Component
 {
-    Element DemoBlock(string label, string desc, Element body) =>
-        new BoxEl
-        {
-            Direction = 1,
-            Gap = 10f,
-            Padding = Edges4.All(18),
-            Fill = Theme.ControlFill,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Children =
-            [
-                new TextEl(label) { Size = 16f, Bold = true, Color = Theme.WindowText },
-                new TextEl(desc) { Size = 12.5f, Color = Theme.ControlText with { A = 0.75f } },
-                body
-            ],
-        };
+    int _renders;
 
     public override Element Render()
     {
+        _renders++;
         var (count, setCount) = UseState(0);
-        return DemoBlock(
-            "1 — UseState counter",
-            "A single piece of local state. The +/- buttons call setCount to drive a re-render.",
+        return ControlExample.Build("Granular re-render — UseState",
             new BoxEl
             {
-                Direction = 0,
-                Gap = 14f,
-                AlignItems = FlexAlign.Center,
+                Direction = 0, Gap = 14f, AlignItems = FlexAlign.Center,
                 Children =
                 [
-                    IconButton.Create("-", () => setCount(count - 1), IconButton.DefaultStyle with { Size = 40f }),
+                    IconButton.Create(Icons.Remove, () => setCount(count - 1)),
                     new BoxEl
                     {
-                        MinWidth = 84f,
-                        Justify = FlexJustify.Center,
-                        AlignItems = FlexAlign.Center,
-                        Padding = Edges4.All(8),
-                        Fill = Theme.WindowBackground,
-                        Corners = CornerRadius4.All(8f),
-                        Children = [new TextEl(count.ToString()) { Size = 28f, Bold = true, Color = Theme.Accent }],
+                        MinWidth = 84f, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center, Padding = Edges4.All(8),
+                        Fill = Tok.FillControlDefault, Corners = Radii.ControlAll,
+                        Children = [new TextEl(count.ToString()) { Size = 28f, Bold = true, Color = Tok.AccentDefault }],
                     },
-                    IconButton.Create("+", () => setCount(count + 1), IconButton.DefaultStyle with { Size = 40f })
+                    IconButton.Create(Icons.Add, () => setCount(count + 1)),
                 ],
-            });
+            },
+            description: "Reading count subscribes this component's render-effect, so setCount re-renders this card's subtree — and nothing else. Watch the render counter follow the clicks.",
+            output: VStack(4, BodyStrong($"count = {count}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var (count, setCount) = UseState(0);   // reading `count` subscribes THIS component
+
+            HStack(14,
+                IconButton.Create(Icons.Remove, () => setCount(count - 1)),
+                Text($"{count}"),
+                IconButton.Create(Icons.Add, () => setCount(count + 1)))
+            """);
     }
 }
 
-sealed class StatePage_ReducerHost : Component
+/// <summary>UseSignal + TextBind: the text updates while the host's render counter stays at 1 forever.</summary>
+sealed class StatePage_SignalHost : Component
 {
-    Element DemoBlock(string label, string desc, Element body) =>
-        new BoxEl
-        {
-            Direction = 1,
-            Gap = 10f,
-            Padding = Edges4.All(18),
-            Fill = Theme.ControlFill,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Children =
-            [
-                new TextEl(label) { Size = 16f, Bold = true, Color = Theme.WindowText },
-                new TextEl(desc) { Size = 12.5f, Color = Theme.ControlText with { A = 0.75f } },
-                body
-            ],
-        };
+    int _renders;
 
     public override Element Render()
     {
-        var (s, dispatch) = UseReducer<int, int>((st, a) => st + a, 0);
-        return DemoBlock(
-            "2 — UseReducer",
-            "State transitions flow through a reducer. Each button dispatches a delta action.",
+        _renders++;
+        var n = UseSignal(0);
+        return ControlExample.Build("Signal + TextBind — update text without a re-render",
             new BoxEl
             {
-                Direction = 0,
-                Gap = 12f,
-                AlignItems = FlexAlign.Center,
-                Wrap = true,
+                Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
+                Children =
+                [
+                    Button.Accent("n.Value++", () => n.Value = n.Peek() + 1),
+                    Button.Standard("Reset", () => n.Value = 0),
+                ],
+            },
+            description: "Render() never reads n.Value, so writes re-run only the TextBind thunk — one effect, one text node. The render counter stays at 1 no matter how many times you click.",
+            output: VStack(4, GalleryPage.LiveText(() => $"n = {n.Value}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var n = UseSignal(0);                    // a cell this component OWNS but does not read in Render()
+
+            Button.Accent("n.Value++", () => n.Value = n.Peek() + 1);
+
+            new TextEl("") { TextBind = () => $"n = {n.Value}" };   // only this thunk re-runs on writes
+            """);
+    }
+}
+
+/// <summary>Compositor-only bindings: a FloatSignal drives TransformBind/FillBind — no render, no layout.</summary>
+sealed class StatePage_BindHost : Component
+{
+    static readonly ColorF Grey = ColorF.FromRgba(96, 96, 104);
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var x = UseFloatSignal(0.3f);
+        var track = new BoxEl
+        {
+            Width = 220f, Height = 36f, Corners = Radii.ControlAll,
+            Fill = Tok.FillControlDefault, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 32f, Height = 32f, Margin = Edges4.All(2), Corners = Radii.ControlAll,
+                    FillBind = () => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value),
+                    TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),
+                },
+            ],
+        };
+        return ControlExample.Build("Compositor-only binding — Slider.Bind + TransformBind",
+            VStack(14, Slider.Bind(x), track),
+            description: "The slider drag writes the FloatSignal (no setState per move); the box rides TransformBind + FillBind. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
+            output: VStack(4, GalleryPage.LiveText(() => $"x = {x.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
+
+            Slider.Bind(x);
+
+            new BoxEl
+            {
+                Width = 32, Height = 32,
+                TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),  // compositor-only
+                FillBind = () => ColorF.Lerp(grey, Tok.AccentDefault, x.Value),  // compositor-only
+            };
+            """);
+    }
+}
+
+/// <summary>Derived state: UseComputed memo — lazy, cached, recomputed when an input signal changes.</summary>
+sealed class StatePage_MemoHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var a = UseSignal(2);
+        var b = UseSignal(3);
+        var product = UseComputed(() => a.Value * b.Value);
+        return ControlExample.Build("Derived state — UseComputed (memo)",
+            new BoxEl
+            {
+                Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+                Children =
+                [
+                    Button.Standard("a++", () => a.Value = a.Peek() + 1),
+                    Button.Standard("b++", () => b.Value = b.Peek() + 1),
+                ],
+            },
+            description: "A memo caches its value and recomputes lazily when an input signal changes; readers subscribe through it. The readout is a TextBind through the memo — the host still never re-renders.",
+            output: VStack(4, GalleryPage.LiveText(() => $"{a.Value} × {b.Value} = {product.Value}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var a = UseSignal(2);
+            var b = UseSignal(3);
+            var product = UseComputed(() => a.Value * b.Value);   // Memo<int>: cached, lazy
+
+            new TextEl("") { TextBind = () => $"{a.Value} × {b.Value} = {product.Value}" };
+            """);
+    }
+}
+
+/// <summary>Reactive control flow: Flow.Show mounts/unmounts a branch via a boundary effect — no host re-render.</summary>
+sealed class StatePage_ShowHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var open = UseSignal(false);
+        var panel = new BoxEl
+        {
+            Padding = Edges4.All(12), Corners = Radii.ControlAll,
+            Fill = Tok.AccentSubtle, BorderColor = Tok.AccentDefault with { A = 0.5f }, BorderWidth = 1f,
+            Children = [Body("This branch is mounted. Toggling unmounts it — its component state is discarded, not hidden.")],
+        };
+        var fallback = Caption("Hidden — the branch is unmounted.").Tertiary();
+        return ControlExample.Build("Reactive control flow — Flow.Show",
+            VStack(10,
+                Button.Standard("Toggle details", () => open.Value = !open.Peek()),
+                Flow.Show(() => open.Value, panel, fallback)),
+            description: "Flow.Show is a boundary effect: when the condition signal flips, it swaps its own children through the keyed reconciler. The enclosing component does not re-render.",
+            output: VStack(4, GalleryPage.LiveText(() => open.Value ? "open" : "closed"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var open = UseSignal(false);
+
+            VStack(10,
+                Button.Standard("Toggle details", () => open.Value = !open.Peek()),
+                Flow.Show(() => open.Value, detailsPanel, fallback));
+            """);
+    }
+}
+
+/// <summary>Reactive control flow: Flow.For keyed list — add/remove/reverse diff rows by key, no host re-render.</summary>
+sealed class StatePage_ForHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var items = UseSignal(new List<string> { "Alpha", "Beta", "Gamma" });
+        var nextId = UseRef(1);
+        void Mutate(Action<List<string>> edit)
+        {
+            var next = new List<string>(items.Peek());
+            edit(next);
+            items.Value = next;   // a NEW list instance — signal writes are value-equality gated
+        }
+        return ControlExample.Build("Reactive control flow — Flow.For (keyed list)",
+            VStack(12,
+                new BoxEl
+                {
+                    Direction = 0, Gap = 8f,
+                    Children =
+                    [
+                        Button.Standard("Add", () => Mutate(l => l.Add($"Item {nextId.Value++}"))),
+                        Button.Standard("Remove first", () => Mutate(l => { if (l.Count > 0) l.RemoveAt(0); })),
+                        Button.Standard("Reverse", () => Mutate(l => l.Reverse())),
+                    ],
+                },
+                Flow.For(() => items.Value.Count, i => Row(items.Value[i]), keyOf: i => items.Value[i])),
+            description: "Flow.For diffs its rows by key when the list signal changes: adds mount, removes unmount, moves reorder — row state is preserved by key, and the host never re-renders.",
+            output: VStack(4, GalleryPage.LiveText(() => $"{items.Value.Count} items"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var items = UseSignal(new List<string> { "Alpha", "Beta", "Gamma" });
+
+            Flow.For(() => items.Value.Count,
+                     i => Row(items.Value[i]),
+                     keyOf: i => items.Value[i]);   // keyed: moves preserve row state
+
+            // mutate by writing a NEW list instance:
+            var next = new List<string>(items.Peek()); next.Reverse(); items.Value = next;
+            """);
+    }
+
+    static Element Row(string label) => new BoxEl
+    {
+        Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, MinHeight = 32f, MaxWidth = 280f,
+        Padding = new Edges4(12, 4, 12, 4), Margin = new Edges4(0, 0, 0, 4), Corners = Radii.ControlAll,
+        Fill = Tok.FillControlDefault, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f,
+        Children =
+        [
+            Icon(Icons.Tag, 12f).Foreground(Tok.AccentDefault),
+            new TextEl(label) { Size = 13f, Color = Tok.TextPrimary },
+        ],
+    };
+}
+
+/// <summary>Folded state: UseReducer — transitions flow through a reducer; dispatch applies immediately.</summary>
+sealed class StatePage_ReducerHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var (s, dispatch) = UseReducer<int, int>((st, a) => st + a, 0);
+        return ControlExample.Build("Folded state — UseReducer",
+            new BoxEl
+            {
+                Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Wrap = true,
                 Children =
                 [
                     Button.Accent("dispatch +5", () => dispatch(5)),
-                    Button.Standard("dispatch -3", () => dispatch(-3)),
-                    new BoxEl
-                    {
-                        MinWidth = 110f,
-                        Justify = FlexJustify.Center,
-                        AlignItems = FlexAlign.Center,
-                        Padding = Edges4.All(8),
-                        Fill = Theme.WindowBackground,
-                        Corners = CornerRadius4.All(8f),
-                        Children = [new TextEl($"total = {s}") { Size = 18f, Bold = true, Color = Theme.WindowText }],
-                    }
+                    Button.Standard("dispatch −3", () => dispatch(-3)),
                 ],
-            });
+            },
+            description: "State transitions flow through a reducer function; each button dispatches a delta action. Reading the folded state subscribes the component, so dispatch re-renders this card.",
+            output: VStack(4, BodyStrong($"total = {s}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var (s, dispatch) = UseReducer<int, int>((state, action) => state + action, 0);
+
+            HStack(12,
+                Button.Accent("dispatch +5", () => dispatch(5)),
+                Button.Standard("dispatch −3", () => dispatch(-3)))
+            """);
     }
 }
 
+/// <summary>Context: a provider stores a signal per node; consumers subscribe — a change re-renders exactly them.</summary>
 sealed class StatePage_ContextHost : Component
 {
-    Element DemoBlock(string label, string desc, Element body) =>
-        new BoxEl
-        {
-            Direction = 1,
-            Gap = 10f,
-            Padding = Edges4.All(18),
-            Fill = Theme.ControlFill,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            Children =
-            [
-                new TextEl(label) { Size = 16f, Bold = true, Color = Theme.WindowText },
-                new TextEl(desc) { Size = 12.5f, Color = Theme.ControlText with { A = 0.75f } },
-                body
-            ],
-        };
-
     public override Element Render()
     {
         var (level, setLevel) = UseState(1);
-        return DemoBlock(
-            "4 — Context",
-            "The page provides a value; a descendant reads it via UseContext without prop drilling.",
+        return ControlExample.Build("Ambient state — Context (Ctx.Provide + UseContext)",
             new BoxEl
             {
-                Direction = 1,
-                Gap = 12f,
+                Direction = 1, Gap = 12f,
                 Children =
                 [
                     new BoxEl
                     {
-                        Direction = 0,
-                        Gap = 10f,
-                        AlignItems = FlexAlign.Center,
+                        Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
                         Children =
                         [
-                            new TextEl("provided level:") { Size = 13f, Color = Theme.ControlText },
-                            Button.Standard("- level", () => setLevel(level - 1)),
-                            new TextEl(level.ToString()) { Size = 18f, Bold = true, Color = Theme.Accent },
-                            Button.Standard("+ level", () => setLevel(level + 1))
+                            new TextEl("provided level:") { Size = 13f, Color = Tok.TextSecondary },
+                            Button.Standard("− level", () => setLevel(level - 1)),
+                            new TextEl(level.ToString()) { Size = 18f, Bold = true, Color = Tok.AccentDefault },
+                            Button.Standard("+ level", () => setLevel(level + 1)),
                         ],
                     },
-                    Ctx.Provide(StatePage.ThemeLevel, level, Embed.Comp(() => new StatePage_Consumer()))
+                    Ctx.Provide(StatePage.ThemeLevel, level, Embed.Comp(() => new StatePage_Consumer())),
                 ],
-            });
+            },
+            description: "The provider stores a signal per node; UseContext resolves the nearest provider by walking the scene tree and subscribes — a value change re-renders exactly the consumers, with no prop drilling.",
+            code: """
+            public static readonly Context<int> ThemeLevel = new(1);   // a channel + default
+
+            Ctx.Provide(StatePage.ThemeLevel, level, Embed.Comp(() => new Consumer()));
+
+            sealed class Consumer : Component
+            {
+                public override Element Render()
+                {
+                    var x = UseContext(StatePage.ThemeLevel);   // reads + subscribes
+                    return Ui.Text($"level {x}");
+                }
+            }
+            """);
     }
 }
 
@@ -1815,20 +1783,14 @@ sealed class StatePage_Chip : Component
         var (n, setN) = UseState(0);
         return new BoxEl
         {
-            Direction = 1,
-            Gap = 8f,
-            Padding = Edges4.All(14),
-            Fill = Theme.WindowBackground,
-            BorderColor = Theme.ControlBorder,
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(10f),
-            AlignItems = FlexAlign.Center,
-            MinWidth = 130f,
+            Direction = 1, Gap = 8f, Padding = Edges4.All(14),
+            Fill = Tok.FillSolidBase, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+            Corners = Radii.OverlayAll, AlignItems = FlexAlign.Center, MinWidth = 130f,
             Children =
             [
-                new TextEl($"chip #{_id}") { Size = 12f, Color = Theme.ControlText with { A = 0.7f } },
-                new TextEl(n.ToString()) { Size = 24f, Bold = true, Color = Theme.Accent },
-                Button.Standard($"count {n}", () => setN(n + 1))
+                new TextEl($"chip #{_id}") { Size = 12f, Color = Tok.TextTertiary },
+                new TextEl(n.ToString()) { Size = 24f, Bold = true, Color = Tok.AccentDefault },
+                Button.Standard($"count {n}", () => setN(n + 1)),
             ],
         };
     }
@@ -1841,20 +1803,14 @@ sealed class StatePage_Consumer : Component
         var x = UseContext(StatePage.ThemeLevel);
         return new BoxEl
         {
-            Direction = 0,
-            Gap = 10f,
-            AlignItems = FlexAlign.Center,
-            Padding = Edges4.All(12),
-            Fill = ColorF.Lerp(Theme.WindowBackground, Theme.Accent, 0.12f),
-            BorderColor = Theme.Accent with { A = 0.5f },
-            BorderWidth = 1f,
-            Corners = CornerRadius4.All(8f),
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, Padding = Edges4.All(12),
+            Fill = Tok.AccentSubtle, BorderColor = Tok.AccentDefault with { A = 0.5f }, BorderWidth = 1f,
+            Corners = Radii.ControlAll,
             Children =
             [
-                new TextEl("consumer reads:") { Size = 13f, Color = Theme.ControlText },
-                new TextEl($"level {x}") { Size = 18f, Bold = true, Color = Theme.Accent }
+                new TextEl("consumer reads:") { Size = 13f, Color = Tok.TextSecondary },
+                new TextEl($"level {x}") { Size = 18f, Bold = true, Color = Tok.AccentDefault },
             ],
         };
     }
 }
-

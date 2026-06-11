@@ -34,7 +34,11 @@ public static class Modifiers
     // Text
     public static TextEl Foreground(this TextEl t, ColorF c) => t with { Color = c };
     public static TextEl FontSize(this TextEl t, float size) => t with { Size = size };
-    public static TextEl Strong(this TextEl t) => t with { Bold = true };
+    /// <summary>WinUI BodyStrong is SemiBold 600 (BaseTextBlockStyle FontWeight, TextBlock_themeresources.xaml:13)
+    /// — Strong() means SemiBold, not Bold 700. Use <see cref="FontWeight"/> or <c>Bold = true</c> for 700.</summary>
+    public static TextEl Strong(this TextEl t) => t with { Weight = 600 };
+    /// <summary>Numeric font weight (WinUI FontWeight; the value IS the DWrite weight, e.g. 350 SemiLight, 600 SemiBold).</summary>
+    public static TextEl FontWeight(this TextEl t, ushort weight) => t with { Weight = weight };
     public static TextEl Font(this TextEl t, string family) => t with { FontFamily = family };
     public static TextEl Wrapped(this TextEl t, TextWrap wrap = TextWrap.Wrap) => t with { Wrap = wrap };
     public static TextEl NoWrap(this TextEl t) => t with { Wrap = TextWrap.NoWrap };

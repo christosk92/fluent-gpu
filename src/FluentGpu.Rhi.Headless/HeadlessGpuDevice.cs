@@ -23,6 +23,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawGradientRectCmd> _gradients = new(16);
     private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
     private readonly List<PushLayerCmd> _layers = new(8);
+    private readonly List<DrawTabShapeCmd> _tabShapes = new(8);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
     private readonly List<int> _evictions = new(16);
@@ -38,6 +39,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawImageCmd> LastImages => _imageDraws;
     /// <summary>SDF outlines (focus rings / stroked borders) drawn this frame.</summary>
     public IReadOnlyList<DrawRoundRectStrokeCmd> LastStrokes => _strokes;
+    /// <summary>The clip-stack depth at the moment each stroke was decoded (parallel to <see cref="LastStrokes"/>) —
+    /// asserts a focus ring records OUTSIDE its ClipsToBounds node's own clip (depth of the parent context).</summary>
+    public IReadOnlyList<int> LastStrokeClipDepths => _strokeClipDepth;
+    private readonly List<int> _strokeClipDepth = new(16);
     /// <summary>Soft drop shadows drawn this frame.</summary>
     public IReadOnlyList<DrawShadowCmd> LastShadows => _shadows;
     /// <summary>Circular-arc strokes (ProgressRing) drawn this frame.</summary>
@@ -48,9 +53,13 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawGradientRectCmd> LastGradients => _gradients;
     /// <summary>Gradient-tinted border strokes (WinUI elevation borders) drawn this frame.</summary>
     public IReadOnlyList<DrawGradientStrokeCmd> LastGradientStrokes => _gradientStrokes;
-    /// <summary>Backdrop-effect layers pushed this frame (acrylic).</summary>
+    /// <summary>Layers pushed this frame — acrylic (Kind 0, blur/tint recipe fields) AND flat opacity groups
+    /// (Kind 1, GroupAlpha) ride the same opcode; assert on <see cref="PushLayerCmd.Kind"/>/<c>GroupAlpha</c>.</summary>
     public IReadOnlyList<PushLayerCmd> LastLayers => _layers;
-    /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame.</summary>
+    /// <summary>WinUI selected-tab shapes drawn this frame (DrawTabShape — rounded-top + inverted bottom flares).</summary>
+    public IReadOnlyList<DrawTabShapeCmd> LastTabShapes => _tabShapes;
+    /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame. Rounded (tier-2) clips are visible
+    /// on <see cref="LastClips"/> entries via <see cref="ClipCmd.CornerRadius"/>/<c>RoundedRect</c>.</summary>
     public int ClipBalance { get; private set; }
     /// <summary>PushLayer/PopLayer balance check — must be 0 at end of a well-formed frame.</summary>
     public int LayerBalance { get; private set; }
@@ -79,12 +88,14 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _clips.Clear();
         _imageDraws.Clear();
         _strokes.Clear();
+        _strokeClipDepth.Clear();
         _shadows.Clear();
         _arcs.Clear();
         _polylines.Clear();
         _gradients.Clear();
         _gradientStrokes.Clear();
         _layers.Clear();
+        _tabShapes.Clear();
         LastClear = ctx.Clear;
         FrameCount++;
         int balance = 0;
@@ -119,6 +130,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     break;
                 case DrawOp.DrawRoundRectStroke:
                     _strokes.Add(MemoryMarshal.Read<DrawRoundRectStrokeCmd>(drawList.Slice(pos)));
+                    _strokeClipDepth.Add(balance);
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
                     break;
                 case DrawOp.DrawShadow:
@@ -149,6 +161,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     layerBalance--;
+                    break;
+                case DrawOp.DrawTabShape:
+                    _tabShapes.Add(MemoryMarshal.Read<DrawTabShapeCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawTabShapeCmd>();
                     break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)

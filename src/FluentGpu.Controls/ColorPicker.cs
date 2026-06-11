@@ -11,9 +11,38 @@ namespace FluentGpu.Controls;
 /// since the engine has no 2-D gradient), a segmented rainbow hue rail (≤4-stop gradients ×6 to span 360°), an optional
 /// alpha rail, a preview swatch, and editable Hex / R / G / B channel fields. HSV is the internal editing space (so hue is
 /// stable at the grays); the selected color is written to a caller <see cref="Signal{T}"/> so a page can read it.
+///
+/// CUSTOMIZATION goes through <see cref="Parts"/> (the one generic door — no per-feature knobs): every named template
+/// part accepts arbitrary element props; the scrub mechanics and value-driven geometry are re-asserted after any
+/// modifier, so customization can restyle everything but break nothing.
 /// </summary>
 public sealed class ColorPicker : Component
 {
+    // Template parts (the WinUI x:Name vocabulary; see TemplateParts). Each part's doc lists the props the control
+    // OWNS (re-asserted after any modifier — a Parts customization cannot win those).
+    /// <summary>The 2-D saturation/value box (WinUI ColorSpectrum). Owned: OnPointerDown/OnDrag (the SV scrub maps
+    /// pointer position against the declared size), Width, Height, Role, Children (the two value-driven gradient
+    /// layers + the positioned thumb).</summary>
+    public const string PartSpectrum = "Spectrum";
+    /// <summary>The 16×16 spectrum selection ring (WinUI SelectionEllipsePanel). Owned: OffsetX/OffsetY (the value
+    /// position).</summary>
+    public const string PartSpectrumThumb = "SpectrumThumb";
+    /// <summary>The segmented rainbow hue rail (WinUI ThirdDimensionSlider). Owned: OnPointerDown/OnDrag (the hue
+    /// scrub maps pointer X against the declared width), Width, Role, Children (the gradient strip + the positioned
+    /// thumb).</summary>
+    public const string PartHueRail = "HueRail";
+    /// <summary>The hue rail thumb. Owned: OffsetX (the value position — the centering math assumes the stock
+    /// <see cref="Style.SliderThumbW"/>).</summary>
+    public const string PartHueThumb = "HueThumb";
+    /// <summary>The alpha rail (WinUI AlphaSlider; mounted only when <see cref="AlphaEnabled"/>). Owned:
+    /// OnPointerDown/OnDrag, Width, Role, Children (the underlay + the value-driven alpha gradient + the positioned
+    /// thumb).</summary>
+    public const string PartAlphaRail = "AlphaRail";
+    /// <summary>The alpha rail thumb. Owned: OffsetX (the value position).</summary>
+    public const string PartAlphaThumb = "AlphaThumb";
+    /// <summary>The preview swatch. Owned: Fill (the live color).</summary>
+    public const string PartSwatch = "Swatch";
+
     /// <summary>WinUI-aligned dimensions and brushes (ColorPicker.xaml / ColorPicker_themeresources.xaml).</summary>
     public sealed record Style
     {
@@ -47,9 +76,13 @@ public sealed class ColorPicker : Component
     public float SpectrumW = 256f;
     public float SpectrumH = 256f;
     public Style? StyleArg;
+    /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
+    /// <see cref="TemplateParts"/> for the contract. The Hex/R/G/B fields are composed <see cref="EditableText"/>
+    /// controls — their chrome is EditableText's own (not forwarded).</summary>
+    public TemplateParts? Parts;
 
-    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f, Style? style = null)
-        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH, StyleArg = style });
+    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f, Style? style = null, TemplateParts? parts = null)
+        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH, StyleArg = style, Parts = parts });
 
     static readonly ColorF White = ColorF.FromRgba(255, 255, 255);
     static readonly ColorF Black = ColorF.FromRgba(0, 0, 0);
@@ -92,6 +125,19 @@ public sealed class ColorPicker : Component
         // ── SV spectrum (white→hue ⊗ transparent→black) with a draggable 2-D thumb ──
         float thumbR = st.SpectrumThumbRadius;
         void SetSV(Point2 p) { sat.Value = Math.Clamp(p.X / SpectrumW, 0f, 1f); val.Value = Math.Clamp(1f - p.Y / SpectrumH, 0f, 1f); Push(); }
+        float svX = Math.Clamp(S * SpectrumW, thumbR, SpectrumW - thumbR) - thumbR;
+        float svY = Math.Clamp((1f - V) * SpectrumH, thumbR, SpectrumH - thumbR) - thumbR;
+        var svThumb = new BoxEl
+        {
+            Width = thumbR * 2f, Height = thumbR * 2f, ZStack = true,
+            OffsetX = svX,
+            OffsetY = svY,
+            Children =
+            [
+                new BoxEl { Width = thumbR * 2f, Height = thumbR * 2f, Corners = Radii.Circle(thumbR * 2f), BorderWidth = 2f, BorderColor = White, Fill = ColorF.Transparent },
+                new BoxEl { Width = 10f, Height = 10f, OffsetX = 4f, OffsetY = 4f, Corners = Radii.Circle(10f), BorderWidth = 1f, BorderColor = ColorF.FromRgba(0, 0, 0, 0x99), Fill = ColorF.Transparent },
+            ],
+        };
         var spectrum = new BoxEl
         {
             Width = SpectrumW, Height = SpectrumH, ZStack = true, Corners = Radii.OverlayAll, ClipToBounds = true,
@@ -100,18 +146,15 @@ public sealed class ColorPicker : Component
             [
                 new BoxEl { Width = SpectrumW, Height = SpectrumH, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, White), new GradientStop(1f, ColorF.FromHsv(H, 1f, 1f))) },
                 new BoxEl { Width = SpectrumW, Height = SpectrumH, Gradient = Ui.LinearGradient(90f, new GradientStop(0f, ClearBlack), new GradientStop(1f, Black)) },
-                new BoxEl
-                {
-                    Width = thumbR * 2f, Height = thumbR * 2f, ZStack = true,
-                    OffsetX = Math.Clamp(S * SpectrumW, thumbR, SpectrumW - thumbR) - thumbR,
-                    OffsetY = Math.Clamp((1f - V) * SpectrumH, thumbR, SpectrumH - thumbR) - thumbR,
-                    Children =
-                    [
-                        new BoxEl { Width = thumbR * 2f, Height = thumbR * 2f, Corners = Radii.Circle(thumbR * 2f), BorderWidth = 2f, BorderColor = White, Fill = ColorF.Transparent },
-                        new BoxEl { Width = 10f, Height = 10f, OffsetX = 4f, OffsetY = 4f, Corners = Radii.Circle(10f), BorderWidth = 1f, BorderColor = ColorF.FromRgba(0, 0, 0, 0x99), Fill = ColorF.Transparent },
-                    ],
-                },
+                Parts.Apply(PartSpectrumThumb, svThumb) with { OffsetX = svX, OffsetY = svY },
             ],
+        };
+        // Parts: restyle anything (corners, border, shadow…); the SV scrub mechanics + declared geometry always win.
+        spectrum = Parts.Apply(PartSpectrum, spectrum) with
+        {
+            Width = SpectrumW, Height = SpectrumH,
+            OnPointerDown = SetSV, OnDrag = SetSV, Role = AutomationRole.Slider,
+            Children = spectrum.Children,
         };
 
         // ── Hue rail: 6 adjacent ≤4-stop gradient segments span the full 360° (MaxStops = 4) ──
@@ -126,15 +169,21 @@ public sealed class ColorPicker : Component
                 Grow = 1f, Height = railH,
                 Gradient = Ui.LinearGradient(0f, new GradientStop(0f, ColorF.FromHsv(i * 60f, 1f, 1f)), new GradientStop(1f, ColorF.FromHsv((i + 1) * 60f, 1f, 1f))),
             };
-        var hueRail = new BoxEl 
+        var hueRail = new BoxEl
         {
             Width = SpectrumW, Height = railBoxH, ZStack = true,
             Role = AutomationRole.Slider, OnPointerDown = SetHue, OnDrag = SetHue,
             Children =
             [
                 new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Direction = 0, Corners = Radii.Circle(railH), ClipToBounds = true, Children = segs },
-                HandleAt(Math.Clamp(H / 360f * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st),
+                HandleAt(Math.Clamp(H / 360f * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st, Parts, PartHueThumb),
             ],
+        };
+        hueRail = Parts.Apply(PartHueRail, hueRail) with
+        {
+            Width = SpectrumW,
+            OnPointerDown = SetHue, OnDrag = SetHue, Role = AutomationRole.Slider,
+            Children = hueRail.Children,
         };
 
         var rows = new List<Element> { spectrum, hueRail };
@@ -144,7 +193,7 @@ public sealed class ColorPicker : Component
         {
             void SetA(Point2 p) { alpha.Value = Math.Clamp(p.X / SpectrumW, 0f, 1f); Push(); }
             var opaque = ColorF.FromHsv(H, S, V, 1f);
-            rows.Add(new BoxEl
+            var alphaRail = new BoxEl
             {
                 Width = SpectrumW, Height = railBoxH, ZStack = true,
                 Role = AutomationRole.Slider, OnPointerDown = SetA, OnDrag = SetA,
@@ -152,13 +201,20 @@ public sealed class ColorPicker : Component
                 [
                     new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Corners = Radii.Circle(railH), ClipToBounds = true, Fill = st.AlphaRailFill },
                     new BoxEl { Width = SpectrumW, Height = railH, OffsetY = railPad, Corners = Radii.Circle(railH), ClipToBounds = true, Gradient = Ui.LinearGradient(0f, new GradientStop(0f, opaque with { A = 0f }), new GradientStop(1f, opaque)) },
-                    HandleAt(Math.Clamp(A * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st),
+                    HandleAt(Math.Clamp(A * SpectrumW, st.SliderThumbW * 0.5f, SpectrumW - st.SliderThumbW * 0.5f), railBoxH, st, Parts, PartAlphaThumb),
                 ],
+            };
+            rows.Add(Parts.Apply(PartAlphaRail, alphaRail) with
+            {
+                Width = SpectrumW,
+                OnPointerDown = SetA, OnDrag = SetA, Role = AutomationRole.Slider,
+                Children = alphaRail.Children,
             });
         }
 
         // ── preview swatch + channel fields ──
         var swatch = new BoxEl { Width = st.SwatchW, Height = st.SwatchH, Corners = Radii.ControlAll, BorderWidth = st.BorderWidth, BorderColor = st.SwatchBorder, Fill = color };
+        swatch = Parts.Apply(PartSwatch, swatch) with { Fill = color };   // the preview always shows the live color
         Element Field(string label, Signal<string> text, Func<string, string> sanitize, Action<string> commit, float w) => new BoxEl
         {
             Direction = 1, Gap = 3f,
@@ -204,14 +260,19 @@ public sealed class ColorPicker : Component
     }
 
     // The hue/alpha rail thumb: 12px wide, 6px corner (ColorPickerSlider), TextPrimary background + 1px elevation border.
-    static Element HandleAt(float x, float railBoxH, Style st) => new BoxEl
+    // Routed through its part name; OffsetX (the value position) is re-asserted — the centering assumes the stock width.
+    static Element HandleAt(float x, float railBoxH, Style st, TemplateParts? parts, string part)
     {
-        Width = st.SliderThumbW,
-        Height = railBoxH,
-        OffsetX = x - st.SliderThumbW * 0.5f,
-        Corners = CornerRadius4.All(st.SliderThumbCornerRadius),
-        BorderWidth = 1f,
-        BorderBrush = Tok.ControlElevationBorder,
-        Fill = st.SliderThumbBg,
-    };
+        var thumb = new BoxEl
+        {
+            Width = st.SliderThumbW,
+            Height = railBoxH,
+            OffsetX = x - st.SliderThumbW * 0.5f,
+            Corners = CornerRadius4.All(st.SliderThumbCornerRadius),
+            BorderWidth = 1f,
+            BorderBrush = Tok.ControlElevationBorder,
+            Fill = st.SliderThumbBg,
+        };
+        return parts.Apply(part, thumb) with { OffsetX = thumb.OffsetX };
+    }
 }

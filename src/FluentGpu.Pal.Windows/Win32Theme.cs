@@ -66,20 +66,31 @@ public static partial class Win32Theme
         return null;
     }
 
-    /// <summary>Dark titlebar + the Mica system backdrop (Windows 11). Mica shows through transparent client pixels.</summary>
-    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true)
+    /// <summary>Dark titlebar + the Mica system backdrop (Windows 11). Mica shows through transparent client pixels.
+    /// <paramref name="customFrame"/> = the engine draws the titlebar (WindowDesc.CustomFrame): the frame is extended
+    /// by only a 1px top sliver — the Windows Terminal recipe — because the -1 sheet-of-glass makes DWM composite its
+    /// OWN caption buttons over the client (the "double min/max/close" bug); the Mica backdrop still fills the whole
+    /// window from DWMWA_SYSTEMBACKDROP_TYPE alone (Terminal's custom-frame Mica proves the -1 isn't needed for it).</summary>
+    public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false)
     {
         int d = dark ? 1 : 0;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, in d, sizeof(int));
         int backdrop = mica ? DWMSBT_MAINWINDOW : DWMSBT_TRANSIENTWINDOW;
         DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, in backdrop, sizeof(int));
 
-        if (mica)
+        if (customFrame)
+        {
+            // 1px top extension: keeps the DWM top border/shadow seam without re-summoning the system caption buttons.
+            MARGINS m = new() { cyTopHeight = 1 };
+            DwmExtendFrameIntoClientArea(hwnd, in m);
+        }
+        else if (mica)
         {
             // Sheet-of-glass: extend the DWM frame across the ENTIRE client area so the Mica system backdrop composites
             // behind the transparent (DirectComposition) client pixels. Without this, the system-backdrop attribute
             // applies to the frame but the transparent client shows the opaque window surface (the white pane), because
-            // DWM only fills the backdrop where the frame is extended. Margins of -1 = full-window glass.
+            // DWM only fills the backdrop where the frame is extended. Margins of -1 = full-window glass. (Safe here:
+            // with the STANDARD frame the DWM-drawn caption buttons land inside the real OS titlebar, not the client.)
             MARGINS m = new() { cxLeftWidth = -1, cxRightWidth = -1, cyTopHeight = -1, cyBottomHeight = -1 };
             DwmExtendFrameIntoClientArea(hwnd, in m);
         }

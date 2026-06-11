@@ -7,7 +7,17 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL <c>Inst</c> struct. One instanced quad per rounded rect, with a world transform + opacity.</summary>
+/// <summary>
+/// CPU mirror of the HLSL <c>Inst</c> struct (144 B, float4-aligned). One instanced quad per rounded-rect-family
+/// primitive, with a world transform + opacity. <see cref="Kind"/> selects the SDF variant:
+/// 0 = rounded rect (fill, or an SDF outline when <see cref="StrokeWidth"/> &gt; 0 — optionally dashed via
+/// <see cref="DashOn"/>/<see cref="DashOff"/>, px along the perimeter clockwise from the top edge's left end);
+/// 1 = checkerboard fill (<see cref="CellPx"/> square cells alternating color/ColorB — the ColorPicker alpha lane);
+/// 2 = the WinUI selected-tab shape (radii.x = top radius, radii.w = bottom flare radius — TabViewItem.cpp:98-123).
+/// <see cref="ClipX"/>… carry the tier-2 rounded clip (device-space rounded box; ClipW ≤ 0 = none): the PS multiplies
+/// coverage by the clip SDF so an animated clip on a rounded surface (AnimChannel.ClipL/T/R/B + Corners) clips this
+/// pipeline's primitives with round corners (other pipelines stay scissor-clipped — documented on ClipCmd).
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct RectInstance
 {
@@ -16,13 +26,22 @@ internal struct RectInstance
     public float R, G, B, A;
     public float M11, M12, M21, M22, Dx, Dy;   // 2x3 world transform (local→device)
     public float Opacity;
-    public float StrokeWidth;   // 0 = filled; >0 = an SDF outline (focus ring / border) of this width. Keeps the 80-byte stride.
+    public float StrokeWidth;   // 0 = filled; >0 = an SDF outline (focus ring / border) of this width.
+    public float DashOn, DashOff;   // dashed outline: on/off px along the perimeter; either ≤ 0 ⇒ solid
+    public float Kind;              // 0 = rect, 1 = checker fill, 2 = tab shape (see type doc)
+    public float CellPx;            // checker cell size (local units)
+    public float BR, BG, BB, BA;    // checker second color (ColorB)
+    public float ClipX, ClipY, ClipW, ClipH;   // tier-2 rounded clip box (device space); ClipW ≤ 0 = none
+    public float ClipR;             // rounded-clip corner radius (device units)
+    public float Pad0, Pad1, Pad2;  // pad to a float4 multiple (36 floats = 144 B — must match the HLSL Inst)
 }
 
 /// <summary>
 /// The SDF rounded-rect pipeline (design/subsystems/gpu-renderer.md): a unit quad drawn instanced; instance data
 /// (rect/radii/color) is read in the VS from a root StructuredBuffer; the PS evaluates the analytic rounded-box SDF
-/// with single-pass AA. Shaders are compiled at runtime (D3DCompile → DXBC sm5.1; DXC→DXIL offline is the spec's eventual path).
+/// with single-pass AA. E9 variants live in the same PS: dashed outlines (perimeter arc-length modulation),
+/// checkerboard fills, the WinUI selected-tab shape, and the tier-2 rounded-clip coverage clamp.
+/// Shaders are compiled at runtime (D3DCompile → DXBC sm5.1; DXC→DXIL offline is the spec's eventual path).
 /// </summary>
 internal sealed unsafe class RoundRectPipeline : IDisposable
 {
@@ -37,10 +56,32 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     private int _cursor;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 color; float4 m; float2 t; float opacity; float stroke; };
+struct Inst
+{
+    float2 pos; float2 size;
+    float4 radii;
+    float4 color;
+    float4 m; float2 t; float opacity; float stroke;
+    float2 dash; float kind; float cellPx;
+    float4 colorB;
+    float4 clip;            // xy = origin, zw = size (device space); z <= 0 = no rounded clip
+    float clipR; float3 pad;
+};
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float4 color : TEXCOORD3; float opacity : TEXCOORD4; float stroke : TEXCOORD5; };
+struct VSOut
+{
+    float4 pos : SV_Position;
+    float2 local : TEXCOORD0;      // SDF coverage space (centred local units — crisp under transform via fwidth)
+    float2 halfSize : TEXCOORD1;
+    float4 radii : TEXCOORD2;      // x = uniform/top radius, w = tab flare radius
+    float4 color : TEXCOORD3;
+    float4 colorB : TEXCOORD4;
+    float4 clip : TEXCOORD5;       // rounded-clip box (device space)
+    float4 misc : TEXCOORD6;       // x = opacity, y = stroke, z = kind, w = cellPx
+    float4 misc2 : TEXCOORD7;      // x = dashOn, y = dashOff, z = clipR
+    float2 world : TEXCOORD8;      // device-space position (for the rounded clip SDF)
+};
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -58,27 +99,110 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
     VSOut o;
     o.pos = float4(ndc, 0.0, 1.0);
-    o.local = corner * it.size - it.size * 0.5 + dir * margin;   // SDF coverage stays in local space (crisp under transform via fwidth)
+    o.local = corner * it.size - it.size * 0.5 + dir * margin;
     o.halfSize = it.size * 0.5;
-    o.radius = it.radii.x;
+    o.radii = it.radii;
     o.color = it.color;
-    o.opacity = it.opacity;
-    o.stroke = it.stroke;
+    o.colorB = it.colorB;
+    o.clip = it.clip;
+    o.misc = float4(it.opacity, it.stroke, it.kind, it.cellPx);
+    o.misc2 = float4(it.dash.x, it.dash.y, it.clipR, 0.0);
+    o.world = world;
     return o;
+}
+
+float SdRoundBox(float2 p, float2 b, float r)
+{
+    float2 q = abs(p) - (b - r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;   // signed distance to the rounded-box edge
 }
 
 float4 PSMain(VSOut i) : SV_Target
 {
-    float2 q = abs(i.local) - (i.halfSize - i.radius);
-    float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - i.radius;   // signed distance to the rounded-box edge
+    float kind = i.misc.z;
+    float stroke = i.misc.y;
+    float d;
+    if (kind > 1.5)
+    {
+        // ── tab shape (WinUI TabViewItem::UpdateTabGeometry, TabViewItem.cpp:98-123) ──
+        // body: the rect inset by the flare radius per side, TOP corners rounded at radii.x, bottom square;
+        // flares: the bottom-corner squares OUTSIDE the body, minus a flare-radius disc centred at the outer
+        // edge flare-radius above the bottom (the concave quarter-arc the path's "a 4,4 0 0 0" encodes).
+        float fr = i.radii.w;
+        float2 bh = float2(max(i.halfSize.x - fr, 0.0), i.halfSize.y);
+        float r = (i.local.y < 0.0) ? min(i.radii.x, min(bh.x, bh.y)) : 0.0;   // per-corner radius: top only
+        float2 q = abs(i.local) - (bh - r);
+        float dBody = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+        d = dBody;
+        if (fr > 0.0)
+        {
+            float2 fp = float2(abs(i.local.x), i.local.y);                  // mirror x: both flares in one test
+            float2 sqC = float2(i.halfSize.x - fr * 0.5, i.halfSize.y - fr * 0.5);
+            float2 sq = abs(fp - sqC) - fr * 0.5;
+            float dSquare = min(max(sq.x, sq.y), 0.0) + length(max(sq, 0.0));
+            float2 fc = float2(i.halfSize.x, i.halfSize.y - fr);            // concave-arc centre (outer edge)
+            float dFlare = max(dSquare, fr - length(fp - fc));              // square ∖ disc = the inverted fillet
+            d = min(dBody, dFlare);
+        }
+    }
+    else
+    {
+        d = SdRoundBox(i.local, i.halfSize, i.radii.x);
+    }
     float fw = max(fwidth(d), 1e-4);
     float cov;
-    if (i.stroke > 0.0)
-        cov = clamp(0.5 - (abs(d) - i.stroke * 0.5) / fw, 0.0, 1.0);   // outline: a band of width 'stroke' centred on the edge
+    if (stroke > 0.0)
+        cov = clamp(0.5 - (abs(d) - stroke * 0.5) / fw, 0.0, 1.0);   // outline: a band of width 'stroke' centred on the edge
     else
-        cov = clamp(0.5 - d / fw, 0.0, 1.0);                            // fill: crisp ~1px linear AA
-    float aOut = i.color.a * cov * i.opacity;
-    return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
+        cov = clamp(0.5 - d / fw, 0.0, 1.0);                          // fill: crisp ~1px linear AA
+
+    // ── dashed outline: modulate the band by an arc-length perimeter parameter (clockwise from the top edge's
+    // left end; straight edges are exact, corner arcs use angle × radius). Either dash component ≤ 0 ⇒ solid. ──
+    if (stroke > 0.0 && i.misc2.x > 0.0 && i.misc2.y > 0.0)
+    {
+        float r2 = min(i.radii.x, min(i.halfSize.x, i.halfSize.y));
+        float2 hp = max(i.halfSize - r2, 0.0);
+        float A = 2.0 * hp.x, B = 1.5707963 * r2, C = 2.0 * hp.y;
+        float2 p = i.local;
+        float per;
+        if (abs(p.x) <= hp.x)
+            per = (p.y < 0.0) ? (p.x + hp.x) : (A + B + C + B) + (hp.x - p.x);
+        else if (abs(p.y) <= hp.y)
+            per = (p.x > 0.0) ? (A + B) + (p.y + hp.y) : (A + B + C + B + A + B) + (hp.y - p.y);
+        else
+        {
+            float2 cp = p - sign(p) * hp;
+            if (p.x > 0.0 && p.y < 0.0)      per = A + atan2(cp.x, -cp.y) * r2;                      // top-right arc
+            else if (p.x > 0.0)              per = A + B + C + atan2(cp.y, cp.x) * r2;               // bottom-right
+            else if (p.y > 0.0)              per = A + B + C + B + A + atan2(-cp.x, cp.y) * r2;      // bottom-left
+            else                             per = A + B + C + B + A + B + C + atan2(-cp.y, -cp.x) * r2; // top-left
+        }
+        float m = i.misc2.x + i.misc2.y;
+        float ph = fmod(per, m);
+        float fwp = max(fwidth(per), 1e-4);
+        // soft window over [0, dashOn]: AA'd dash ends (the wrap seam at per=0 keeps WinUI StrokeDashArray's
+        // non-normalized behavior — the last dash may truncate).
+        cov *= clamp((i.misc2.x - ph) / fwp + 0.5, 0.0, 1.0) * clamp(ph / fwp + 0.5, 0.0, 1.0);
+    }
+
+    // ── checkerboard fill (ColorPicker alpha lane): square cells from the rect's top-left, alternating color
+    // (even cells — WinUI's blank/transparent cell) and colorB (the checker color). ColorHelpers.cpp:384-404. ──
+    float4 baseCol = i.color;
+    if (kind > 0.5 && kind < 1.5)
+    {
+        float2 cell = floor((i.local + i.halfSize) / max(i.misc.w, 1.0));
+        baseCol = (fmod(cell.x + cell.y, 2.0) < 0.5) ? i.color : i.colorB;
+    }
+
+    // ── tier-2 rounded clip (device space): multiply coverage by the clipping rounded-box SDF. ──
+    if (i.clip.z > 0.0)
+    {
+        float dc = SdRoundBox(i.world - (i.clip.xy + i.clip.zw * 0.5), i.clip.zw * 0.5, min(i.misc2.z, min(i.clip.z, i.clip.w) * 0.5));
+        cov *= clamp(0.5 - dc / max(fwidth(dc), 1e-4), 0.0, 1.0);
+    }
+
+    float aOut = baseCol.a * cov * i.misc.x;
+    return float4(baseCol.rgb * aOut, aOut);   // premultiplied alpha
 }
 """;
 
@@ -236,7 +360,7 @@ float4 PSMain(VSOut i) : SV_Target
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
-        if (count == 0) return;
+        if (count <= 0) return;
         for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
         _cursor += count;
 

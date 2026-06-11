@@ -18,6 +18,9 @@ public sealed record TokenSet
     public required ColorF FillControlStrong { get; init; }          // ControlStrongFillColorDefault — slider rail, scrollbar thumb
     public required ColorF FillControlStrongDisabled { get; init; }  // ControlStrongFillColorDisabled
     public required ColorF FillControlSolid { get; init; }           // ControlSolidFillColorDefault — slider thumb ring
+    // WinUI ControlOnImageFillColorDefault — near-solid chrome floated over media (the ItemContainer multi-select
+    // checkbox unchecked plate). Common_themeresources_any.xaml:34 dark #B31C1C1C / :238 light #C9FFFFFF.
+    public required ColorF FillControlOnImage { get; init; }
     public required ColorF FillSubtleTransparent { get; init; }
     public required ColorF FillSubtleSecondary { get; init; }    // subtle hover
     public required ColorF FillSubtleTertiary { get; init; }     // subtle pressed
@@ -50,6 +53,15 @@ public sealed record TokenSet
     public required ColorF TextOnAccentPrimary { get; init; }
     public required ColorF TextOnAccentSecondary { get; init; }
     public required ColorF TextOnAccentDisabled { get; init; }
+    // WinUI TextOnAccentFillColorSelectedText — the recolored glyphs inside a text selection. #FFFFFF in BOTH themes
+    // (NOT TextOnAccentPrimary, which is black in dark): the selection plate is the accent BASE (#0078D4-class, dark
+    // blue) in both themes, so the selected text stays white in both.
+    public required ColorF TextOnAccentSelectedText { get; init; }
+
+    // Custom-titlebar caption buttons (engine-drawn min/max/close). The close hover/press red is the Win11 SHELL
+    // caption red — no WinUI XAML resource exists (system caption buttons are shell-drawn); same value in BOTH themes.
+    public required ColorF CaptionCloseHover { get; init; }      // #C42B1C opaque, white glyph on top
+    public required ColorF CaptionClosePressed { get; init; }    // #C42B1C @ 0.9
 
     // Accent (base; live OS accent folds in via Tok overrides)
     public required ColorF AccentDefault { get; init; }
@@ -63,6 +75,10 @@ public sealed record TokenSet
     public required ColorF AccentTextPrimary { get; init; }
     public required ColorF AccentTextSecondary { get; init; }
     public required ColorF AccentTextTertiary { get; init; }
+    // WinUI AccentFillColorSelectedTextBackground (→ TextControlSelectionHighlightColor): the text-selection plate.
+    // Bound to the system accent BASE (SystemAccentColor, #FF0078D4 default) in BOTH themes — not the theme-shifted
+    // Light2/Dark1 fill the other accent tokens use.
+    public required ColorF AccentSelectedTextBackground { get; init; }
 
     // Focus
     public required ColorF FocusOuter { get; init; }
@@ -72,6 +88,15 @@ public sealed record TokenSet
     public required ColorF ScrollThumb { get; init; }
     public required ColorF AcrylicTint { get; init; }
     public required ColorF AcrylicBase { get; init; }
+    /// <summary>The ONE WinUI default transient-surface acrylic (AcrylicInAppFillColorDefaultBrush ==
+    /// AcrylicBackgroundFillColorDefaultBrush, AcrylicBrush_themeresources.xaml): every flyout-family surface carries
+    /// it — FlyoutPresenter (FlyoutPresenter_themeresources.xaml:5/15), MenuFlyoutPresenter (via the
+    /// AcrylicBackgroundFillColorDefaultBackdrop system backdrop, MenuFlyout_themeresources.xaml:264+271), the
+    /// ComboBox PopupBorder (ComboBox_themeresources.xaml:63/273), the AutoSuggestBox SuggestionsContainer
+    /// (AutoSuggestBox_themeresources.xaml:5/17) and ToolTip (ToolTipBackgroundBrush, ToolTip_themeresources.xaml:14/40).
+    /// Dark: tint #2C2C2C @ 0.15, luminosity 0.96, FALLBACK #2C2C2C; Light: tint #FCFCFC @ 0.0, luminosity 0.85,
+    /// FALLBACK #F9F9F9. The Fallback is the solid paint when blur is unavailable (AcrylicBrush FallbackColor).</summary>
+    public required AcrylicSpec AcrylicFlyout { get; init; }
 
     // Hero gradient stops
     public required ColorF HeroGradientTop { get; init; }
@@ -91,6 +116,20 @@ public sealed record TokenSet
 
     // Input-active fill (WinUI ControlFillColorInputActive — focused text-control body: TextBox/AutoSuggest/NumberBox)
     public required ColorF FillControlInputActive { get; init; }
+
+    // Text-control chrome (TextBox/PasswordBox/NumberBox/AutoSuggestBox header + description + disabled text).
+    // WinUI TextControlHeaderForeground = SystemControlForegroundBaseHighBrush = SystemBaseHighColor
+    // (generic.xaml:886; color generic.xaml:207 dark / :4132 light).
+    public required ColorF TextControlHeaderForeground { get; init; }
+    // WinUI TextControlHeaderForegroundDisabled = SystemControlDisabledBaseMediumLowBrush = SystemBaseMediumLowColor
+    // (generic.xaml:887; color generic.xaml:211 dark / :4136 light).
+    public required ColorF TextControlHeaderForegroundDisabled { get; init; }
+    // WinUI SystemControlDescriptionTextForegroundBrush = SystemControlPageTextBaseMediumBrush = SystemBaseMediumColor
+    // (generic.xaml:327; color generic.xaml:209 dark / :4134 light) — the DescriptionPresenter row of every text control.
+    public required ColorF TextControlDescriptionForeground { get; init; }
+    // WinUI TextControlForegroundDisabled = TemporaryTextFillColorDisabled (TextBox_themeresources.xaml:22 dark /
+    // :129 light) — the disabled field TEXT; note it is NOT TextFillColorDisabled (the disabled PLACEHOLDER token).
+    public required ColorF TextControlForegroundDisabled { get; init; }
 
     // Severity palette (WinUI SystemFillColor* — InfoBar/InfoBadge/TeachingTip). Saturated icon color + tinted
     // background per severity. Attention (informational) follows the system accent, exposed as Tok.SystemFillAttention.
@@ -140,6 +179,7 @@ public static class Tok
     public static ColorF FillControlStrong => T.FillControlStrong;
     public static ColorF FillControlStrongDisabled => T.FillControlStrongDisabled;
     public static ColorF FillControlSolid => T.FillControlSolid;
+    public static ColorF FillControlOnImage => T.FillControlOnImage;
     public static ColorF FillSubtleTransparent => T.FillSubtleTransparent;
     public static ColorF FillSubtleSecondary => T.FillSubtleSecondary;
     public static ColorF FillSubtleTertiary => T.FillSubtleTertiary;
@@ -164,14 +204,27 @@ public static class Tok
     public static ColorF StrokeControlOnAccentSecondary => T.StrokeControlOnAccentSecondary;
     public static ColorF StrokeControlOnAccentTertiary => T.StrokeControlOnAccentTertiary;
 
-    /// <summary>WinUI ControlElevationBorderBrush: a 2-stop vertical gradient (secondary edge → default edge) — the
-    /// signature Fluent control border. Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
+    /// <summary>WinUI ControlElevationBorderBrush: the signature Fluent control border — MappingMode="Absolute"
+    /// StartPoint 0,0 EndPoint 0,3: the secondary→default blend lives in a 3-PHYSICAL-px band at one edge, the
+    /// default stroke everywhere else (Common_themeresources_any.xaml:186-191 dark). LIGHT carries a ScaleTransform
+    /// ScaleY=-1 (:382-390) anchoring the band (darker secondary edge) at the BOTTOM — encoded as AnchorEnd.
+    /// Theme-aware; pass to BoxEl.BorderBrush. (Allocated at reconcile time, not per frame.)</summary>
     public static GradientSpec ControlElevationBorder =>
-        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlSecondary), new GradientStop(1f, StrokeControlDefault)]);
+        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlSecondary), new GradientStop(1f, StrokeControlDefault)])
+        { AxisLengthPx = 3f, AnchorEnd = Theme == ThemeKind.Light };
 
-    /// <summary>WinUI AccentControlElevationBorderBrush: the on-accent variant (for accent buttons / checked toggles).</summary>
+    /// <summary>WinUI AccentControlElevationBorderBrush (accent buttons / checked toggles): the same absolute 3px
+    /// band, mirrored (ScaleY=-1) in BOTH themes — the darker on-accent secondary edge sits at the BOTTOM
+    /// (Common_themeresources_any.xaml:198-205 dark / :397-404 light).</summary>
     public static GradientSpec AccentControlElevationBorder =>
-        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlOnAccentSecondary), new GradientStop(1f, StrokeControlOnAccentDefault)]);
+        new(GradientShape.Linear, 90f, [new GradientStop(0.33f, StrokeControlOnAccentSecondary), new GradientStop(1f, StrokeControlOnAccentDefault)])
+        { AxisLengthPx = 3f, AnchorEnd = true };
+
+    /// <summary>WinUI CircleElevationBorderBrush (Common_themeresources_any.xaml:192-198 dark / :391-397 light): a
+    /// RelativeToBoundingBox vertical 2-stop gradient — ControlStrokeColorDefault @0.50 → ControlStrokeColorSecondary
+    /// @0.70 — the subtle rim on circular knobs/glyphs (ToggleSwitch SwitchKnobOn stroke, RadioButton glyph stroke).</summary>
+    public static GradientSpec CircleElevationBorder =>
+        new(GradientShape.Linear, 90f, [new GradientStop(0.50f, StrokeControlDefault), new GradientStop(0.70f, StrokeControlSecondary)]);
 
     // Text
     public static ColorF TextPrimary => T.TextPrimary;
@@ -181,6 +234,11 @@ public static class Tok
     public static ColorF TextOnAccentPrimary => T.TextOnAccentPrimary;
     public static ColorF TextOnAccentSecondary => T.TextOnAccentSecondary;
     public static ColorF TextOnAccentDisabled => T.TextOnAccentDisabled;
+    public static ColorF TextOnAccentSelectedText => T.TextOnAccentSelectedText;
+
+    // Custom-titlebar caption buttons (Win11 shell close-red; theme-invariant)
+    public static ColorF CaptionCloseHover => T.CaptionCloseHover;
+    public static ColorF CaptionClosePressed => T.CaptionClosePressed;
 
     // Accent (override-aware)
     public static ColorF AccentDefault => _accent ?? T.AccentDefault;
@@ -194,6 +252,9 @@ public static class Tok
     public static ColorF AccentTextPrimary   => _accent is { } a ? AccentTextShade(a, 0) : T.AccentTextPrimary;
     public static ColorF AccentTextSecondary => _accent is { } a ? AccentTextShade(a, 1) : T.AccentTextSecondary;
     public static ColorF AccentTextTertiary  => _accent is { } a ? AccentTextShade(a, 2) : T.AccentTextTertiary;
+    // Selection plate = the accent base itself (WinUI binds it to SystemAccentColor), so a live accent override
+    // substitutes it directly — the AccentDefault pattern.
+    public static ColorF AccentSelectedTextBackground => _accent ?? T.AccentSelectedTextBackground;
 
     // level 0=Primary 1=Secondary 2=Tertiary. Dark lightens (→ Light3/Light3/Light2); light darkens (→ Dark2/Dark3/Dark1).
     // Mix factors tuned to the #0078D4 default anchors; the default (no-override) path uses the exact baked values above.
@@ -215,6 +276,8 @@ public static class Tok
     public static ColorF ScrollThumb => T.ScrollThumb;
     public static ColorF AcrylicTint => T.AcrylicTint;
     public static ColorF AcrylicBase => T.AcrylicBase;
+    /// <summary>Theme-aware default flyout acrylic (see <see cref="TokenSet.AcrylicFlyout"/> for the WinUI sources).</summary>
+    public static AcrylicSpec AcrylicFlyout => T.AcrylicFlyout;
     public static ColorF HeroGradientTop => _accent is { } a ? a with { A = 0.55f } : T.HeroGradientTop;
     public static ColorF HeroGradientBottom => T.HeroGradientBottom;
 
@@ -228,6 +291,12 @@ public static class Tok
     public static ColorF StrokeControlStrongDefault => T.StrokeControlStrongDefault;
     public static ColorF StrokeControlStrongDisabled => T.StrokeControlStrongDisabled;
     public static ColorF FillControlInputActive => T.FillControlInputActive;
+
+    // Text-control chrome (header / description / disabled field text) — see the TokenSet field docs for sources.
+    public static ColorF TextControlHeaderForeground => T.TextControlHeaderForeground;
+    public static ColorF TextControlHeaderForegroundDisabled => T.TextControlHeaderForegroundDisabled;
+    public static ColorF TextControlDescriptionForeground => T.TextControlDescriptionForeground;
+    public static ColorF TextControlForegroundDisabled => T.TextControlForegroundDisabled;
 
     // Severity palette (Attention follows the live OS accent, like WinUI SystemFillColorAttention = SystemAccentColor*)
     public static ColorF SystemFillCritical => T.SystemFillCritical;
@@ -252,6 +321,7 @@ public static class Tok
         FillControlStrong         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
         FillControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x3F),
         FillControlSolid          = ColorF.FromRgba(0x45, 0x45, 0x45),
+        FillControlOnImage   = ColorF.FromRgba(0x1C, 0x1C, 0x1C, 0xB3),   // #B31C1C1C (Common_themeresources_any.xaml:34)
         FillSubtleTransparent= ColorF.Transparent,
         FillSubtleSecondary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
         FillSubtleTertiary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
@@ -280,6 +350,10 @@ public static class Tok
         TextOnAccentPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00),
         TextOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x80),
         TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
+        // WinUI Default(dark) dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
+        TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
+        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
         AccentDefault = ColorF.FromRgba(0x60, 0xCD, 0xFF),
         AccentSecondary = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xCC),
@@ -289,11 +363,17 @@ public static class Tok
         AccentTextTertiary  = ColorF.FromRgba(0x76, 0xB9, 0xED),
         AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),   // WinUI AccentFillColorDisabled = #28FFFFFF
         AccentSubtle    = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0x29),
+        // WinUI Default(dark) dict: AccentFillColorSelectedTextBackgroundBrush = {ThemeResource SystemAccentColor}
+        // (the accent BASE — #FF0078D4 system default), NOT the Light2 fill above.
+        AccentSelectedTextBackground = ColorF.FromRgba(0x00, 0x78, 0xD4),
         FocusOuter = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         FocusInner = ColorF.FromRgba(0x00, 0x00, 0x00, 0xB3),
         ScrollThumb = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),   // == FillControlStrong (WinUI ControlStrongFillColorDefault)
         AcrylicTint = ColorF.FromRgba(0x2C, 0x2C, 0x2C, 0xCC),
         AcrylicBase = ColorF.FromRgba(0x20, 0x20, 0x20, 0xD9),
+        // AcrylicInAppFillColorDefaultBrush dark (AcrylicBrush_themeresources.xaml "Default" dict):
+        // TintColor #2C2C2C, TintOpacity 0.15, TintLuminosityOpacity 0.96, FallbackColor #2C2C2C.
+        AcrylicFlyout = AcrylicSpec.InAppDefault,
         HeroGradientTop = ColorF.FromRgba(0x2A, 0x4A, 0x66, 0xCC),
         HeroGradientBottom = ColorF.FromRgba(0x20, 0x20, 0x20, 0x00),
         FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
@@ -303,6 +383,13 @@ public static class Tok
         StrokeControlStrongDefault  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
         StrokeControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),
         FillControlInputActive   = ColorF.FromRgba(0x1E, 0x1E, 0x1E, 0xB3),
+        // SystemBaseHighColor #FFFFFFFF / SystemBaseMediumLowColor #66FFFFFF / SystemBaseMediumColor #99FFFFFF
+        // (generic.xaml:207/211/209, Default theme dictionary).
+        TextControlHeaderForeground         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x66),
+        TextControlDescriptionForeground    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x99),
+        // TemporaryTextFillColorDisabled #5DFEFEFE (TextBox_themeresources.xaml:22, Default).
+        TextControlForegroundDisabled       = ColorF.FromRgba(0xFE, 0xFE, 0xFE, 0x5D),
         SystemFillCritical = ColorF.FromRgba(0xFF, 0x99, 0xA4),
         SystemFillCaution  = ColorF.FromRgba(0xFC, 0xE1, 0x00),
         SystemFillSuccess  = ColorF.FromRgba(0x6C, 0xCB, 0x5F),
@@ -324,6 +411,7 @@ public static class Tok
         FillControlStrong         = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         FillControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x51),
         FillControlSolid          = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        FillControlOnImage   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC9),   // #C9FFFFFF (Common_themeresources_any.xaml:238)
         FillSubtleTransparent= ColorF.Transparent,
         FillSubtleSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
         FillSubtleTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
@@ -352,6 +440,10 @@ public static class Tok
         TextOnAccentPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         TextOnAccentSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
         TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        // WinUI Light dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
+        TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
+        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
         AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),
@@ -361,11 +453,17 @@ public static class Tok
         AccentTextTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         AccentSubtle    = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0x24),
+        // WinUI Light dict: AccentFillColorSelectedTextBackgroundBrush = {ThemeResource SystemAccentColor}
+        // (the accent BASE — #FF0078D4 system default, same as dark), NOT the Dark1 fill above.
+        AccentSelectedTextBackground = ColorF.FromRgba(0x00, 0x78, 0xD4),
         FocusOuter = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
-        FocusInner = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        FocusInner = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),   // WinUI Light FocusStrokeColorInner = #B3FFFFFF (audit fix)
         ScrollThumb = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         AcrylicTint = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xD9),
         AcrylicBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0xE6),
+        // AcrylicInAppFillColorDefaultBrush light (AcrylicBrush_themeresources.xaml "Light" dict):
+        // TintColor #FCFCFC, TintOpacity 0.0, TintLuminosityOpacity 0.85, FallbackColor #F9F9F9.
+        AcrylicFlyout = AcrylicSpec.FlyoutLight,
         HeroGradientTop = ColorF.FromRgba(0x7A, 0xB6, 0xE6, 0xB3),
         HeroGradientBottom = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0x00),
         FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
@@ -375,6 +473,13 @@ public static class Tok
         StrokeControlStrongDefault  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
         StrokeControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
         FillControlInputActive   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        // SystemBaseHighColor #FF000000 / SystemBaseMediumLowColor #66000000 / SystemBaseMediumColor #99000000
+        // (generic.xaml:4132/4136/4134, Light theme dictionary).
+        TextControlHeaderForeground         = ColorF.FromRgba(0x00, 0x00, 0x00),
+        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+        TextControlDescriptionForeground    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x99),
+        // TemporaryTextFillColorDisabled #5C010101 (TextBox_themeresources.xaml:129, Light).
+        TextControlForegroundDisabled       = ColorF.FromRgba(0x01, 0x01, 0x01, 0x5C),
         SystemFillCritical = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
         SystemFillCaution  = ColorF.FromRgba(0x9D, 0x5D, 0x00),
         SystemFillSuccess  = ColorF.FromRgba(0x0F, 0x7B, 0x0F),

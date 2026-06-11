@@ -1,9 +1,11 @@
+using System.Linq;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
 using FluentGpu.Reconciler;
+using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
 // The capability gallery — a nav-driven showcase of everything fluent-gpu can do, styled to mirror the WinUI 3 Gallery:
@@ -38,7 +40,7 @@ sealed class GalleryApp : Component
             Children =
             [
                 new("typography", Icons.Font, "Typography"),
-                new("icons", Icons.Star, "Icons & fonts"),
+                new("icons", Icons.Star, "Iconography"),
                 new("images", Icons.Picture, "Images"),
             ],
         },
@@ -141,11 +143,11 @@ sealed class GalleryApp : Component
         {
             Children =
             [
-                new("ListView", Icons.List, "ListView"),
-                new("GridView", Icons.Grid, "GridView"),
+                // ItemsView is the premiere collections control (it absorbed the former ListView/GridView pages as
+                // its List/Grid presets); it leads the category.
+                new("ItemsView", Icons.Grid, "ItemsView"),
                 new("FlipView", Icons.Picture, "FlipView"),
                 new("TreeView", Icons.List, "TreeView"),
-                new("ItemsView", Icons.Grid, "ItemsView"),
             ],
         },
         new("menus", Icons.More, "Menus & toolbars")
@@ -175,38 +177,113 @@ sealed class GalleryApp : Component
         new("wavee", Icons.MusicNote, "Wavee skeleton"),
     };
 
-    // Maps a Basic-input control key to its bundled WinUI-Gallery tile image (note the casing: "CheckBox" → "Checkbox.png").
-    public static readonly (string Key, string Title, string Image)[] BasicInputCatalog =
+    // Every control page, grouped by nav category — drives the All-controls page and the category overview pages
+    // (tile image + subtitle come from the PageInfo registry).
+    public static readonly (string Title, string[] Keys)[] ControlCatalog =
     {
-        ("Button", "Button", "Button.png"),
-        ("DropDownButton", "DropDownButton", "DropDownButton.png"),
-        ("HyperlinkButton", "HyperlinkButton", "HyperlinkButton.png"),
-        ("RepeatButton", "RepeatButton", "RepeatButton.png"),
-        ("ToggleButton", "ToggleButton", "ToggleButton.png"),
-        ("SplitButton", "SplitButton", "SplitButton.png"),
-        ("ToggleSplitButton", "ToggleSplitButton", "ToggleSplitButton.png"),
-        ("CheckBox", "CheckBox", "Checkbox.png"),
-        ("ColorPicker", "ColorPicker", "ColorPicker.png"),
-        ("ComboBox", "ComboBox", "ComboBox.png"),
-        ("RadioButton", "RadioButton", "RadioButton.png"),
-        ("RatingControl", "RatingControl", "RatingControl.png"),
-        ("Slider", "Slider", "Slider.png"),
-        ("ToggleSwitch", "ToggleSwitch", "ToggleSwitch.png"),
+        ("Basic input", ["Button", "DropDownButton", "HyperlinkButton", "RepeatButton", "ToggleButton", "SplitButton",
+                         "ToggleSplitButton", "CheckBox", "ColorPicker", "ComboBox", "RadioButton", "RatingControl",
+                         "Slider", "ToggleSwitch"]),
+        ("Status & info", ["InfoBadge", "InfoBar", "ProgressBar", "ProgressRing", "ToolTip"]),
+        ("Layout", ["Expander", "SplitView", "Viewbox", "Border", "Canvas", "RelativePanel", "VariableSizedWrapGrid"]),
+        ("Scrolling", ["PipsPager", "AnnotatedScrollBar"]),
+        ("Navigation", ["BreadcrumbBar", "SelectorBar", "TabView", "Pivot"]),
+        ("Dialogs & flyouts", ["Flyout", "ContentDialog", "TeachingTip", "Popup"]),
+        ("Text", ["TextBox", "PasswordBox", "AutoSuggestBox", "NumberBox", "TextBlock", "RichTextBlock"]),
+        ("Media", ["PersonPicture", "MediaPlayerElement"]),
+        ("Collections", ["ItemsView", "FlipView", "TreeView"]),
+        ("Menus & toolbars", ["MenuBar", "AppBarButton", "AppBarToggleButton", "CommandBar", "AppBarSeparator",
+                              "CommandBarFlyout", "SwipeControl"]),
+        ("Date & time", ["CalendarView", "CalendarDatePicker", "DatePicker", "TimePicker"]),
     };
+
+    public static string[] CategoryKeys(string title)
+    {
+        foreach (var (t, keys) in ControlCatalog) if (t == title) return keys;
+        return [];
+    }
 
     // Initial nav page (default = Home). Overridable so the --screenshot harness can deep-link a control page.
     public string InitialPage = "welcome";
 
+    // Titlebar chrome → NavigationView seams (bump/request signals; instance-lifetime, wired into both components).
+    readonly Signal<int> _paneToggleReq = new(0);
+    readonly Signal<string> _navigateReq = new("");
+    readonly Signal<string> _searchText = new("");
+
+    // The titlebar search corpus: every selectable nav entry (groups + leaves); AutoSuggestBox substring-filters it.
+    static readonly (string Label, string Key)[] SearchIndex = BuildSearchIndex();
+    static readonly string[] SearchTitles = SearchIndex.Select(e => e.Label).Distinct().ToArray();
+
+    static (string Label, string Key)[] BuildSearchIndex()
+    {
+        var list = new List<(string Label, string Key)>();
+        void Walk(NavItem[] items)
+        {
+            foreach (var it in items)
+            {
+                if (!it.IsHeader && !it.IsSeparator) list.Add((it.Label, it.Key));
+                if (it.Children is { Length: > 0 } kids) Walk(kids);
+            }
+        }
+        Walk(Items);
+        return list.ToArray();
+    }
+
+    // Search commit (Enter or suggestion choice) → resolve the typed/chosen title to a nav key and navigate.
+    void NavigateToTitle(string query)
+    {
+        string q = query.Trim();
+        if (q.Length == 0) return;
+        string? key = null;
+        foreach (var (label, k) in SearchIndex)
+            if (string.Equals(label, q, StringComparison.OrdinalIgnoreCase)) { key = k; break; }
+        if (key is null)
+            foreach (var (label, k) in SearchIndex)
+                if (label.Contains(q, StringComparison.OrdinalIgnoreCase)) { key = k; break; }
+        if (key is null) return;
+        // A ""-reset first so re-searching the SAME page after navigating elsewhere still changes the signal value
+        // (request signals are equality-gated).
+        _navigateReq.Value = "";
+        _navigateReq.Value = key;
+    }
+
     public override Element Render()
     {
         var shell = VStack(0,
-            TitleBar(),
+            // The WinUI 3 Gallery titlebar: back (visible, disabled — no Frame back-stack yet) + hamburger + accent
+            // icon + title + the centered AutoSuggestBox + engine-drawn min/max/close on the custom frame.
+            Embed.Comp(() => new TitleBar
+            {
+                Title = "FluentGpu Gallery",
+                IconGlyph = Icons.Grid,
+                IconColor = Tok.AccentDefault,
+                ShowBackButton = true,
+                BackEnabled = false,
+                ShowPaneToggle = true,
+                OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,
+                // WinUI sizing: 580 is the MAX — the search gives way as the window narrows (caption buttons never
+                // move) and collapses entirely below a usable floor.
+                Content = avail => avail < 140f
+                    ? new BoxEl()
+                    : AutoSuggestBox.Create(
+                        suggestions: SearchTitles,
+                        placeholder: "Search controls and samples...",
+                        width: MathF.Min(580f, avail),
+                        text: _searchText,
+                        onSuggestionChosen: NavigateToTitle,
+                        onQuerySubmitted: NavigateToTitle),
+                ShowCaptionButtons = true,
+            }),
             Embed.Comp(() => new NavigationView
             {
                 Header = "fluent-gpu",
                 Initial = InitialPage,
                 Items = Items,
                 Content = Page,   // each page is a distinct component type → the reconciler remounts it on navigation
+                ShowPaneToggle = false,            // the titlebar owns the hamburger (the WinUI-gallery shape)
+                PaneToggleRequest = _paneToggleReq,
+                NavigateRequest = _navigateReq,
             })
         ) with { Grow = 1 };
 
@@ -214,35 +291,6 @@ sealed class GalleryApp : Component
         // Host the overlay layer at the top so anchored flyouts (ComboBox/DropDownButton/SplitButton/ColorPicker) work app-wide.
         return Embed.Comp(() => new OverlayHost { Child = content });
     }
-
-    // Integrated title bar (transparent → window Mica shows through): app identity left, a centered search pill,
-    // a right inset clearing the system caption buttons.
-    static Element TitleBar() => new BoxEl
-    {
-        Direction = 0, Height = 48, AlignItems = FlexAlign.Center, Gap = 10, Padding = new Edges4(14, 0, 140, 0),
-        Children =
-        [
-            Icon(Icons.Grid, 16f).Foreground(Tok.AccentDefault),
-            new TextEl("fluent-gpu") { Size = 12f, Bold = true, Color = Tok.TextPrimary },
-            new BoxEl { Grow = 1 },
-            SearchBox(),
-            new BoxEl { Grow = 1 },
-        ],
-    };
-
-    // A search box (visual; text input is a future Text-subsystem capability). Mirrors the WinUI AutoSuggestBox.
-    static Element SearchBox() => new BoxEl
-    {
-        Direction = 0, Gap = 8, AlignItems = FlexAlign.Center, MaxWidth = 460, Grow = 1, Height = 30,
-        Padding = new Edges4(11, 0, 11, 0), Corners = Radii.ControlAll,
-        Fill = Tok.FillControlDefault, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f,
-        HoverFill = Tok.FillControlSecondary,
-        Children =
-        [
-            Icon(Icons.Search, 14f).Foreground(Tok.TextSecondary),
-            Caption("Search controls and samples").Tertiary(),
-        ],
-    };
 
     static Element DiagnosticsOverlay() => new BoxEl
     {
@@ -297,8 +345,6 @@ sealed class GalleryApp : Component
         "media" => Embed.Comp(() => new MediaOverviewPage()),
         "PersonPicture" => Embed.Comp(() => new PersonPicturePage()),
         "collections" => Embed.Comp(() => new CollectionsOverviewPage()),
-        "ListView" => Embed.Comp(() => new ListViewPage()),
-        "GridView" => Embed.Comp(() => new GridViewPage()),
         "FlipView" => Embed.Comp(() => new FlipViewPage()),
         "TreeView" => Embed.Comp(() => new TreeViewPage()),
         "menus" => Embed.Comp(() => new MenusOverviewPage()),

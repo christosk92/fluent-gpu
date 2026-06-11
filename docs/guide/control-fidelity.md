@@ -174,6 +174,13 @@ There are two animation systems on purpose, not two competing engines:
 - **Press-only parts stay in the tree with explicit targets.** RadioButton's `PressedCheckGlyph` is the model:
   separate key from `CheckGlyph`, rest size 4/opacity 0, pressed size 10/opacity 1, `PressDurationMs = 167`, and
   `PressEasing = ControlFastOutSlowIn`.
+- **Layout-size changes that must reflow neighbours use `SizeMode.Reflow`** (a `LayoutTransition` on the resizing
+  node): the engine eases the LAYOUT height/width through real boundary-scoped relayout each tick, restores the
+  declared input at settle, and `SizeAnchor.Trailing` rides the content's end edge on the reveal edge. FLIP
+  projections are PARENT-RELATIVE, so everything below moves rigidly while the space animates. This is FluentGpu's
+  one **deliberate divergence from WinUI**: where WinUI snaps layout and only translates content (Expander
+  ExpandDown/CollapseUp), FluentGpu eases the space itself — keeping the WinUI timings/easings (expand 333ms
+  KeySpline 0,0,0,1; collapse 167ms KeySpline 1,1,0,1 via `ExitDynamics`). The Expander is the reference consumer.
 
 This kit is generic: RadioButton, ToggleButton, ComboBox, ToggleSwitch, TabView, NavigationView etc. all declare ramps
 and pick interaction targets or explicit timelines. Per-control work = *declare the ramps, template parts, keys, and
@@ -220,3 +227,28 @@ it look instant. Use a deterministic frame clock or temporary slow-motion proof 
    (incl. the slow-motion proof for any animation). Save a golden PNG.
 
 If you skip step 1 you WILL miss states — that is the recurring failure this guide exists to prevent.
+
+---
+
+## 6. Template parts — one generic door, no styling knobs
+
+Customization of a control's internals goes through `TemplateParts` (`src/FluentGpu.Dsl/TemplateParts.cs`; usage in
+`docs/guide/components-elements-layout.md`), never through per-control feature props. Rules for every new control:
+
+- **Export `public const string PartXxx` consts** for each named template part — WinUI template-part `x:Name`s where
+  an equivalent exists (Expander: `Root`/`Header`/`Chevron`/`Clip`/`Content`) — plus `public TemplateParts? Parts;`.
+- **Route every named part** through `Parts.Apply(PartXxx, el)` after building it, then **re-assert the part's
+  mechanics-critical props** with one trailing `with` (click/toggle handlers, reflow `Animate` specs, `*Bind`
+  closures, `Key`, `Role`) and **chain** ref-capture handlers (`OnRealized`/`OnPinned`) via `TemplateParts.Chain` —
+  a modifier can restyle everything but break nothing. Document each part's OWNED props on its const.
+- **New styling knobs are banned.** The review question for any proposed public field: *could the caller write
+  `Parts[PartX] = el => el with { … }` instead?* Then they must. Keep: content **slots** (Element-typed), state
+  signals/callbacks, options/config, and theme token-bundle `Style` records — those are not part-styling.
+- Part-name strings may match existing reconciler `Key`s (e.g. "sb-thumb") for one vocabulary, but `Key` remains a
+  separate identity concept — repeated parts (tab items, tick marks) must never derive their `Key` from a part const.
+- Virtualized item chrome (ListView/GridView rows) stays on the `ContainerFactory` seam — per-item part modifiers in
+  hot scroll paths are a recycling/allocation hazard.
+- If a public factory returns `Embed.Comp(() => new Core { ... })`, every runtime-changeable prop must flow through a
+  `Props` record plus `Ctx.Provide`, or through a caller-owned `Signal<T>` read by the component. The factory is not
+  re-run when the parent re-renders, so fields set in the object initializer are mount-only seeds. Use frozen fields
+  only for `Initial*` values or configuration that is explicitly never expected to change.

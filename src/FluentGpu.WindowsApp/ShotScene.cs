@@ -26,6 +26,7 @@ sealed class ShotScene : Component
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),
+        "combobox-editable-open" => OverlayShot(Embed.Comp(() => new ComboBoxEditableOpenShot())),
         "autosuggest-open" => OverlayShot(Embed.Comp(() => new AutoSuggestOpenShot())),
         "dropdown-open" => OverlayShot(Embed.Comp(() => new DropDownOpenShot())),
         "split-open" => OverlayShot(Embed.Comp(() => new SplitOpenShot())),
@@ -39,6 +40,7 @@ sealed class ShotScene : Component
         "flyout-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.Flyout))),
         "contentdialog-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.Modal))),
         "teachingtip-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.TeachingTip))),
+        "atlas-stress" => CenterShot(Embed.Comp(() => new AtlasStressShot())),
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
@@ -48,6 +50,36 @@ sealed class ShotScene : Component
         "tabview" => CenterShot(Embed.Comp(() => new TabViewShot())),
         "navigationview" => CenterShot(Embed.Comp(() => new NavigationViewShot())),
         "treeview" => CenterShot(Embed.Comp(() => new TreeViewShot())),
+        "listview" => CenterShot(Embed.Comp(() => new ItemsViewListShot())),   // id kept stable; renders the List preset
+        "itemsview" => CenterShot(Embed.Comp(() => new ItemsViewShot())),
+        // Acrylic material proof (needs-pixels loop for Rhi.D3D12 AcrylicCompositor): the flyout acrylic surface over
+        // HIGH-CONTRAST saturated bars — the σ=30 DIP backdrop blur (AcrylicBrush.h:64 sc_blurRadius) must read as
+        // soft color washes through the surface; over a flat page the blur would be invisible.
+        "acrylic" => new BoxEl
+        {
+            Grow = 1, ZStack = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1, Direction = 0,   // saturated vertical bars fill the page behind the surface
+                    Children =
+                    [
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0xE8, 0x3C, 0x3C) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0xF5, 0xC5, 0x18) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x18, 0xA0, 0x57) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x2D, 0x7D, 0xF6) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x8B, 0x3C, 0xC9) },
+                        new BoxEl { Grow = 1, Fill = ColorF.FromRgba(0x20, 0x20, 0x20) },
+                    ],
+                },
+                new BoxEl
+                {
+                    Grow = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children = [MenuPresenter()],
+                },
+            ],
+        },
         _ => new BoxEl
         {
             Grow = 1,
@@ -156,7 +188,7 @@ sealed class ShotScene : Component
         {
             Direction = 1,
             Fill = ColorF.Transparent,
-            Acrylic = AcrylicSpec.Flyout,
+            Acrylic = Tok.AcrylicFlyout,
             BorderColor = Tok.StrokeFlyoutDefault,
             BorderWidth = 1f,
             Corners = Radii.OverlayAll,
@@ -253,6 +285,41 @@ sealed class ComboBoxOpenShot : Component
                 {
                     Items = Colors,
                     SelectedIndex = selected,
+                    Width = 298f,
+                    OpenOnMount = true,
+                }),
+            ],
+        };
+    }
+}
+
+sealed class ComboBoxEditableOpenShot : Component
+{
+    static readonly string[] Colors =
+    [
+        "Blue",
+        "Green",
+        "Red",
+        "Yellow",
+    ];
+
+    public override Element Render()
+    {
+        var selected = UseSignal(1);
+        var text = UseSignal("Green");
+        return new BoxEl
+        {
+            Direction = 1,
+            Gap = 16f,
+            Children =
+            [
+                new TextEl("An editable ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
+                Embed.Comp(() => new ComboBox
+                {
+                    Items = Colors,
+                    SelectedIndex = selected,
+                    Editable = true,
+                    Text = text,
                     Width = 298f,
                     OpenOnMount = true,
                 }),
@@ -712,5 +779,75 @@ sealed class TreeViewShot : Component
         BorderWidth = 1f,
         Padding = new Edges4(0, 6, 0, 6),
         Children = [TreeView.Create(Roots)],
+    };
+}
+
+// D1 — the exact gallery ItemsView List-preset card (Width=280, 8 natural rows, accent pill on row 0): Width=280
+// with NO height anywhere above the list. Must render 8 natural-sized rows (8 × 44) with the accent selection pill
+// on row 0 — this card rendered as an empty panel before the D1 fix.
+sealed class ItemsViewListShot : Component
+{
+    static readonly string[] Items = ["Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado"];
+    public override Element Render()
+    {
+        var selected = UseSignal(0);
+        return new BoxEl
+        {
+            Width = 280f,
+            Corners = Radii.OverlayAll,
+            BorderColor = Tok.StrokeCardDefault,
+            BorderWidth = 1f,
+            Padding = new Edges4(0, 4, 0, 4),
+            Children = [ItemsView.List(Items, selected)],
+        };
+    }
+}
+
+// Glyph-atlas overflow proof (run with --frames 14): the first frames rasterize ~1,200 distinct Segoe Fluent glyphs
+// at THREE sizes (≈6.2 M px² of coverage vs the 4.19 M px² atlas — guaranteed overflow → generational reset), then
+// the storm unmounts and only a sentinel line remains. A correct reset re-shapes the sentinel from the fresh
+// generation → the screenshot shows crisp readable text. The pre-fix behavior cached overflowed glyphs at the atlas
+// origin, so the sentinel (and every later glyph) rendered as corrupt fragments.
+sealed class AtlasStressShot : Component
+{
+    public override Element Render()
+    {
+        var tick = UseContext(FrameClock.Tick);
+        bool storm = tick < 6;
+
+        var kids = new List<Element>
+        {
+            new TextEl("Atlas generation reset OK — the quick brown fox 0123456789") { Size = 16f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) },
+            new TextEl("       ") { Size = 20f, Color = ColorF.FromRgba(0x4C, 0xC2, 0xFF), FontFamily = Theme.IconFont },
+        };
+
+        if (storm)
+        {
+            // A FRESH glyph set per frame: the cache key includes the quantized size, so size = 20 + tick rasterizes
+            // 1,200 new entries each storm frame (~1 M px² of coverage per frame → guaranteed overflow by frame ~5).
+            // All rows sit inside the viewport — record-time culling must not skip the shaping.
+            const int Count = 1200, PerRow = 60;
+            float size = 20f + tick;
+            for (int row = 0; row < Count / PerRow; row++)
+            {
+                var sb = new System.Text.StringBuilder(PerRow);
+                for (int i = 0; i < PerRow; i++) sb.Append((char)(0xE700 + row * PerRow + i));
+                kids.Add(new TextEl(sb.ToString()) { Size = size, Color = ColorF.FromRgba(0x80, 0x80, 0x80), FontFamily = Theme.IconFont });
+            }
+        }
+
+        return new BoxEl { Direction = 1, Gap = 2f, Width = 1320f, Children = kids.ToArray() };
+    }
+}
+
+// D1 — the gallery ItemsView shape (MiscPages.cs): the legacy 4-column tile grid in an auto-height host; the view
+// must size to its grid's ContentExtent (2 rows × 80 + 8 gap = 168) — was an empty panel before the D1 fix.
+sealed class ItemsViewShot : Component
+{
+    static readonly string[] Items = ["Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8"];
+    public override Element Render() => new BoxEl
+    {
+        Width = 420f,
+        Children = [ItemsView.Create(Items, columns: 4)],
     };
 }

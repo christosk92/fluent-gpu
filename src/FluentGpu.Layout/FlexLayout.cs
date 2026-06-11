@@ -100,7 +100,13 @@ public sealed class FlexLayout
             {
                 var m = _fonts.Measure(paint.Text, li.TextStyle, maxW);
                 w = m.Size.Width; h = m.Size.Height;
-                mc = new TextMeasureCache { Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h) };
+                // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
+                // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
+                mc = new TextMeasureCache
+                {
+                    Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
+                    UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
+                };
             }
         }
         else
@@ -304,6 +310,30 @@ public sealed class FlexLayout
 
         if (!sc.ContentSized)
         {
+            // D1 — natural-size fallback for NON-FLEXING virtual viewports the parent does not size. WinUI's
+            // ItemsView template is a ScrollView over an ItemsRepeater (ItemsView.xaml:19-37, VerticalAlignment=Top):
+            // measured unconstrained it reports the repeater's natural extent — it does not collapse to 0 (the
+            // gallery ListView/ItemsView empty-panel regression). Cross axis: an auto-width vertical list fills the
+            // available width (block-level, the MeasureGrid rule); main axis: the layout's ContentExtent. Gated on
+            // FlexGrow == 0 so a Grow viewport (every Virtual.* factory, app fill-lists) keeps its 0 base — a
+            // 10k-row list must never inject a ~440000px flex basis; grow/stretch size it at arrange and
+            // realize-after-layout (ArrangeViewport tail) re-windows against the published viewport.
+            if (sc.ItemCount > 0 && li.FlexGrow == 0f)
+            {
+                if (!horizontal && float.IsNaN(w) && !float.IsInfinity(availW))
+                    w = MathF.Max(0f, availW);
+                if (horizontal ? float.IsNaN(w) : float.IsNaN(h))
+                {
+                    float cross = horizontal
+                        ? (float.IsNaN(h) ? 0f : MathF.Max(0f, h - li.Padding.Vertical))
+                        : (float.IsNaN(w) ? 0f : MathF.Max(0f, w - li.Padding.Horizontal));
+                    float main = sc.Layout is not null ? sc.Layout.ContentExtent(sc.ItemCount, cross)
+                               : _scene.TryGetExtents(node, out var extents) && extents is not null ? (float)extents.Total
+                               : 0f;
+                    if (horizontal) w = main + li.Padding.Horizontal;
+                    else h = main + li.Padding.Vertical;
+                }
+            }
             if (float.IsNaN(w)) w = 0f;
             if (float.IsNaN(h)) h = 0f;
             w = Clamp(w, li.MinW, li.MaxW);
@@ -348,7 +378,8 @@ public sealed class FlexLayout
         float padL = li.Padding.Left, padT = li.Padding.Top;
 
         (float contentW, float contentH) =
-              sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
+              sc0.ItemCount > 0 && sc0.Layout is IMeasuredVirtualLayout ml ? ArrangeVirtualMeasured(node, ml, in sc0, content, innerW, innerH, padL, padT, horizontal)
+            : sc0.ItemCount > 0 && sc0.Layout is not null ? ArrangeVirtualLayout(in sc0, content, innerW, innerH, padL, padT, horizontal)
             : sc0.ItemCount > 0                           ? ArrangeVirtualVariable(node, in sc0, content, innerW, innerH, padL, padT, horizontal)
             :                                               ArrangePlainScroll(content, innerW, innerH, padL, padT, horizontal);
 
@@ -366,6 +397,31 @@ public sealed class FlexLayout
         {
             ref NodePaint cp = ref _scene.Paint(content);
             cp.LocalTransform = Affine2D.Translation(horizontal ? -sc.OffsetX : 0f, horizontal ? 0f : -sc.OffsetY);
+        }
+
+        // D1 realize-after-layout: the realize window was computed BEFORE this arrange published the real viewport
+        // size (a mount realizes against the Height hint; a relayout can also grow the host). If the realized window
+        // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
+        // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
+        // windowing idiom as the scroll paths (ScrollAnimator.Tick / InputDispatcher).
+        if (sc.ItemCount > 0)
+        {
+            float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
+            float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            int visibleFirst, visibleLast;
+            if (sc.Layout is not null)
+            {
+                float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                sc.Layout.Window(sc.ItemCount, cross, vpExtent, off, 0, out visibleFirst, out visibleLast);
+            }
+            else if (_scene.TryGetExtents(node, out var extents) && extents is not null)
+            {
+                visibleFirst = extents.IndexAt(off);
+                visibleLast = Math.Min(sc.ItemCount, extents.IndexAt(off + vpExtent) + 1);
+            }
+            else visibleFirst = visibleLast = 0;
+            if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast))
+                _scene.Mark(node, NodeFlags.VirtualRangeDirty);
         }
     }
 
@@ -447,6 +503,50 @@ public sealed class FlexLayout
         return (contentW, contentH);
     }
 
+    // Measured-seam virtualization (E11-L0): the same estimate-then-correct + scroll-anchoring contract as the
+    // built-in Fenwick path (ArrangeVirtualVariable), but the extents/prefix sums live behind the user-implementable
+    // IMeasuredVirtualLayout — custom layouts can be variable/sliver-like. virtualization.md §6.2 semantics.
+    private (float w, float h) ArrangeVirtualMeasured(NodeHandle node, IMeasuredVirtualLayout layout, in ScrollState sc,
+                                                      NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
+    {
+        if (content.IsNull) return (0f, 0f);
+        int first = sc.FirstRealized;
+        float cross = horizontal ? innerH : innerW;
+
+        // Anchor: the topmost-visible item + its sub-item offset, captured BEFORE this frame's corrections.
+        float offset = horizontal ? sc.OffsetX : sc.OffsetY;
+        int anchorIndex = layout.IndexAt(offset, cross);
+        float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
+
+        int ord = 0;
+        for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
+        {
+            int index = first + ord;
+            var cs = Measure(rc);                                  // the row's natural main extent
+            float main = horizontal ? cs.Width : cs.Height;
+            layout.SetMeasured(index, main, cross);                // estimate-then-correct through the seam (O(log n))
+            var rect = layout.ItemRect(index, cross);              // post-correction content-space rect
+            if (horizontal) Arrange(rc, rect.X, rect.Y, main, innerH);
+            else            Arrange(rc, rect.X, rect.Y, innerW, main);
+        }
+
+        float mainContent = layout.ContentExtent(sc.ItemCount, cross);
+        float contentW = horizontal ? mainContent : innerW;
+        float contentH = horizontal ? innerH : mainContent;
+        _scene.Bounds(content) = new RectF(padL, padT, contentW, contentH);
+
+        // Re-pin the anchor so corrections to rows above the visible top do not shift the viewport.
+        float pinned = layout.OffsetOf(anchorIndex, cross) + anchorWithin;
+        float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
+        pinned = Math.Clamp(pinned, 0f, maxOff);
+        ref ScrollState scw = ref _scene.ScrollRef(node);
+        if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
+        scw.AnchorIndex = anchorIndex;
+        ref NodePaint cp = ref _scene.Paint(content);
+        cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
+        return (contentW, contentH);
+    }
+
     // ── Z-stack: children overlay at the origin (each filling the box unless explicitly sized), painted in order ──
 
     private Size2 MeasureZStack(NodeHandle node, in LayoutInput li, float availW)
@@ -504,7 +604,7 @@ public sealed class FlexLayout
         {
             Span<float> colW = count <= 64 ? stackalloc float[count] : new float[count];
             ResolveColumns(node, in g, count, w - padH, colW);
-            h = GridContentHeight(node, in g, count) + padV;
+            h = GridContentHeight(node, in g, count, colW) + padV;
         }
         else h = float.IsNaN(li.Height) ? 0f : li.Height;
         w = Clamp(w, li.MinW, li.MaxW);
@@ -540,10 +640,10 @@ public sealed class FlexLayout
 
             float rowH = autoRow ? 0f : g.RowHeight;
             if (autoRow)
-                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j]); rowH = MathF.Max(rowH, cs.Height); }
+                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j], colW[j]); rowH = MathF.Max(rowH, cs.Height); }
             for (int j = 0; j < n; j++)
             {
-                if (!autoRow) Measure(rowKids[j]);   // base sizes for the cell's own flex
+                if (!autoRow) Measure(rowKids[j], colW[j]);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
                 Arrange(rowKids[j], colX[j], rowTop, colW[j], rowH);
             }
             rowTop += rowH + g.RowGap;
@@ -608,7 +708,7 @@ public sealed class FlexLayout
         }
     }
 
-    private float GridContentHeight(NodeHandle node, in GridSpec g, int count)
+    private float GridContentHeight(NodeHandle node, in GridSpec g, int count, ReadOnlySpan<float> colW)
     {
         int childCount = _scene.ChildCount(node);
         if (childCount == 0) return 0f;
@@ -618,7 +718,7 @@ public sealed class FlexLayout
         float sumRowH = 0f, rowH = 0f; int k = 0;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
         {
-            var cs = Measure(c);
+            var cs = Measure(c, colW[k % count]);   // at the track width, so wrapping text reports its wrapped height
             rowH = MathF.Max(rowH, cs.Height);
             if (k % count == count - 1) { sumRowH += rowH; rowH = 0f; }
         }

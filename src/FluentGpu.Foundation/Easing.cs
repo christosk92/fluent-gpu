@@ -46,6 +46,9 @@ public readonly record struct EasingSpec
     public static EasingSpec CubicBezier(float x1, float y1, float x2, float y2) => new(x1, y1, x2, y2);
     public static implicit operator EasingSpec(Easing easing) => new(easing);
 
+    /// <summary>True for a default-constructed spec ("no curve chosen") — consumers substitute their own default.</summary>
+    public bool IsDefault => _hasValue == 0;
+
     internal float Evaluate(float t)
         => _hasValue == 0 ? Easings.Ease(Easing.EaseInOut, t)
          : _kind == 1 ? Easings.CubicBezier(t, _x1, _y1, _x2, _y2)

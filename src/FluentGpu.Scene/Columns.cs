@@ -7,7 +7,12 @@ public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, Polyline
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
-/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.</summary>
+/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
+/// Besides the size, the cache retains the face's DECORATION metrics from the same <c>TextMetrics</c> (top-down DIP,
+/// the line frame of <c>Baseline</c> — see FluentGpu.Text.TextMetrics): the recorder reads them at record time to
+/// place underline/strikethrough bars (NodePaint.TextDecorations) without re-touching the font seam. Filled by the
+/// layout engine's measure-miss path; 0 ⇒ the backend reported no face metrics (the recorder falls back to a
+/// size-derived approximation).</summary>
 public struct TextMeasureCache
 {
     public bool Valid;
@@ -15,6 +20,15 @@ public struct TextMeasureCache
     public TextStyle Style;
     public float MaxW;
     public Size2 Size;
+    /// <summary>Underline bar top, measured DOWN from the line top (DWrite underlinePosition flipped over the baseline
+    /// — TextLayoutEngine.cs:141; headless model: baseline + 1).</summary>
+    public float UnderlineY;
+    /// <summary>Underline bar thickness (DWrite underlineThickness; also reused for the strikethrough bar, the
+    /// DWrite/WinUI convention).</summary>
+    public float UnderlineThickness;
+    /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
+    /// headless model: SizeDip × 0.8).</summary>
+    public float StrikeY;
 }
 
 /// <summary>Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).</summary>
@@ -73,6 +87,10 @@ public struct NodePaint
     // Authored clip-rect (node-local space): when not Infinite, the recorder intersects the child clip with it (composes
     // with ClipsToBounds). Animated by AnimEngine ClipL/T/R/B (e.g. an Expander/CommandBarFlyout reveal). Default Infinite.
     public RectF ClipRect;
+    // Child-group offset (a SizeMode.Reflow Trailing anchor): when non-zero, the recorder shifts every CHILD's origin
+    // by this amount while the node's own fill/border/clip stay put — so the content's end edge rides the animated
+    // layout edge (the Expander slide-from-under-the-header). Written by the reflow re-solve each tick; 0 at rest.
+    public float ChildShiftX, ChildShiftY;
     public float StrokeTrimStart, StrokeTrimEnd;
     public ColorF Fill;
     public ColorF HoverFill;      // A==0 ⇒ recorder auto-lightens Fill on hover
@@ -90,8 +108,26 @@ public struct NodePaint
     public ColorF TextDisabledColor;
     public ColorF TextFocusedColor;
     public StringId Text;
+    /// <summary>Text decoration flags for a <see cref="VisualKind.Text"/> leaf (<see cref="UnderlineBit"/> |
+    /// <see cref="StrikethroughBit"/>; 0 = none). The recorder emits the bars itself — FillRoundRect quads placed by
+    /// the face metrics cached on <see cref="TextMeasureCache"/> (no new opcode), colored with the SAME resolved
+    /// foreground (hover/press ramps + BrushTransition) as the glyph run — matching DWrite, which draws decorations
+    /// from the face's underline position/thickness rather than glyph geometry. Written by the reconciler from
+    /// <c>TextEl.Underline</c>/<c>Strikethrough</c> (WinUI <c>TextDecorations</c>; HyperlinkButton underlines only when
+    /// the HyperlinkUnderlineVisible directive is set or under HighContrast — HyperLinkButton_Partial.cpp:207-212).</summary>
+    public byte TextDecorations;
+    /// <summary>Flat opacity group opt-in (WinUI Composition LayerVisual semantics): when set and the node's resolved
+    /// opacity &lt; 1, the recorder wraps the subtree in PushLayer{Opacity}…PopLayer — children render at FULL alpha
+    /// offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
+    /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
+    public bool OpacityGroup;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
     public VisualKind VisualKind;
+
+    /// <summary><see cref="TextDecorations"/>: draw the face-metric underline bar.</summary>
+    public const byte UnderlineBit = 1;
+    /// <summary><see cref="TextDecorations"/>: draw the face-metric strikethrough bar.</summary>
+    public const byte StrikethroughBit = 2;
 
     public static NodePaint Default => new()
     {
@@ -135,7 +171,8 @@ public struct ScrollState
 
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
-    public IVirtualLayout? Layout;        // pluggable fixed-geometry layout (stack/grid/custom); null ⇒ variable (extent table)
+    public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent
+                                          // estimate-then-correct + anchoring); null ⇒ the legacy Fenwick extent-table path
     public int   Overscan;                // rows realized beyond the viewport on each side
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
@@ -190,17 +227,88 @@ public struct InteractionAnim
     };
 }
 
+/// <summary>
+/// An implicit brush transition (WinUI <c>BrushTransition</c>, 83ms): when a LOGICAL state flip re-renders a node with a
+/// different Fill/BorderColor/TextColor and the element opted in (<c>BrushTransitionMs</c>), the reconciler captures the
+/// previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <c>T</c> advances
+/// (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+/// </summary>
+public struct BrushAnim
+{
+    public ColorF FillFrom, BorderFrom, TextFrom;
+    public float T;            // 0 → 1 progress (advanced by SceneStore.AdvanceBrushAnims at phase 7)
+    public float DurationMs;
+    public byte Channels;
+    public const byte FillBit = 1, BorderBit = 2, TextBit = 4;
+}
+
+/// <summary>
+/// Sparse text-edit state for an editor's TEXT node (side-table, O(editors)): caret geometry + caret-follow scroll +
+/// in-flight IME composition span + focus/blink flags. Written by the editing control (UI thread, edit/drag time) and
+/// the <c>CaretBlinker</c> phase-7 ticker; the recorder only READS it (plus the pooled decoration rects on
+/// <see cref="SceneStore.SetTextEditRects"/>) to emit selection highlight / selected-text recolor / IME underlines /
+/// the caret bar — retained scene state, never composed elements (0 alloc in phases 6–13).
+/// </summary>
+public struct TextEditState
+{
+    public int CompStart, CompLen;          // in-flight IME composition span (document indices); CompLen 0 = none
+    public float ScrollX;                   // horizontal caret-follow offset (applied by the control as a transform)
+    public float CaretX, CaretTop, CaretH;  // caret bar geometry in TEXT-NODE-LOCAL coords (already scrolled)
+    public byte Flags;
+    public const byte CaretVisible = 1, Focused = 2, SelectionActive = 4;
+}
+
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 = click/pointer, bit1 = key, bit2 = pointer, bit3 = char, bit4 = repeat
+    public ushort HandlerMask;    // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
+                                  // bit7 focus, bit8 drag, bit9 explicit cursor, bit10 no-Enter-activate,
+                                  // bit11 no-pointer-focus, bit12 wheel
+    /// <summary>Meaningful only while <see cref="CursorBit"/> is set (an element-declared cursor); without the bit the
+    /// dispatcher's hover walk skips this node and falls through to the system arrow — there is no clickable⇒hand default.</summary>
     public CursorId Cursor;
     public AutomationRole Role;   // semantic control role (set by control factories) → UIA ControlType / devtools / tests
     public bool Focusable;
     public int TabIndex;
+    /// <summary>Access-key mnemonic (Alt+letter; uppercase VK 'A'..'Z' / '0'..'9'). 0 = none.</summary>
+    public char AccessKey;
+    /// <summary>WinUI FocusVisualMargin (negative = the focus ring expands OUTSIDE the bounds; WinUI templates use −3,
+    /// Slider −7,0,−7,0). Written resolved by the reconciler (default −3 all around).</summary>
+    public Edges4 FocusVisualMargin;
+    /// <summary>Keyboard-accelerator chord: invoked from anywhere once focused routing leaves the key unhandled. 0 = none.</summary>
+    public int AccelKey;
+    public KeyModifiers AccelMods;
     public const ushort ClickBit = 1;
     public const ushort KeyBit = 2;
     public const ushort PointerBit = 4;   // position-aware press/drag (slider/scrollbar)
     public const ushort CharBit = 8;      // text (character) input handler present
     public const ushort RepeatBit = 16;   // clickable opts into press-and-hold auto-repeat (RepeatButton)
+    public const ushort PressedBit = 32;  // position-aware press carrying click-count/modifiers (OnPointerPressed)
+    public const ushort ContextBit = 64;  // right-click / Menu-key context request (OnContextRequested)
+    public const ushort FocusBit = 128;   // focus-change handler present (OnFocusChanged) — reached via the dispatcher's
+                                          // SetFocus (WinUI GotFocus/LostFocus), never via hit-testing; the bit lets the
+                                          // dispatcher skip the handler-column lookup on every focus move
+    public const ushort DragBit = 256;    // drag-reorder source (BoxEl.CanDrag): hit-testable; a press arms
+                                          // Input.DragController and the drag lifecycle columns fire past the 4px box
+    public const ushort CursorBit = 512;  // element declared an explicit Cursor (WinUI SetCursor): the hover walk
+                                          // resolves it and STOPS here — an explicit Arrow masks an ancestor I-beam/hand
+                                          // (TextBox delete button / PasswordBox reveal over the field's I-beam)
+    public const ushort NoEnterActivateBit = 1024;  // clickable opts OUT of Enter activation (WinUI KeyPress::Button
+                                                    // bAcceptsReturn=false — CheckBox/RadioButton/ToggleSwitch are
+                                                    // Space-only; Enter falls through to normal key routing)
+    public const ushort NoPointerFocusBit = 2048;   // WinUI AllowFocusOnInteraction=False: a press never moves focus
+                                                    // to (or past) this focusable — Tab still reaches it
+    public const ushort WheelBit = 4096;            // element-level OnPointerWheel handler (NumberBox value stepping):
+                                                    // consulted before the viewport scroll; Handled stops the scroll
+    public const ushort SelectableTextBit = 8192;   // read-only text selection (rtb-02, TextEl/SpanTextEl
+                                                    // IsTextSelectionEnabled): hit-testable; the dispatcher runs the
+                                                    // drag-select/word-select/Ctrl+C gestures against the text seam
+                                                    // (WinUI TextSelectionManager — RichTextBlock.cpp:1730 default-on)
+    public const ushort SpanLinksBit = 16384;       // the node's span run carries hyperlink spans (TextSpan.OnClick):
+                                                    // hit-testable; the dispatcher resolves Hand over the span's laid
+                                                    // rects and fires the span action on click (RichTextBlock.cpp:2995)
+
+    /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
+    /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>
+    public float RepeatDelayMs, RepeatIntervalMs;
 }

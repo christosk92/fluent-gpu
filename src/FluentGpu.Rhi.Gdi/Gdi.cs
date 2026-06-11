@@ -170,7 +170,8 @@ public sealed class GdiSwapchain : ISwapchain
                     int height = -(int)MathF.Round(c.FontSize);
                     string fam = strings.Resolve(c.Family);   // system family by name; custom .ttf files fall back (no AddFontResource here)
                     if (fam.Length == 0 || fam.IndexOf('#') >= 0 || fam.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase)) fam = "Segoe UI";
-                    nint font = Gdi32.CreateFontW(height, 0, 0, 0, c.Bold != 0 ? Gdi32.FW_BOLD : Gdi32.FW_NORMAL,
+                    // GDI takes the same numeric 0..1000 weight scale (FW_*) the glyph op carries.
+                    nint font = Gdi32.CreateFontW(height, 0, 0, 0, c.Weight > 0 ? c.Weight : Gdi32.FW_NORMAL,
                         0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, fam);
                     nint oldF = Gdi32.SelectObject(_memDc, font);
                     Gdi32.SetTextColor(_memDc, Gdi32.Bgr(c.Color));
@@ -200,8 +201,12 @@ public sealed class GdiSwapchain : ISwapchain
                     pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;   // experimental GDI path: no path strokes
                 case DrawOp.DrawGradientRect:
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;     // experimental GDI path: no gradients
+                case DrawOp.DrawGradientStroke:
+                    pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;   // experimental GDI path: no gradient strokes
+                case DrawOp.DrawTabShape:
+                    pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;         // experimental GDI path: no tab shapes
                 case DrawOp.PushLayer:
-                    pos += Unsafe.SizeOf<PushLayerCmd>(); break;            // experimental GDI path: no acrylic
+                    pos += Unsafe.SizeOf<PushLayerCmd>(); break;            // experimental GDI path: no acrylic/opacity layers
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>(); break;
                 default: pos = cmds.Length; break;
@@ -243,7 +248,7 @@ public sealed class GdiFontSystem : IFontSystem
         string s = _strings.Resolve(text);
         int height = -(int)MathF.Round(style.SizeDip);
         string family = ResolveMeasureFamily(style.FontFamily);
-        nint font = Gdi32.CreateFontW(height, 0, 0, 0, style.Bold ? Gdi32.FW_BOLD : Gdi32.FW_NORMAL,
+        nint font = Gdi32.CreateFontW(height, 0, 0, 0, style.Weight > 0 ? style.Weight : Gdi32.FW_NORMAL,
             0, 0, 0, Gdi32.DEFAULT_CHARSET, 0, 0, Gdi32.CLEARTYPE_QUALITY, Gdi32.DEFAULT_PITCH, family);
         nint oldF = Gdi32.SelectObject(_dc, font);
         Gdi32.GetTextExtentPoint32W(_dc, s, s.Length, out SIZE size);

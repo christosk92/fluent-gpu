@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -28,8 +29,10 @@ internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, Beari
 internal struct FaceMetrics { public ushort Em; public short Asc, Desc; }
 /// <summary>Glyph-atlas cache key. <paramref name="Fam"/> is a family id (codepoint path) OR a face id (glyph-id path);
 /// <paramref name="Ch"/> is a codepoint OR a glyph id. <paramref name="ByGid"/> keeps those two key spaces disjoint so a
-/// codepoint entry and a glyph-id entry can never alias (the bug that smeared shaped + per-char glyphs together). Value type → no alloc.</summary>
-internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold, int Ch, bool ByGid);
+/// codepoint entry and a glyph-id entry can never alias (the bug that smeared shaped + per-char glyphs together).
+/// <paramref name="Weight"/> is the NUMERIC font weight (codepoint path; the glyph-id path keys weight via the face id,
+/// since faces are resolved per (family, weight)). Value type → no alloc.</summary>
+internal readonly record struct GlyphKey(int Fam, int Size, int Scale, int Weight, int Ch, bool ByGid);
 
 /// <summary>One baked glyph quad in LOCAL (DIP) space — color/transform/opacity are applied per-frame at replay, NOT baked
 /// here, so the same shaped run is reusable across scroll/theme/fade. The atlas UVs are stable (the shelf packer never
@@ -37,13 +40,19 @@ internal readonly record struct GlyphKey(int Fam, int Size, int Scale, bool Bold
 internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V1; }
 
 /// <summary>A fully shaped text run cached by content (see <see cref="RunKey"/>): the local-space quads + an LRU stamp.
-/// Allocated only on a cache miss (content change); replayed allocation-free on every steady-state frame.</summary>
-internal struct ShapedRun { public ShapedGlyph[] Glyphs; public int Count; public int LastUsedFrame; }
+/// Allocated only on a cache miss (content change); replayed allocation-free on every steady-state frame.
+/// <see cref="Colors"/> (span runs only, parallel to <see cref="Glyphs"/>): the per-quad span color override —
+/// A==0 entries inherit the replayed command color; null = a plain uniform run (the overwhelming case).</summary>
+internal struct ShapedRun { public ShapedGlyph[] Glyphs; public ColorF[]? Colors; public int Count; public int LastUsedFrame; }
 
 /// <summary>Content key for the shaped-run cache. Keyed on the interned <see cref="StringId"/> handles (stable across frames,
-/// no per-frame string hashing) + quantized layout inputs. Excludes color/transform/opacity (replayed). Bounds origin and
-/// width are layout-stable for a given element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
-internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Bold, int Wrap, int Trim, int MaxLines, int WidthQ, int OriginXQ, int OriginYQ, int ScaleQ);
+/// no per-frame string hashing) + quantized layout inputs — including EVERY shaping input of the glyph op (numeric Weight,
+/// CharacterSpacing ×10, LineHeight ×10, packed LineStacking|LineBounds, the SpanRunId inline-run overlay — a span style
+/// change mints a fresh id upstream, so the key self-invalidates), so two runs differing only in weight or tracking
+/// can never alias. Excludes color/transform/opacity (replayed). Bounds origin and width are layout-stable for a given
+/// element (scroll rides the world transform, not the bounds), so they can key safely.</summary>
+internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Weight, int Wrap, int Trim, int MaxLines, int WidthQ, int OriginXQ, int OriginYQ, int ScaleQ,
+    int SpacingQ, int LineHQ, int LineFlags, int SpanId);
 
 /// <summary>
 /// DirectWrite glyph atlas + textured-quad pipeline (design/subsystems/text.md, gpu-renderer.md DrawGlyphRun). Glyphs are
@@ -53,13 +62,17 @@ internal readonly record struct RunKey(int TextId, int FamId, int SizeQ, int Bol
 /// </summary>
 internal sealed unsafe class GlyphRenderer : IDisposable
 {
-    private const int ATLAS = 1024;
+    // 2048² R8 (4 MB CPU mirror + 4 MB GPU): sized so even the Iconography page's full Segoe Fluent catalog
+    // (~1,500 distinct glyphs at two sizes) plus the app's text fits one generation. Overflow is still HANDLED
+    // (generational reset below) — before that, a full atlas silently cached entries at X=Y=0, so every later
+    // glyph sampled the atlas origin and corrupted all text for the rest of the session.
+    private const int ATLAS = 2048;
 
     private IDWriteFactory* _dw;
     private const string DefaultFamily = "Segoe UI";
-    // Per-(family, weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
-    private readonly Dictionary<(string fam, bool bold), nint> _faces = new();
-    private readonly Dictionary<(string fam, bool bold), FaceMetrics> _faceMetrics = new();
+    // Per-(family, numeric weight) faces + metrics, resolved on demand. Family = a system name OR "path.ttf#Family Name".
+    private readonly Dictionary<(string fam, int weight), nint> _faces = new();
+    private readonly Dictionary<(string fam, int weight), FaceMetrics> _faceMetrics = new();
     private readonly Dictionary<string, int> _famIds = new();
 
     private readonly byte[] _cpu = new byte[ATLAS * ATLAS];
@@ -82,7 +95,15 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // hit needs neither a string hash nor a face/family lookup. See LayoutRun.
     private readonly Dictionary<RunKey, ShapedRun> _runCache = new();
     private readonly List<ShapedGlyph> _scratch = new(256);   // reused miss-path shaping buffer
+    private readonly List<ColorF> _colorScratch = new(256);   // reused span-run per-quad color buffer (miss path)
     private readonly List<RunKey> _evictScratch = new();      // reused eviction sweep buffer (off the hot path)
+    // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
+    // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
+    // this list retains every returned array, so steady-state churn reuses instead of allocating.
+    private readonly Stack<ShapedGlyph[]>[] _quadPool = new Stack<ShapedGlyph[]>[14];   // buckets 1<<0 .. 1<<13
+    // Liveness source for the run cache: a reclaimed text id resolves to "" (StringTable), so its runs can never be
+    // hit again — evict them promptly instead of waiting out the age backstop (keeps the free-list small under storms).
+    private StringTable? _liveness;
     private int _frame;
     private int _runsCached, _runsShaped;                     // per-frame diagnostics
 #if DEBUG
@@ -159,7 +180,7 @@ float4 PSMain(VSOut i) : SV_Target
         Check(DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED, __uuidof<IDWriteFactory>(), (IUnknown**)&f), "DWriteCreateFactory");
         _dw = f;
         // warm the default face so the atlas has metrics from frame 1
-        ResolveFace(DefaultFamily, false, out _, out _, out _);
+        ResolveFace(DefaultFamily, 400, out _, out _, out _);
     }
 
     // A small per-family integer used in the glyph-cache key (so the same codepoint in two fonts caches separately).
@@ -170,12 +191,14 @@ float4 PSMain(VSOut i) : SV_Target
         id = _famIds.Count + 1; _famIds[family] = id; return id;
     }
 
-    /// <summary>Resolve (and cache) a font face for a family + weight. Family is a system name ("Segoe UI",
-    /// "Segoe Fluent Icons") or a custom file "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
-    private IDWriteFontFace* ResolveFace(string family, bool bold, out ushort em, out short asc, out short desc)
+    /// <summary>Resolve (and cache) a font face for a family + NUMERIC weight (the int IS the DWRITE_FONT_WEIGHT;
+    /// ≤0 → 400, clamped to 999). Family is a system name ("Segoe UI", "Segoe Fluent Icons") or a custom file
+    /// "path.ttf#Family Name" (the WinUI syntax). Falls back to the default on error.</summary>
+    private IDWriteFontFace* ResolveFace(string family, int weight, out ushort em, out short asc, out short desc)
     {
         if (string.IsNullOrEmpty(family)) family = DefaultFamily;
-        var key = (family, bold);
+        if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
+        var key = (family, weight);
         if (_faces.TryGetValue(key, out var cached))
         {
             var m0 = _faceMetrics[key]; em = m0.Em; asc = m0.Asc; desc = m0.Desc;
@@ -183,8 +206,8 @@ float4 PSMain(VSOut i) : SV_Target
         }
 
         IDWriteFontFace* face;
-        try { face = CreateFaceFor(family, bold); }
-        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, bold); }
+        try { face = CreateFaceFor(family, weight); }
+        catch { face = family == DefaultFamily ? null : CreateFaceFor(DefaultFamily, weight); }
         if (face == null) { em = 2048; asc = 1500; desc = 500; return null; }
 
         DWRITE_FONT_METRICS m; face->GetMetrics(&m);
@@ -194,15 +217,15 @@ float4 PSMain(VSOut i) : SV_Target
         return face;
     }
 
-    private IDWriteFontFace* CreateFaceFor(string family, bool bold)
+    private IDWriteFontFace* CreateFaceFor(string family, int weight)
     {
         int hash = family.IndexOf('#');
         string path = hash >= 0 ? family.Substring(0, hash) : family;
         bool isFile = path.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
-        return isFile ? CreateFaceFromFile(path, bold) : CreateSystemFace(family, bold);
+        return isFile ? CreateFaceFromFile(path, weight) : CreateSystemFace(family, weight);
     }
 
-    private IDWriteFontFace* CreateSystemFace(string familyName, bool bold)
+    private IDWriteFontFace* CreateSystemFace(string familyName, int weight)
     {
         IDWriteFontCollection* coll;
         Check(_dw->GetSystemFontCollection(&coll, BOOL.FALSE), "GetSystemFontCollection");
@@ -211,28 +234,30 @@ float4 PSMain(VSOut i) : SV_Target
         if (!exists)   // unknown family → fall back to the default
         {
             coll->Release();
-            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, bold);
+            return familyName == DefaultFamily ? null : CreateSystemFace(DefaultFamily, weight);
         }
         IDWriteFontFamily* family;
         Check(coll->GetFontFamily(index, &family), "GetFontFamily");
+        // The numeric weight passes straight through (WinUI FontWeight ≡ DWRITE_FONT_WEIGHT) — GetFirstMatchingFont
+        // picks the nearest face / variable-font named instance (e.g. SemiBold 600 of "Segoe UI Variable Text").
         IDWriteFont* font;
-        var weight = bold ? DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL;
-        Check(family->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
+        Check(family->GetFirstMatchingFont((DWRITE_FONT_WEIGHT)weight, DWRITE_FONT_STRETCH.DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_NORMAL, &font), "GetFirstMatchingFont");
         IDWriteFontFace* face;
         Check(font->CreateFontFace(&face), "CreateFontFace");
         font->Release(); family->Release(); coll->Release();
         return face;
     }
 
-    // Load a face directly from a .ttf/.otf file (custom icon fonts). Bold is synthesized when requested.
-    private IDWriteFontFace* CreateFaceFromFile(string path, bool bold)
+    // Load a face directly from a .ttf/.otf file (custom icon fonts). A raw file has no weight family to pick from,
+    // so the heavy half (>= 600) synthesizes bold.
+    private IDWriteFontFace* CreateFaceFromFile(string path, int weight)
     {
         IDWriteFontFile* file;
         fixed (char* p = path) Check(_dw->CreateFontFileReference(p, null, &file), "CreateFontFileReference");
         BOOL supported; DWRITE_FONT_FILE_TYPE ft; DWRITE_FONT_FACE_TYPE faceType; uint numFaces;
         Check(file->Analyze(&supported, &ft, &faceType, &numFaces), "Analyze(font)");
         IDWriteFontFile** files = &file;
-        var sim = bold ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
+        var sim = weight >= 600 ? DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_BOLD : DWRITE_FONT_SIMULATIONS.DWRITE_FONT_SIMULATIONS_NONE;
         IDWriteFontFace* face;
         Check(_dw->CreateFontFace(faceType, 1, files, 0, sim, &face), "CreateFontFace(file)");
         file->Release();
@@ -240,11 +265,11 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     // Rasterize at the PHYSICAL size (size * dpiScale) so glyphs are crisp when drawn into a DIP-sized quad at high DPI.
-    private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale)
+    private GlyphEntry GetGlyph(IDWriteFontFace* face, ushort em, int famId, char ch, float size, int weight, float dpiScale)
     {
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        var key = new GlyphKey(famId, sizeQ, scaleQ, bold, ch, ByGid: false);
+        var key = new GlyphKey(famId, sizeQ, scaleQ, weight, ch, ByGid: false);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         uint cp = ch;
@@ -285,7 +310,7 @@ float4 PSMain(VSOut i) : SV_Target
                 Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
             byte[] gray = new byte[w * h];      // average to grayscale coverage for the R8 atlas
             for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            Pack(ref e, gray, w, h);
+            PackOrReset(ref e, gray, w, h);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
@@ -294,10 +319,12 @@ float4 PSMain(VSOut i) : SV_Target
         return e;
     }
 
-    private void Pack(ref GlyphEntry e, byte[] src, int w, int h)
+    /// <summary>Shelf-pack one rasterized glyph. False = atlas full — the caller must NOT cache the entry as-is
+    /// (an unpacked entry keeps X=Y=0 and would sample the atlas origin); it resets the atlas generation and retries.</summary>
+    private bool TryPack(ref GlyphEntry e, byte[] src, int w, int h)
     {
         if (_shelfX + w + 1 > ATLAS) { _shelfX = 1; _shelfY += _shelfH + 1; _shelfH = 0; }
-        if (_shelfY + h + 1 > ATLAS) return;   // atlas full (slice never hits this)
+        if (_shelfY + h + 1 > ATLAS) return false;   // atlas full → generational reset (ResetAtlas)
         e.X = _shelfX; e.Y = _shelfY;
         long nonZero = _atlasNonZero;
         for (int row = 0; row < h; row++)
@@ -314,6 +341,40 @@ float4 PSMain(VSOut i) : SV_Target
         _atlasNonZero = nonZero;
         _shelfX += w + 1;
         if (h > _shelfH) _shelfH = h;
+        return true;
+    }
+
+    /// <summary>Pack with overflow recovery: a full atlas flushes the GENERATION (pixels + glyph entries + every cached
+    /// run — their quads embed atlas UVs) and packs into the fresh one. Quads already emitted THIS frame briefly sample
+    /// repacked texels (one-frame artifact on the overflow frame); next frame re-shapes from the empty run cache and is
+    /// clean. The epoch counter lets an in-flight <see cref="ShapeInto"/> detect the flush and re-shape its own run so a
+    /// single cached run never mixes generations.</summary>
+    private void PackOrReset(ref GlyphEntry e, byte[] src, int w, int h)
+    {
+        if (TryPack(ref e, src, w, h)) return;
+        ResetAtlas();
+        if (!TryPack(ref e, src, w, h))
+        {
+            // A single glyph larger than the whole atlas — render nothing rather than garbage.
+            e.W = 0; e.H = 0;
+            Diag.Set("text.atlas", "oversized-glyph", $"{w}x{h} > {ATLAS}");
+        }
+    }
+
+    private int _atlasEpoch;
+
+    private void ResetAtlas()
+    {
+        Array.Clear(_cpu);
+        _shelfX = 1; _shelfY = 1; _shelfH = 0;
+        _atlasNonZero = 0;
+        _cache.Clear();
+        foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+        _runCache.Clear();
+        _atlasEpoch++;
+        _atlasDirty = true;
+        Diag.Count("text.atlas", "generation-reset");
+        Diag.Event("text.atlas", $"generation reset #{_atlasEpoch} (atlas full at {ATLAS}x{ATLAS})");
     }
 
     /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space, then emit them tinted/transformed into
@@ -321,10 +382,15 @@ float4 PSMain(VSOut i) : SV_Target
     /// <see cref="RunKey"/>: an unchanged run replays its baked local-space quads with the CURRENT color/transform/opacity and
     /// touches neither DirectWrite nor the glyph dictionary. <paramref name="textId"/>/<paramref name="familyId"/> are the
     /// interned handles (the cache key); <paramref name="text"/>/<paramref name="family"/> are needed only to shape on a miss.
-    /// <paramref name="family"/> selects the face (system name or "path.ttf#Family"); empty = the default body font.</summary>
-    public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList)
+    /// <paramref name="family"/> selects the face (system name or "path.ttf#Family"); empty = the default body font.
+    /// <paramref name="weight"/> is the NUMERIC font weight; <paramref name="charSpacing"/>/<paramref name="lineHeight"/>/
+    /// <paramref name="lineStacking"/>/<paramref name="lineBounds"/> mirror the glyph op (see DrawGlyphRunCmd) and feed
+    /// the layout engine, so the GPU path lays out exactly like the measure path.</summary>
+    public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
+        int spanRunId = 0, bool forceColor = false)
     {
-        var key = MakeRunKey(textId, familyId, size, bold, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale);
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
 
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
         if (!Unsafe.IsNullRef(ref hit))
@@ -332,40 +398,83 @@ float4 PSMain(VSOut i) : SV_Target
             hit.LastUsedFrame = _frame;
             _runsCached++;
 #if DEBUG
-            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale);
+            if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
 #endif
-            Replay(hit.Glyphs.AsSpan(0, hit.Count), color, world, opacity, outList);
+            Replay(hit.Glyphs.AsSpan(0, hit.Count), hit.Colors, forceColor, color, world, opacity, outList);
             return;
         }
 
         // Miss (new/changed run): shape once into the scratch buffer, cache the baked local-space quads, then replay.
+        // The quad array is POOLED (returned on eviction) so scroll-storms of fresh text don't churn Gen0 per run.
+        // Span runs (rtb-01): the SpanRunTable overlay restyles ranges of the SAME flow; per-quad span colors bake
+        // into a parallel Colors array (allocated on the miss only — a span style change minted a fresh id anyway).
+        var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
         _scratch.Clear();
-        ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
-        var arr = _scratch.Count > 0 ? _scratch.ToArray() : Array.Empty<ShapedGlyph>();
-        _runCache[key] = new ShapedRun { Glyphs = arr, Count = arr.Length, LastUsedFrame = _frame };
+        _colorScratch.Clear();
+        ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
+            spanRun is not null ? spanRun.Spans : default, spanRun is not null ? _colorScratch : null);
+        int n = _scratch.Count;
+        var arr = RentQuads(n);
+        for (int i = 0; i < n; i++) arr[i] = _scratch[i];
+        ColorF[]? colors = null;
+        if (spanRun is not null && _colorScratch.Count == n)
+        {
+            for (int i = 0; i < n && colors is null; i++)
+                if (_colorScratch[i].A > 0f) colors = new ColorF[n];   // only retain when some span actually recolors
+            if (colors is not null)
+                for (int i = 0; i < n; i++) colors[i] = _colorScratch[i];
+        }
+        _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
-        Replay(arr.AsSpan(), color, world, opacity, outList);
+        Replay(arr.AsSpan(0, n), colors, forceColor, color, world, opacity, outList);
     }
 
-    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, bool bold, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale)
+    /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
+    public void SetLivenessSource(StringTable strings) => _liveness = strings;
+
+    private ShapedGlyph[] RentQuads(int count)
+    {
+        if (count == 0) return Array.Empty<ShapedGlyph>();
+        int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
+        if (bucket >= _quadPool.Length) return new ShapedGlyph[count];   // pathological run — don't pool
+        var stack = _quadPool[bucket];
+        return stack is { Count: > 0 } ? stack.Pop() : new ShapedGlyph[1 << bucket];
+    }
+
+    private void ReturnQuads(ShapedGlyph[] arr)
+    {
+        if (arr.Length == 0) return;
+        int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
+        if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
+        (_quadPool[bucket] ??= new Stack<ShapedGlyph[]>()).Push(arr);
+    }
+
+    private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, int spanRunId)
     {
         int widthQ = float.IsInfinity(maxWidth) || maxWidth > 1e9f ? int.MaxValue : (int)MathF.Round(maxWidth);
-        return new RunKey(textId.Value, familyId.Value, (int)MathF.Round(size), bold ? 1 : 0, wrap, trim, maxLines,
-            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f));
+        int lineHQ = float.IsNaN(lineHeight) || lineHeight <= 0f ? 0 : (int)MathF.Round(lineHeight * 10f);   // 0 = font-natural
+        return new RunKey(textId.Value, familyId.Value, (int)MathF.Round(size), weight, wrap, trim, maxLines,
+            widthQ, (int)MathF.Round(originX), (int)MathF.Round(topY), (int)MathF.Round(dpiScale * 100f),
+            (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
 
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity.
-    /// Allocation-free (appends into the reused glyph-instance list) — the steady-state path for unchanged text.</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF color, Affine2D world, float opacity, List<GlyphInstance> outList)
+    /// Allocation-free (appends into the reused glyph-instance list) — the steady-state path for unchanged text.
+    /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
+    /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
+    /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, List<GlyphInstance> outList)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
+            ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             outList.Add(new GlyphInstance
             {
                 DstX = s.DstX, DstY = s.DstY, DstW = s.DstW, DstH = s.DstH,
                 U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
-                R = color.R, G = color.G, B = color.B, A = color.A,
+                R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
             });
         }
@@ -373,23 +482,41 @@ float4 PSMain(VSOut i) : SV_Target
 
     /// <summary>Shape + lay out a run via the DirectWrite layout engine (itemize → shape → wrap/trim → position, with
     /// kerning/ligatures/complex-script/BiDi), then rasterize each POST-shaping glyph (by glyph id) into the atlas and
-    /// bake its local-space quad. The engine drives BOTH this render path and the measure path, so they layout identically.</summary>
-    private void ShapeInto(string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, float dpiScale, List<ShapedGlyph> outList)
+    /// bake its local-space quad. The engine drives BOTH this render path and the measure path, so they layout identically.
+    /// <paramref name="spans"/> (rtb-01 inline runs): the same one-flow layout with per-range face/weight/size; each
+    /// glyph rasterizes at ITS shaped size (LaidGlyph.Size) and <paramref name="colorsOut"/> (non-null for span runs)
+    /// receives the per-quad span color (A==0 = inherit), parallel to <paramref name="outList"/>.</summary>
+    private void ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, List<ShapedGlyph> outList,
+        ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null)
     {
-        _engine.Layout(text.AsSpan(), family ?? "", bold, size, maxWidth, wrap, trim, maxLines);
+        _engine.Layout(text.AsSpan(), family ?? "", weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, spans, _liveness);
         float inv = 1f / dpiScale;
-        foreach (var lg in _engine.Glyphs)
+        // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
+        // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
+        // Bounded: a restarted pass packs into an empty 2048² atlas; one run can't fill it (guard at 3 just in case).
+        int epoch, restarts = 0;
+        do
         {
-            if (lg.Face == 0) continue;
-            var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, size, dpiScale);
-            if (ge.W > 0 && ge.H > 0)
-                outList.Add(new ShapedGlyph
+            epoch = _atlasEpoch;
+            outList.Clear();
+            colorsOut?.Clear();
+            foreach (var lg in _engine.Glyphs)
+            {
+                if (lg.Face == 0) continue;
+                var ge = GetGlyphByGid((IDWriteFontFace*)lg.Face, lg.Gid, lg.Size > 0f ? lg.Size : size, dpiScale);
+                if (ge.W > 0 && ge.H > 0)
                 {
-                    DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
-                    DstW = ge.W * inv, DstH = ge.H * inv,
-                    U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
-                });
-        }
+                    outList.Add(new ShapedGlyph
+                    {
+                        DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
+                        DstW = ge.W * inv, DstH = ge.H * inv,
+                        U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
+                    });
+                    colorsOut?.Add(lg.Span >= 0 && lg.Span < spans.Length ? spans[lg.Span].Color : default);
+                }
+            }
+        } while (epoch != _atlasEpoch && ++restarts < 3);
     }
 
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
@@ -401,7 +528,8 @@ float4 PSMain(VSOut i) : SV_Target
         int faceId = FaceId((nint)face);
         int sizeQ = (int)MathF.Round(size);
         int scaleQ = (int)MathF.Round(dpiScale * 100f);
-        var key = new GlyphKey(faceId, sizeQ, scaleQ, false, gid, ByGid: true);
+        // Weight 0 here is correct: the face id already encodes the (family, numeric weight) the engine resolved.
+        var key = new GlyphKey(faceId, sizeQ, scaleQ, 0, gid, ByGid: true);
         if (_cache.TryGetValue(key, out var e)) return e;
 
         float physEm = size * dpiScale;
@@ -421,12 +549,14 @@ float4 PSMain(VSOut i) : SV_Target
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         if (w > 0 && h > 0)
         {
-            byte[] rgb = new byte[w * h * 3];
+            byte[] rgb = ArrayPool<byte>.Shared.Rent(w * h * 3);
             fixed (byte* pr = rgb)
-                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
-            byte[] gray = new byte[w * h];
+                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)(w * h * 3)), "CreateAlphaTexture");
+            byte[] gray = ArrayPool<byte>.Shared.Rent(w * h);
             for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            Pack(ref e, gray, w, h);
+            PackOrReset(ref e, gray, w, h);
+            ArrayPool<byte>.Shared.Return(gray);
+            ArrayPool<byte>.Shared.Return(rgb);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
@@ -435,9 +565,9 @@ float4 PSMain(VSOut i) : SV_Target
         return e;
     }
 
-    private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, bool bold, float dpiScale, float pen, float baseline, float inv, List<ShapedGlyph> outList)
+    private float Emit(IDWriteFontFace* face, ushort em, int famId, char ch, float size, int weight, float dpiScale, float pen, float baseline, float inv, List<ShapedGlyph> outList)
     {
-        var g = GetGlyph(face, em, famId, ch, size, bold, dpiScale);
+        var g = GetGlyph(face, em, famId, ch, size, weight, dpiScale);
         if (g.W > 0 && g.H > 0)
             outList.Add(new ShapedGlyph
             {
@@ -448,22 +578,34 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     // Drop runs not referenced for a while so the cache tracks the live (e.g. virtualized) working set. Off the hot path —
-    // called from BeginFrame on a stride. The age threshold tightens when the cache grows large (a bounded backstop).
+    // called from BeginFrame on a stride. The age threshold tightens when the cache grows large (a bounded backstop),
+    // and a run whose text id was RECLAIMED by the interner (resolves empty — no live node shows it, the draw list
+    // can't reference it) is dropped after a short grace, so storm-shaped runs recycle their quad arrays promptly.
     private void EvictStaleRuns()
     {
         int maxAge = _runCache.Count > 4096 ? 60 : 240;
         foreach (var kv in _runCache)
-            if (_frame - kv.Value.LastUsedFrame > maxAge) _evictScratch.Add(kv.Key);
-        foreach (var k in _evictScratch) _runCache.Remove(k);
+        {
+            int idle = _frame - kv.Value.LastUsedFrame;
+            if (idle > maxAge
+                || (idle > 2 && kv.Key.TextId != 0 && _liveness is { } st && st.Resolve(new StringId(kv.Key.TextId)).Length == 0))
+                _evictScratch.Add(kv.Key);
+        }
+        foreach (var k in _evictScratch)
+            if (_runCache.Remove(k, out var dead))
+                ReturnQuads(dead.Glyphs);
         _evictScratch.Clear();
     }
 
 #if DEBUG
     // Re-shape and assert the cached run is byte-identical to a fresh shape — proves the cache is output-preserving.
-    private void VerifyAgainstReshape(in ShapedRun cached, string text, string family, float size, bool bold, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines, float dpiScale)
+    private void VerifyAgainstReshape(in ShapedRun cached, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, int spanRunId = 0)
     {
         _scratch.Clear();
-        ShapeInto(text, family, size, bold, originX, topY, maxWidth, wrap, trim, maxLines, dpiScale, _scratch);
+        var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
+        ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
+            spanRun is not null ? spanRun.Spans : default);
         Debug.Assert(_scratch.Count == cached.Count, $"shaped-run cache count mismatch for \"{text}\": {_scratch.Count} vs {cached.Count}");
         for (int i = 0; i < _scratch.Count && i < cached.Count; i++)
         {
@@ -480,25 +622,25 @@ float4 PSMain(VSOut i) : SV_Target
     {
         private readonly GlyphRenderer _r;
         private readonly nint _face;
-        private readonly ushort _em; private readonly int _famId; private readonly float _size; private readonly bool _bold; private readonly float _dpi;
-        public GlyphAdvanceSource(GlyphRenderer r, IDWriteFontFace* face, ushort em, int famId, float size, bool bold, float dpi)
-        { _r = r; _face = (nint)face; _em = em; _famId = famId; _size = size; _bold = bold; _dpi = dpi; }
-        public float Advance(char ch) => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, ch, _size, _bold, _dpi).Advance;
-        public float EllipsisAdvance => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, '…', _size, _bold, _dpi).Advance;
+        private readonly ushort _em; private readonly int _famId; private readonly float _size; private readonly int _weight; private readonly float _dpi;
+        public GlyphAdvanceSource(GlyphRenderer r, IDWriteFontFace* face, ushort em, int famId, float size, int weight, float dpi)
+        { _r = r; _face = (nint)face; _em = em; _famId = famId; _size = size; _weight = weight; _dpi = dpi; }
+        public float Advance(char ch) => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, ch, _size, _weight, _dpi).Advance;
+        public float EllipsisAdvance => _r.GetGlyph((IDWriteFontFace*)_face, _em, _famId, '…', _size, _weight, _dpi).Advance;
     }
 
-    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale)
-        => LineBreaker.MeasureRange(text.AsSpan(), s, e, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private float MeasureRange(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, int weight, float dpiScale)
+        => LineBreaker.MeasureRange(text.AsSpan(), s, e, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
-    private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, bool bold, float dpiScale, float maxWidth, float ellipsisW)
-        => LineBreaker.FitEllipsis(text.AsSpan(), s, e, maxWidth, ellipsisW, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private int FitEllipsis(IDWriteFontFace* face, ushort em, int famId, string text, int s, int e, float size, int weight, float dpiScale, float maxWidth, float ellipsisW)
+        => LineBreaker.FitEllipsis(text.AsSpan(), s, e, maxWidth, ellipsisW, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
     private static int SkipSpaces(string text, int i) { while (i < text.Length && text[i] == ' ') i++; return i; }
 
     /// <summary>Greedy line break (shared with the measure path): the exclusive end index of the line starting at
     /// <paramref name="start"/> that fits within <paramref name="maxWidth"/>.</summary>
-    private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, bool bold, float dpiScale, float maxWidth, int wrap)
-        => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, bold, dpiScale));
+    private int WrapEnd(IDWriteFontFace* face, ushort em, int famId, string text, int start, int n, float size, int weight, float dpiScale, float maxWidth, int wrap)
+        => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
     // ── GPU resources ─────────────────────────────────────────────────────────
     private void InitAtlasTexture(ID3D12Device* device)
@@ -658,14 +800,17 @@ float4 PSMain(VSOut i) : SV_Target
         _frame++;
         _runsCached = 0;
         _runsShaped = 0;
-        if ((_frame & 63) == 0) EvictStaleRuns();   // sweep stale shaped runs every 64 frames
+        // Sweep stale shaped runs: every 64 frames at rest, every 8 under churn (a scroll storm fills the cache with
+        // dead-id runs — sweeping sooner keeps their pooled quad arrays cycling instead of piling up).
+        int stride = _runCache.Count > 2048 ? 7 : 63;
+        if ((_frame & stride) == 0) EvictStaleRuns();
     }
 
     public void Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH)
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
-        if (count == 0) return;
+        if (count <= 0) return;
         for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
         _cursor += count;
 

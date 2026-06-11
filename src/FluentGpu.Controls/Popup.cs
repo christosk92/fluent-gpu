@@ -14,6 +14,13 @@ public sealed class Popup : Component
     public string Text = "Popup content";
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
 
+    /// <summary>WinUI <c>Popup.ShouldConstrainToRootBounds</c> (Popup_Partial.cpp:951-970: false ⇒ a WINDOWED popup
+    /// rendered in its own top-level window, placed against the monitor work area — Popup_Partial.cpp:1019
+    /// <c>SetIsWindowed</c>). Default true (constrained to the window, like a non-windowed XAML popup). When the
+    /// platform/host cannot create popup windows the overlay host silently falls back to constrained placement
+    /// (WinUI's <c>DoesPlatformSupportWindowedPopup</c> gate, FlyoutBase_Partial.cpp:3188).</summary>
+    public bool ShouldConstrainToRootBounds = true;
+
     public static Element Create(string triggerLabel, string text)
         => Embed.Comp(() => new Popup { TriggerLabel = triggerLabel, Text = text });
 
@@ -23,6 +30,7 @@ public sealed class Popup : Component
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
         var autoOpened = UseRef(false);
+        bool constrain = ShouldConstrainToRootBounds;
 
         void Toggle()
         {
@@ -39,7 +47,8 @@ public sealed class Popup : Component
                         new TextEl(Text) { Size = 14f, Color = Tok.TextPrimary },
                     },
                 },
-                FlyoutPlacement.BottomLeft);
+                FlyoutPlacement.BottomLeft,
+                new PopupOptions() { ConstrainToRootBounds = constrain });
         }
 
         UseEffect(() =>

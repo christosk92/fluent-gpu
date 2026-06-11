@@ -71,7 +71,8 @@ public sealed class ToggleSplitButton : Component
                 () => anchor.Value,
                 () => MenuFlyout.Build(Items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,                 // FlyoutShowOptions Placement = BottomEdgeAlignedLeft (SplitButton.cpp OpenFlyout)
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss));
+                // WinUI menus are windowed popups (FlyoutBase SetIsWindowedPopup) — may escape the window.
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => { handle.Value = null; open.Value = false; };
             open.Value = true;
         }
@@ -197,6 +198,9 @@ public sealed class ToggleSplitButton : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center,
+            // ToggleSplitButton shares SplitButtonStyle (SplitButton.xaml:246 BasedOn), which sets
+            // HorizontalAlignment="Left" (:8): hug content, never stretch to the cross-axis width.
+            AlignSelf = FlexAlign.Start,
             MinHeight = ControlHeight,
             Fill = restFill,
             BorderWidth = 1f, BorderBrush = restBorder, PressedBorderBrush = pressBorder, Corners = Radii.ControlAll,

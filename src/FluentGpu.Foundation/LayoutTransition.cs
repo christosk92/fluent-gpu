@@ -25,8 +25,18 @@ public enum SizeMode : byte
     Reveal,        // lay out at final size immediately; ease a clip window + translate. Crisp, compositor-only (the default).
     ScaleCorrect,  // GPU scale toward 1 with child counter-scale (Framer-Motion projection). Chrome only — distorts text/borders.
     Relayout,      // re-solve the subtree at the interpolated size each tick so text re-wraps live. Correct, costs scoped layout.
+    Reflow,        // the size change runs through REAL layout each tick: the interpolated size participates in PARENT
+                   // layout (boundary-scoped re-solve), so neighbours/siblings reflow smoothly. The deliberate
+                   // smoother-than-WinUI mode for open/close surfaces (Expander, panes, info rows).
     Auto,
 }
+
+/// <summary>Which edge of a <see cref="SizeMode.Reflow"/> node its CONTENT is anchored to while the size animates.
+/// <see cref="Leading"/> = content stays put, the far edge sweeps (a wipe). <see cref="Trailing"/> = the content's
+/// end edge rides the animated edge (the WinUI Expander "slide out from under the header": at reveal 0 the content
+/// sits fully behind the leading edge; its trailing rounded corners stay visible mid-motion). Applied by the recorder
+/// as a child-group offset — compositor-composed, no per-child knowledge.</summary>
+public enum SizeAnchor : byte { Leading, Trailing }
 
 /// <summary>Spring (velocity-carrying, interruptible — the default) or an eased fixed-duration tween.</summary>
 public enum DynamicsKind : byte { Spring, Tween }
@@ -34,22 +44,29 @@ public enum DynamicsKind : byte { Spring, Tween }
 /// <summary>
 /// The dynamics of a transition. Springs are the default (interruptible, jump-free retarget): <c>Response</c> ≈ the
 /// settle time in seconds, <c>DampingRatio</c> 1 = critical (no overshoot), &lt;1 = bouncy. A tween is opt-in:
-/// fixed <c>DurationMs</c> + <c>Easing</c>. Stored as scalars (not the AnimEngine's <c>SpringParams</c>) so the spec
-/// can live in Foundation; the engine converts at seed time. A <c>default</c> value (all zero) is normalized by the
-/// engine to the spring defaults.
+/// fixed <c>DurationMs</c> + <c>Easing</c> (an <see cref="EasingSpec"/>, so authored WinUI KeySplines are expressible;
+/// a default spec is normalized by the engine to <see cref="Foundation.Easing.FluentDecelerate"/>). Stored as scalars
+/// (not the AnimEngine's <c>SpringParams</c>) so the spec can live in Foundation; the engine converts at seed time.
+/// A <c>default</c> value (all zero) is normalized by the engine to the spring defaults.
 /// </summary>
 public readonly record struct TransitionDynamics(
     DynamicsKind Kind = DynamicsKind.Spring,
     float Response = 0.30f,
     float DampingRatio = 0.85f,
     float DurationMs = 0f,
-    Easing Easing = Easing.FluentDecelerate)
+    EasingSpec Easing = default)
 {
     public static TransitionDynamics Spring(float response = 0.30f, float dampingRatio = 0.85f)
         => new(DynamicsKind.Spring, response, dampingRatio);
-    public static TransitionDynamics Tween(float durationMs, Easing easing = Easing.FluentDecelerate)
+    public static TransitionDynamics Tween(float durationMs, Easing easing = Foundation.Easing.FluentDecelerate)
         => new(DynamicsKind.Tween, 0f, 0f, durationMs, easing);
-    public static TransitionDynamics Default => new();
+    public static TransitionDynamics Tween(float durationMs, EasingSpec easing)
+        => new(DynamicsKind.Tween, 0f, 0f, durationMs, easing);
+    // NOTE: must spell the arguments out — on a record struct the parameterless `new()` ZERO-initializes (primary-ctor
+    // parameter defaults do NOT apply), which made Default a 0-response/0-damping spring: stiffness ~4e7 with zero
+    // damping, and the integrator DIVERGES to ±Infinity in two frames (the Repeater.cs ItemCollectionTransition
+    // comment documents the same landmine).
+    public static TransitionDynamics Default => new(DynamicsKind.Spring, 0.30f, 0.85f);
 }
 
 /// <summary>Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
@@ -71,7 +88,10 @@ public readonly record struct LayoutTransition(
     TransitionDynamics? ExitDynamics = null,
     // Optional start delay for layout-transition channels + enter/exit terminals. This keeps stagger as an engine
     // primitive (a field on the transition spec), not a control-local timer or per-frame callback.
-    float DelayMs = 0f)
+    float DelayMs = 0f,
+    // Content anchoring while a Reflow size animation runs (see SizeAnchor). Leading = wipe; Trailing = the content's
+    // end edge rides the animated edge (the Expander slide-from-under-the-header). Ignored by the other size modes.
+    SizeAnchor Anchor = SizeAnchor.Leading)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);
