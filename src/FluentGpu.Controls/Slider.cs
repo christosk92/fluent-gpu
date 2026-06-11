@@ -442,16 +442,18 @@ public static partial class Slider
         // Rail (pure styling) + value fill: full width, grown from the left by a composited ScaleX bound to the signal — no layout.
         var rail = parts.Apply(PartRail,
             new BoxEl { Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius), Fill = railFill, HoverFill = railFill, PressedFill = railFill, OffsetY = (height - s.TrackHeight) * 0.5f });
+        // The bind OWNS LocalTransform (a bound node's static Offset* is ignored — Reconciler rule), so the rail's
+        // vertical centering must ride inside the bind's translation, not a static OffsetY.
+        float fillOffY = (height - s.TrackHeight) * 0.5f;
         Func<Affine2D> fillBind = () =>
         {
             float v = MathF.Max(Math.Clamp(value.Value, 0f, 1f), 1e-4f);
-            return Affine2D.Translation(-width * (1f - v) * 0.5f, 0f).Multiply(Affine2D.Scale(v, 1f));   // grow from the left
+            return Affine2D.Translation(-width * (1f - v) * 0.5f, fillOffY).Multiply(Affine2D.Scale(v, 1f));   // grow from the left, centred on the rail
         };
         var fill = new BoxEl
         {
             Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius),
             Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress,   // SliderTrackValueFill* (lines 24-26)
-            OffsetY = (height - s.TrackHeight) * 0.5f,
             TransformBind = fillBind,
         };
         if (parts is not null)

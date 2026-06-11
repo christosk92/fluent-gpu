@@ -25,7 +25,22 @@ public enum InputKind : byte
     /// <summary>The window lost activation (WM_ACTIVATE WA_INACTIVE) — light-dismiss overlays close, pressed state clears.</summary>
     WindowBlur = 9,
     WindowFocus = 10,
+    /// <summary>The window's placement changed (normal ↔ maximized/minimized) — a custom titlebar re-glyphs max↔restore.</summary>
+    WindowStateChanged = 11,
 }
+
+/// <summary>Window placement, surfaced for custom-titlebar chrome (<see cref="IPlatformWindow.State"/>).</summary>
+public enum WindowState : byte { Normal = 0, Maximized = 1, Minimized = 2 }
+
+/// <summary>Non-client classification for one engine-reported titlebar rect (engine → WM_NCHITTEST). <c>Client</c>
+/// marks an INTERACTIVE ISLAND (search box, back/pane buttons) the engine keeps; <c>Caption</c> is the OS drag-move
+/// band; the three buttons get HTMIN/HTMAX/HTCLOSE so Win11 shows the snap-layouts flyout over Max.</summary>
+public enum TitleBarHit : byte { Client = 0, Caption = 1, MinButton = 2, MaxButton = 3, CloseButton = 4 }
+
+/// <summary>One reported titlebar region: a rect in CLIENT DIP (the engine's space) + its non-client classification.
+/// Pushed on titlebar relayout only (push-on-change — never per frame). First match wins at hit-test, so callers list
+/// interactive islands and buttons BEFORE the catch-all <see cref="TitleBarHit.Caption"/> band.</summary>
+public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 
 /// <summary>
 /// POD input event drained from the host-owned ring once per frame (no C# events across the seam).
@@ -126,8 +141,12 @@ public interface IPlatformPopupWindow : IDisposable
     void Hide();
 }
 
-/// <summary><paramref name="Composited"/> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels.</summary>
-public readonly record struct WindowDesc(string Title, Size2 SizePx, float Scale, bool Composited = false);
+/// <summary><paramref name="Composited"/> = the window is composited with per-pixel alpha (WS_EX_NOREDIRECTIONBITMAP) so a
+/// DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels. <paramref name="CustomFrame"/> =
+/// the engine draws the ENTIRE titlebar (WinUI ExtendsContentIntoTitleBar): the platform strips the OS caption
+/// (WM_NCCALCSIZE) but keeps the resize frame/shadow, answers WM_NCHITTEST from the engine-reported
+/// <see cref="TitleBarRegion"/>s, and synthesizes pointer input for the engine-drawn caption buttons.</summary>
+public readonly record struct WindowDesc(string Title, Size2 SizePx, float Scale, bool Composited = false, bool CustomFrame = false);
 
 public interface IPlatformWindow : IDisposable
 {
@@ -162,6 +181,26 @@ public interface IPlatformWindow : IDisposable
 
     /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
     IPlatformTextInput TextInput { get; }
+
+    // ── custom-titlebar seam (WindowDesc.CustomFrame; defaults are no-ops so standard-frame backends ignore it) ──────
+
+    /// <summary>Push the titlebar's drag/caption-button regions (CLIENT DIP; see <see cref="TitleBarRegion"/>). The
+    /// engine calls this only when the titlebar relayouts — push-on-change, never per frame (zero-alloc steady path).
+    /// Anything not covered stays HTCLIENT (the bar's interactive content). An empty span clears all regions.</summary>
+    void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) { }
+
+    /// <summary>Current placement (drives the custom max↔restore glyph). Change is signaled via
+    /// <see cref="InputKind.WindowStateChanged"/>; this property is the pull side.</summary>
+    WindowState State => WindowState.Normal;
+
+    /// <summary>True while the window has activation (drives titlebar dimming). Change is signaled via the existing
+    /// <see cref="InputKind.WindowFocus"/>/<see cref="InputKind.WindowBlur"/> events; this property is the pull side.</summary>
+    bool IsActive => true;
+
+    /// <summary>Engine caption-button commands (Win32: WM_SYSCOMMAND SC_MINIMIZE / SC_MAXIMIZE↔SC_RESTORE / WM_CLOSE).</summary>
+    void Minimize() { }
+    void ToggleMaximize() { }
+    void CloseWindow() { }
 }
 
 /// <summary>Versioned external-store-shaped locale seam (modeled on ISystemColors). L9.</summary>

@@ -72,9 +72,9 @@ public static class ItemContainer
     /// realize-time closures are the only managed cost. <paramref name="isTabStop"/> is the roving-tab-stop seam:
     /// ItemsView keeps it true on the keyboard-current container ONLY (TabNavigation="Once", ItemsView.xaml:7).
     /// </summary>
-    // Per-item chrome customization goes through the composing control's ContainerFactory seam, NOT TemplateParts —
-    // per-item part modifiers in recycled scroll paths are an allocation/recycling hazard
-    // (docs/guide/control-fidelity.md §6).
+    // Per-item chrome SKIN goes through the composing control's ContainerFactory/SelectorVisual seam; per-item
+    // VARIATION goes through the PartDelta value seam (fill/fg/opacity/corner/padding/glyph as values, applied during
+    // construction — shape-stable, 0-alloc, CI-enforced; docs/guide/control-fidelity.md §6).
     public static BoxEl Build(
         Element child,
         bool isSelected,
@@ -86,9 +86,15 @@ public static class ItemContainer
         Action<bool>? onFocusChanged = null,
         float width = float.NaN,
         float height = float.NaN,
-        bool isTabStop = true)
+        bool isTabStop = true,
+        PartDelta partDelta = default)
     {
-        CornerRadius4 outer = corners ?? Radii.ControlAll;   // ControlCornerRadius default (ItemContainer.xaml:7)
+        // Per-item VARIATION baked during construction: every applied delta is a plain init-property swap into an
+        // already-allocated record — it NEVER adds/removes children (shape stays a function of (selectedVisible,
+        // enabled, checkbox) only) and introduces no bind/Animate/OnRealized (keeps the subtree recyclable). Glyph is
+        // honored only by presets that render a leading glyph (the default ItemContainer has none — accepted for
+        // signature uniformity).
+        CornerRadius4 outer = partDelta.Corners ?? corners ?? Radii.ControlAll;   // ControlCornerRadius default (ItemContainer.xaml:7)
         bool selectedVisible = isSelected && isEnabled;       // Disabled collapses PART_SelectionVisual (xaml:108-110)
 
         // Child count is shape-stable per (selected, enabled, checkbox) state; stable keys keep identity across state
@@ -97,8 +103,11 @@ public static class ItemContainer
         var children = new Element[n];
         int w = 0;
 
-        // Content layer (the "Placeholder for child", xaml:115) — fills the container.
-        children[w++] = new BoxEl { Key = "ic-content", Children = [child] };
+        // Content layer (the "Placeholder for child", xaml:115) — fills the container. A PartDelta.Foreground recolors
+        // a TextEl child in place; a PartDelta.Padding insets the content lane (non-text content has no single
+        // foreground, so Foreground is ignored for it).
+        Element laneContent = child is TextEl ct && partDelta.Foreground is { } fg ? ct with { Color = fg } : child;
+        children[w++] = new BoxEl { Key = "ic-content", Padding = partDelta.Padding ?? default, Children = [laneContent] };
 
         if (selectedVisible)
         {
@@ -108,7 +117,7 @@ public static class ItemContainer
             children[w++] = new BoxEl
             {
                 Key = "ic-ring",
-                BorderColor = Tok.AccentDefault,                  // ItemContainerSelectionVisualBackground (:14/:46)
+                BorderColor = partDelta.Border ?? Tok.AccentDefault,   // ItemContainerSelectionVisualBackground (:14/:46)
                 BorderWidth = SelectionVisualThickness,
                 Corners = outer,
                 HitTestVisible = false,                           // IsHitTestVisible="False" (xaml:125)
@@ -170,8 +179,8 @@ public static class ItemContainer
             Width = width,
             Height = height,
             Corners = outer,
-            Fill = Tok.FillSubtleTransparent,        // ItemContainerBackground (:5/:37) — pointer states live on ic-common above
-            Opacity = isEnabled ? 1f : DisabledOpacity,   // Disabled storyboard (xaml:104-107)
+            Fill = partDelta.Fill ?? Tok.FillSubtleTransparent,   // ItemContainerBackground (:5/:37) — pointer states live on ic-common above
+            Opacity = partDelta.Opacity ?? (isEnabled ? 1f : DisabledOpacity),   // Disabled storyboard (xaml:104-107)
             IsEnabled = isEnabled,
             // Roving single tab stop (ItemsView.xaml:7 TabNavigation="Once"; the RadioButtons IsTabStop pattern):
             // an explicit TabStop — NOT Focusable — so only the keyboard-current container sits in the tab order;

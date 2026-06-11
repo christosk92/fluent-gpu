@@ -50,7 +50,7 @@ sealed class ShotScene : Component
         "tabview" => CenterShot(Embed.Comp(() => new TabViewShot())),
         "navigationview" => CenterShot(Embed.Comp(() => new NavigationViewShot())),
         "treeview" => CenterShot(Embed.Comp(() => new TreeViewShot())),
-        "listview" => CenterShot(Embed.Comp(() => new ListViewShot())),
+        "listview" => CenterShot(Embed.Comp(() => new ItemsViewListShot())),   // id kept stable; renders the List preset
         "itemsview" => CenterShot(Embed.Comp(() => new ItemsViewShot())),
         // Acrylic material proof (needs-pixels loop for Rhi.D3D12 AcrylicCompositor): the flyout acrylic surface over
         // HIGH-CONTRAST saturated bars — the σ=30 DIP backdrop blur (AcrylicBrush.h:64 sc_blurRadius) must read as
@@ -782,10 +782,10 @@ sealed class TreeViewShot : Component
     };
 }
 
-// D1 — the exact gallery ListView card (CollectionsMenusPages.cs): Width=280 with NO height anywhere above the
-// list. Must render 8 natural-sized rows (8 × 44) with the accent selection pill on row 0 — this card rendered as
-// an empty panel before the D1 fix.
-sealed class ListViewShot : Component
+// D1 — the exact gallery ItemsView List-preset card (Width=280, 8 natural rows, accent pill on row 0): Width=280
+// with NO height anywhere above the list. Must render 8 natural-sized rows (8 × 44) with the accent selection pill
+// on row 0 — this card rendered as an empty panel before the D1 fix.
+sealed class ItemsViewListShot : Component
 {
     static readonly string[] Items = ["Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado"];
     public override Element Render()
@@ -798,7 +798,7 @@ sealed class ListViewShot : Component
             BorderColor = Tok.StrokeCardDefault,
             BorderWidth = 1f,
             Padding = new Edges4(0, 4, 0, 4),
-            Children = [ListView.Create(Items, selected)],
+            Children = [ItemsView.List(Items, selected)],
         };
     }
 }

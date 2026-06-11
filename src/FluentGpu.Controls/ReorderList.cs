@@ -27,6 +27,15 @@ namespace FluentGpu.Controls;
 /// <c>Complete()</c> in <c>OnDragCompleted</c> fires <see cref="OnCommit"/> with the collection move;
 /// <c>Cancel()</c> in <c>OnDragCanceled</c> drops every hint. All state is grow-only — steady-state reorder
 /// (drag at pointer rate) allocates nothing.
+///
+/// <para>TWO-DIMENSIONAL MODE (<see cref="Begin2D"/> / <see cref="Update2D"/> / <see cref="OffsetFor2D"/>) absorbs the
+/// GridView live-reorder geometry: the pending slot comes from the dragged tile's accumulated (dx,dy) against the grid
+/// (row from the vertical stride, column from the realized column width), with the 300ms grid dwell
+/// (GRIDVIEW_LIVEREORDER_TIMER = 300ms — ListViewBase_Partial_Reorder.cpp:51) re-armed on every drag-over change. A
+/// one-slot grid shift can WRAP A ROW (the trailing tile of a row dropping to the head of the next), so the 2-D
+/// displacement hint carries BOTH axes. The dwell ticker (<see cref="Advance"/>), the moved-items projection
+/// (<see cref="ProjectOrder"/> — row-major, identical to 1-D), <see cref="Complete"/> and <see cref="Cancel"/> are
+/// shared with the 1-D path unchanged. <see cref="Columns"/> = 0 selects the 1-D path; <see cref="Begin2D"/> sets it.</para>
 /// </summary>
 public sealed class ReorderList
 {
@@ -58,6 +67,10 @@ public sealed class ReorderList
     public int Count => _count;
     public int DraggedIndex => _dragged;
 
+    /// <summary>Grid column count for the 2-D mode (0 ⇒ 1-D mode). Set by <see cref="Begin2D"/>; the 1-D
+    /// <see cref="Begin(int,System.ReadOnlySpan{float},float)"/> overloads leave it 0.</summary>
+    public int Columns { get; private set; }
+
     /// <summary>The latest computed insertion slot under the pointer (becomes <see cref="TargetIndex"/> after the dwell).</summary>
     public int PendingIndex => _pending;
 
@@ -75,22 +88,6 @@ public sealed class ReorderList
             if (_target > _dragged) return _starts[_target] + _extents[_target] - _extents[_dragged];
             if (_target < _dragged) return _starts[_target];
             return _starts[_dragged];
-        }
-    }
-
-    /// <summary>The pending insertion boundary in the list's resting main-axis coordinates. This follows
-    /// <see cref="PendingIndex"/> immediately, before the live-reorder dwell promotes it to
-    /// <see cref="TargetIndex"/>, so virtualized/list controls can show a deterministic drop cue even while
-    /// displaced siblings are still waiting on WinUI's dwell timer.</summary>
-    public float PendingInsertionLineOffset
-    {
-        get
-        {
-            if (_dragged < 0 || _pending < 0 || (uint)_pending >= (uint)_count) return 0f;
-            float pos = _pending > _dragged
-                ? _starts[_pending] + _extents[_pending] + _spacing * 0.5f
-                : _starts[_pending] - _spacing * 0.5f;
-            return MathF.Max(0f, pos);
         }
     }
 
@@ -120,6 +117,7 @@ public sealed class ReorderList
         _pending = draggedIndex;
         _target = draggedIndex;
         _dwellRemainingMs = 0f;
+        Columns = 0;   // 1-D mode
     }
 
     /// <summary>Uniform-extent overload (fixed-row ListView / tab strip): all <paramref name="count"/> items share
@@ -145,6 +143,61 @@ public sealed class ReorderList
         _pending = draggedIndex;
         _target = draggedIndex;
         _dwellRemainingMs = 0f;
+        Columns = 0;   // 1-D mode
+    }
+
+    /// <summary>Begin a 2-D (grid) reorder for <paramref name="draggedIndex"/> over <paramref name="count"/> tiles laid
+    /// out row-major in <paramref name="columns"/> columns (absorbs the GridView live-reorder geometry). No resting
+    /// extents are stored — the 2-D slot math is grid-geometric (<see cref="Update2D"/> takes the realized column width
+    /// and row stride per move). Sets <see cref="Columns"/> &gt; 0 to select the 2-D path.</summary>
+    public void Begin2D(int draggedIndex, int count, int columns)
+    {
+        if ((uint)draggedIndex >= (uint)count) { Reset(); return; }
+        _count = count;
+        Columns = Math.Max(1, columns);
+        _dragged = draggedIndex;
+        _pending = draggedIndex;
+        _target = draggedIndex;
+        _dwellRemainingMs = 0f;
+    }
+
+    /// <summary>Recompute the 2-D pending slot from the dragged tile's accumulated translation
+    /// (<paramref name="totalDx"/>, <paramref name="totalDy"/>): column from <paramref name="colWidth"/>, row from
+    /// <paramref name="rowStride"/>, clamped to the grid. Returns true when the pending slot changed (the dwell re-arms
+    /// to <see cref="DwellMs"/> — already 300 for the grid preset; ListViewBase_Partial_Reorder.cpp:1068-1074). A
+    /// verbatim port of the GridView 2-D update.</summary>
+    public bool Update2D(float totalDx, float totalDy, float colWidth, float rowStride)
+    {
+        if (_dragged < 0) return false;
+        int cols = Columns < 1 ? 1 : Columns;
+        int row0 = _dragged / cols, col0 = _dragged % cols;
+        int col = Math.Clamp(col0 + (int)MathF.Round(totalDx / MathF.Max(1f, colWidth)), 0, cols - 1);
+        int row = Math.Max(0, row0 + (int)MathF.Round(totalDy / MathF.Max(1f, rowStride)));
+        int slot = Math.Clamp(row * cols + col, 0, _count - 1);
+        if (slot == _pending) return false;
+        _pending = slot;
+        _dwellRemainingMs = DwellMs;   // re-arm on every drag-over change (cpp:1068-1074)
+        return true;
+    }
+
+    /// <summary>The 2-D per-tile displacement hint at the current shown target: a tile in the block between the dragged
+    /// slot and the target shifts by ONE slot toward the vacated source (row-major), which can WRAP A ROW — so the hint
+    /// carries both axes (<paramref name="dx"/>, <paramref name="dy"/>). The dragged tile and everything outside the
+    /// block get (0,0). A verbatim port of the GridView 2-D OffsetFor (ListViewBase_Partial_Reorder.cpp:2125-2158).</summary>
+    public void OffsetFor2D(int index, float colWidth, float rowStride, out float dx, out float dy)
+    {
+        dx = 0f; dy = 0f;
+        if (_dragged < 0 || _target < 0 || index == _dragged || (uint)index >= (uint)_count) return;
+        int cols = Columns < 1 ? 1 : Columns;
+        // Forward drag (target after source): tiles (dragged, target] move back one slot (toward source).
+        // Backward drag: tiles [target, dragged) move forward one slot.
+        int shifted;
+        if (_target > _dragged) { if (index <= _dragged || index > _target) return; shifted = index - 1; }
+        else { if (index >= _dragged || index < _target) return; shifted = index + 1; }
+        int r0 = index / cols, c0 = index % cols;
+        int r1 = shifted / cols, c1 = shifted % cols;
+        dx = (c1 - c0) * colWidth;
+        dy = (r1 - r0) * rowStride;
     }
 
     /// <summary>Recompute the pending slot from the dragged item's accumulated main-axis translation
@@ -270,5 +323,6 @@ public sealed class ReorderList
         _pending = -1;
         _target = -1;
         _dwellRemainingMs = 0f;
+        Columns = 0;
     }
 }

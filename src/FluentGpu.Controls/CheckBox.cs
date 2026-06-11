@@ -104,9 +104,13 @@ public static partial class CheckBox
         // tip, so a left-to-right reveal is the pen order). The dash reveals the same way. Unchecked has NO child (an empty
         // placeholder would persist as the same node and suppress the insert/remove). The box fill/stroke ease under it.
         Element[] markChildren = on
-            ? [Embed.Comp(() => new DrawnCheckmark { Size = s.GlyphSize + 2f, Thickness = 1.8f, Color = glyphColor, Pressable = enabled, Parts = parts })]
+            ? [Ctx.Provide(MarkProps.Channel,
+                new MarkProps(s.GlyphSize + 2f, 1.8f, glyphColor, enabled, CheckBoxMotion.NormalOffToNormalOnMs, parts),
+                Embed.Comp(() => new DrawnCheckmark()))]
             : indet
-                ? [Embed.Comp(() => new DrawnDash { Width = s.BoxSize * 0.5f, Thickness = 2f, Color = glyphColor, Pressable = enabled, Parts = parts })]
+                ? [Ctx.Provide(MarkProps.Channel,
+                    new MarkProps(s.BoxSize * 0.5f, 2f, glyphColor, enabled, 200f, parts),
+                    Embed.Comp(() => new DrawnDash()))]
                 : [];
 
         // The box keeps a 1px ring in every state; the engine eases Fill/BorderColor toward the Hover/Pressed legs of the
@@ -170,6 +174,12 @@ public static partial class CheckBox
         // Parts: restyle anything on the row; the toggle mechanics and the box+label structure always win.
         return parts.Apply(PartRoot, root) with { OnClick = toggle, Role = AutomationRole.CheckBox, Children = children };
     }
+
+    /// <summary>Runtime mark props flow through context because a reused ComponentEl never re-runs its factory.</summary>
+    internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts)
+    {
+        internal static readonly Context<MarkProps?> Channel = new(null);
+    }
 }
 
 /// <summary>
@@ -192,41 +202,37 @@ internal static class CheckBoxMotion
 /// <summary>The checked glyph stroke-trim animation, using WinUI AnimatedAccept NormalOffToNormalOn constants.</summary>
 internal sealed class DrawnCheckmark : Component
 {
-    public float Size = 14f;
-    public float Thickness = 1.8f;
-    public ColorF Color;
-    public bool Pressable = true;
-    public float DurationMs = CheckBoxMotion.NormalOffToNormalOnMs;
-    public TemplateParts? Parts;   // routes CheckBox.PartMark onto the stroke
-
     // Normalized checkmark vertices in the Size×Size box (y down). x is monotonic → left-to-right reveal = draw order.
     static readonly EasingSpec DrawEase = CheckBoxMotion.AcceptTrimEndEase;
     static readonly (float x, float y) P0 = (0.18f, 0.50f), P1 = (0.42f, 0.72f), P2 = (0.80f, 0.26f);
 
     public override Element Render()
     {
+        var p = UseContext(CheckBox.MarkProps.Channel)
+            ?? new CheckBox.MarkProps(14f, 1.8f, default, true, CheckBoxMotion.NormalOffToNormalOnMs, null);
+
         // Reveal the presented width 0→Size on mount (clip exposes the stroke left-to-right). LayoutEffect seeds it before
         // the first anim tick, so the very first recorded frame is already at width 0 — no full-checkmark flash.
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], p.DurationMs);
 
         var mark = new PolylineStrokeEl
         {
-            Width = Size,
-            Height = Size,
-            P0 = new Point2(P0.x * Size, P0.y * Size),
-            P1 = new Point2(P1.x * Size, P1.y * Size),
-            P2 = new Point2(P2.x * Size, P2.y * Size),
+            Width = p.Size,
+            Height = p.Size,
+            P0 = new Point2(P0.x * p.Size, P0.y * p.Size),
+            P1 = new Point2(P1.x * p.Size, P1.y * p.Size),
+            P2 = new Point2(P2.x * p.Size, P2.y * p.Size),
             PointCount = 3,
-            Color = Color,
-            Thickness = Thickness,
+            Color = p.Color,
+            Thickness = p.Thickness,
             TrimStart = 0f,
             TrimEnd = 1f,
             RoundCaps = true,
-            PressScale = Pressable ? 0.86f : 1f,   // WinUI's pressed "squish" (inherits the row's press progress)
+            PressScale = p.Pressable ? 0.86f : 1f,   // WinUI's pressed "squish" (inherits the row's press progress)
         };
         // PartMark: restyle geometry/color/thickness; the trim stays owned (the draw-on keyframes land on it).
-        return Parts.Apply(CheckBox.PartMark, mark) with { TrimStart = 0f, TrimEnd = 1f };
+        return p.Parts.Apply(CheckBox.PartMark, mark) with { TrimStart = 0f, TrimEnd = 1f };
     }
 
 }
@@ -234,32 +240,28 @@ internal sealed class DrawnCheckmark : Component
 /// <summary>The indeterminate dash, drawn the same way: a rounded bar revealed left-to-right by a presented-width sweep.</summary>
 internal sealed class DrawnDash : Component
 {
-    public float Width = 10f;
-    public float Thickness = 2f;
-    public ColorF Color;
-    public bool Pressable = true;
-    public float DurationMs = 200f;
-    public TemplateParts? Parts;   // routes CheckBox.PartMark onto the stroke
-
     public override Element Render()
     {
+        var p = UseContext(CheckBox.MarkProps.Channel)
+            ?? new CheckBox.MarkProps(10f, 2f, default, true, 200f, null);
+
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs);
         var dash = new PolylineStrokeEl
         {
-            Width = Width,
-            Height = Thickness,
-            P0 = new Point2(0f, Thickness * 0.5f),
-            P1 = new Point2(Width, Thickness * 0.5f),
+            Width = p.Size,
+            Height = p.Thickness,
+            P0 = new Point2(0f, p.Thickness * 0.5f),
+            P1 = new Point2(p.Size, p.Thickness * 0.5f),
             PointCount = 2,
-            Color = Color,
-            Thickness = Thickness,
+            Color = p.Color,
+            Thickness = p.Thickness,
             TrimStart = 0f,
             TrimEnd = 1f,
             RoundCaps = true,
-            PressScale = Pressable ? 0.86f : 1f,
+            PressScale = p.Pressable ? 0.86f : 1f,
         };
         // PartMark (shared with the checkmark — one is mounted at a time); the trim stays owned (draw-on keyframes).
-        return Parts.Apply(CheckBox.PartMark, dash) with { TrimStart = 0f, TrimEnd = 1f };
+        return p.Parts.Apply(CheckBox.PartMark, dash) with { TrimStart = 0f, TrimEnd = 1f };
     }
 }

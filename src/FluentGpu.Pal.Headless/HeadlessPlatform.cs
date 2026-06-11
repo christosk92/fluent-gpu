@@ -50,11 +50,19 @@ public sealed class HeadlessWindow : IPlatformWindow
     {
         ClientSizePx = desc.SizePx;
         Scale = desc.Scale <= 0 ? 1f : desc.Scale;
+        CustomFrame = desc.CustomFrame;
     }
 
+    /// <summary>The <see cref="WindowDesc.CustomFrame"/> opt-in, recorded for assertions (no real NC concept headless).</summary>
+    public bool CustomFrame { get; }
+
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
-    public Size2 ClientSizePx { get; }
-    public float Scale { get; }
+    /// <summary>Settable (test seam): simulate a window resize / per-monitor DPI change (WM_DPICHANGED) mid-session —
+    /// the host's EnsureSize watches BOTH px size and scale every frame, so the next RunFrame re-lays-out in the new
+    /// DIP viewport (the multi-monitor DPI-hop regression).</summary>
+    public Size2 ClientSizePx { get; set; }
+    /// <inheritdoc cref="ClientSizePx"/>
+    public float Scale { get; set; }
     public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
@@ -78,5 +86,44 @@ public sealed class HeadlessWindow : IPlatformWindow
     public void SetTitle(StringId title) { }
     public void Show() => Shown = true;
     public IPlatformTextInput TextInput { get; } = new HeadlessTextInput();
+
+    // ── custom-titlebar mirror: recorded call-lists + settable state (golden checks assert against these) ────────────
+
+    /// <summary>Settable placement (test seam). <see cref="ToggleMaximize"/> flips it and emits
+    /// <see cref="InputKind.WindowStateChanged"/> exactly like the Win32 backend's WM_SIZE transition.</summary>
+    public WindowState State { get; set; } = WindowState.Normal;
+
+    private bool _active = true;
+    /// <summary>Settable activation (test seam): flipping emits WindowFocus/WindowBlur like Win32 WM_ACTIVATE.</summary>
+    public bool IsActive
+    {
+        get => _active;
+        set
+        {
+            if (_active == value) return;
+            _active = value;
+            QueueInput(new InputEvent(value ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0));
+        }
+    }
+
+    public int MinimizeCount { get; private set; }
+    public int ToggleMaximizeCount { get; private set; }
+    public int CloseCount { get; private set; }
+
+    public void Minimize() { MinimizeCount++; State = WindowState.Minimized; }
+
+    public void ToggleMaximize()
+    {
+        ToggleMaximizeCount++;
+        State = State == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        QueueInput(new InputEvent(InputKind.WindowStateChanged, default, 0, 0));
+    }
+
+    public void CloseWindow() => CloseCount++;
+
+    /// <summary>The most recent region push (copied), for drag-band/island/button-rect assertions.</summary>
+    public TitleBarRegion[] LastTitleBarRegions { get; private set; } = [];
+    public void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) => LastTitleBarRegions = regions.ToArray();
+
     public void Dispose() { }
 }

@@ -58,6 +58,11 @@ public sealed record TokenSet
     // blue) in both themes, so the selected text stays white in both.
     public required ColorF TextOnAccentSelectedText { get; init; }
 
+    // Custom-titlebar caption buttons (engine-drawn min/max/close). The close hover/press red is the Win11 SHELL
+    // caption red — no WinUI XAML resource exists (system caption buttons are shell-drawn); same value in BOTH themes.
+    public required ColorF CaptionCloseHover { get; init; }      // #C42B1C opaque, white glyph on top
+    public required ColorF CaptionClosePressed { get; init; }    // #C42B1C @ 0.9
+
     // Accent (base; live OS accent folds in via Tok overrides)
     public required ColorF AccentDefault { get; init; }
     public required ColorF AccentSecondary { get; init; }
@@ -231,6 +236,10 @@ public static class Tok
     public static ColorF TextOnAccentDisabled => T.TextOnAccentDisabled;
     public static ColorF TextOnAccentSelectedText => T.TextOnAccentSelectedText;
 
+    // Custom-titlebar caption buttons (Win11 shell close-red; theme-invariant)
+    public static ColorF CaptionCloseHover => T.CaptionCloseHover;
+    public static ColorF CaptionClosePressed => T.CaptionClosePressed;
+
     // Accent (override-aware)
     public static ColorF AccentDefault => _accent ?? T.AccentDefault;
     public static ColorF AccentSecondary => _accent is { } a ? a with { A = 0.90f } : T.AccentSecondary;
@@ -343,6 +352,8 @@ public static class Tok
         TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
         // WinUI Default(dark) dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
         TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
+        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
         AccentDefault = ColorF.FromRgba(0x60, 0xCD, 0xFF),
         AccentSecondary = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xCC),
@@ -431,6 +442,8 @@ public static class Tok
         TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         // WinUI Light dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
         TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
+        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
         AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
         AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
         AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),

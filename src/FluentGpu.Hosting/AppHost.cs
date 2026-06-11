@@ -173,6 +173,7 @@ public sealed class AppHost : IDisposable
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
     private bool _inPaint;
     private Size2 _lastSize;
+    private float _lastScale;
     private readonly long[] _presentTimes = new long[240];
     private int _presentTimeNext;
     private int _presentTimeCount;
@@ -187,7 +188,8 @@ public sealed class AppHost : IDisposable
     public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
         || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _caretBlinker.HasActive || _scene.HasBrushAnims
         || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0
-        || _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork;   // E5: ghost spring easing / edge auto-scroll
+        || _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork   // E5: ghost spring easing / edge auto-scroll
+        || _dispatcher.Drag.IsActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
@@ -221,6 +223,16 @@ public sealed class AppHost : IDisposable
         _device = device;
         _root = root;
         _strings = strings;
+        // The overlay scrollbar's arrows = the SAME caret glyphs the ScrollBar control template draws (the shared
+        // IconGlyphs constants), pre-interned once so record stays 0-alloc. PINNED with a host AddRef: the ids are
+        // shared BY CONTENT with any TextEl using the same glyph/family (the ScrollBar page's arrow cells, every
+        // icon's font family) — without the ref, that page's unmount Release reclaims the id and the recorder's
+        // arrows silently resolve to "" for the rest of the session.
+        StringId sbUp = strings.Intern(IconGlyphs.CaretUpSolid8), sbDown = strings.Intern(IconGlyphs.CaretDownSolid8),
+                 sbLeft = strings.Intern(IconGlyphs.CaretLeftSolid8), sbRight = strings.Intern(IconGlyphs.CaretRightSolid8),
+                 sbFam = strings.Intern(Theme.IconFont);
+        strings.AddRef(sbUp); strings.AddRef(sbDown); strings.AddRef(sbLeft); strings.AddRef(sbRight); strings.AddRef(sbFam);
+        SceneRecorder.ConfigureScrollbarArrowGlyphs(sbUp, sbDown, sbLeft, sbRight, sbFam);
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _frameTime = frameTime ?? (window.Handle.Kind == NativeHandleKind.Headless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
@@ -234,6 +246,7 @@ public sealed class AppHost : IDisposable
         _repeat = new RepeatTicker(_scene);
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
+        _lastScale = window.Scale;
 
         // A reactive write (anywhere) requests a frame.
         _runtime.FrameRequested = WakeFrame;
@@ -258,6 +271,20 @@ public sealed class AppHost : IDisposable
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
+
+        // Custom-titlebar chrome seam (WindowDesc.CustomFrame): pull-state + caption commands to the window, the
+        // region push (relayout-only), and an epoch signal bumped on activation/placement changes so the TitleBar
+        // control re-renders (dim / max↔restore glyph). All members default-no-op on standard-frame backends.
+        _inputHooks.GetWindowState = () => _window.State;
+        _inputHooks.IsWindowActive = () => _window.IsActive;
+        _inputHooks.WindowMinimize = _window.Minimize;
+        _inputHooks.WindowToggleMaximize = _window.ToggleMaximize;
+        _inputHooks.WindowClose = _window.CloseWindow;
+        _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
+        _inputHooks.GetNodeRect = _scene.AbsoluteRect;
+        var chromeEpoch = new Signal<int>(0);
+        _inputHooks.WindowChromeEpoch = chromeEpoch;
+        _dispatcher.OnWindowActivationChanged = () => chromeEpoch.Value = chromeEpoch.Peek() + 1;
 
         // E5 drop-settle: the released drag visual glides from the drop point into its (possibly reordered) slot via
         // the same FLIP pipeline that moves displaced siblings — the seeded spring is retargeted velocity-continuously
@@ -864,9 +891,14 @@ public sealed class AppHost : IDisposable
     /// FLIP-animate content; the pre-resize rects are stale and projecting them shifts the content + reveals the backdrop).</summary>
     private bool EnsureSize()
     {
+        // Scale participates too: a per-monitor DPI change (WM_DPICHANGED) re-scales the window — usually the px
+        // size changes with the suggested rect, but even when it doesn't, the DIP viewport (px/scale) did, so the
+        // tree must re-lay-out (glyph re-rasterization keys on the per-frame FrameInfo scale by itself).
         var s = _window.ClientSizePx;
-        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height) return false;
+        float scale = _window.Scale;
+        if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
         _lastSize = s;
+        _lastScale = scale;
         _swapchain.Resize(s);
         _needFullLayout = true;
         return true;

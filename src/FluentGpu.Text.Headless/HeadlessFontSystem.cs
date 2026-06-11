@@ -19,7 +19,8 @@ namespace FluentGpu.Text.Headless;
 /// x-height) — same top-down frame as the baseline;</item>
 /// <item>wrap = greedy word-wrap on ' ' runs (a word's trailing spaces ride its line; an over-long unbreakable word
 /// overflows rather than breaking mid-word), engaged only when the style wraps ∧ maxWidth is finite ∧ the single-line
-/// width exceeds maxWidth; MaxLines stops further wrapping (the remainder accumulates on the last line).</item>
+/// width exceeds maxWidth; MaxLines caps the line count — the last line still wraps at maxWidth and the remainder
+/// is dropped (WinUI clips whole lines past the cap; it never dumps the remainder unwrapped).</item>
 /// <item>SPAN RUNS (rtb-01, <c>TextStyle.SpanRunId</c> ≠ 0): each char's advance resolves through the covering
 /// <see cref="SpanStyle"/> (its weight/size deltas apply per the same constants — a 700-weight span's chars advance at
 /// size × 0.62); the line model's SizeDip becomes the MAX size across base + spans. The whole paragraph still wraps
@@ -227,7 +228,8 @@ public sealed class HeadlessFontSystem : IFontSystem
 
     /// <summary>The single line walk every member runs — the deterministic greedy word-wrap of the advance model above.
     /// Partitions [0, text.Length] into line ranges in the reused grow-only table (no per-call allocation). The line
-    /// COUNT matches what counting all natural wraps then capping at MaxLines yields (stopping early ≡ capping), so
+    /// COUNT matches what counting all natural wraps then capping at MaxLines yields (the over-cap remainder is
+    /// dropped, so the box is unchanged from capping), so
     /// Measure's box is unchanged from the pre-seam model. Span runs walk the per-char prefix table instead of the
     /// uniform advance — same greedy rule over non-uniform cells.</summary>
     private void LayoutLines(ReadOnlySpan<char> s, in TextStyle style, float maxWidth)
@@ -248,8 +250,11 @@ public sealed class HeadlessFontSystem : IFontSystem
             float wordW = XAt(in style, i) - XAt(in style, ws);
             int spaceStart = i; while (i < n && s[i] == ' ') i++;
             float spacesW = XAt(in style, i) - XAt(in style, spaceStart);
-            if (pen > 0f && pen + wordW > maxWidth && _lineCount + 1 < maxL)
+            if (pen > 0f && pen + wordW > maxWidth)
             {
+                // Line budget reached: the last line still wraps at the word boundary and the remainder is
+                // DROPPED (WinUI MaxLines clips whole lines past the cap — never the remainder run-on).
+                if (_lineCount + 1 >= maxL) { AddLine(lineStart, ws); return; }
                 AddLine(lineStart, ws);
                 lineStart = ws; pen = 0f;
             }

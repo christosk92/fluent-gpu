@@ -106,7 +106,14 @@ public static class ProgressBar
     /// PartFill modifier runs on BOTH sweeping indicators).</summary>
     public static Element Indeterminate(float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
                                         TemplateParts? parts = null)
-        => Embed.Comp(() => new IndeterminateBar { Width = width, State = state, Parts = parts });
+        => Ctx.Provide(Props.Channel, new Props(width, state, parts), Embed.Comp(() => new IndeterminateBar()));
+
+    /// <summary>Controlled props, carried to the stateful core via context (a reused ComponentEl never re-runs its
+    /// factory, so runtime-changeable props must flow through a provider).</summary>
+    internal sealed record Props(float Width, ProgressBarState State, TemplateParts? Parts)
+    {
+        internal static readonly Context<Props?> Channel = new(null);
+    }
 
     /// <summary>The computed translate positions WinUI binds from ProgressBarTemplateSettings into the indeterminate
     /// storyboards (ProgressBar.cpp UpdateWidthBasedTemplateSettings). Indicator widths follow SetProgressBarIndicatorWidth.</summary>
@@ -133,12 +140,12 @@ public static class ProgressBar
 
     private sealed class IndeterminateBar : Component
     {
-        public float Width = DefaultWidth;
-        public ProgressBarState State = ProgressBarState.Normal;
-        public TemplateParts? Parts;
-
         public override Element Render()
         {
+            var props = UseContext(Props.Channel) ?? new Props(DefaultWidth, ProgressBarState.Normal, null);
+            float Width = props.Width;
+            var State = props.State;
+            var Parts = props.Parts;
             var ts = ProgressBarTemplateSettings.For(Width);
             bool nonNormal = State != ProgressBarState.Normal;   // Paused / Error: hide track + indicator1, recolor indicator2
             ColorF fg = ForegroundFor(State);

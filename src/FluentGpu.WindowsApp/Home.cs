@@ -90,6 +90,9 @@ sealed class HomeHero : Component
         {
             Height = 200, Direction = 1, Justify = FlexJustify.End, Gap = 4, Padding = new Edges4(36, 0, 36, 22),
             Gradient = LinearGradient(118f, new GradientStop(0f, Tok.HeroGradientTop), new GradientStop(1f, Tok.HeroGradientBottom)),
+            // The full-bleed hero sits at the NavigationView content's rounded top-left corner; gradients aren't rounded-
+            // clipped by the content frame, so round the fill itself to match (Radii.Overlay = ContentLeftTopCorner).
+            Corners = new(Radii.Overlay, 0f, 0f, 0f),
             Children =
             [
                 Caption("WinUI-style capability gallery").Secondary(),

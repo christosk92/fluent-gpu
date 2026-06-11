@@ -605,7 +605,7 @@ internal sealed class ScrollBarAnatomy : Component
             Children =
             [
                 // VerticalDecrement EDDB / Increment EDDC (:387/:344); HorizontalDecrement EDD9 / Increment EDDA (:301/:258)
-                new TextEl(horiz ? (dec ? "" : "") : (dec ? "" : ""))
+                new TextEl(horiz ? (dec ? IconGlyphs.CaretLeftSolid8 : IconGlyphs.CaretRightSolid8) : (dec ? IconGlyphs.CaretUpSolid8 : IconGlyphs.CaretDownSolid8))
                 {
                     Size = ScrollBar.ArrowFontSize,             // (:186)
                     FontFamily = Theme.IconFont,

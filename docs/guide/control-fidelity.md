@@ -248,3 +248,7 @@ Customization of a control's internals goes through `TemplateParts` (`src/Fluent
   separate identity concept — repeated parts (tab items, tick marks) must never derive their `Key` from a part const.
 - Virtualized item chrome (ListView/GridView rows) stays on the `ContainerFactory` seam — per-item part modifiers in
   hot scroll paths are a recycling/allocation hazard.
+- If a public factory returns `Embed.Comp(() => new Core { ... })`, every runtime-changeable prop must flow through a
+  `Props` record plus `Ctx.Provide`, or through a caller-owned `Signal<T>` read by the component. The factory is not
+  re-run when the parent re-renders, so fields set in the object initializer are mount-only seeds. Use frozen fields
+  only for `Initial*` values or configuration that is explicitly never expected to change.

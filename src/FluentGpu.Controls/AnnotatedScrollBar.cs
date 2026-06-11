@@ -322,7 +322,7 @@ public static class AnnotatedScrollBar
                 IsEnabled = onClick is not null,
                 Children =
                 [
-                    new TextEl(up ? "" : "")          // EDDB / EDDC (xaml:38/:101)
+                    new TextEl(up ? IconGlyphs.CaretUpSolid8 : IconGlyphs.CaretDownSolid8)          // EDDB / EDDC (xaml:38/:101)
                     {
                         Size = ButtonGlyph,                       // ScrollButtonFontSize 8 (:40)
                         FontFamily = Theme.IconFont,

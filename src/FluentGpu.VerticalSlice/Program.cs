@@ -498,6 +498,28 @@ sealed class FlowProbe : Component
     }
 }
 
+sealed class FlowReorderProbe : Component
+{
+    public static int Renders;
+    public Signal<List<string>>? Items;
+    public override Element Render()
+    {
+        Renders++;
+        var items = UseSignal(new List<string> { "fa", "fb", "fc" });
+        Items = items;
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                Flow.For(() => items.Value.Count,
+                    i => new BoxEl { Width = 40, Height = 12, Children = [Text(items.Value[i])] },
+                    keyOf: i => items.Value[i]),
+            ],
+        };
+    }
+}
+
 // ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
 sealed class RepeatProbe : Component
 {
@@ -1200,6 +1222,7 @@ sealed class NavHierarchyProbe : Component
         Items =
         [
             new NavItem("home", "H", "Home"),
+            new NavItem("h", "", "Header", IsHeader: true),
             new NavItem("group", "G", "Group")
             {
                 Children = [new NavItem("c1", "1", "ChildOne"), new NavItem("c2", "2", "ChildTwo")],
@@ -3435,6 +3458,34 @@ static class Slice
             $"labels exp={exp.label} comp={comp.label} min={min.label}; content={content}");
         Check("54a. AppHost lays out scaled windows in DIPs", !dpiComp.label && Near(dpiComp.rootW, 800f),
             $"rootW={dpiComp.rootW:0.#} label={dpiComp.label}");
+
+        // 54c — a per-monitor DPI hop MID-SESSION (the WM_DPICHANGED path): EnsureSize watches scale as well as px
+        // size, so a scale-only change re-lays-out in the new DIP viewport, and the suggested-rect resize restores it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("dpihop", new Size2(1200, 700), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new NavProbe());
+            host.RunFrame();
+            bool labels1 = HasGlyph(device, strings, "Home");
+            float w1 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 1200 DIP @1x → Expanded
+
+            window.Scale = 1.5f;                                            // monitor hop, px not yet adjusted
+            host.RunFrame();
+            bool labels2 = HasGlyph(device, strings, "Home");
+            float w2 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 800 DIP @1.5x → Compact
+
+            window.ClientSizePx = new Size2(1800, 1050);                    // the OS-suggested rect at the new DPI
+            host.RunFrame();
+            bool labels3 = HasGlyph(device, strings, "Home");
+            float w3 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 1200 DIP again → Expanded restored
+
+            Check("54c. mid-session DPI change re-lays-out in the new DIP viewport (scale-only, then the suggested-rect resize)",
+                labels1 && Near(w1, 1200f) && !labels2 && Near(w2, 800f) && labels3 && Near(w3, 1200f),
+                $"w {w1:0}@1x → {w2:0}@1.5x (labels={labels2}) → {w3:0}@1.5x/1800px (labels={labels3})");
+        }
     }
 
     static void NavigationViewAnimationChecks(StringTable strings)
@@ -3819,6 +3870,37 @@ static class Slice
 
         Check("61. reactive For/Show restructure the tree with NO parent re-render", init && grew && toggled,
             $"init={init} grew={grew} toggled={toggled} parentRenders+{FlowProbe.Renders - r0}");
+    }
+
+    // A PURE keyed reorder (reverse: same keys, same count) must still relayout — the diff creates/removes nothing,
+    // but the re-appended child order has to move the rows (the gallery "Reverse does nothing" regression).
+    static void FlowReorderChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("flowreorder", new Size2(320, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        FlowReorderProbe.Renders = 0;
+        var root = new FlowReorderProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        int r0 = FlowReorderProbe.Renders;
+
+        var forHost = Child(host.Scene, host.Scene.Root, 0);
+        var rowA = Child(host.Scene, forHost, 0);                 // the "fa" row — identity must survive the reorder
+        var b0 = host.Scene.Bounds(rowA);
+
+        var rev = new List<string>(root.Items!.Peek()); rev.Reverse();
+        root.Items!.Value = rev;                                  // pure move: no add, no remove, count unchanged
+        host.RunFrame();
+        var b1 = host.Scene.Bounds(rowA);
+
+        bool lastIsA = Child(host.Scene, forHost, 2) == rowA;     // scene order reversed, node preserved by key
+        bool movedInLayout = MathF.Abs(b1.X - b0.X) + MathF.Abs(b1.Y - b0.Y) > 10f;   // and layout actually moved it
+        Check("61b. Flow.For pure reorder (reverse) relayouts the rows (key-preserved node moves slots)",
+            lastIsA && movedInLayout && FlowReorderProbe.Renders == r0,
+            $"rowA ({b0.X:0},{b0.Y:0})→({b1.X:0},{b1.Y:0}) lastIsA={lastIsA} parentRenders+{FlowReorderProbe.Renders - r0}");
     }
 
     static void RepeatButtonChecks(StringTable strings)
@@ -7634,6 +7716,35 @@ static class Slice
         using var host = new AppHost(app, window, device, fonts, strings, new NavHierarchyProbe());
         host.RunFrame();
 
+        bool HasAccentPillBeside(NodeHandle row)
+        {
+            if (row.IsNull) return false;
+            var rr = host.Scene.AbsoluteRect(row);
+            bool found = false;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull || found) return;
+                ref var p = ref host.Scene.Paint(n);
+                var r = host.Scene.AbsoluteRect(n);
+                if (ColorClose(p.Fill, Tok.AccentDefault, 0.02f)
+                    && Near(r.W, 3f, 0.75f)
+                    && Near(r.H, 16f, 0.75f)
+                    && MathF.Abs((r.Y + r.H * 0.5f) - (rr.Y + rr.H * 0.5f)) < 4f
+                    && r.X >= rr.X
+                    && r.X <= rr.X + 14f)
+                {
+                    found = true;
+                    return;
+                }
+
+                for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+                    Visit(c);
+            }
+
+            Visit(host.Scene.Root);
+            return found;
+        }
+
         var items = new List<NodeHandle>();
         CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
         int collapsedCount = items.Count;   // home, group (children hidden — group starts collapsed)
@@ -7655,6 +7766,40 @@ static class Slice
             for (int i = 0; i < 4; i++) host.RunFrame();   // let the child rows clear their staggered enter delay
             ClickNode(host, window, items[2]);
             childSelected = HasGlyph(device, strings, "PAGE:c1");
+        }
+
+        // Collapse the expanded pane to the icon rail while a child is selected. WinUI keeps the hierarchical child
+        // selection in the model, but the closed compact rail shows only top-level containers and paints the selected
+        // child indication on the visible parent chain.
+        bool compactRailRootOnly = false;
+        bool compactRailParentChrome = false;
+        bool compactRailKeepsChildPage = false;
+        bool reopenedStillExpanded = false;
+        var buttons = Roles(host.Scene, AutomationRole.Button);
+        if (childSelected && buttons.Count > 0)
+        {
+            ClickNode(host, window, buttons[0]);
+            for (int i = 0; i < 24; i++) host.RunFrame();
+
+            items.Clear();
+            CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+            compactRailRootOnly = items.Count == collapsedCount;
+            compactRailKeepsChildPage = HasGlyph(device, strings, "PAGE:c1");
+            if (items.Count > 1)
+            {
+                compactRailParentChrome = ColorClose(host.Scene.Paint(items[1]).Fill, Tok.FillSubtleSecondary, 0.02f)
+                    && HasAccentPillBeside(items[1]);
+            }
+
+            buttons = Roles(host.Scene, AutomationRole.Button);
+            if (buttons.Count > 0)
+            {
+                ClickNode(host, window, buttons[0]);
+                for (int i = 0; i < 4; i++) host.RunFrame();
+                items.Clear();
+                CollectRole(host.Scene, host.Scene.Root, AutomationRole.NavigationItem, items);
+                reopenedStillExpanded = items.Count == expandedCount;
+            }
         }
 
         // Click the group again → it collapses (children disappear).
@@ -7680,6 +7825,9 @@ static class Slice
         Check("65a. NavigationView: hierarchy reflow motion is owned by the whole row, not the label",
             collapsedAgain && rowOwnsMotion && labelNotProjected,
             $"rowTracks={rowOwnsMotion} labelDy={afterLabelDy:0.###}");
+        Check("65a2. NavigationView: closed icon rail hides child rows and maps child selection chrome to parent",
+            compactRailRootOnly && compactRailParentChrome && compactRailKeepsChildPage && reopenedStillExpanded,
+            $"rootOnly={compactRailRootOnly} parentChrome={compactRailParentChrome} childPage={compactRailKeepsChildPage} reopenExpanded={reopenedStillExpanded}");
     }
 
     static void PipsPagerOutputChecks(StringTable strings)
@@ -8795,6 +8943,36 @@ static class Slice
                 one && idempotent && split && inverted && trimmed, $"events={events} ranges={m.RangeCount} count={m.SelectedCount}");
         }
 
+        // e11virt.10b — selection follows ITEM identity across a RemoveAt+Insert reorder (ListViewBase::ReorderItemsTo),
+        // including range splits, instead of staying on the old slot.
+        {
+            var single = new SelectionModel { ItemCount = 8 };
+            int singleEvents = 0;
+            single.SelectionChanged = () => singleEvents++;
+            single.Select(4);
+            single.RemapMove(4, 2);
+            bool selectedItemMoved = single.IsSelected(2) && !single.IsSelected(4) && single.FirstSelectedIndex == 2
+                && single.AnchorIndex == 2 && singleEvents == 2;
+
+            var range = new SelectionModel { ItemCount = 8, Mode = ItemsSelectionMode.Multiple };
+            range.SelectRange(4, 5);
+            range.AnchorIndex = 4;
+            range.RemapMove(4, 2);
+            bool splitRange = range.RangeCount == 2 && range.GetRange(0) == (2, 2) && range.GetRange(1) == (5, 5)
+                && range.AnchorIndex == 2;
+
+            var all = new SelectionModel { ItemCount = 10, Mode = ItemsSelectionMode.Extended };
+            int allEvents = 0;
+            all.SelectionChanged = () => allEvents++;
+            all.SelectAll();
+            all.RemapMove(8, 2);
+            bool allStillCompact = all.RangeCount == 1 && all.GetRange(0) == (0, 9) && allEvents == 1;
+
+            Check("e11virt.10b SelectionModel RemapMove preserves selected item identity across reorder (single, split range, select-all compact)",
+                selectedItemMoved && splitRange && allStillCompact,
+                $"single={single.FirstSelectedIndex} events={singleEvents} split={range.RangeCount} allEvents={allEvents}");
+        }
+
         // e11virt.11 — ItemContainer state ARGB, BOTH themes (full #AARRGGBB; ItemContainer_themeresources.xaml:5-18
         // dark / :37-49 light → Common_themeresources_any.xaml) + the selected dual-stroke geometry + checkbox plate
         // + disabled collapse.
@@ -9149,7 +9327,7 @@ static class Slice
             Build = () => new BoxEl
             {
                 Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
-                Padding = new Edges4(0, 4, 0, 4), Children = [ListView.Create(coffees, selected)],
+                Padding = new Edges4(0, 4, 0, 4), Children = [ItemsView.List(coffees, selected)],
             },
         });
         host.RunFrame();
@@ -9160,9 +9338,9 @@ static class Slice
         int lvRows = lv.IsNull ? 0 : host.Scene.ChildCount(lsc.ContentNode);
         var row0 = default(RectF);
         if (lvRows > 0) row0 = host.Scene.Bounds(host.Scene.FirstChild(lsc.ContentNode));
-        bool lvOk = !lv.IsNull && Near(lvRect.W, 280f) && Near(lvRect.H, 8 * ListView.DefaultItemExtent)
+        bool lvOk = !lv.IsNull && Near(lvRect.W, 280f) && Near(lvRect.H, 8 * ItemsView.ListItemExtent)
             && Near(lsc.ViewportW, 280f) && Near(lsc.ViewportH, 352f) && Near(lsc.ContentH, 352f)
-            && lvRows == 8 && Near(row0.W, 280f) && Near(row0.H, ListView.DefaultItemExtent);
+            && lvRows == 8 && Near(row0.W, 280f) && Near(row0.H, ItemsView.ListItemExtent);
         Check("cp1.a — gallery ListView (280-wide card, no height above) sizes naturally to 8×44 and realizes 8 rows at W=280",
             lvOk, $"vp={lvRect.W:0}x{lvRect.H:0} viewport={lsc.ViewportW:0}x{lsc.ViewportH:0} content={lsc.ContentH:0} rows={lvRows} row0={row0.W:0}x{row0.H:0}");
 
@@ -9207,7 +9385,7 @@ static class Slice
             Build = () => new BoxEl
             {
                 Width = 360, Height = hostH.Value,
-                Children = [ListView.Create(10_000, i => new BoxEl(), grow: 1f)],
+                Children = [ItemsView.List(10_000, i => new BoxEl(), grow: 1f)],
             },
         });
         host3.RunFrame();
@@ -9216,7 +9394,7 @@ static class Slice
         if (!big.IsNull) host3.Scene.TryGetScroll(big, out bsc0);
         int realized0 = big.IsNull ? 0 : host3.Scene.ChildCount(bsc0.ContentNode);
         bool windowed = !big.IsNull && realized0 > 0 && realized0 < 40
-            && Near(bsc0.ViewportH, 400f) && Near(bsc0.ContentH, 10_000 * ListView.DefaultItemExtent, 1f);
+            && Near(bsc0.ViewportH, 400f) && Near(bsc0.ContentH, 10_000 * ItemsView.ListItemExtent, 1f);
 
         hostH.Value = 3000f;   // grow the host — ONE RunFrame must both publish 3000 and re-realize to cover it
         host3.RunFrame();
@@ -9224,9 +9402,667 @@ static class Slice
         if (!big.IsNull) host3.Scene.TryGetScroll(big, out bsc1);
         int realized1 = big.IsNull ? 0 : host3.Scene.ChildCount(bsc1.ContentNode);
         bool covered = Near(bsc1.ViewportH, 3000f) && bsc1.FirstRealized == 0
-            && bsc1.LastRealized * ListView.DefaultItemExtent >= 3000f && realized1 > realized0 && realized1 < 120;
+            && bsc1.LastRealized * ItemsView.ListItemExtent >= 3000f && realized1 > realized0 && realized1 < 120;
         Check("cp1.c — 10k rows stay windowed (<40) at 400px; growing the host re-realizes to cover in the SAME frame",
             windowed && covered, $"realized {realized0}→{realized1} viewport {bsc0.ViewportH:0}→{bsc1.ViewportH:0} last={bsc1.LastRealized} content={bsc0.ContentH:0}");
+    }
+
+    // cp2.* — the collection-consolidation contract (the premiere ItemsView + thin ListView/GridView presets + the
+    // ReorderList 2-D fold + the host-seeded displacement channel). These pin the NEW reorder model the user ruled in:
+    // dragged item is a pointer-held ghost, displaced siblings PART TO MAKE ROOM via an ANIMATED translate (no
+    // insertion line, no forced rerender), commit = RemoveAt+Insert on release. No check here encodes the rejected
+    // insertion-line / static-OffsetY hack — they assert the displacement reaches the realized node as live AnimEngine
+    // motion (the core defect's fix) and that every capability works in every combination across the three controls.
+    static void Cp2ConsolidationChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // The realized window's ord-th container for an item index (resting order: ord = index − FirstRealized;
+        // mirrors ItemsView.FocusIndex / the displacement seed's ord math). Non-virtual hosts have no scroll state.
+        static NodeHandle RealizedRow(SceneStore s, NodeHandle vp, int index)
+        {
+            if (vp.IsNull || !s.IsLive(vp)) return NodeHandle.Null;
+            NodeHandle first; int ord;
+            if (s.TryGetScroll(vp, out var sc))
+            {
+                ord = index - sc.FirstRealized;
+                if (ord < 0 || index >= sc.LastRealized) return NodeHandle.Null;
+                first = s.FirstChild(sc.ContentNode);
+            }
+            else { ord = index; first = s.FirstChild(vp); }
+            var n = first;
+            for (int k = 0; k < ord && !n.IsNull; k++) n = s.NextSibling(n);
+            return n;
+        }
+
+        // Depth-first structural finder for a selector-chrome part (the SelectorVisuals builders carry no reconciler
+        // Key into the scene, so match on geometry/fill rather than Key — more robust than a Key probe anyway).
+        static NodeHandle FindBox(SceneStore s, NodeHandle n, Func<NodePaint, bool> pred)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (pred(s.Paint(n))) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = FindBox(s, c, pred);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        NodeHandle FindViewport(SceneStore s, int count)
+        {
+            NodeHandle found = default;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (s.TryGetScroll(n, out var sc) && sc.ItemCount == count) found = n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) Visit(c);
+            }
+            Visit(s.Root);
+            return found;
+        }
+
+        // ── C1 — cp2.reorder2d: the GridView 2-D reorder math folded into ReorderList (Begin2D/Update2D/OffsetFor2D),
+        // proving GridReorder's logic survived the consolidation. Pure unit, no host (scroll/realize-agnostic). ──────
+        {
+            var rl = new ReorderList { DwellMs = ReorderList.GridDwellMs };
+            bool dwell300 = ReorderList.GridDwellMs == 300f && rl.DwellMs == 300f;
+            rl.Begin2D(0, 8, columns: 4);                              // 8 tiles, 4 cols → rows of {0,1,2,3},{4,5,6,7}
+            bool init = rl.IsActive && rl.DraggedIndex == 0 && rl.Columns == 4 && rl.PendingIndex == 0 && rl.TargetIndex == 0;
+            // Drag tile 0 to slot 5 (col 1, row 1): totalDx≈100 → +1 col, totalDy≈100 → +1 row, on a 100×100 grid.
+            bool moved = rl.Update2D(100f, 100f, colWidth: 100f, rowStride: 100f) && rl.PendingIndex == 5;
+            bool dwellHeld = !rl.Advance(299f) && rl.TargetIndex == 0;
+            bool dwellFire = rl.Advance(1f) && rl.TargetIndex == 5;
+            // Forward drag 0→5: tiles (0,5] each shift ONE slot toward the vacated source (row-major). Tile 4 sits at
+            // (col0,row1) and shifts to slot 3 = (col3,row0): a ROW WRAP — dx = +3 cols, dy = −1 row.
+            rl.OffsetFor2D(4, 100f, 100f, out float dx4, out float dy4);
+            bool wrap = Near(dx4, 300f) && Near(dy4, -100f);
+            // Tile 1 (col1,row0) shifts to slot 0 (col0,row0): one column back, same row.
+            rl.OffsetFor2D(1, 100f, 100f, out float dx1, out float dy1);
+            bool oneCol = Near(dx1, -100f) && Near(dy1, 0f);
+            rl.OffsetFor2D(0, 100f, 100f, out float dxD, out float dyD);   // the dragged tile never displaces
+            bool draggedZero = dxD == 0f && dyD == 0f;
+            rl.OffsetFor2D(6, 100f, 100f, out float dx6, out float dy6);   // tile 6 is OUTSIDE (0,5] → no shift
+            bool outsideZero = dx6 == 0f && dy6 == 0f;
+            int dest = rl.Complete();
+            bool committed = dest == 5 && !rl.IsActive;
+            Check("cp2.reorder2d ReorderList 2-D slot math + 300ms grid dwell + OffsetFor2D row-wrap (GridReorder folded in)",
+                dwell300 && init && moved && dwellHeld && dwellFire && wrap && oneCol && draggedZero && outsideZero && committed,
+                $"300={dwell300} init={init} moved={moved} dwell={dwellHeld}/{dwellFire} wrap=({dx4:0},{dy4:0}) oneCol=({dx1:0},{dy1:0}) draggedZ={draggedZero} outZ={outsideZero} dest={dest}");
+        }
+
+        // ── C2 — cp2.displace: THE core-defect proof. A displacement on a realized row reaches the node as ANIMATED
+        // LocalTransform motion (mid-flight → settled), NOT a static jump and NOT discarded behind the autonomous
+        // ItemsView boundary. Synthetic itemDisplacement=(0,40) for index 2 + a displacementVersion the test bumps. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-displace", new Size2(420, 360), 1f));
+            window.Show();
+            var ver = new Signal<int>(0);
+            int dispTarget = -1;                                       // armed below (so the mount frame seeds nothing)
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 360, Height = 280,
+                    Children =
+                    [
+                        ItemsView.Create(8,
+                            i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
+                            RepeatLayout.Stack(40f),
+                            selector: SelectorVisual.AccentPill,
+                            itemDisplacement: i => i == dispTarget ? (0f, 40f) : (0f, 0f),
+                            displacementVersion: ver),
+                    ],
+                },
+            });
+            host.RunFrame();                                          // mount + realize (no displacement armed yet)
+            var vp = FindViewport(host.Scene, 8);
+            var row2 = RealizedRow(host.Scene, vp, 2);
+            bool found = !row2.IsNull;
+            float authoredOffset = found ? host.Scene.Paint(row2).LocalTransform.Dy : -1f;   // 0 before any seed
+            bool restZero = found && Near(authoredOffset, 0f);
+
+            dispTarget = 2;                                           // arm (0,40) for index 2, then bump the version
+            ver.Value = ver.Peek() + 1;
+            host.RunFrame();                                          // re-render ItemsView → seed the TranslateY track (elapsed 0)
+            for (int i = 0; i < 3; i++) host.RunFrame();             // advance the 250ms track a few 16ms ticks → mid-flight
+            float midDy = found ? host.Scene.Paint(row2).LocalTransform.Dy : 0f;
+            bool midFlight = midDy > 0.5f && midDy < 40f;            // animated, not an instant jump (no exact ms asserted)
+            for (int i = 0; i < 40; i++) host.RunFrame();            // let the 250ms FluentDecelerate track settle
+            float settledDy = found ? host.Scene.Paint(row2).LocalTransform.Dy : 0f;
+            bool settled = Near(settledDy, 40f, 0.6f);
+            // The element carries NO authored OffsetY — the motion lives on the AnimEngine track, not a static offset
+            // (so it survives reconcile; the dragged-ghost rule). A non-displaced realized row stays put.
+            var row0 = RealizedRow(host.Scene, vp, 0);
+            bool neighborStill = !row0.IsNull && Near(host.Scene.Paint(row0).LocalTransform.Dy, 0f, 0.6f);
+            Check("cp2.displace ItemsView host-seeds an ANIMATED translate on a displaced realized row (mid-drag part-to-make-room; not a static jump)",
+                found && restZero && midFlight && settled && neighborStill,
+                $"found={found} rest={authoredOffset:0.0} mid={midDy:0.0} settled={settledDy:0.0} neighbor={neighborStill}");
+        }
+
+        // ── C3 — cp2.dragstill: stage A's `HasActiveWork |= Drag.IsActive` keep-alive — a live drag keeps RunFrame
+        // pumping so the FrameClock dwell ticker keeps getting frames even on a MOTIONLESS pointer (without it RunFrame
+        // would early-return at the !HasActiveWork gate, AppHost.cs:351, and the dwell would freeze). The keep-alive
+        // (HasActiveWork true across still frames) + the gesture surviving the still hold to commit on release are fully
+        // deterministic; the dwell MATH itself is pinned at the unit level (e5dragdrop.6/.7 Advance). NOTE: this does
+        // NOT read the realized-row displacement — the live ListView/GridView preset's displacement is currently dead
+        // (a freeze bug in ListView.cs/GridView.cs: their itemDisplacement closure captures the per-render `reordering`
+        // bool, which freezes to false at the inner ItemsView's MOUNT because a reused ComponentEl is a no-op on a
+        // parent re-render, Reconciler.cs:217-221 — see notes). The DISPLACEMENT-reaches-the-realized-node proof lives
+        // in cp2.displace / cp2.scrollslot / cp2.matrix.itemsview (the channel path, which is sound). ────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-still", new Size2(360, 360), 1f));
+            window.Show();
+            var drinks = new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" };
+            int committedFrom = -1, committedTo = -1;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 320, Height = 280,
+                    Children =
+                    [
+                        ItemsView.List(drinks.Count,
+                            i => new TextEl(drinks[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                            canReorderItems: true, onReorder: (f, t) => { committedFrom = f; committedTo = t; },
+                            keyOf: i => drinks[i], itemText: i => drinks[i]),
+                    ],
+                },
+            });
+            host.RunFrame();
+            var vp = FindViewport(host.Scene, drinks.Count);
+            var dragRow = RealizedRow(host.Scene, vp, 0);
+            var c = CenterOf(host.Scene, dragRow);
+            // Promote a drag on row 0 (PointerDown, then a >4px move) — 0-stamp ⇒ deterministic snap-track ghost.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            // Move the dragged centre (row-0 centre 22) DOWN past row 1's midpoint (66): +50 ⇒ centre 72 > 66 → pending 1.
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X, c.Y + 50f), 0, 0));
+            host.RunFrame();
+            bool promoted = host.HasActiveWork;                       // a live drag → work pending
+            // Hold STILL: no further pointer input. HasActiveWork must stay true EVERY frame (the keep-alive) so the
+            // dwell ticker keeps getting frames. Space the frames with real time so wall-clock actually advances.
+            bool stayedAlive = true;
+            for (int i = 0; i < 5; i++)
+            {
+                System.Threading.Thread.Sleep(110);                  // let Environment.TickCount64 advance past a dwell step
+                host.RunFrame();
+                if (!host.HasActiveWork) stayedAlive = false;
+            }
+            // Release: the gesture stayed live through the motionless hold, so it completes and commits the reorder
+            // (pending slot 1 at the latest pointer position). HasActiveWork from the drag then drains.
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X, c.Y + 50f), 0, 0));
+            host.RunFrame();
+            bool committedAfterStill = committedFrom == 0 && committedTo == 1;
+            Check("cp2.dragstill HasActiveWork keep-alive holds frames across a MOTIONLESS pointer (no early-return); the gesture survives the still hold + commits on release",
+                promoted && stayedAlive && committedAfterStill,
+                $"promoted={promoted} alive={stayedAlive} commit=({committedFrom}->{committedTo})");
+        }
+
+        // ── C4 — cp2.invokerelease: a promoted drag is a REORDER gesture (commits a move on release); a plain
+        // press-release is a CLICK (selects + raises ItemClick + does NOT reorder).
+        // NOTE (WinUI-faithful divergence, documented + verified against the real code): this engine selects AND raises
+        // ItemClick at the PRESS edge via OnPointerPressed→Tap (ItemContainer.cs:41-45 / SelectorVisuals.AccentPill +
+        // ListView.Chrome's interact wrapper — "Win32 lists select on button-down; the visual outcome is identical to
+        // WinUI's PointerReleased selection"). So the orders' literal "a drag does not select / drag suppresses the
+        // click" cannot hold against press-edge handling — both a click and a grab touch the row at press. What a
+        // completed drag uniquely does is take the DRAG path (commit a reorder) and suppress the RELEASE-edge click
+        // (InputDispatcher.cs:332-345); a plain release takes the CLICK path. This asserts that truthful discrimination
+        // (the spirit of parity:420/430 — a drag is a drag, a click is a click). ─────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-invoke", new Size2(360, 360), 1f));
+            window.Show();
+            var drinks = new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" };
+            int clicked = -1, clickCount = 0, reorderFrom = -1, reorderTo = -1;
+            var model = new SelectionModel();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 320, Height = 280,
+                    Children =
+                    [
+                        ItemsView.List(drinks.Count,
+                            i => new TextEl(drinks[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                            selection: model,
+                            onItemClick: i => { clicked = i; clickCount++; },
+                            canReorderItems: true, onReorder: (f, t) => { reorderFrom = f; reorderTo = t; }, keyOf: i => drinks[i]),
+                    ],
+                },
+            });
+            host.RunFrame();
+            var vp = FindViewport(host.Scene, drinks.Count);
+
+            // (a) DRAG row 1 UP past row 0's midpoint (row-1 centre 66 → −50 ⇒ 16 < row-0 mid 22 → pending 0), release:
+            // the gesture is a REORDER, committing 1→0 (Complete uses the latest pending, no dwell needed for the drop).
+            var r1 = RealizedRow(host.Scene, vp, 1);
+            var c1 = CenterOf(host.Scene, r1);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c1, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c1.X, c1.Y - 50f), 0, 0));   // >4px up → promote, cross row-0 mid
+            host.RunFrame();
+            bool active = host.HasActiveWork;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c1.X, c1.Y - 50f), 0, 0));
+            host.RunFrame();
+            bool dragReordered = reorderFrom == 1 && reorderTo == 0;  // the drag committed a move, not a tap-invoke
+
+            // (b) PLAIN click on row 2 (no threshold cross): ItemClick fires + the row selects (press-edge), NO reorder.
+            int reorders0From = reorderFrom;
+            var r2 = RealizedRow(host.Scene, vp, 2);
+            var c2 = CenterOf(host.Scene, r2);
+            int clicks1 = clickCount;
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c2, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c2, 0, 0));
+            host.RunFrame();
+            bool plainClicks = clickCount == clicks1 + 1 && clicked == 2 && model.IsSelected(2) && reorderFrom == reorders0From;
+            Check("cp2.invokerelease a promoted drag commits a reorder (drag gesture); a plain release selects + raises ItemClick + no reorder (press-edge select divergence noted)",
+                active && dragReordered && plainClicks,
+                $"active={active} dragReorder=({reorderFrom}->{reorderTo}) plain={plainClicks} clicked={clicked} sel2={model.IsSelected(2)}");
+        }
+
+        // ── C5 — cp2.scrollslot: under a SCROLLED viewport (FirstRealized>0) the displacement seed lands on the
+        // CORRECT realized node (index→ord via FirstRealized — the seed's ord math must respect scroll, not blindly
+        // use the absolute index). Synthetic displacement on a realized-but-scrolled index. ──────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-scroll", new Size2(360, 360), 1f));
+            window.Show();
+            var ver = new Signal<int>(0);
+            int dispTarget = -1;
+            var ctl = new ItemsViewController();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 320, Height = 200,                        // 200 / 40 ⇒ ~5 rows visible over 100 items
+                    Children =
+                    [
+                        ItemsView.Create(100,
+                            i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
+                            RepeatLayout.Stack(40f),
+                            controller: ctl,
+                            selector: SelectorVisual.AccentPill,
+                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
+                            displacementVersion: ver),
+                    ],
+                },
+            });
+            host.RunFrame();
+            ctl.StartBringItemIntoView(40, 0f);                       // scroll so item 40 is at the top edge
+            host.RunFrame();
+            var vp = FindViewport(host.Scene, 100);
+            host.Scene.TryGetScroll(vp, out var sc);
+            bool scrolled = sc.FirstRealized >= 30;                   // genuinely past the top (ord != index now)
+            int target = sc.FirstRealized + 1;                        // a realized item with ord = 1
+            var targetNode = RealizedRow(host.Scene, vp, target);
+            bool nodeFound = !targetNode.IsNull;
+
+            dispTarget = target;
+            ver.Value = ver.Peek() + 1;
+            host.RunFrame();
+            for (int i = 0; i < 40; i++) host.RunFrame();            // settle
+            float tdy = nodeFound ? host.Scene.Paint(targetNode).LocalTransform.Dy : 0f;
+            bool landedOnTarget = nodeFound && Near(tdy, 24f, 0.6f);
+            // The ord-0 realized node (a DIFFERENT item index than `target`) must NOT have moved — proving the seed
+            // mapped index→ord through FirstRealized rather than smearing onto the wrong (absolute-index) child.
+            var ord0 = RealizedRow(host.Scene, vp, sc.FirstRealized);
+            bool othersStill = !ord0.IsNull && Near(host.Scene.Paint(ord0).LocalTransform.Dy, 0f, 0.6f);
+            Check("cp2.scrollslot displaced offset lands on the correct realized node under a scrolled viewport (index→ord via FirstRealized)",
+                scrolled && nodeFound && landedOnTarget && othersStill,
+                $"first={sc.FirstRealized} target={target} tdy={tdy:0.0} othersStill={othersStill}");
+        }
+
+        // ── C6 — cp2.matrix: the SAME logical reorder (drag item 0 → slot 2) run THREE ways — ListView, GridView,
+        // ItemsView (synthetic, like a preset) — proving "every capability in every combination". ALL THREE arms pin
+        // part-to-make-room: the (i) ListView and (ii) GridView arms drive a REAL pointer drag through the LIVE preset
+        // wiring and assert (1) the model move 0→2 commits on release, (2) the dragged node's translate is the DRAG's
+        // (ghost rides the pointer), (3) a displaced sibling's translate parts toward the vacated slot mid-drag. That
+        // third assertion guards the closure-freeze regression: itemDisplacement is a constructor arg of the inner
+        // autonomous ItemsView, so it freezes at mount (engine Rule #2) — it must capture only STABLE state (the
+        // memoized ReorderList), never a per-render local; a frozen `reordering ? … : (0,0)` once shipped green here
+        // while the live displacement was dead. The (iii) ItemsView arm pins the channel itself deterministically. ────
+        {
+            // (i) ListView ─────────────────────────────────────────────────────────────────────────────────────────
+            int lvFrom = -1, lvTo = -1;
+            using (var app = new HeadlessPlatformApp())
+            {
+                var window = new HeadlessWindow(new WindowDesc("cp2-mx-lv", new Size2(360, 360), 1f));
+                window.Show();
+                var items = new List<string> { "A", "B", "C", "D", "E" };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 320, Height = 280,
+                        Children =
+                        [
+                            ItemsView.List(items.Count,
+                                i => new TextEl(items[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                                canReorderItems: true, onReorder: (f, t) => { lvFrom = f; lvTo = t; }, keyOf: i => items[i]),
+                        ],
+                    },
+                });
+                host.RunFrame();
+                var vp = FindViewport(host.Scene, items.Count);
+                var dragRow = RealizedRow(host.Scene, vp, 0);
+                var c = CenterOf(host.Scene, dragRow);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+                host.RunFrame();
+                // Move the dragged centre PAST row 2's midpoint (row-0 centre 22; row-2 mid = 44*2+22 = 110 ⇒ +92 → centre 114 > 110 → pending 2).
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X, c.Y + 92f), 0, 0));
+                host.RunFrame();
+                // A few frames while held (real time advances the dwell ticker; keep-alive keeps frames coming).
+                bool aliveLv = host.HasActiveWork;
+                for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); aliveLv &= host.HasActiveWork; }
+                // The 200ms dwell committed target=2 during the loop; the LIVE preset's ItemDisplacement channel seeds
+                // rows 1,2 with the animated -44 part (the 250ms Reposition glide) — settle it, then read row 1.
+                for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); }
+                var row1Lv = RealizedRow(host.Scene, vp, 1);
+                float lvRow1Dy = row1Lv.IsNull ? 0f : host.Scene.Paint(row1Lv).LocalTransform.Dy;
+                bool lvParted = !row1Lv.IsNull && lvRow1Dy < -30f;   // a displaced sibling parts up toward -44 on the LIVE path (directional: the glide settles asymptotically)
+                // Re-fetch FRESH: the ListView re-renders + re-realizes every drag frame (its FrameClock dwell ticker).
+                var dragRowNow = RealizedRow(host.Scene, vp, 0);
+                float draggedDy = dragRowNow.IsNull ? 0f : host.Scene.Paint(dragRowNow).LocalTransform.Dy;   // ghost rides the pointer (+~92)
+                // TWO-SIDED: the dragged node rides the pointer at the gesture delta (+92) and STAYS there across the
+                // held frames — it must NOT run away. Pre-fix, the ItemsView displacement seed planted a Replace
+                // TranslateY track on the dragged ghost (DraggedSlot is unwired in every preset) that fought
+                // DragController.RetargetFromRest into an unbounded per-frame runaway (hundreds→thousands of px, the
+                // ghost flying off the page); the old `draggedDy > 20f` lower bound passed on that runaway. The upper
+                // bound is the actual regression guard — the seed now skips the DragGhost-flagged node.
+                bool lvGhost = !dragRowNow.IsNull && MathF.Abs(draggedDy - 92f) < 20f;   // ≈ +92 gesture delta, not a runaway
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X, c.Y + 92f), 0, 0));
+                host.RunFrame();
+                bool lvCommit = lvFrom == 0 && lvTo == 2;
+                Check("cp2.matrix.listview drag 0→2: model commits, displaced row parts mid-drag on the LIVE path, dragged node owned by the drag, keep-alive holds",
+                    lvCommit && lvGhost && aliveLv && lvParted,
+                    $"commit=({lvFrom}->{lvTo}) row1Dy={lvRow1Dy:0.0} draggedDy={draggedDy:0.0} alive={aliveLv}");
+            }
+
+            // (ii) GridView (Check selector + ReorderList 2-D) ──────────────────────────────────────────────────────
+            int gvFrom = -1, gvTo = -1;
+            using (var app = new HeadlessPlatformApp())
+            {
+                var window = new HeadlessWindow(new WindowDesc("cp2-mx-gv", new Size2(480, 360), 1f));
+                window.Show();
+                var items = new List<string> { "A", "B", "C", "D", "E", "F", "G", "H" };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 440, Height = 320,
+                        Children =
+                        [
+                            ItemsView.Grid(items.Count, i => new BoxEl { Children = [new TextEl(items[i]) { Size = 13f }] },
+                                columns: 4, tileHeight: 96f,
+                                canReorderItems: true, onReorder: (f, t) => { gvFrom = f; gvTo = t; }, keyOf: i => items[i]),
+                        ],
+                    },
+                });
+                host.RunFrame();
+                var vp = FindViewport(host.Scene, items.Count);
+                var dragTile = RealizedRow(host.Scene, vp, 0);
+                var c = CenterOf(host.Scene, dragTile);
+                var c2 = CenterOf(host.Scene, RealizedRow(host.Scene, vp, 2));   // target slot 2 (same row, 2 cols right)
+                window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+                host.RunFrame();
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c2.X, c2.Y), 0, 0));   // over tile-2 centre
+                host.RunFrame();
+                bool aliveGv = host.HasActiveWork;
+                for (int i = 0; i < 4; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); aliveGv &= host.HasActiveWork; }   // 300ms grid dwell
+                // The 300ms dwell committed target=2; the LIVE preset's channel seeds tiles 1,2 with the animated
+                // one-column-left part — settle the 250ms glide, then read tile 1 (directional: a column ≈ 110px).
+                for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); }
+                var tile1Gv = RealizedRow(host.Scene, vp, 1);
+                float gvTile1Dx = tile1Gv.IsNull ? 0f : host.Scene.Paint(tile1Gv).LocalTransform.Dx;
+                bool gvParted = !tile1Gv.IsNull && gvTile1Dx < -60f;   // a displaced tile parts one column left on the LIVE path
+                // Re-fetch FRESH (the GridView re-renders + re-realizes every drag frame via its dwell ticker).
+                var dragTileNow = RealizedRow(host.Scene, vp, 0);
+                float draggedTx = dragTileNow.IsNull ? 0f : host.Scene.Paint(dragTileNow).LocalTransform.Dx;
+                // TWO-SIDED: the dragged tile rides the pointer at the injected horizontal gesture delta (≈2 columns)
+                // and STAYS there — it must NOT run away. Pre-fix the displacement seed stomped BOTH tile axes
+                // (OffsetFor2D returns (0,0) for the dragged tile, but the seed animated its live translate back to 0),
+                // and the runaway was on the X axis for this same-row drag; the old `draggedTx > 20f` lower bound
+                // masked it. The upper bound (anchored to the real injected delta) is the regression guard.
+                float gvExpectTx = c2.X - c.X;
+                bool gvGhost = !dragTileNow.IsNull && MathF.Abs(draggedTx - gvExpectTx) < 16f;   // tile rides the pointer, not a runaway
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c2.X, c2.Y), 0, 0));
+                host.RunFrame();
+                bool gvCommit = gvFrom == 0 && gvTo == 2;
+                Check("cp2.matrix.gridview drag 0→2 (2-D): model commits, displaced tile parts mid-drag on the LIVE path, dragged tile owned by the drag, keep-alive holds",
+                    gvCommit && gvGhost && aliveGv && gvParted,
+                    $"commit=({gvFrom}->{gvTo}) tile1Dx={gvTile1Dx:0.0} draggedTx={draggedTx:0.0} alive={aliveGv}");
+            }
+
+            // (iii) ItemsView wired like a preset (AccentPill + synthetic ReorderList-fed displacement) ──────────────
+            using (var app = new HeadlessPlatformApp())
+            {
+                var window = new HeadlessWindow(new WindowDesc("cp2-mx-iv", new Size2(360, 360), 1f));
+                window.Show();
+                var rl = new ReorderList { DwellMs = 0f };           // 0 dwell ⇒ target follows pending immediately (test-deterministic)
+                var ver = new Signal<int>(0);
+                int from = -1, to = -1;
+                rl.OnCommit = (f, t) => { from = f; to = t; };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 320, Height = 280,
+                        Children =
+                        [
+                            ItemsView.Create(5,
+                                i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
+                                RepeatLayout.Stack(40f),
+                                selector: SelectorVisual.AccentPill,
+                                itemDisplacement: i => { rl.OffsetFor2D(i, 0f, 0f, out _, out _); return (0f, rl.OffsetFor(i)); },
+                                displacementVersion: ver),
+                        ],
+                    },
+                });
+                host.RunFrame();
+                // Drive the substrate like a preset would: Begin, Update past row 2's midpoint, commit the target.
+                rl.Begin(0, 5, itemExtent: 40f);
+                rl.Update(88f);                                       // dragged centre 20+88=108 > mid-2 (100) → pending 2
+                rl.Advance(0f);                                       // 0 dwell ⇒ target = 2 now (OffsetFor parts rows 1,2)
+                ver.Value = ver.Peek() + 1;
+                host.RunFrame();
+                for (int i = 0; i < 40; i++) host.RunFrame();        // settle the seeded translate
+                var vp = FindViewport(host.Scene, 5);
+                var row1 = RealizedRow(host.Scene, vp, 1);
+                float row1Dy = row1.IsNull ? 0f : host.Scene.Paint(row1).LocalTransform.Dy;
+                bool ivDisplace = !row1.IsNull && Near(row1Dy, -40f, 0.8f);   // row 1 parts up by one extent
+                int dest = rl.Complete();
+                bool ivCommit = dest == 2 && from == 0 && to == 2;
+                Check("cp2.matrix.itemsview drag 0→2 (preset-wired): displacement parts the block + the substrate commits 0→2",
+                    ivDisplace && ivCommit, $"row1Dy={row1Dy:0.0} commit=({from}->{to}) dest={dest}");
+            }
+        }
+
+        // ── C7 — cp2.selectorpresets: each SelectorVisual preset builds the correct selected chrome, exercised through
+        // the PUBLIC ItemsView selector switch (the SelectorVisuals builders are `internal` with no InternalsVisibleTo
+        // to this project, so the public path is the only reachable seam — and it additionally proves the BCore switch
+        // wiring + recyclability, since virtualized realize rejects any non-recyclable container). ───────────────────
+        {
+            // Build a one-item ItemsView in a given selector + selection state and return its realized container subtree.
+            (SceneStore scene, NodeHandle container) BuildSel(SelectorVisual sel, ItemsSelectionMode mode, bool selected)
+            {
+                var model = new SelectionModel { ItemCount = 1, Mode = mode };
+                if (selected) model.Select(0);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("cp2-sel", new Size2(240, 160), 1f));
+                window.Show();
+                var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 200, Height = 120,
+                        Children =
+                        [
+                            ItemsView.Create(1, i => new BoxEl { Width = 120, Height = 40 }, RepeatLayout.Stack(44f),
+                                selectionMode: mode, selection: model, selector: sel),
+                        ],
+                    },
+                });
+                host.RunFrame();
+                var vp = FindViewport(host.Scene, 1);
+                var container = RealizedRow(host.Scene, vp, 0);
+                // Detach the scene from the (disposing) host: AbsoluteRect/Paint stay valid on the retained store.
+                var s = host.Scene;
+                host.Dispose();
+                return (s, container);
+            }
+
+            // The accent pill is uniquely identified on NodePaint by (Fill≈AccentDefault ∧ Corners.TopLeft≈1.5); laid-out
+            // W/H live in _bounds (read via AbsoluteRect), not NodePaint.Size, so verify geometry separately.
+            static bool IsPill(NodePaint p) => Near(p.Corners.TopLeft, 1.5f) && ColorClose(p.Fill, Tok.AccentDefault, 0.02f);
+
+            // (a) AccentPill selected (Single) → the 3×16 r1.5 accent pill exists.
+            var (pillScene, pillRoot) = BuildSel(SelectorVisual.AccentPill, ItemsSelectionMode.Single, selected: true);
+            var pill = FindBox(pillScene, pillRoot, IsPill);
+            var pillRect = pill.IsNull ? default : pillScene.AbsoluteRect(pill);
+            bool pillOk = !pill.IsNull && Near(pillRect.W, 3f) && Near(pillRect.H, 16f);
+
+            // (b) AccentPill selected in MULTIPLE → the pill is SUPPRESSED (checkbox-OR-pill); the inline 20×20 check
+            // plate is present (the only BorderWidth≈1 ∧ Corners.TopLeft≈3 node in the AccentPill row).
+            var (multiScene, multiRoot) = BuildSel(SelectorVisual.AccentPill, ItemsSelectionMode.Multiple, selected: true);
+            var noPill = FindBox(multiScene, multiRoot, IsPill);
+            var checkPlate = FindBox(multiScene, multiRoot, p => Near(p.BorderWidth, 1f) && Near(p.Corners.TopLeft, 3f));
+            var checkRect = checkPlate.IsNull ? default : multiScene.AbsoluteRect(checkPlate);
+            bool multiOk = noPill.IsNull && !checkPlate.IsNull && Near(checkRect.W, 20f) && Near(checkRect.H, 20f);
+
+            // (c) Check selected (Single) → the 2px accent border on the plate + the inset 1px ControlSolid inner ring.
+            var (checkScene, checkRoot) = BuildSel(SelectorVisual.Check, ItemsSelectionMode.Single, selected: true);
+            bool plateBorder = Near(checkScene.Paint(checkRoot).BorderWidth, 2f)
+                && ColorClose(checkScene.Paint(checkRoot).BorderColor, Tok.AccentDefault, 0.02f);
+            var innerRing = FindBox(checkScene, checkRoot, p => Near(p.BorderWidth, 1f)
+                && ColorClose(p.BorderColor, Tok.FillControlSolid, 0.02f) && Near(p.Corners.TopLeft, 3f));
+            bool checkOk = plateBorder && !innerRing.IsNull;
+
+            // (d) FullRow superset selected → NO left pill, but the selected subtle plate reads as the full-bleed fill.
+            var (fullScene, fullRoot) = BuildSel(SelectorVisual.FullRow, ItemsSelectionMode.Single, selected: true);
+            var fullPill = FindBox(fullScene, fullRoot, IsPill);
+            bool fullOk = fullPill.IsNull && ColorClose(fullScene.Paint(fullRoot).Fill, Tok.FillSubtleSecondary, 0.02f);
+
+            // (e) None → a bare container: no pill, no accent ring (app draws its own selection).
+            var (noneScene, noneRoot) = BuildSel(SelectorVisual.None, ItemsSelectionMode.Single, selected: true);
+            bool noneOk = FindBox(noneScene, noneRoot, IsPill).IsNull
+                && FindBox(noneScene, noneRoot, p => Near(p.BorderWidth, 3f)).IsNull;
+
+            Check("cp2.selectorpresets AccentPill/Check/FullRow/None build the correct selected chrome (pill 3×16, Multiple-suppression, Check dual-border, FullRow full-bleed, None bare)",
+                pillOk && multiOk && checkOk && fullOk && noneOk,
+                $"pill={pillOk} multiSuppress={multiOk} check={checkOk} fullRow={fullOk} none={noneOk}");
+        }
+
+        // ── C8 — cp2.treedwell: TreeView consumes the SAME reorder substrate. The dwell + 1s auto-expand advance on a
+        // still drag (stage A keep-alive + BTree left the ticker intact); the realized-handle map prune (BT2) keeps the
+        // realized-row count bounded across a Roots rebuild; reparent is DEFERRED (default) so a drop commits SIBLING-only. ─
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-tree", new Size2(360, 400), 1f));
+            window.Show();
+            var rootsA = new List<TreeNode>
+            {
+                new("Alpha"), new("Bravo"), new("Charlie"), new("Delta"), new("Echo"),
+            };
+            var roots = new Signal<IReadOnlyList<TreeNode>>(rootsA);
+            TreeNode? commitParent = null; int tFrom = -1, tTo = -1; bool reparent = false;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 320, Height = 360,
+                    Children =
+                    [
+                        TreeView.Create(roots.Value, itemTemplate: null, canReorderItems: true,
+                            onReorder: (parent, f, t) => { commitParent = parent; tFrom = f; tTo = t; reparent = parent is not null; }),
+                    ],
+                },
+            });
+            host.RunFrame();
+
+            // Count realized tree rows via role scan (each TreeViewItem row carries the Button automation role).
+            int RowCount() => Roles(host.Scene, AutomationRole.Button).Count;
+            int rows0 = RowCount();
+            bool initialRows = rows0 >= 5;                            // 5 roots realized as Button-role rows
+
+            // Promote a drag on root 0, hold still through the dwell, assert the keep-alive + that work stays pending.
+            var firstRow = Roles(host.Scene, AutomationRole.Button) is { Count: > 0 } rs ? rs[0] : NodeHandle.Null;
+            bool aliveDuringDrag = true, dwellAdvanced = false;
+            if (!firstRow.IsNull)
+            {
+                var c = CenterOf(host.Scene, firstRow);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+                host.RunFrame();
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X, c.Y + 60f), 0, 0));   // past sibling 1
+                host.RunFrame();
+                for (int i = 0; i < 4; i++)
+                {
+                    System.Threading.Thread.Sleep(110);
+                    host.RunFrame();
+                    if (!host.HasActiveWork) aliveDuringDrag = false;
+                }
+                // After the dwell, the projected sibling order moved root 0 down: the FLIP re-rendered the keyed rows,
+                // so the row that is now FIRST in the realized column is no longer the originally-dragged node's slot.
+                // Proxy: the dragged ghost node carries a non-zero translate (it rides the pointer) — proves the drag
+                // engine + dwell are live (the keep-alive pumped frames).
+                dwellAdvanced = host.HasActiveWork && MathF.Abs(host.Scene.Paint(firstRow).LocalTransform.Dy) > 0.5f;
+                window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X, c.Y + 60f), 0, 0));
+                host.RunFrame();
+            }
+            bool siblingCommit = !reparent && tFrom == 0 && tTo >= 1 && commitParent is null;   // root-level sibling move
+
+            // BT2 prune: rebuild Roots to a SMALLER set; the realized rows must shrink (no leaked handles inflate it).
+            roots.Value = new List<TreeNode> { new("Alpha"), new("Bravo") };
+            host.RunFrame();
+            int rows1 = RowCount();
+            bool prunedBounded = rows1 <= rows0 && rows1 >= 2;       // realized rows track the live projection (bounded)
+
+            Check("cp2.treedwell TreeView reorder: dwell/keep-alive advance on a still drag, sibling-only commit (reparent deferred), realized rows stay bounded after a Roots rebuild",
+                initialRows && aliveDuringDrag && dwellAdvanced && siblingCommit && prunedBounded,
+                $"rows {rows0}→{rows1} alive={aliveDuringDrag} dwell={dwellAdvanced} commit=({tFrom}->{tTo},parent={(commitParent is null ? "root" : "node")},reparent={reparent})");
+        }
+
+        // ── cp2.dragalloc: the displacement SEED is edge-triggered (it fires only when DisplacementVersion changes),
+        // so a steady frame with NO version bump is 0-alloc on the hot phases. (A LIVE ListView/GridView reorder is NOT
+        // per-frame 0-alloc — its FrameClock dwell ticker re-renders every drag frame to advance the 200/300ms timer,
+        // an inherent cost of the live-reorder timer, NOT of the displacement seed; the raw drag-move path's 0-alloc is
+        // already pinned by e5dragdrop.8b. So this isolates the SEED on the ItemsView path, which has no dwell ticker:
+        // once seeded and settled, an unbumped frame allocates nothing.) ────────────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp2-alloc", new Size2(360, 360), 1f));
+            window.Show();
+            var ver = new Signal<int>(0);
+            int dispTarget = 2;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 320, Height = 280,
+                    Children =
+                    [
+                        ItemsView.Create(8,
+                            i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
+                            RepeatLayout.Stack(40f),
+                            selector: SelectorVisual.AccentPill,
+                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
+                            displacementVersion: ver),
+                    ],
+                },
+            });
+            host.RunFrame();
+            ver.Value = ver.Peek() + 1;          // seed the displacement track once (edge), then let it fully settle
+            for (int i = 0; i < 50; i++) host.RunFrame();
+            // A steady frame with NO version bump: the seed effect doesn't re-run, the AnimEngine track has settled and
+            // been reclaimed, the ItemsView doesn't re-render — phases 6–13 must allocate 0.
+            var warm = host.RunFrame();
+            var steady = host.RunFrame();
+            bool zero = steady.HotPhaseAllocBytes == 0;
+            Check("cp2.dragalloc the displacement seed is edge-triggered — a steady ItemsView frame with no version bump is 0-alloc on phases 6–13",
+                zero, $"{steady.HotPhaseAllocBytes} bytes (warm={warm.HotPhaseAllocBytes})");
+        }
     }
 
     // D2 — the PasswordBox reveal eye must SURVIVE its own click. Regression: engine pointer focus moved to ANY
@@ -9339,6 +10175,160 @@ static class Slice
         Check("cp2.c — blur→refocus shows no eye (OnGotFocus arm-clear); typing populated stays hidden; empty→retype re-arms",
             blurUnmounts && noEyeOnRefocus && typingPopulatedHidden && rearmed,
             $"blur={blurUnmounts} refocus={noEyeOnRefocus} typing={typingPopulatedHidden} rearmed={rearmed}");
+    }
+
+    static void ProgressIndeterminateLifecycleChecks(StringTable strings)
+    {
+        // ProgressRing: parent re-render updates isActive through context, preserving the component instance.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("progress-ring-lifecycle", new Size2(240, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var active = new Signal<bool>(true);
+            NodeHandle arc = default;
+            var parts = new TemplateParts();
+            parts[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 160, Height = 120, Padding = Edges4.All(16),
+                    Children = [ProgressRing.Indeterminate(isActive: active.Value, parts: parts)],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var ring = host.Scene.Parent(arc);
+            bool activeMount = !arc.IsNull && !ring.IsNull
+                && Near(host.Scene.Paint(ring).Opacity, 1f, 0.001f)
+                && host.Animation.HasTracks(ring) && host.Animation.HasTracks(arc);
+
+            var ring0 = ring;
+            var arc0 = arc;
+            active.Value = false;
+            host.RunFrame(); host.RunFrame();
+            bool stopped = ring == ring0 && arc == arc0
+                && Near(host.Scene.Paint(ring).Opacity, 0f, 0.001f)
+                && !host.Animation.HasTracks(ring)
+                && !host.Animation.HasTracks(arc);
+
+            active.Value = true;
+            host.RunFrame();
+            bool restarted = ring == ring0 && arc == arc0 && Near(host.Scene.Paint(ring).Opacity, 1f, 0.001f)
+                && host.Animation.HasTracks(ring) && host.Animation.HasTracks(arc);
+
+            Check("progress.1 ProgressRing isActive flows through context: active spins, inactive stops, reactivation restarts without remount",
+                activeMount && stopped && restarted,
+                $"active={activeMount} stopped={stopped} restarted={restarted} same={ring == ring0 && arc == arc0}");
+        }
+
+        // Fresh inactive mount: no hidden compositor work should be seeded under opacity 0.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("progress-ring-inactive", new Size2(240, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            NodeHandle arc = default;
+            var parts = new TemplateParts();
+            parts[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => ProgressRing.Indeterminate(isActive: false, parts: parts),
+            });
+            host.RunFrame(); host.RunFrame();
+            var ring = host.Scene.Parent(arc);
+            bool idle = !arc.IsNull && !ring.IsNull
+                && Near(host.Scene.Paint(ring).Opacity, 0f, 0.001f)
+                && !host.Animation.HasTracks(ring)
+                && !host.Animation.HasTracks(arc);
+            Check("progress.2 inactive ProgressRing mounts idle with opacity 0 and zero animation tracks",
+                idle, $"arc={arc} ring={ring} tracks arc={(!arc.IsNull && host.Animation.HasTracks(arc))}");
+        }
+
+        // ProgressBar: parent re-render updates state/width through context, so the existing effect deps fire.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("progress-bar-lifecycle", new Size2(420, 180), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var state = new Signal<ProgressBarState>(ProgressBarState.Normal);
+            var width = new Signal<float>(240f);
+            var fills = new List<NodeHandle>(2);
+            var parts = new TemplateParts();
+            parts[ProgressBar.PartFill] = b => b with
+            {
+                OnRealized = h => { if (!fills.Contains(h)) fills.Add(h); },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 360, Height = 80, Padding = Edges4.All(16),
+                    Children = [ProgressBar.Indeterminate(width.Value, state.Value, parts)],
+                },
+            });
+            host.RunFrame();
+            bool normalTracks = fills.Count == 2 && host.Animation.HasTracks(fills[0]) && host.Animation.HasTracks(fills[1]);
+            var barRoot = fills.Count == 2 ? host.Scene.Parent(fills[0]) : NodeHandle.Null;
+
+            state.Value = ProgressBarState.Paused;
+            host.RunFrame(); host.RunFrame();
+            bool paused = fills.Count == 2
+                && Near(host.Scene.Paint(fills[0]).Opacity, 0f, 0.001f)
+                && !host.Animation.HasTracks(fills[0])
+                && ColorClose(host.Scene.Paint(fills[1]).Fill, Tok.SystemFillCaution, 0.004f);
+
+            state.Value = ProgressBarState.Normal;
+            host.RunFrame();
+            bool resumed = fills.Count == 2
+                && ColorClose(host.Scene.Paint(fills[1]).Fill, Tok.AccentDefault, 0.004f)
+                && host.Animation.HasTracks(fills[0]) && host.Animation.HasTracks(fills[1]);
+
+            width.Value = 300f;
+            host.RunFrame(); host.RunFrame();
+            bool resized = !barRoot.IsNull && Near(host.Scene.AbsoluteRect(barRoot).W, 300f, 0.5f);
+
+            Check("progress.3 ProgressBar indeterminate state and width props update the preserved component",
+                normalTracks && paused && resumed && resized,
+                $"normal={normalTracks} paused={paused} resumed={resumed} resized={resized} width={(!barRoot.IsNull ? host.Scene.AbsoluteRect(barRoot).W : 0):0.#}");
+        }
+
+        // CheckBox: checked mark color/pressability must update through context without remounting or replaying draw-on.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("checkbox-mark-props", new Size2(260, 160), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var enabled = new Signal<bool>(true);
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Width = 220, Height = 80, Padding = Edges4.All(16),
+                    Children = [CheckBox.Create("opt", CheckState.Checked, _ => { }, isEnabled: enabled.Value)],
+                },
+            });
+            host.RunFrame();
+            var cb = FindRole(host.Scene, host.Scene.Root, AutomationRole.CheckBox);
+            var mark = FindPolylineStrokeNode(host.Scene, cb);
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            bool settled = !mark.IsNull && !host.Animation.HasTracks(mark);
+            bool initialColor = !mark.IsNull && host.Scene.TryGetPolylineStroke(mark, out var before)
+                && ColorClose(before.Color, Tok.TextOnAccentPrimary, 0.004f);
+
+            enabled.Value = false;
+            host.RunFrame(); host.RunFrame();
+            var markAfter = FindPolylineStrokeNode(host.Scene, cb);
+            bool sameNode = markAfter == mark;
+            bool disabledColor = !markAfter.IsNull && host.Scene.TryGetPolylineStroke(markAfter, out var after)
+                && ColorClose(after.Color, Tok.TextOnAccentDisabled, 0.004f);
+            bool noReplay = !markAfter.IsNull && !host.Animation.HasTracks(markAfter);
+
+            Check("progress.4 CheckBox mark props update through context without remounting or replaying draw-on",
+                settled && initialColor && sameNode && disabledColor && noReplay,
+                $"settled={settled} initial={initialColor} same={sameNode} disabled={disabledColor} replay={!noReplay}");
+        }
     }
 
     // D3 — Expander motion (the SizeMode.Reflow contract — a DELIBERATE divergence from WinUI's layout snap): the clip
@@ -10388,6 +11378,7 @@ static class Slice
         GranularityChecks(strings);
         SliderSignalChecks(strings);
         FlowChecks(strings);
+        FlowReorderChecks(strings);
 
         // Wave 1 engine primitives (control-parity foundation). P1 — disabled gate; P2 — stateful text ramps;
         // P4b — stateful gradient transitions; P4a — authored clip-rect channel; P6 — focus/keyboard nav.
@@ -10441,7 +11432,9 @@ static class Slice
         // Parity wave-1 defect fixes (D1 collection-host sizing, D2 pointer-focus/PasswordBox reveal,
         // D3 Expander WinUI motion, D4 ScrollBar/AnnotatedScrollBar anatomy).
         D1CollectionHostSizingChecks(strings);
+        Cp2ConsolidationChecks(strings);   // collection consolidation: ItemsView premiere + thin LV/GV presets + 2-D reorder + displacement channel
         D2PasswordRevealFocusChecks(strings);
+        ProgressIndeterminateLifecycleChecks(strings);
         D3ExpanderChecks(strings);
         D4ScrollBarChecks(strings);
 

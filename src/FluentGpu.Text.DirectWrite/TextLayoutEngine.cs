@@ -288,13 +288,33 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 bool mustBreak = bb == BreakOpp.MustBreak;
                 bool canBreak = bb == BreakOpp.CanBreak || mustBreak;
 
-                if (mustBreak && i > lineStart) { EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW); lineStart = i; line++; pen = 0f; lastBreak = -1; }
+                if (mustBreak && i > lineStart)
+                {
+                    if (line + 1 >= maxL)
+                    {
+                        // Line budget reached at a hard break: emit this line as-is and DROP the rest — WinUI
+                        // MaxLines clips whole lines past the cap; it never runs the next paragraph on.
+                        EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        line++; lineStart = gc;
+                        break;
+                    }
+                    EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW); lineStart = i; line++; pen = 0f; lastBreak = -1;
+                }
                 if (canBreak) lastBreak = i;
 
                 float adv = _glyphs[i].Advance;
-                if (doWrap && pen + adv > maxWidth && i > lineStart && line + 1 < maxL)
+                if (doWrap && pen + adv > maxWidth && i > lineStart)
                 {
                     int br = lastBreak > lineStart ? lastBreak : i;
+                    if (line + 1 >= maxL)
+                    {
+                        // Overflow ON the last allowed line: it still wraps at the break point — the remainder is
+                        // dropped, never dumped unwrapped past maxWidth. With trimming, EmitLine ellipsizes the
+                        // remainder down to the width budget instead (WinUI CharacterEllipsis + MaxLines).
+                        EmitLine(lineStart, doTrim ? gc : br, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        line++; lineStart = gc;
+                        break;
+                    }
                     EmitLine(lineStart, br, line, lineHeight, false, maxWidth, ref maxLineW);   // wrapped lines fit by construction
                     lineStart = br; line++;
                     pen = 0f; for (int k = br; k < i; k++) pen += _glyphs[k].Advance;

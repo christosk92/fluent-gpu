@@ -121,7 +121,13 @@ static class Program
         if (screenshot != null)
         {
             int sf = frames > 0 ? frames : 6;   // a few frames to settle layout + glyph upload
-            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", 900, 640, mica: micaShot, frames: sf, screenshot: screenshot);
+            int sw = 900, sh = 640;             // --w/--h: reproduce a reported window geometry (wrap/clip bugs are width-dependent)
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--w" && int.TryParse(args[i + 1], out int w)) sw = w;
+                if (args[i] == "--h" && int.TryParse(args[i + 1], out int h)) sh = h;
+            }
+            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", sw, sh, mica: micaShot, frames: sf, screenshot: screenshot);
             return;
         }
 
@@ -134,6 +140,7 @@ static class Program
         else if (demo == "basic")
             FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
         else
-            FluentApp.Run(() => new GalleryApp { InitialPage = page }, "FluentGpu — Capability Gallery", 1240, 820, frames: frames);
+            FluentApp.Run(() => new GalleryApp { InitialPage = page }, "FluentGpu — Capability Gallery", 1240, 820,
+                          frames: frames, customFrame: true);   // the gallery draws the WinUI TitleBar (engine caption buttons)
     }
 }

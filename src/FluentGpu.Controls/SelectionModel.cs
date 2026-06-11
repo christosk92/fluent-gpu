@@ -203,6 +203,44 @@ public sealed class SelectionModel
         Notify();
     }
 
+    /// <summary>Remap selected indices after a collection RemoveAt(<paramref name="from"/>) + Insert(<paramref name="to"/>)
+    /// reorder, preserving selected ITEM identity rather than the old slot. Cold drop path.</summary>
+    public void RemapMove(int from, int to)
+    {
+        if (from == to || (uint)from >= (uint)_itemCount || (uint)to >= (uint)_itemCount) return;
+
+        var mapped = new List<(int Start, int End)>(_ranges.Count + 2);
+        for (int i = 0; i < _ranges.Count; i++)
+        {
+            var (s, e) = _ranges[i];
+            if (from < to)
+            {
+                AddMappedSegment(mapped, s, e, 0, from - 1, 0);
+                if (s <= from && e >= from) mapped.Add((to, to));
+                AddMappedSegment(mapped, s, e, from + 1, to, -1);
+                AddMappedSegment(mapped, s, e, to + 1, _itemCount - 1, 0);
+            }
+            else
+            {
+                AddMappedSegment(mapped, s, e, 0, to - 1, 0);
+                AddMappedSegment(mapped, s, e, to, from - 1, +1);
+                if (s <= from && e >= from) mapped.Add((to, to));
+                AddMappedSegment(mapped, s, e, from + 1, _itemCount - 1, 0);
+            }
+        }
+        NormalizeMapped(mapped);
+
+        int oldAnchor = AnchorIndex;
+        if (AnchorIndex >= 0) AnchorIndex = MapMovedIndex(AnchorIndex, from, to);
+        bool changed = AnchorIndex != oldAnchor || !SameRanges(mapped);
+        if (changed)
+        {
+            _ranges.Clear();
+            _ranges.AddRange(mapped);
+            Notify();
+        }
+    }
+
     // ── WinUI interaction semantics (the ItemsView selector trio, verbatim) ───────────────────────────
 
     /// <summary>Pointer tap / Space / Enter on item <paramref name="index"/> with the live modifier chord.</summary>
@@ -426,5 +464,41 @@ public sealed class SelectionModel
             else if (_ranges[i].End >= count) { _ranges[i] = (_ranges[i].Start, count - 1); changed = true; }
         }
         return changed;
+    }
+
+    private static int MapMovedIndex(int index, int from, int to)
+    {
+        if (index == from) return to;
+        if (from < to) return index > from && index <= to ? index - 1 : index;
+        return index >= to && index < from ? index + 1 : index;
+    }
+
+    private static void AddMappedSegment(List<(int Start, int End)> into, int s, int e, int lo, int hi, int delta)
+    {
+        int a = Math.Max(s, lo), b = Math.Min(e, hi);
+        if (a <= b) into.Add((a + delta, b + delta));
+    }
+
+    private static void NormalizeMapped(List<(int Start, int End)> ranges)
+    {
+        if (ranges.Count <= 1) return;
+        ranges.Sort(static (a, b) => a.Start.CompareTo(b.Start));
+        int w = 0;
+        for (int i = 1; i < ranges.Count; i++)
+        {
+            var cur = ranges[i];
+            var prev = ranges[w];
+            if (cur.Start <= prev.End + 1) ranges[w] = (prev.Start, Math.Max(prev.End, cur.End));
+            else ranges[++w] = cur;
+        }
+        ranges.RemoveRange(w + 1, ranges.Count - w - 1);
+    }
+
+    private bool SameRanges(List<(int Start, int End)> other)
+    {
+        if (_ranges.Count != other.Count) return false;
+        for (int i = 0; i < _ranges.Count; i++)
+            if (_ranges[i] != other[i]) return false;
+        return true;
     }
 }

@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -43,8 +44,8 @@ public readonly record struct ItemChromeState(
     bool IsSelected, bool IsEnabled, bool ShowCheckbox, bool IsChecked, bool IsCurrent);
 
 /// <summary>
-/// Custom item-container factory — the E11-L4 SKIN seam: ListView/GridView/TreeView supply their WinUI item chrome
-/// (ListViewItemPresenter / GridView dual-border / TreeViewItem row) around the engine's ONE selection + keyboard
+/// Custom item-container factory — the E11-L4 SKIN seam: the List/Grid presets + TreeView supply their WinUI item
+/// chrome (ListViewItemPresenter / GridView dual-border / TreeViewItem row) around the engine's ONE selection + keyboard
 /// substrate. The returned BoxEl must wire <paramref name="onInteraction"/> (press/Enter/Space → the selector) and
 /// <paramref name="onFocusChanged"/> (keyboard-current tracking), and should be <c>Focusable</c> so the engine focus
 /// ring lands on items. Null ⇒ the default WinUI <see cref="ItemContainer"/> chrome.
@@ -54,11 +55,23 @@ public delegate BoxEl ItemContainerFactory(
     Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged);
 
 /// <summary>
-/// WinUI <c>ItemsView</c> (controls\dev\ItemsView) — E11-L3: the L2 repeater substrate + <see cref="SelectionModel"/>
-/// + <see cref="ItemContainer"/> + keyboard navigation/typeahead + StartBringItemIntoView, composed. Every item
-/// template is wrapped in an ItemContainer (selection visuals, pointer states, multi-select checkbox); the items ride
-/// ONE virtualized viewport (<see cref="VirtualListEl"/>) over any <see cref="RepeatLayout"/> — Stack, Grid,
-/// LinedFlow (the WinUI photo-wall), Measured, SpanGrid or a custom seam layout.
+/// THE premiere collection control (a deliberate, documented SUPERSET of WinUI <c>ItemsView</c>,
+/// controls\dev\ItemsView) — E11-L3: the L2 repeater substrate + <see cref="SelectionModel"/> + the
+/// <see cref="SelectorVisual"/> chrome presets + keyboard navigation/typeahead + StartBringItemIntoView + BUILT-IN
+/// drag-reorder, composed. <see cref="List(System.Collections.Generic.IReadOnlyList{string}, Signal{int}, System.Action{int})"/>
+/// and <see cref="Grid(System.Collections.Generic.IReadOnlyList{string}, int, float)"/> are the built-in presets (the
+/// former ListView/GridView controls, folded onto ItemsView); the goal is no WinUI-style capability cliffs — every
+/// layout × every selection mode × every selector × reorder works in any combination.
+///
+/// Three pluggable axes, each available with every other (the superset over WinUI's fixed ListView/GridView pairings):
+/// • LAYOUT preset — any <see cref="RepeatLayout"/>: Stack, Grid, HorizontalStrip, LinedFlow (the WinUI photo-wall),
+///   Measured, SpanGrid or a custom seam layout, over ONE virtualized viewport (<see cref="VirtualListEl"/>).
+/// • SELECTION mode — None/Single/Multiple/Extended (<see cref="SelectionModel"/>, range-based: decoupled from realization).
+/// • SELECTOR VISUAL — <see cref="Selector"/>: AccentPill (the WinUI ListView accent bar), Check (GridView corner check),
+///   FullRow, Border (the default <see cref="ItemContainer"/>), None, or a custom <see cref="ContainerFactory"/> hook.
+/// Every item template is wrapped in the chosen selector chrome (selection visuals, pointer states, multi-select
+/// checkbox). Reorder (the WinUI live "siblings part to make room") rides the ONE substrate via
+/// <see cref="ItemDisplacement"/> + <see cref="DisplacementVersion"/> — a capability WinUI's own ItemsView lacks.
 ///
 /// Behavior contract (verified against the WinUI sources):
 /// • SelectionMode None/Single/Multiple/Extended (ItemsView.idl:6-12; default Single, ItemsView.h s_defaultSelectionMode)
@@ -85,6 +98,16 @@ public sealed class ItemsView : Component
 {
     private const float TypeaheadResetMs = 1000f;
     private const int GeometricScan = 512;   // bounded candidate scan for custom-layout arrow nav
+    // Reorder-displacement glide duration. WinUI's MoveItemsForLiveReorder uses TAS_REPOSITION timing, which is a
+    // build-only theme artifact (no readable token), so use the Reposition-class ControlNormal (250ms) with
+    // FluentDecelerate — the closest documented "reposition" cadence (Common_themeresources ControlNormalAnimationDuration).
+    private const float DisplacementAnimMs = Motion.ControlNormal;   // 250ms
+    private const float DisplacementEpsilon = 0.5f;   // sub-pixel: don't re-seed a track that is already at target
+
+    /// <summary>Default list slot stride: ListViewItemMinHeight 40 + the 2+2 backplate margins {4,2,4,2}; cp1.a pins 8×44.
+    /// (The default main-axis extent for <see cref="List(int, Func{int, Element}, ItemsSelectionMode, SelectionModel, Action{int}, Action{int}, Action{int}, bool, Action{int, int}, Func{int, string}, Func{int, bool}, ItemsViewController, Func{int, string}, float, float, float, float)"/>;
+    /// the uniform virtualization stride for the List preset.)</summary>
+    public const float ListItemExtent = 44f;
 
     // ── legacy simple surface (kept source-compatible: ItemsViewPage / MiscPages.cs uses Create(items, columns)) ──
     public IReadOnlyList<string> Items = [];
@@ -99,10 +122,22 @@ public sealed class ItemsView : Component
     public Func<int, string>? ItemText;
     /// <summary>Per-item enabled gate (disabled items dim to 0.3 and don't interact).</summary>
     public Func<int, bool>? IsItemEnabled;
-    /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (ListView/GridView/TreeView).</summary>
-    // Per-item chrome customization goes through the ContainerFactory seam, NOT TemplateParts — per-item part
-    // modifiers in recycled scroll paths are an allocation/recycling hazard (docs/guide/control-fidelity.md §6).
+    /// <summary>L4 skin seam: replaces the default <see cref="ItemContainer"/> chrome (the List/Grid presets + TreeView).</summary>
+    // Per-item chrome SKIN goes through the ContainerFactory/SelectorVisual seam; per-item VARIATION goes through the
+    // PartDelta value seam (fill/fg/opacity/corner/padding/glyph as values, applied during construction — shape-stable,
+    // 0-alloc, CI-enforced; docs/guide/control-fidelity.md §6).
     public ItemContainerFactory? ContainerFactory;
+    /// <summary>Per-item VARIATION (fill/foreground/opacity/corner/padding/glyph as VALUES) baked into the chrome
+    /// during construction — the legal per-item-customization seam (supersedes per-item TemplateParts in recycled
+    /// scroll paths). Resolved ONCE per realized item and passed by value into every selector builder / ItemContainer.
+    /// Must be a pure-value Func (no new/box/LINQ per call) — CI-enforced (control-fidelity §6).</summary>
+    public Func<int, ItemChromeState, PartDelta>? PartDelta;
+    /// <summary>The built-in selector-VISUAL preset (the user-pickable item chrome). Default <see cref="SelectorVisual.Border"/>
+    /// = the existing <see cref="ItemContainer"/> chrome (current behavior). When <see cref="ContainerFactory"/> is set it
+    /// wins (a custom skin overrides the preset); otherwise this picks one of the <see cref="SelectorVisuals"/> builders —
+    /// AccentPill (ListView accent bar), Check (GridView corner check), FullRow, None — so any selector works with any
+    /// layout × any selection mode (no WinUI capability cliffs). The List preset uses AccentPill, the Grid preset uses Check.</summary>
+    public SelectorVisual Selector = SelectorVisual.Border;
     /// <summary>Stable per-item keys for the keyed diff (reorder projections need item-identity keys).</summary>
     public Func<int, string>? KeyOf;
     public RepeatLayout Layout;
@@ -118,6 +153,27 @@ public sealed class ItemsView : Component
     /// ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
     /// fade, Moves FLIP, 167ms decelerate (<see cref="ItemCollectionTransition"/>).</summary>
     public ItemCollectionTransition? Transition;
+
+    // ── drag-reorder displacement channel (the WinUI "siblings part to make room" over the positional recycler) ──
+    /// <summary>Resting-index → target displacement in DIP at the current dwell-committed reorder target. The owning
+    /// reorder substrate (the ListView/GridView/TreeView preset, via ReorderList.OffsetFor / OffsetFor2D over RESTING
+    /// indices) supplies it; returns (0,0) for the dragged item and every non-displaced item. ItemsView seeds each
+    /// realized row's AnimEngine TranslateX/Y track from this so displaced siblings glide aside (WinUI
+    /// MoveItemsForLiveReorder), and the motion survives recycling because it is re-seeded each realize.</summary>
+    public Func<int, (float dx, float dy)>? ItemDisplacement;
+    /// <summary>Bumped by the owner on every drag-delta / dwell-commit; ItemsView subscribes (its <c>.Value</c>) so the
+    /// frozen-ComponentEl boundary (Reconciler.cs:220-221 — a parent bump alone never re-renders this autonomous
+    /// component) is crossed and the displacement edge-trigger re-seeds. This is the WinUI on-timer reorder cadence, NOT
+    /// per frame.</summary>
+    public IReadSignal<int>? DisplacementVersion;
+    /// <summary>OPTIONAL redundant hint: the resting index currently pointer-dragged. The displacement seed already
+    /// skips the dragged node UNCONDITIONALLY via its <see cref="NodeFlags.DragGhost"/> scene flag (its translate is
+    /// owned by the DragController and must never be animated), so this is needed only by callers whose drag does not
+    /// flow through that flag. NOTE: returning (0,0) from <see cref="ItemDisplacement"/> for the dragged item does NOT
+    /// by itself make the seed a no-op — the seed animates the row's LIVE translate back to that 0, which is exactly
+    /// the ownership conflict the DragGhost-flag skip prevents.</summary>
+    public IReadSignal<int>? DraggedSlot;
+
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
     /// hard-viewport path every big list wants (a Grow viewport never measures its content extent, so 10k rows stay
@@ -145,7 +201,12 @@ public sealed class ItemsView : Component
                                  ItemContainerFactory? containerFactory = null,
                                  Func<int, string>? keyOf = null,
                                  float grow = 1f,
-                                 ItemCollectionTransition? transition = null)
+                                 ItemCollectionTransition? transition = null,
+                                 SelectorVisual selector = SelectorVisual.Border,
+                                 Func<int, (float, float)>? itemDisplacement = null,
+                                 IReadSignal<int>? displacementVersion = null,
+                                 IReadSignal<int>? draggedSlot = null,
+                                 Func<int, ItemChromeState, PartDelta>? partDelta = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -165,7 +226,65 @@ public sealed class ItemsView : Component
             KeyOf = keyOf,
             Grow = grow,
             Transition = transition,
+            Selector = selector,
+            ItemDisplacement = itemDisplacement,
+            DisplacementVersion = displacementVersion,
+            DraggedSlot = draggedSlot,
+            PartDelta = partDelta,
         });
+
+    // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
+    // ItemsView.List(...) and ItemsView.Grid(...) are the built-in presets backed by the internal hook-bearing
+    // components ItemsViewListPreset / ItemsViewGridPreset (the substrate needs hooks — UseMemo/UseSignal/UseRef/
+    // conditional UseContext — which a plain static returning Element cannot host). The List preset uses AccentPill,
+    // the Grid preset uses Check.
+
+    /// <summary>The WinUI ListView simple surface: a vertical, single-selectable list over the labeled items, with the
+    /// accent-bar selector. <paramref name="selectedIndex"/> is the controlled single-selection signal.</summary>
+    public static Element List(IReadOnlyList<string> items,
+                               Signal<int>? selectedIndex = null,
+                               Action<int>? onSelectionChanged = null)
+        => Embed.Comp(() => new ItemsViewListPreset { Items = items, SelectedIndex = selectedIndex ?? new Signal<int>(-1), OnSelectionChanged = onSelectionChanged });
+
+    /// <summary>The full WinUI ListView-shaped preset: templated rows over the virtualized stack (the former
+    /// <c>ListView.Create</c>).</summary>
+    public static Element List(int itemCount, Func<int, Element> itemTemplate,
+                               ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
+                               SelectionModel? selection = null,
+                               Action<int>? onItemClick = null,
+                               Action<int>? onItemInvoked = null,
+                               Action<int>? onSelectionIndexChanged = null,
+                               bool canReorderItems = false,
+                               Action<int, int>? onReorder = null,
+                               Func<int, string>? itemText = null,
+                               Func<int, bool>? isItemEnabled = null,
+                               ItemsViewController? controller = null,
+                               Func<int, string>? keyOf = null,
+                               float itemExtent = ListItemExtent,
+                               float width = float.NaN, float height = float.NaN, float grow = 0f)
+        => Embed.Comp(() => new ItemsViewListPreset { ItemCount = itemCount, ItemTemplate = itemTemplate, SelectionMode = selectionMode, Selection = selection, OnItemClick = onItemClick, OnItemInvoked = onItemInvoked, OnSelectionChanged = onSelectionIndexChanged, CanReorderItems = canReorderItems, OnReorder = onReorder, ItemText = itemText, IsItemEnabled = isItemEnabled, Controller = controller, KeyOf = keyOf, ItemExtent = itemExtent, Width = width, Height = height, Grow = grow });
+
+    /// <summary>The WinUI GridView simple surface: a grid of labeled tiles with the corner-check selector (the former
+    /// <c>GridView.Create</c>).</summary>
+    public static Element Grid(IReadOnlyList<string> items, int columns = 4, float tileSize = 96f)
+        => Embed.Comp(() => new ItemsViewGridPreset { Items = items, Columns = columns, TileSize = tileSize });
+
+    /// <summary>The full WinUI GridView-shaped preset: templated tiles over the virtualized grid (the former
+    /// <c>GridView.Create</c>).</summary>
+    public static Element Grid(int itemCount, Func<int, Element> itemTemplate, int columns, float tileHeight,
+                               ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
+                               SelectionModel? selection = null,
+                               Action<int>? onItemClick = null,
+                               Action<int>? onItemInvoked = null,
+                               Action? onSelectionChanged = null,
+                               bool canReorderItems = false,
+                               Action<int, int>? onReorder = null,
+                               Func<int, string>? itemText = null,
+                               Func<int, bool>? isItemEnabled = null,
+                               ItemsViewController? controller = null,
+                               Func<int, string>? keyOf = null,
+                               float width = float.NaN, float height = float.NaN, float grow = 0f)
+        => Embed.Comp(() => new ItemsViewGridPreset { ItemCount = itemCount, ItemTemplate = itemTemplate, Columns = columns, TileSize = tileHeight, SelectionMode = selectionMode, Selection = selection, OnItemClick = onItemClick, OnItemInvoked = onItemInvoked, OnSelectionChanged = onSelectionChanged, CanReorderItems = canReorderItems, OnReorder = onReorder, ItemText = itemText, IsItemEnabled = isItemEnabled, Controller = controller, KeyOf = keyOf, Width = width, Height = height, Grow = grow });
 
     public override Element Render()
     {
@@ -184,6 +303,8 @@ public sealed class ItemsView : Component
         model.Mode = SelectionMode;
         _ = model.Version.Value;                           // subscribe — a selection change re-skins just this window
         int cur = current.Value;                           // subscribe — current moves re-render (focus visuals)
+        int dispVer = DisplacementVersion?.Value ?? 0;     // subscribe — reorder drag-delta/dwell re-seeds displacement
+                                                           //   (crosses the frozen-ComponentEl boundary; the only re-render trigger here)
 
         if (!ReferenceEquals(subscribed.Value, model))     // forward the model's event once per model instance
         {
@@ -572,10 +693,85 @@ public sealed class ItemsView : Component
             if (target >= 0) { pendingFocus.Value = -1; FocusIndex(target, visual: true); }
         }, cur);
 
+        // ── reorder displacement seed (the WinUI "siblings part to make room" over the positional recycler) ──────────
+        // Edge-triggered on DisplacementVersion (NOT per frame): the owner bumps it on each drag-delta/dwell-commit — the
+        // WinUI MoveItemsForLiveReorder-on-timer cadence. The effect walks the REALIZED window and seeds each row's
+        // AnimEngine TranslateX/Y track to its target displacement (in DIP), reading the row's CURRENT translate as the
+        // animation start so a retarget is velocity-continuous. The track (not BoxEl.OffsetX/Y) owns the channel, so the
+        // displacement survives every reconcile (ApplyBox only writes LocalTransform from a NON-ZERO static offset,
+        // Reconciler.cs:935-947 — the rows carry none, so the AnimEngine track is never clobbered) and is re-seeded on
+        // each realize from ItemDisplacement (recycling-safe). Animate allocates a Keyframe[] per call — fine here because
+        // this body is cold/edge-triggered, never a frame phase.
+        UseLayoutEffect(() =>
+        {
+            var disp = ItemDisplacement;
+            var anim = Context.Anim;
+            if (disp is null || anim is null || sceneRef is null) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp)) return;
+            int dragged = DraggedSlot?.Peek() ?? -1;   // resting index whose translate DragController owns (skip the seed)
+
+            NodeHandle first; int restingBase;
+            if (sceneRef.TryGetScroll(vp, out var sc))
+            {
+                restingBase = sc.FirstRealized;        // realized window: ord-th child ⇒ resting index FirstRealized+ord
+                first = sceneRef.FirstChild(sc.ContentNode);
+            }
+            else
+            {
+                restingBase = 0;                       // non-virtual fallback (Wrap/Inline): ord == index
+                first = sceneRef.FirstChild(vp);
+            }
+
+            var n = first;
+            for (int ord = 0; !n.IsNull && sceneRef.IsLive(n); ord++, n = sceneRef.NextSibling(n))
+            {
+                int item = restingBase + ord;
+                // Skip the pointer-dragged ghost UNCONDITIONALLY. Its translate is owned by DragController, which
+                // re-asserts it every move; OffsetFor(dragged)==0 does NOT make the seed a no-op here, because `fromY`
+                // below is the LIVE drag translate, so |0 − fromY| > eps fires a Replace TranslateY track that fights
+                // DragController for the node: AnimEngine.Tick folds it absolutely and overwrites the drag translate,
+                // then DragController.RetargetFromRest double-counts the stomped origin per frame into an unbounded
+                // runaway (the ghost flies off the page). The scene's DragGhost flag is the ground truth (set by
+                // DragController.Promote/ApplyPresented), so this holds even when DraggedSlot is unwired (every preset
+                // currently leaves it null) or its index doesn't align with the realized window.
+                if ((sceneRef.Flags(n) & NodeFlags.DragGhost) != 0 || item == dragged) continue;
+                var (dx, dy) = disp(item);             // (0,0) for non-displaced (non-dragged) items
+                ref NodePaint p = ref sceneRef.Paint(n);
+                float fromX = p.LocalTransform.Dx, fromY = p.LocalTransform.Dy;
+                if (MathF.Abs(dx - fromX) > DisplacementEpsilon)
+                    anim.Animate(n, AnimChannel.TranslateX, fromX, dx, DisplacementAnimMs, Easing.FluentDecelerate);
+                if (MathF.Abs(dy - fromY) > DisplacementEpsilon)
+                    anim.Animate(n, AnimChannel.TranslateY, fromY, dy, DisplacementAnimMs, Easing.FluentDecelerate);
+            }
+        }, dispVer);
+
         // ── item template: content wrapped in the WinUI ItemContainer chrome (or the L4 skin's chrome) ──
         bool multi = SelectionMode == ItemsSelectionMode.Multiple;
         Func<int, Element> content = ItemTemplate ?? DefaultTile;
-        ItemContainerFactory? skin = ContainerFactory;
+        // Selector-preset chrome: a custom ContainerFactory wins; else pick a built-in SelectorVisuals builder by the
+        // Selector field. Border ⇒ null ⇒ the existing ItemContainer.Build branch below (the default; keeps cp1.b +
+        // the e11virt.11-18 ItemContainer pins untouched). The SelectorVisuals builders take `in ItemChromeState` (an
+        // additive, readonly-passed shape, SelectorVisuals.cs), so each preset is bridged through a capture-free lambda
+        // to the by-value ItemContainerFactory delegate — the compiler caches these as static singletons (zero per-render
+        // alloc; the closures capture nothing).
+        // NOTE: the public ItemContainerFactory delegate has a FIXED signature with NO PartDelta param, so it can't
+        // carry a per-item delta. To keep that delegate untouched while still routing PartDelta to the BUILT-IN
+        // presets, containerTemplate (below) calls the SelectorVisuals builder DIRECTLY with `in delta` whenever a
+        // built-in Selector is active (ContainerFactory is null && Selector != Border); the `skin` indirection is used
+        // ONLY for a custom ContainerFactory (whose author reads ItemChromeState itself — no delta routing). The Border
+        // default flows the delta through ItemContainer.Build's partDelta: param.
+        ItemContainerFactory? skin = ContainerFactory ?? Selector switch
+        {
+            SelectorVisual.AccentPill => (i, c, st, oi, of) => SelectorVisuals.AccentPill(i, c, in st, oi, of),
+            SelectorVisual.Check      => (i, c, st, oi, of) => SelectorVisuals.Check(i, c, in st, oi, of),
+            SelectorVisual.FullRow    => (i, c, st, oi, of) => SelectorVisuals.FullRow(i, c, in st, oi, of),
+            SelectorVisual.None       => (i, c, st, oi, of) => SelectorVisuals.None(i, c, in st, oi, of),
+            _                         => (ItemContainerFactory?)null,   // Border ⇒ keep the ItemContainer.Build path below
+        };
+        // True ⇒ a built-in SelectorVisuals preset is active (NOT a custom ContainerFactory, NOT Border) — the delta is
+        // routed by a direct builder call in containerTemplate so it lands on the preset chrome.
+        bool builtInSelector = ContainerFactory is null && Selector != SelectorVisual.Border;
 
         // TabNavigation="Once" (ItemsView.xaml:7): the view exposes ONE tab stop — the keyboard-current container.
         // Tab-in with no current lands on the selected item when SelectionMode is Single (the GettingFocus redirect
@@ -589,15 +785,40 @@ public sealed class ItemsView : Component
         }
         if (tabStop < 0) tabStop = FirstEnabled(0, +1);
 
+        Func<int, ItemChromeState, PartDelta>? partDelta = PartDelta;
         Func<int, Element> containerTemplate = i =>
         {
             bool selected = model.IsSelected(i);
             bool enabled = IsItemEnabled?.Invoke(i) ?? true;
+            var state = new ItemChromeState(selected, enabled, multi, multi && selected, i == cur);
+            // Per-item VARIATION resolved ONCE per realized item (cold realize edge, never a frame phase) and passed BY
+            // VALUE into the selector builder / ItemContainer. None ⇒ every `?? default` fallback preserves the preset
+            // EXACTLY (so a null PartDelta is byte-for-byte the prior behavior). The Func must be pure-value.
+            var delta = partDelta?.Invoke(i, state) ?? FluentGpu.Controls.PartDelta.None;
+            // RESIDUAL (documented per S1b orders): these two closures allocate per realized item. The mechanically-
+            // correct per-SLOT pool (grow-only, indexed by realize ORD so the SAME callback objects survive recycling)
+            // is NOT installable in this pass — VirtualListEl.RenderItem is called with the ABSOLUTE item index and the
+            // viewport ScrollState.FirstRealized is still the PREVIOUS window's value at call time (Reconciler
+            // RealizeWindow writes FirstRealized AFTER the RenderItem build loop), and overlap-reuse skips RenderItem
+            // entirely (Reconciler.cs:555) — so no reliable realize-ord is available to key a bounded pool without an
+            // engine change. The C6 recycle shape-hash guard + the S3 steady-scroll HotPhaseAllocBytes==0 check reveal
+            // whether closing this residual is required; pool here once an ord seam exists.
             Action<ItemContainerTrigger, KeyModifiers> interact = (t, m) => OnItemInteraction(i, t, m);
             Action<bool> focusChanged = got => { if (got && current.Peek() != i) current.Value = i; };
+            // Built-in preset: call the SelectorVisuals builder DIRECTLY with `in delta` (the public ItemContainerFactory
+            // delegate carries no delta — see the `skin` note above). Custom ContainerFactory: route through `skin`
+            // (its author reads ItemChromeState itself; no delta). Border default: ItemContainer.Build with partDelta:.
+            if (builtInSelector)
+                return Selector switch
+                {
+                    SelectorVisual.AccentPill => SelectorVisuals.AccentPill(i, content(i), in state, interact, focusChanged, in delta),
+                    SelectorVisual.Check      => SelectorVisuals.Check(i, content(i), in state, interact, focusChanged, in delta),
+                    SelectorVisual.FullRow    => SelectorVisuals.FullRow(i, content(i), in state, interact, focusChanged, in delta),
+                    SelectorVisual.None       => SelectorVisuals.None(i, content(i), in state, interact, focusChanged, in delta),
+                    _                         => SelectorVisuals.None(i, content(i), in state, interact, focusChanged, in delta),
+                };
             return skin is not null
-                ? skin(i, content(i), new ItemChromeState(selected, enabled, multi, multi && selected, i == cur),
-                       interact, focusChanged)
+                ? skin(i, content(i), state, interact, focusChanged)
                 : ItemContainer.Build(
                     content(i),
                     isSelected: selected,
@@ -606,7 +827,8 @@ public sealed class ItemsView : Component
                     showSelectionCheckbox: multi,
                     isChecked: multi && selected,
                     onFocusChanged: focusChanged,
-                    isTabStop: i == tabStop);
+                    isTabStop: i == tabStop,
+                    partDelta: delta);
         };
 
         // ItemTransitionProvider (ItemsView.idl:45 → the inner repeater, ItemsView.xaml:30): stamp the collection

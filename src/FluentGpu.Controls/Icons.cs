@@ -54,6 +54,12 @@ public static class Icons
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
     public const string Movie = "\uE8B2";
+    // -- Window chrome (Segoe Fluent Icons caption set \u2014 the Win11 system caption-button glyphs, drawn at 10px) ------
+    public const string ChromeMinimize = "\uE921";   // Minimize \u2014
+    public const string ChromeMaximize = "\uE922";   // Maximize \u25A1
+    public const string ChromeRestore = "\uE923";    // Restore \u2750 (shown while maximized; FA WindowDecorations.axaml:208)
+    public const string ChromeClose = "\uE8BB";      // Close \u2715
+
     public const string RevealPassword = "\uF78D";   // PasswordBox RevealButton GlyphElement (PasswordBox_themeresources.xaml:100)
     public const string ClearText = "\uE894";        // TextBox DeleteButton glyph (TextBox_themeresources.xaml:246 GlyphElement)
     public const string CaretUpSolid = "\uE70E";     // NumberBox UpSpinButton Content (NumberBox.xaml:174)

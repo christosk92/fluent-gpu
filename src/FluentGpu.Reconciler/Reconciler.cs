@@ -697,6 +697,7 @@ public sealed class TreeReconciler
             {
                 used[match] = true;
                 newNodes[i] = oldNodes[match];
+                AssertRecycleShapeStable(oldKids[match], nk);   // [Conditional("DEBUG")] — catches a PartDelta/factory that varied SHAPE per item
                 Update(oldNodes[match], nk, oldKids[match]);
                 // The node now shows a DIFFERENT item: transient interaction state must not travel with it (the old
                 // code freed the node, which dropped this state implicitly).
@@ -757,6 +758,60 @@ public sealed class TreeReconciler
         }
     }
 
+    // The recycle-shape contract guard (production safety == CI coverage): per-item VALUE variation (a PartDelta) or
+    // invisible-part flips are legal in a recycled scroll path, but per-item STRUCTURE variation that the keyed child
+    // reconcile (below) CANNOT absorb is not — it rebinds onto a recycled node the diff can't realign. This catches
+    // that in DEBUG/CI. The comparison mirrors ReconcileChildren EXACTLY (keyed children match by Key — so a keyed
+    // child legally appears/disappears, e.g. ItemContainer's selection-state ring/common/checkbox; UNKEYED children
+    // match POSITIONALLY — so their type sequence must be stable, and each key present in BOTH must stay shape-compat).
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void AssertRecycleShapeStable(Element prev, Element next)
+    {
+        if (!ShapeCompatible(prev, next))
+            System.Diagnostics.Debug.Fail(
+                $"recycle shape mismatch: a factory/PartDelta varied keyed-reconcile-incompatible SHAPE (not values) " +
+                $"per item — prev typeId={prev.ElementTypeId} next typeId={next.ElementTypeId}. Per-item variation must " +
+                $"be VALUES (PartDelta) or invisible-part flips; structural variation must use STABLE KEYS so the keyed " +
+                $"window diff can absorb it, never an unkeyed positional add/remove (docs/guide/control-fidelity.md §6).");
+    }
+
+    // Shape-compat = same element type, and child lists reconcilable by the SAME rules ReconcileChildren applies — so
+    // legal STATE-driven chrome (the selection ring/inner-stroke/checkbox coming & going, the checkmark glyph appearing
+    // when checked) passes, while a genuinely corrupting recycle (a different-typed UNKEYED child landing at an aligned
+    // positional slot, or a keyed child whose own subtree shape changes) is flagged:
+    //   • UNKEYED children match POSITIONALLY by index — overlapping positions must agree on type + recurse-compat;
+    //     a surplus on either side is a legal TAIL insert/remove (exactly the unchecked↔checked glyph child).
+    //   • KEYED children match by Key — a key in only one side is a free insert/remove (the selected↔unselected ring);
+    //     a key in BOTH must recurse-compat.
+    // Values (Fill/Color/Opacity/…) are ignored — only structure is checked. Leaves (Text/Image/Polyline) compare by type.
+    private static bool ShapeCompatible(Element a, Element b)
+    {
+        if (a.ElementTypeId != b.ElementTypeId) return false;
+        Element[]? ac = a switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
+        Element[]? bc = b switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
+        if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
+
+        // Positional pass over UNKEYED children (Key == null): walk both in order, comparing overlapping slots only.
+        // A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren removes/mounts it).
+        int ai = 0, bi = 0;
+        while (true)
+        {
+            while (ai < ac.Length && ac[ai].Key is not null) ai++;
+            while (bi < bc.Length && bc[bi].Key is not null) bi++;
+            if (ai >= ac.Length || bi >= bc.Length) break;   // one side ran out → remaining unkeyed are tail churn
+            if (!ShapeCompatible(ac[ai], bc[bi])) return false;
+            ai++; bi++;
+        }
+
+        // Keyed children: every key present in BOTH must stay shape-compatible (a key in one side only is a legal
+        // keyed insert/remove — exactly how the selection ring/checkbox come and go across a selected↔unselected recycle).
+        foreach (var ce in ac)
+            if (ce.Key is string k)
+                foreach (var de in bc)
+                    if (de.Key == k) { if (!ShapeCompatible(ce, de)) return false; break; }
+        return true;
+    }
+
     // ── Keyed child reconcile (the structural engine, retained) ──────────────────────────────────
 
     internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids)
@@ -779,6 +834,10 @@ public sealed class TreeReconciler
         Span<bool> used = oldN <= 128 ? stackalloc bool[oldN] : new bool[oldN];
         Span<NodeHandle> newNodes = newN <= 128 ? stackalloc NodeHandle[newN] : new NodeHandle[newN];
         bool structural = false;
+        // A PURE reorder (same key set, different order — e.g. a list reverse) creates/removes nothing, but the
+        // re-appended child order still needs a relayout to move the rows. Non-monotonic match order detects it.
+        bool moved = false;
+        int lastMatch = -1;
 
         for (int i = 0; i < newN; i++)
         {
@@ -806,6 +865,7 @@ public sealed class TreeReconciler
             if (match >= 0)
             {
                 used[match] = true;
+                if (match < lastMatch) moved = true; else lastMatch = match;
                 newNodes[i] = oldNodes[match];
                 Update(oldNodes[match], nk, oldKids[match]);
             }
@@ -832,8 +892,9 @@ public sealed class TreeReconciler
             _scene.AppendChild(node, newNodes[i]);
         }
 
-        // Structural change to the child set → relayout this container's subtree (scoped to its boundary).
-        if (structural || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty);
+        // Structural change to the child set (including a pure keyed reorder) → relayout this container's subtree
+        // (scoped to its boundary).
+        if (structural || moved || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty);
     }
 
     // ── Removal / unmount (dispose reactive effects) ────────────────────────────────────────────

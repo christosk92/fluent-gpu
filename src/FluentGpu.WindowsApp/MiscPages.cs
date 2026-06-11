@@ -120,6 +120,27 @@ sealed class ItemsViewPage : Component
     static readonly string[] Items = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };
     static readonly float[] WallAspects = { 1.0f, 1.5f, 0.75f, 1.8f, 1.2f, 0.9f };
 
+    // The 5 selector-visual names, in SelectorVisual enum order (AccentPill=0, Check=1, FullRow=2, Border=3, None=4) —
+    // the interactive picker switches the live ItemsView's selector by casting the chosen index back to the enum.
+    static readonly string[] Visuals = { "AccentPill", "Check", "FullRow", "Border", "None" };
+
+    // List-preset demo data (re-homed from the deleted ListViewPage — same coffee/drink data so nothing is lost).
+    static readonly string[] Coffees = { "Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado" };
+    // Grid-preset demo data (re-homed from the deleted GridViewPage — same "Item N" labels).
+    static readonly string[] GridItems = { "Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7", "Item 8" };
+
+    // PartDelta demo: ~6 rows tinted by a per-item data property (the newly-legal per-item-customization seam — the
+    // tint is baked as a VALUE into the chrome during construction, zero per-item allocation, shape-stable).
+    static readonly (string Name, ColorF Tint)[] Swatches =
+    {
+        ("Crimson", ColorF.FromRgba(0xE8, 0x3C, 0x3C, 0x33)),
+        ("Amber",   ColorF.FromRgba(0xF5, 0xC5, 0x18, 0x33)),
+        ("Emerald", ColorF.FromRgba(0x18, 0xA0, 0x57, 0x33)),
+        ("Azure",   ColorF.FromRgba(0x2D, 0x7D, 0xF6, 0x33)),
+        ("Violet",  ColorF.FromRgba(0x8B, 0x3C, 0xC9, 0x33)),
+        ("Teal",    ColorF.FromRgba(0x18, 0xA0, 0xA0, 0x33)),
+    };
+
     public override Element Render()
     {
         var multi = UseMemo(static () => new SelectionModel());
@@ -127,8 +148,28 @@ sealed class ItemsViewPage : Component
             lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f));
         var (invoked, setInvoked) = UseState("—");
 
+        // Card 1 (picker): a reactive index over the 5 visuals; the live ItemsView re-renders when it changes. A
+        // SelectionModel pre-selecting index 0 (created once, in the memo factory) keeps a selected row visible so the
+        // chosen selector visual always reads.
+        var (sel, setSel) = UseState(0);
+        var pickSel = UseMemo(static () => { var m = new SelectionModel(); m.Select(0); return m; });
+
+        // Card-group 2 (List preset) state — re-homed verbatim from the deleted ListViewPage.
+        var listSel = UseSignal(0);   // a default selection so the accent pill is visible (WinUI gallery parity)
+        var listMulti = UseMemo(static () => new SelectionModel());
+        var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" });
+        var listOrder = UseSignal(0);
+        _ = listOrder.Value;   // re-render after a drag-reorder commit (refreshes the template closures)
+
+        // Card-group 3 (Grid preset) state — re-homed verbatim from the deleted GridViewPage.
+        var gridMulti = UseMemo(static () => new SelectionModel());
+        var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" });
+        var gridOrder = UseSignal(0);
+        _ = gridOrder.Value;
+
         return GalleryPage.Shell("ItemsView",
-            "A modern, selectable collection control — a flexible grid of items.",
+            "The premiere collection control — every layout × selection mode × selector visual, with built-in drag-reorder.",
+            // ── the 4 original ItemsView cards (UNCHANGED) ───────────────────────────────────────────────────────
             ControlExample.Build("An ItemsView", ItemsView.Create(Items, columns: 4),
                 description: "Single selection (the default): click a tile or arrow-key between them; type to jump by prefix.",
                 code: """
@@ -185,6 +226,140 @@ sealed class ItemsViewPage : Component
                 ItemsView.Create(24, WallTile, RepeatLayout.Custom(wall),
                     itemText: i => "Photo " + (i + 1),
                     grow: 0f)
+                """),
+
+            // ── 1) the INTERACTIVE selector-visual picker ────────────────────────────────────────────────────────
+            ControlExample.Build("Pick a selector visual",
+                ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
+                    selectionMode: ItemsSelectionMode.Single,
+                    selection: pickSel,
+                    selector: (SelectorVisual)sel,
+                    itemText: i => Items[i],
+                    // Constructor args freeze at mount (the reconciler never re-renders a mounted component on a
+                    // parent re-render — pitfalls.md "child ignores new data"). A sel-derived Key remounts the view
+                    // with the new Selector; pickSel is hoisted above, so the selection survives the remount.
+                    grow: 0f) with { Key = "selvis-" + Visuals[sel] },
+                description: "Any selector visual works with any layout × any selection mode — no WinUI capability cliffs. AccentPill is the ListView accent bar; Check is the GridView corner check; FullRow is a full-bleed superset; Border is the default ItemContainer ring; None is app-drawn.",
+                options: RadioButton.Group(Visuals, sel, setSel),
+                code: """
+                var (sel, setSel) = UseState(0);
+                static readonly string[] Visuals = { "AccentPill", "Check", "FullRow", "Border", "None" };
+
+                ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
+                    selectionMode: ItemsSelectionMode.Single,
+                    selector: (SelectorVisual)sel,
+                    grow: 0f) with { Key = "selvis-" + Visuals[sel] }   // key change ⇒ remount with the new selector
+                // …wired to RadioButton.Group(Visuals, sel, setSel)
+                """),
+
+            // ── 2) List preset (AccentPill) — absorbs the 3 deleted ListViewPage examples ─────────────────────────
+            BodyStrong("List preset (AccentPill)"),
+            ControlExample.Build("A simple list",
+                ListCard(ItemsView.List(Coffees, listSel)),
+                description: "ItemsView.List(items, selection) is the former ListView: a vertical accent-pill list. A default selection keeps the accent bar visible.",
+                output: GalleryPage.LiveText(() => listSel.Value >= 0 ? Coffees[listSel.Value] : "—"),
+                code: """
+                static readonly string[] Coffees = { "Cappuccino", "Latte", "Espresso", "Macchiato", "Americano", "Mocha", "Flat White", "Cortado" };
+                var selected = UseSignal(0);
+
+                ItemsView.List(Coffees, selected)
+                """),
+            ControlExample.Build("Multiple selection",
+                ListCard(ItemsView.List(Coffees.Length,
+                    i => new TextEl(Coffees[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                    selectionMode: ItemsSelectionMode.Multiple,
+                    selection: listMulti,
+                    itemText: i => Coffees[i])),
+                description: "SelectionMode.Multiple slides in the inline checkboxes; the SelectionModel stores the selected ranges (Ctrl+A selects all).",
+                output: GalleryPage.LiveText(() => { _ = listMulti.Version.Value; return $"{listMulti.SelectedCount} selected"; }),
+                code: """
+                var multi = UseMemo(static () => new SelectionModel());
+
+                ItemsView.List(Coffees.Length,
+                    i => new TextEl(Coffees[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                    selectionMode: ItemsSelectionMode.Multiple,
+                    selection: multi,
+                    itemText: i => Coffees[i])
+                """),
+            ControlExample.Build("Drag to reorder",
+                ListCard(ItemsView.List(drinks.Count,
+                    i => new TextEl(drinks[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                    canReorderItems: true,
+                    onReorder: (from, to) => { ReorderList.Move(drinks, from, to); listOrder.Value = listOrder.Peek() + 1; },
+                    itemText: i => drinks[i],
+                    keyOf: i => drinks[i])),
+                description: "CanReorderItems: drag a row — displaced rows part after the 200ms WinUI live-reorder dwell, then the commit moves the item.",
+                output: GalleryPage.LiveText(() => { _ = listOrder.Value; return string.Join(" · ", drinks); }),
+                code: """
+                var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" });
+                var order = UseSignal(0);
+
+                ItemsView.List(drinks.Count,
+                    i => new TextEl(drinks[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
+                    canReorderItems: true,
+                    onReorder: (from, to) => { ReorderList.Move(drinks, from, to); order.Value = order.Peek() + 1; },
+                    itemText: i => drinks[i],
+                    keyOf: i => drinks[i])
+                """),
+
+            // ── 3) Grid preset (Check) — absorbs the 3 deleted GridViewPage examples ──────────────────────────────
+            BodyStrong("Grid preset (Check)"),
+            ControlExample.Build("A simple grid", ItemsView.Grid(GridItems, columns: 4),
+                description: "ItemsView.Grid(items, columns) is the former GridView: a tile grid with the top-right corner-check selector.",
+                code: """
+                static readonly string[] GridItems = { "Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7", "Item 8" };
+
+                ItemsView.Grid(GridItems, columns: 4)
+                """),
+            ControlExample.Build("Multiple selection",
+                ItemsView.Grid(GridItems.Length, i => Tile(GridItems[i]), columns: 4, tileHeight: 96f,
+                    selectionMode: ItemsSelectionMode.Multiple,
+                    selection: gridMulti,
+                    itemText: i => GridItems[i]),
+                description: "SelectionMode.Multiple shows the top-right overlay check square; selected tiles get the 2px accent border with the inner ring.",
+                output: GalleryPage.LiveText(() => { _ = gridMulti.Version.Value; return $"{gridMulti.SelectedCount} selected"; }),
+                code: """
+                var multi = UseMemo(static () => new SelectionModel());
+
+                ItemsView.Grid(GridItems.Length, i => Tile(GridItems[i]), columns: 4, tileHeight: 96f,
+                    selectionMode: ItemsSelectionMode.Multiple,
+                    selection: multi,
+                    itemText: i => GridItems[i])
+                """),
+            ControlExample.Build("Drag to reorder",
+                ItemsView.Grid(colors.Count, i => Tile(colors[i]), columns: 4, tileHeight: 96f,
+                    canReorderItems: true,
+                    onReorder: (from, to) => { ReorderList.Move(colors, from, to); gridOrder.Value = gridOrder.Peek() + 1; },
+                    keyOf: i => colors[i]),
+                description: "2-D live reorder: drag a tile — displaced tiles part after the 300ms WinUI grid dwell, then the commit moves the item.",
+                output: GalleryPage.LiveText(() => { _ = gridOrder.Value; return string.Join(" · ", colors); }),
+                code: """
+                var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" });
+                var order = UseSignal(0);
+
+                ItemsView.Grid(colors.Count, i => Tile(colors[i]), columns: 4, tileHeight: 96f,
+                    canReorderItems: true,
+                    onReorder: (from, to) => { ReorderList.Move(colors, from, to); order.Value = order.Peek() + 1; },
+                    keyOf: i => colors[i])
+                """),
+
+            // ── 4) Per-item customization (PartDelta) — the newly-legal per-item-variation seam ────────────────────
+            ControlExample.Build("Per-item customization (PartDelta)",
+                ItemsView.Create(Swatches.Length, i => Tile(Swatches[i].Name), RepeatLayout.Stack(44f),
+                    selectionMode: ItemsSelectionMode.Single,
+                    selector: SelectorVisual.FullRow,
+                    partDelta: (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
+                    itemText: i => Swatches[i].Name,
+                    grow: 0f),
+                description: "PartDelta bakes per-item VALUES (fill/foreground/opacity/corner/padding/glyph) into the chrome during construction — zero extra allocation, provably shape-stable. The legal way to vary item chrome per item (per-item TemplateParts in a recycled scroll path is the banned hazard).",
+                code: """
+                static readonly (string Name, ColorF Tint)[] Swatches = { … };
+
+                ItemsView.Create(Swatches.Length, i => Tile(Swatches[i].Name), RepeatLayout.Stack(44f),
+                    selectionMode: ItemsSelectionMode.Single,
+                    selector: SelectorVisual.FullRow,
+                    partDelta: (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
+                    grow: 0f)
                 """));
     }
 
@@ -200,6 +375,10 @@ sealed class ItemsViewPage : Component
         Fill = Tok.FillCardSecondary, Corners = Radii.ControlAll,
         Children = [new TextEl("Photo " + (i + 1)) { Size = 12f, Color = Tok.TextSecondary }],
     };
+
+    // The bordered 280-wide host the List preset sits in (the former ListViewPage card — Width=280, no height so the
+    // list sizes to its natural rows, 4px top/bottom inset).
+    static Element ListCard(Element list) => new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [list] };
 }
 
 sealed class TextBlockPage : Component

@@ -33,6 +33,19 @@ public static class SceneRecorder
     private static int _scrollLogFrame;
     private static bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
 
+    // Overlay-scrollbar arrow glyphs: the host pre-interns the four Segoe Fluent arrow chars + the icon family once
+    // at startup (AppHost ctor) so EmitScrollbar draws the SAME solid-triangle glyphs as the standalone ScrollBar
+    // control (ScrollBar_themeresources.xaml :387/:344/:301/:258) — one scrollbar visual language, not two. A host
+    // that never configures them (bare recorder tests) falls back to the stroked-chevron primitive.
+    private static StringId _sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily;
+    private static bool _sbArrowGlyphsSet;
+
+    public static void ConfigureScrollbarArrowGlyphs(StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
+    {
+        _sbUpGlyph = up; _sbDownGlyph = down; _sbLeftGlyph = left; _sbRightGlyph = right; _sbIconFamily = iconFamily;
+        _sbArrowGlyphsSet = true;
+    }
+
     private struct RecordAccumulator
     {
         public int NodesVisited;
@@ -883,7 +896,25 @@ public static class SceneRecorder
             if (arrowOpacity > 0.04f)
             {
                 var arrow = thumb with { A = thumb.A * arrowOpacity };
-                if (horizontal)
+                if (_sbArrowGlyphsSet)
+                {
+                    // The standalone control's exact arrow anatomy (ScrollBar.ArrowButton): a 12px cell at each rail
+                    // end, FontSize 8 (:186), the glyph nudged 4px toward the track (margins :195-198) and centred on
+                    // the cross axis — so the overlay scrollbar and the ScrollBar element read as ONE control.
+                    const float glyphSize = 8f;
+                    float crossCentered = cross - bar + (bar - glyphSize) * 0.5f;
+                    RectF decRect = horizontal
+                        ? new RectF(4f, crossCentered, glyphSize, glyphSize)
+                        : new RectF(crossCentered, 4f, glyphSize, glyphSize);
+                    RectF incRect = horizontal
+                        ? new RectF(axis - bar, crossCentered, glyphSize, glyphSize)
+                        : new RectF(crossCentered, axis - bar, glyphSize, glyphSize);
+                    StringId dec = horizontal ? _sbLeftGlyph : _sbUpGlyph;
+                    StringId inc = horizontal ? _sbRightGlyph : _sbDownGlyph;
+                    dl.DrawGlyphRun(decRect, arrow, dec, _sbIconFamily, glyphSize, 400, 0, 0, 1, 0f, float.NaN, 0, 0, world, opacity, key | 0x2);
+                    dl.DrawGlyphRun(incRect, arrow, inc, _sbIconFamily, glyphSize, 400, 0, 0, 1, 0f, float.NaN, 0, 0, world, opacity, key | 0x3);
+                }
+                else if (horizontal)
                 {
                     EmitChevron(dl, new Point2(bar * 0.5f, cross - bar * 0.5f), horizontal: true, positive: false, arrow, world, opacity, key | 0x2);
                     EmitChevron(dl, new Point2(axis - bar * 0.5f, cross - bar * 0.5f), horizontal: true, positive: true, arrow, world, opacity, key | 0x3);

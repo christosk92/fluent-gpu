@@ -119,6 +119,10 @@ public sealed class InputDispatcher
     /// light-dismiss overlays here (WinUI window-deactivation dismiss).</summary>
     public Action? OnWindowBlur;
 
+    /// <summary>Raised on window activation/placement changes (WindowFocus, WindowBlur, WindowStateChanged): the host
+    /// bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).</summary>
+    public Action? OnWindowActivationChanged;
+
     /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
     public Action<CursorId>? OnCursorChanged;
 
@@ -422,6 +426,15 @@ public sealed class InputDispatcher
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
                     _accessKeyMode = false; _altPending = false;
                     OnWindowBlur?.Invoke();
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar dims (TextTertiary / disabled glyphs)
+                    break;
+
+                case InputKind.WindowFocus:
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar un-dims
+                    break;
+
+                case InputKind.WindowStateChanged:
+                    OnWindowActivationChanged?.Invoke();   // custom titlebar re-glyphs max↔restore
                     break;
             }
         }

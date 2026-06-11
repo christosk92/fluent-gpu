@@ -604,7 +604,7 @@ public sealed class FlexLayout
         {
             Span<float> colW = count <= 64 ? stackalloc float[count] : new float[count];
             ResolveColumns(node, in g, count, w - padH, colW);
-            h = GridContentHeight(node, in g, count) + padV;
+            h = GridContentHeight(node, in g, count, colW) + padV;
         }
         else h = float.IsNaN(li.Height) ? 0f : li.Height;
         w = Clamp(w, li.MinW, li.MaxW);
@@ -640,10 +640,10 @@ public sealed class FlexLayout
 
             float rowH = autoRow ? 0f : g.RowHeight;
             if (autoRow)
-                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j]); rowH = MathF.Max(rowH, cs.Height); }
+                for (int j = 0; j < n; j++) { var cs = Measure(rowKids[j], colW[j]); rowH = MathF.Max(rowH, cs.Height); }
             for (int j = 0; j < n; j++)
             {
-                if (!autoRow) Measure(rowKids[j]);   // base sizes for the cell's own flex
+                if (!autoRow) Measure(rowKids[j], colW[j]);   // base sizes for the cell's own flex, at the cell's width so text wraps to the track
                 Arrange(rowKids[j], colX[j], rowTop, colW[j], rowH);
             }
             rowTop += rowH + g.RowGap;
@@ -708,7 +708,7 @@ public sealed class FlexLayout
         }
     }
 
-    private float GridContentHeight(NodeHandle node, in GridSpec g, int count)
+    private float GridContentHeight(NodeHandle node, in GridSpec g, int count, ReadOnlySpan<float> colW)
     {
         int childCount = _scene.ChildCount(node);
         if (childCount == 0) return 0f;
@@ -718,7 +718,7 @@ public sealed class FlexLayout
         float sumRowH = 0f, rowH = 0f; int k = 0;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), k++)
         {
-            var cs = Measure(c);
+            var cs = Measure(c, colW[k % count]);   // at the track width, so wrapping text reports its wrapped height
             rowH = MathF.Max(rowH, cs.Height);
             if (k % count == count - 1) { sumRowH += rowH; rowH = 0f; }
         }

@@ -24,15 +24,29 @@ public sealed record TreeNode(string Label, params TreeNode[] Children)
 ///   anywhere in the WinUI TreeView sources (audited expectation corrected against the cpp).
 /// • Arrow keys (TreeViewItem.cpp:638-696 HandleExpandCollapse): Left collapses an expanded node, else focuses the
 ///   parent; Right expands a collapsed parent, else focuses the first child. Up/Down move through the visible flat
-///   order. Ctrl+Up/Down reorders the focused node among its SIBLINGS, collapsing it first
-///   (TreeViewItem.cpp:600-636 HandleReorder). Plain direction keys only (IsExpandCollapse, cpp:527-541).
+///   order. Shift+Alt+(Up/Left = backward, Down/Right = forward) with Ctrl up reorders the focused node ±1 among its
+///   SIBLINGS, collapsing it first (TreeViewItem.cpp:396 IsReorder + cpp:600-636 HandleReorder; the position guard is
+///   applied to BOTH directions, fixing WinUI's Up||Left&&pos!=0 precedence bug — sweep:484). Plain (unmodified)
+///   direction keys are navigation only (IsExpandCollapse, cpp:527-541).
 /// • Multi-select (TreeViewItem.xaml:101-118 TreeViewMultiSelectStates): a 32px-wide checkbox lane (CheckBox
 ///   Width=32 Margin=10,0,0,0 — xaml:138) slides the row content; Space / row press toggles; toggling a parent
 ///   cascades through its subtree and a partially-selected parent shows the indeterminate dash
 ///   (TreeViewNode UpdateSelection cascade + PartialSelectionState).
 /// • Drag reorder — composes the E5 drag engine + <see cref="ReorderList"/> over the SIBLING blocks (a sibling's
 ///   extent = its visible subtree height, so whole subtrees part to make room); 200ms list dwell; commit =
-///   RemoveAt+Insert among the siblings.
+///   RemoveAt+Insert among the siblings. The DISPLACEMENT (keyed rows FLIP-sliding to part) is the only drop cue —
+///   WinUI draws NO insertion line for same-list reorder (none in TreeViewItem.xaml). While dragging, a collapsed
+///   row with children that the pointer dwells over for 1s auto-expands (c_dragOverInterval=1000ms, reset-on-leave —
+///   TreeViewItem.h:15 + cpp:204-224/242-245/348-362), and an edge-near pointer nudges a scrollable ancestor.
+///   • Reorder default — <c>CanReorderItems</c> defaults to <c>true</c>, matching WinUI's default true (TreeView.idl:141
+///   <c>[MUX_DEFAULT_VALUE("true")]</c> + TreeView.xaml:12 <c>Setter … Value="True"</c>): a bare tree is reorderable.
+///   • DOCUMENTED GAP (WinUI superset deferral) — reorder here is SIBLING-ONLY (RemoveAt+Insert within one parent's
+///   children, the <c>CommitSiblingMove</c> local). WinUI additionally supports drag-REPARENT: dropping ONTO a row
+///   (vs between rows) appends the dragged node as that row's last child, resolved through a cross-parent insertion
+///   model with an ancestor walk-up cycle guard (TreeViewList.cpp MoveNodeInto + TreeViewItem.cpp:68-126; the
+///   you-can't-drop-a-node-into-its-own-descendant check). That cross-parent gesture layer (drop-onto-row + a
+///   DropTargetSpec the current single-axis ReorderList-over-siblings path does not use) is intentionally NOT
+///   implemented in this pass to protect the keyed-projection invariant + the E5 substrate pins; it is a known gap.
 ///
 /// Style verified against controls\dev\TreeView\TreeView_themeresources.xaml + TreeViewItem.xaml:
 /// row plate rest=SubtleFillColorTransparent (:5), hover=Secondary (:6), pressed=Tertiary (:7), selected=Secondary
@@ -65,8 +79,10 @@ public sealed class TreeView : Component
     /// <summary>Selection changed (node, isSelected). Multi mode reports each toggled node once per gesture root.</summary>
     public Action<TreeNode, bool>? SelectionChanged;
     public Action<TreeNode, bool>? Expanding;     // (node, isExpanded) — WinUI Expanding/Collapsed pair, folded
-    /// <summary>WinUI <c>CanReorderItems</c>: rows drag-reorder among their siblings (kind scoped to this tree).</summary>
-    public bool CanReorderItems;
+    /// <summary>WinUI <c>CanReorderItems</c>: rows drag-reorder among their siblings (kind scoped to this tree).
+    /// Defaults to <c>true</c>, matching WinUI (TreeView.idl:141 <c>[MUX_DEFAULT_VALUE("true")]</c> + TreeView.xaml:12
+    /// <c>&lt;Setter Property="CanReorderItems" Value="True"/&gt;</c>).</summary>
+    public bool CanReorderItems = true;
     /// <summary>Reorder commit: (parent — null at root level, fromChildIndex, toChildIndex). When null and the
     /// sibling array is mutable, the tree moves the node in place (WinUI mutates its own node tree).</summary>
     public Action<TreeNode?, int, int>? OnReorder;
@@ -111,6 +127,10 @@ public sealed class TreeView : Component
         var orderVersion = UseSignal(0);
         var structureVersion = UseSignal(0);     // bumped on in-place sibling mutation (OnReorder == null commits)
         var lastDwellTick = UseRef(0L);
+        var autoExpandId = UseRef<string?>(null);     // collapsed-with-children row the pointer currently dwells over
+        var autoExpandMs = UseRef(0f);                 // ms remaining until auto-expand (1000ms WinUI c_dragOverInterval)
+        var dragPointerY = UseRef(0f);                 // last drag-delta absolute pointer Y (window space)
+        var draggedId = UseRef<string?>(null);         // the row that started the drag (never auto-expand it)
 
         _ = orderVersion.Value;
         _ = structureVersion.Value;
@@ -238,18 +258,21 @@ public sealed class TreeView : Component
 
             switch (e.KeyCode)
             {
-                case Keys.Up when e.Ctrl && CanReorderItems:
-                case Keys.Down when e.Ctrl && CanReorderItems:
+                // WinUI keyboard reorder: Shift+Alt + Up/Left (backward) / Down/Right (forward), Ctrl up, CanReorderItems
+                // (TreeViewItem.cpp:396). Move ±1 among SIBLINGS, collapse the node first (cpp:611-613). Position guard
+                // applied to BOTH directions (fixes WinUI's Up||Left&&pos!=0 precedence bug — sweep:484).
+                case Keys.Up when e.Shift && e.Alt && !e.Ctrl && CanReorderItems:
+                case Keys.Left when e.Shift && e.Alt && !e.Ctrl && CanReorderItems:
+                case Keys.Down when e.Shift && e.Alt && !e.Ctrl && CanReorderItems:
+                case Keys.Right when e.Shift && e.Alt && !e.Ctrl && CanReorderItems:
                 {
-                    // HandleReorder (cpp:600-636): collapse first, move ±1 among siblings, keep focus on the node.
-                    int dir = e.KeyCode == Keys.Up ? -1 : 1;
+                    bool backward = e.KeyCode is Keys.Up or Keys.Left;
                     TreeNode[] siblings = row.Parent?.Children ?? (Roots as TreeNode[]) ?? [.. Roots];
-                    int to = row.ChildIndex + dir;
-                    if (to >= 0 && to < siblings.Length)
+                    int to = row.ChildIndex + (backward ? -1 : 1);
+                    if (to >= 0 && to < siblings.Length)   // guard BOTH directions
                     {
                         if (expanded.Contains(row.Id)) ToggleExpand(row.Node);
                         CommitSiblingMove(row.Parent, row.ChildIndex, to);
-                        // focusedId stays on the node; the re-render keeps its key, focus follows the handle.
                     }
                     e.Handled = true;
                     return;
@@ -284,6 +307,25 @@ public sealed class TreeView : Component
         }
 
         // ── drag reorder among siblings (sibling extent = its visible block height) ─────────────────
+        // The collapsed-with-children row the dragged pointer currently sits over (window-space Y vs realized rects),
+        // skipping the dragged row itself. null when the pointer is over an expanded row, a leaf, or empty space.
+        string? HoveredCollapsedFolder()
+        {
+            if (Context.Scene is not { } s) return null;
+            float py = dragPointerY.Value;
+            for (int i = 0; i < rows.Count; i++)
+            {
+                var r = rows[i];
+                if (r.Node.Children.Length == 0 || expanded.Contains(r.Id)) continue;   // only collapsed-with-children
+                if (handles.TryGetValue(r.Id, out var h) && s.IsLive(h))
+                {
+                    var rc = s.AbsoluteRect(h);
+                    if (py >= rc.Y && py <= rc.Y + rc.H && r.Id != draggedId.Value) return r.Id;   // not the dragged row itself
+                }
+            }
+            return null;
+        }
+
         if (reordering)
         {
             _ = UseContext(FrameClock.Tick);   // dwell ticks while a drag is live (safe conditional read)
@@ -291,8 +333,51 @@ public sealed class TreeView : Component
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
             if (reorder.Advance(dt)) orderVersion.Value = orderVersion.Peek() + 1;
+
+            // 1s drag-over auto-expand (WinUI c_dragOverInterval=1000ms, reset-on-leave — TreeViewItem.h:14-15,
+            // cpp:204-224/242-245/348-362): a collapsed row with children that the pointer dwells over for 1s expands.
+            string? hoverId = HoveredCollapsedFolder();
+            if (hoverId != autoExpandId.Value) { autoExpandId.Value = hoverId; autoExpandMs.Value = hoverId is null ? 0f : 1000f; }
+            else if (hoverId is not null)
+            {
+                autoExpandMs.Value -= dt;
+                if (autoExpandMs.Value <= 0f)
+                {
+                    autoExpandId.Value = null; autoExpandMs.Value = 0f;
+                    var hn = rows.Find(r => r.Id == hoverId).Node;
+                    if (hn is not null && !expanded.Contains(hoverId)) { ToggleExpand(hn); orderVersion.Value = orderVersion.Peek() + 1; }
+                }
+            }
         }
-        else lastDwellTick.Value = 0;
+        else { lastDwellTick.Value = 0; autoExpandId.Value = null; }
+
+        // Edge auto-scroll during a drag (WinUI band 100px, 150-1500px/s, ListViewBase_Partial_Reorder.cpp:39-47).
+        // The flat row column has no ScrollView of its own, so nudge the nearest SCROLLABLE ANCESTOR (the consumer's
+        // ScrollView) when one exists; no-op otherwise (the gallery card has none → harmless). Cold drag path.
+        void EdgeAutoScroll(float pointerY)
+        {
+            if (Context.Scene is not { } s) return;
+            // Walk to the nearest scrollable ancestor of this tree (the consumer's ScrollView). None → no-op.
+            var vp = NodeHandle.Null;
+            for (var n = Context.HostNode; !n.IsNull; n = s.Parent(n))
+                if ((s.Flags(n) & NodeFlags.Scrollable) != 0) { vp = n; break; }
+            if (vp.IsNull || !s.IsLive(vp) || !s.TryGetScroll(vp, out var sc)) return;
+            var rc = s.AbsoluteRect(vp);
+            const float band = 24f, speed = 8f;   // engine nudge (the WinUI 100px/150-1500px/s gradient lives in DragDropContext; the tree path is hand-rolled to match ListView's nudge)
+            float delta = 0f;
+            if (pointerY < rc.Y + band) delta = -speed;
+            else if (pointerY > rc.Y + rc.H - band) delta = speed;
+            if (delta == 0f) return;
+            float viewport = sc.ViewportH, content = sc.ContentH, now = sc.OffsetY;
+            float target = Math.Clamp(now + delta, 0f, MathF.Max(0f, content - viewport));
+            if (target == now) return;
+            ref ScrollState scw = ref s.ScrollRef(vp);
+            scw.OffsetY = target; scw.TargetY = target;
+            var cn = sc.ContentNode;
+            if (!cn.IsNull && s.IsLive(cn)) { s.Paint(cn).LocalTransform = Affine2D.Translation(0f, -target); s.Mark(cn, NodeFlags.TransformDirty | NodeFlags.PaintDirty); }
+            s.Mark(vp, NodeFlags.VirtualRangeDirty);
+            orderVersion.Value = orderVersion.Peek() + 1;
+        }
 
         float BlockExtent(TreeNode n, string? collapsedId)
         {
@@ -318,8 +403,9 @@ public sealed class TreeView : Component
             var parent = row.Parent;
             reorder.OnCommit = (from, to) => CommitSiblingMove(parent, from, to);
             dragParentId.Value = parent is null ? "" : IdOf(parent);
+            draggedId.Value = row.Id;
+            autoExpandId.Value = null; autoExpandMs.Value = 0f;
             orderVersion.Value = orderVersion.Peek() + 1;
-            Context.RequestRerender();
         }
 
         // ── rows ─────────────────────────────────────────────────────────────────────────────────────
@@ -359,73 +445,58 @@ public sealed class TreeView : Component
                     OnDragStarted = _ => StartDrag(rowCopy),
                     OnDragDelta = e =>
                     {
-                        if (reorder.Update(e.TotalDy))
-                        {
-                            orderVersion.Value = orderVersion.Peek() + 1;
-                            Context.RequestRerender();
-                        }
+                        dragPointerY.Value = e.Absolute.Y;
+                        if (reorder.Update(e.TotalDy)) orderVersion.Value = orderVersion.Peek() + 1;
+                        EdgeAutoScroll(e.Absolute.Y);
                     },
                     OnDragCompleted = _ =>
                     {
                         reorder.Complete();
                         dragParentId.Value = null;
+                        draggedId.Value = null;
+                        autoExpandId.Value = null; autoExpandMs.Value = 0f;
                         orderVersion.Value = orderVersion.Peek() + 1;
-                        Context.RequestRerender();
                     },
                     OnDragCanceled = () =>
                     {
                         reorder.Cancel();
                         dragParentId.Value = null;
+                        draggedId.Value = null;
+                        autoExpandId.Value = null; autoExpandMs.Value = 0f;
                         orderVersion.Value = orderVersion.Peek() + 1;
-                        Context.RequestRerender();
                     },
                 };
             }
             children[i] = el;
         }
 
-        float RowExtentForLine(in FlatRow row)
-        {
-            if (handles.TryGetValue(row.Id, out var h) && Context.Scene is { } s && s.IsLive(h))
-                return s.AbsoluteRect(h).H + 4f;
-            return RowStrideFallback;
-        }
+        // ── prune the realized-handle map (parity sweep:472 — was unbounded per scroll) ───────────────
+        // `handles` only ever ADDED (onRealized: handles[id] = h) and never pruned, so every row id that ever
+        // realized — including the ones a Roots rebuild dropped and every off-screen row a long scroll touched —
+        // leaked an entry forever. A stale handle for an off-screen / removed row is dead weight (its only readers
+        // — FocusRow/HoveredCollapsedFolder/BlockExtent — already guard with s.IsLive). So at the end of Render
+        // (cold, once per render) keep only the ids that are CURRENTLY realized this projection and drop the rest.
+        // (rows.Count == 0 ⇒ live = empty ⇒ all handles cleared, correct: nothing is realized.)
+        // `ids` (the REFERENCE-keyed TreeNode→id map, TreeView.cs:107) is deliberately NOT pruned here: those entries
+        // are what keep expansion/selection/keys stable across sibling reorders, and a node can be momentarily
+        // unrealized (collapsed/off-screen) yet still reachable from Roots and about to reappear with the SAME id —
+        // pruning by realization would re-mint its id and break that stability. Its growth is bounded by distinct
+        // TreeNode instances ever seen (acceptable); only `handles` was unbounded-per-scroll.
+        // (No count fast-path: handles can hold a stale id AND miss a not-yet-realized one at equal Count, so a
+        // count guard could skip a needed prune. Walking handles.Keys unconditionally is still cold — handles is
+        // bounded by realized rows — and the drop list is lazily allocated only when something actually leaked, so
+        // the steady state with no stale keys allocates nothing beyond the `live` set.)
+        var live = new HashSet<string>(rows.Count);
+        for (int i = 0; i < rows.Count; i++) live.Add(rows[i].Id);
+        List<string>? drop = null;
+        foreach (var key in handles.Keys)
+            if (!live.Contains(key)) (drop ??= new List<string>()).Add(key);
+        if (drop is not null) foreach (var key in drop) handles.Remove(key);
 
-        float DragGroupTop()
-        {
-            string? pid = dragParentId.Value;
-            float y = 0f;
-            for (int i = 0; i < rows.Count; i++)
-            {
-                var parent = rows[i].Parent;
-                string rowPid = parent is null ? "" : IdOf(parent);
-                if (rowPid == pid) return y;
-                y += RowExtentForLine(rows[i]);
-            }
-            return 0f;
-        }
-
-        bool showDropLine = CanReorderItems && reorder.IsActive && reorder.PendingIndex != reorder.DraggedIndex;
-        var rowColumn = new BoxEl { Key = "treeview-rows", Direction = 1, Children = children };
-        return showDropLine
-            ? new BoxEl
-            {
-                ZStack = true,
-                OnKeyDown = HandleKey,
-                Children =
-                [
-                    rowColumn,
-                    new BoxEl
-                    {
-                        Key = "treeview-reorder-line",
-                        Height = 2f,
-                        Fill = Tok.AccentDefault,
-                        OffsetY = DragGroupTop() + reorder.PendingInsertionLineOffset - 1f,
-                        HitTestVisible = false,
-                    },
-                ],
-            }
-            : rowColumn with { OnKeyDown = HandleKey };
+        // Same-list reorder shows DISPLACEMENT only (the keyed rows FLIP to part) — WinUI draws NO insertion line for
+        // same-list reorder (no InsertionLine/DropLine element anywhere in TreeViewItem.xaml; the only indicator is the
+        // 3x16 SelectionIndicator, which is for selection). The 2px accent line stays ONLY in Reorderable's cross-list case.
+        return new BoxEl { Key = "treeview-rows", Direction = 1, OnKeyDown = HandleKey, Children = children };
     }
 
     private static void MoveInArray(TreeNode[] arr, int from, int to)

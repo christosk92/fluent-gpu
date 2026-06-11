@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
+using FluentGpu.Signals;
 using FluentGpu.Text;
 
 namespace FluentGpu.Hooks;
@@ -75,6 +76,24 @@ public sealed class InputHooks
     /// (WinUI window-deactivation dismiss). Invoked from the dispatcher's WindowBlur via the host wiring.</summary>
     public Action? WindowBlurred;
     public void NotifyWindowBlur() => WindowBlurred?.Invoke();
+
+    // ── custom-titlebar chrome seam (host-wired in the AppHost ctor; consumed by the TitleBar control) ───────────────
+    /// <summary>Pull the window placement (drives the max↔restore caption glyph). Null = standard frame (Normal).</summary>
+    public Func<WindowState>? GetWindowState;
+    /// <summary>Pull window activation (drives titlebar dimming). Null = always active.</summary>
+    public Func<bool>? IsWindowActive;
+    /// <summary>Caption-button commands → <c>IPlatformWindow.Minimize/ToggleMaximize/CloseWindow</c>.</summary>
+    public Action? WindowMinimize, WindowToggleMaximize, WindowClose;
+    /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
+    /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
+    /// on titlebar relayout only, never per frame).</summary>
+    public Action<TitleBarRegion[], int>? SetTitleBarRegions;
+    /// <summary>Node → its laid-out absolute rect (window DIP) — host-wired to <c>SceneStore.AbsoluteRect</c>. The
+    /// TitleBar control builds its region report from captured part handles in a layout effect.</summary>
+    public Func<NodeHandle, RectF>? GetNodeRect;
+    /// <summary>Bumped by the host on WindowFocus/WindowBlur/WindowStateChanged: the TitleBar reads it (subscribes)
+    /// and pulls <see cref="GetWindowState"/>/<see cref="IsWindowActive"/> for the current values on re-render.</summary>
+    public Signal<int>? WindowChromeEpoch;
 
     // ── E4 windowed out-of-bounds popups (host-wired in the AppHost ctor; consumed by OverlayHost) ──────────────────
     /// <summary>Window-DIP point → the containing MONITOR's work area translated into window-DIP space (the container

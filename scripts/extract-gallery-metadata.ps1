@@ -28,7 +28,7 @@ $keys = @(
   'Flyout','ContentDialog','TeachingTip','Popup',
   'TextBox','PasswordBox','AutoSuggestBox','NumberBox','TextBlock','RichTextBlock',
   'PersonPicture','MediaPlayerElement',
-  'ListView','GridView','FlipView','TreeView','ItemsView',
+  'FlipView','TreeView','ItemsView',
   'MenuBar','AppBarButton','AppBarToggleButton','CommandBar','AppBarSeparator','CommandBarFlyout','SwipeControl',
   'CalendarView','CalendarDatePicker','DatePicker','TimePicker',
   'ItemsRepeater','ScrollViewer','AnimatedIcon'

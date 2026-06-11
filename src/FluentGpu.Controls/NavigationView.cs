@@ -4,6 +4,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -108,6 +109,15 @@ public sealed class NavigationView : Component
     public string? Header;
     public bool ShowBackButton;
     public Action? OnBack;
+    /// <summary>WinUI <c>IsPaneToggleButtonVisible</c>: false hides the pane's own hamburger — the WinUI-gallery
+    /// shape, where the <see cref="TitleBar"/> owns the toggle and drives it via <see cref="PaneToggleRequest"/>.</summary>
+    public bool ShowPaneToggle = true;
+    /// <summary>External pane-toggle seam (the titlebar hamburger): BUMP the value (+1) to request one toggle — the
+    /// same mode-aware action as the internal hamburger (expanded↔rail inline; open↔close the overlay otherwise).</summary>
+    public Signal<int>? PaneToggleRequest;
+    /// <summary>External navigate seam (the titlebar search commit): set a nav-item key to select it (collapsed
+    /// ancestor groups expand to reveal it). Ignored when empty or unknown.</summary>
+    public Signal<string>? NavigateRequest;
     /// <summary>WinUI <c>PaneDisplayMode</c>: Auto (adaptive), forced Left modes, or Top.</summary>
     public NavPaneDisplayMode PaneDisplayMode = NavPaneDisplayMode.Auto;
     /// <summary>WinUI <c>SelectionFollowsFocus</c> (cpp:3408-3411): arrow-key focus selects.</summary>
@@ -280,11 +290,20 @@ public sealed class NavigationView : Component
             else Select(it.Key);
         }
 
+        void ActivateRail(NavItem it)
+        {
+            focusedKey.Value = it.Key;
+            Select(it.Key, hasChildren: it.IsExpandable);
+        }
+
         // The visible, selectable rows in display order (headers/separators excluded) — the keyboard cursor's track.
         var flat = Flatten(Items, expanded);
-        var rows = flat.Where(r => !r.Item.IsHeader && !r.Item.IsSeparator).Select(r => r.Item)
-                       .Concat(footerItems.Where(f => !f.IsHeader && !f.IsSeparator))
-                       .ToArray();
+        var paneFlat = labelsVisible ? flat : RootRows(Items);
+        string paneSelected = DisplaySelectionKey(Items, paneFlat, selected);
+        var keyboardFlat = labelsVisible || (paneOpen && !inlinePane) ? flat : paneFlat;
+        var rows = keyboardFlat.Where(r => !r.Item.IsHeader && !r.Item.IsSeparator).Select(r => r.Item)
+                               .Concat(footerItems.Where(f => !f.IsHeader && !f.IsSeparator))
+                               .ToArray();
 
         void FocusRowKey(string key)
         {
@@ -346,17 +365,35 @@ public sealed class NavigationView : Component
             ? () => setCollapsed(!collapsed)
             : () => { if (paneOpen) TryClosePane(); else setPaneOpen(true); };
 
+        // External chrome seams (the custom TitleBar): reading subscribes this component; each effect re-runs only
+        // when its request value changes and applies the SAME internal action (state writes happen post-present).
+        int paneToggleReq = PaneToggleRequest?.Value ?? 0;
+        UseEffect(() => { if (paneToggleReq != 0) toggle(); }, paneToggleReq);
+        string navigateReq = NavigateRequest?.Value ?? "";
+        UseEffect(() =>
+        {
+            if (navigateReq.Length == 0 || navigateReq == selected) return;
+            if (FindItem(Items, navigateReq) is not { } target) return;
+            // Reveal the target: expand any collapsed ancestor groups, then select (the WinUI search-commit path).
+            string[] reveal = expanded;
+            for (NavItem? p = ParentOf(Items, target.Key); p is not null; p = ParentOf(Items, p.Key))
+                if (!reveal.Contains(p.Key)) reveal = [.. reveal, p.Key];
+            if (!ReferenceEquals(reveal, expanded)) setExpanded(reveal);
+            Select(target.Key, hasChildren: target.IsExpandable);
+        }, navigateReq);
+
         Action<NodeHandle> CaptureRow(string key) => h => rowHandles[key] = h;
 
         if (PaneDisplayMode == NavPaneDisplayMode.Top)
             return TopLayer(width, selected, Activate, Select, footerItems, CaptureRow, HandleNavKey, overlayService, overflowAnchor);
 
         var content = ContentFrame(selected, Select, mode);
+        Action<NavItem> paneActivate = labelsVisible ? Activate : ActivateRail;
         Element baseLayer = inlinePane ? new BoxEl
         {
             Direction = 0,
             Grow = 1,
-            Children = [FullPane(paneWidth, flat, footerItems, selected, expanded, Activate, HandleNavKey, toggle, CaptureRow, overlay: false, labelsVisible: labelsVisible), content],
+            Children = [FullPane(paneWidth, paneFlat, footerItems, paneSelected, expanded, paneActivate, HandleNavKey, toggle, CaptureRow, overlay: false, labelsVisible: labelsVisible), content],
         } : mode switch
         {
             PaneMode.Compact => new BoxEl
@@ -379,11 +416,22 @@ public sealed class NavigationView : Component
         return Ui.ZStack(
             baseLayer,
             new BoxEl { Fill = LightDismissOverlay, Opacity = 1f, OnClick = () => TryClosePane() },
-            FullPane(openPaneWidth, flat, footerItems, selected, expanded, Activate, HandleNavKey, () => TryClosePane(), CaptureRow, overlay: true, labelsVisible: true)
+            FullPane(openPaneWidth, flat, footerItems, DisplaySelectionKey(Items, flat, selected), expanded, Activate, HandleNavKey, () => TryClosePane(), CaptureRow, overlay: true, labelsVisible: true)
         ) with { Grow = 1f };
     }
 
     // ── tree helpers ──────────────────────────────────────────────────────────────
+    /// <summary>Depth-first key lookup over the full item tree (incl. children of collapsed groups).</summary>
+    static NavItem? FindItem(NavItem[] items, string key)
+    {
+        foreach (var it in items)
+        {
+            if (it.Key == key) return it;
+            if (it.Children is { Length: > 0 } kids && FindItem(kids, key) is { } found) return found;
+        }
+        return null;
+    }
+
     static string[] SeedExpanded(NavItem[] items)
     {
         var seed = new List<string>();
@@ -413,6 +461,44 @@ public sealed class NavigationView : Component
         }
         Walk(items, 0);
         return list;
+    }
+
+    /// <summary>Compact/closed-left rail rows: top-level items only. Expanded state is preserved for when the pane
+    /// reopens, but children are never emitted inline while labels are hidden.</summary>
+    static List<(NavItem Item, int Depth)> RootRows(NavItem[] items)
+    {
+        var list = new List<(NavItem, int)>(items.Length);
+        foreach (var it in items) list.Add((it, 0));
+        return list;
+    }
+
+    /// <summary>Selection chrome follows the selected item when visible; if the selected item is hidden under a
+    /// collapsed parent or an icon-only rail, show the indicator on the lowest visible ancestor.</summary>
+    static string DisplaySelectionKey(NavItem[] roots, List<(NavItem Item, int Depth)> visible, string selected)
+    {
+        if (IsVisible(selected)) return selected;
+
+        string? mapped = null;
+        bool Walk(NavItem[] items, string? visibleAncestor)
+        {
+            foreach (var it in items)
+            {
+                string? here = IsVisible(it.Key) ? it.Key : visibleAncestor;
+                if (it.Key == selected) { mapped = here; return true; }
+                if (it.Children is { Length: > 0 } ch && Walk(ch, here)) return true;
+            }
+            return false;
+        }
+
+        Walk(roots, null);
+        return mapped ?? selected;
+
+        bool IsVisible(string key)
+        {
+            foreach (var (it, _) in visible)
+                if (it.Key == key) return true;
+            return false;
+        }
     }
 
     static NavItem? ParentOf(NavItem[] items, string childKey)
@@ -454,6 +540,9 @@ public sealed class NavigationView : Component
             BorderColor = Tok.StrokeCardDefault,
             BorderWidth = 1f,
             Corners = mode == PaneMode.Minimal ? default : ContentLeftTopCorner,
+            // Clip the page subtree to the 8,0,0,0 corner (WinUI's ContentGrid is a Grid+CornerRadius, which clips its
+            // content). Without this the corner renders square and an opaque page background overdraws the 1px stroke.
+            ClipToBounds = true,
             Children = [child],
         };
     }
@@ -493,7 +582,7 @@ public sealed class NavigationView : Component
         // the focused row to this container's handler (rows are the tab stops — WinUI items are focusable).
         paneChildren.Add(Ui.ScrollView(Ui.ZStack(
             new BoxEl { Direction = 1, OnKeyDown = handleNavKey, Children = mainItems },
-            Ctx.Provide(IndicatorTarget, SelectedPos(flat, selected), Embed.Comp(() => new NavIndicator { Parts = Parts }))
+            Ctx.Provide(IndicatorTarget, SelectedPos(flat, selected, labelsVisible), Embed.Comp(() => new NavIndicator { Parts = Parts }))
         )));
         paneChildren.Add(new BoxEl { Direction = 1, OnKeyDown = handleNavKey, Children = footerRows });
         paneChildren.Add(new BoxEl { Height = 4 });
@@ -508,8 +597,11 @@ public sealed class NavigationView : Component
             Animate = PaneTransition,             // presented-width Reveal (model snaps to the final width; no relayout)
             // Overlay pane = the theme-aware WinUI in-app acrylic (NavigationViewDefaultPaneBackground, :5).
             Acrylic = overlay ? Tok.AcrylicFlyout : null,
-            BorderColor = Tok.StrokeDividerDefault,
-            BorderWidth = 1f,
+            // Only the floating OVERLAY pane (minimal-mode flyout) gets a border. WinUI's always-visible expanded pane
+            // (NavigationViewExpandedPaneBackground = transparent) is borderless — the seam is the content grid's own
+            // left/top stroke + its rounded corner. A pane border here draws a square-cornered light line over that corner.
+            BorderColor = overlay ? Tok.StrokeDividerDefault : ColorF.Transparent,
+            BorderWidth = overlay ? 1f : 0f,
             Corners = overlay ? PaneOverlayCorners : default,
             Shadow = overlay ? Elevation.Flyout : null,
             Children = paneKids,
@@ -523,29 +615,28 @@ public sealed class NavigationView : Component
     Element CompactPane(NavItem[] footerItems, string selected, Action<string, bool> select, Action toggle,
                         Action<KeyEventArgs> handleNavKey, Func<string, Action<NodeHandle>> captureRow)
     {
-        // v1: Compact/Minimal panes show TOP-LEVEL rows only (groups don't expand inline); a group navigates to its first
-        // child so its icon still leads somewhere. Children are reachable in the Expanded pane.
+        // Compact/Minimal panes show TOP-LEVEL rows only (groups don't expand inline). A selected child maps its
+        // selection chrome to the collapsed parent; children are reachable once the pane is opened.
+        var compactFlat = RootRows(Items);
+        string compactSelected = DisplaySelectionKey(Items, compactFlat, selected);
         var noneExpanded = Array.Empty<string>();
         void CompactActivate(NavItem it)
         {
-            if (it.IsExpandable && it.Children is { Length: > 0 } ch) select(ch[0].Key, false);
-            else select(it.Key, false);
+            select(it.Key, it.IsExpandable);
         }
 
-        var children = new List<Element>
-        {
-            PaneToggleButton(toggle),
-            new BoxEl { Height = 4 },
-        };
+        var children = new List<Element>();
+        if (ShowPaneToggle) children.Add(PaneToggleButton(toggle));
+        children.Add(new BoxEl { Height = 4 });
 
         // The AutoSuggest slot collapses to the search button that opens the pane (WinUI PaneAutoSuggestButton).
         if (AutoSuggest is not null)
             children.Add(PaneGlyphButton(Icons.Search, toggle));
 
-        foreach (var it in Items)
+        foreach (var (it, _) in compactFlat)
             children.Add(it.IsHeader ? new BoxEl { Height = 8 }
                        : it.IsSeparator ? SeparatorRow(expandedLayout: false)
-                       : Item(it, 0, children.Count, selected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
+                       : Item(it, 0, children.Count, compactSelected, noneExpanded, CompactActivate, expandedLayout: false, ownIndicator: true, labelsVisible: false, captureRow(it.Key), Parts));
 
         children.Add(new BoxEl { Grow = 1 });
 
@@ -580,7 +671,7 @@ public sealed class NavigationView : Component
         BorderWidth = 1f,
         Children =
         [
-            PaneToggleButton(toggle),
+            .. ShowPaneToggle ? (Element[])[PaneToggleButton(toggle)] : [],
             Header is null
                 ? new BoxEl { Grow = 1 }
                 : new BoxEl
@@ -778,14 +869,21 @@ public sealed class NavigationView : Component
         if (ShowBackButton)
             children.Add(PaneGlyphButton(Icons.Back, () => OnBack?.Invoke()));
 
-        children.Add(PaneToggleButton(toggle));
+        if (ShowPaneToggle)
+            children.Add(PaneToggleButton(toggle));
 
-        if (Header is { Length: > 0 } title)
+        // WinUI hides the PaneTitle when the pane is collapsed (icon rail) — only emit it while labels show, the same
+        // way Item() gates its own text label on expandedLayout. Otherwise it renders clipped ("fluent-") in the rail.
+        if (labelsVisible && Header is { Length: > 0 } title)
             children.Add(AnimatedLabel(labelsVisible, new NavLabelSpec(
                 new TextEl(title) { Size = 14f, Bold = true, Color = Tok.TextPrimary },
                 PaneHeaderRowHeight, 1f, new Edges4(4, 0, 16, 0))));
 
         var rowKids = children.ToArray();
+        // Nothing to show (e.g. the gallery puts the toggle in the titlebar and the title hides when collapsed) → reclaim
+        // the header band instead of reserving an empty TopPaneHeight row that pushes the rail items down.
+        if (rowKids.Length == 0)
+            return new BoxEl { Height = 4 };
         var row = new BoxEl
         {
             Direction = 0,
@@ -846,14 +944,14 @@ public sealed class NavigationView : Component
         Children = [new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
     };
 
-    static Point2 SelectedPos(List<(NavItem Item, int Depth)> flat, string selected)
+    static Point2 SelectedPos(List<(NavItem Item, int Depth)> flat, string selected, bool labelsVisible)
     {
         float y = 0f;
         foreach (var (it, depth) in flat)
         {
             if (it.IsHeader)
             {
-                y += HeaderHeight;
+                y += labelsVisible ? HeaderHeight : 8f;
                 continue;
             }
             if (it.IsSeparator)
