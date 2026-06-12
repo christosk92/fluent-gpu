@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Existing files keep their per-subsystem namespaces (FluentGpu.Foundation, FluentGpu.Scene, ...); this only
+         seeds NEW files, which would otherwise inherit the project-name root (FluentGpu.Engine). -->
+    <RootNamespace>FluentGpu</RootNamespace>
+  </PropertyGroup>
+  <!-- The portable engine core: Foundation, the Rhi/Pal/Text seam interfaces, Scene, Render, Layout, Dsl, Hooks,
+       Reconciler, Animation, Input, Media, Hosting, and the three Headless backends. No NuGet, no OS code — the
+       Windows leaves live in FluentGpu.Windows behind the interface-level seams. Intra-engine layering (e.g. Dsl
+       must not see Scene) is folder/namespace discipline now; the load-bearing direction (Engine never sees a
+       platform backend) is still compiler-enforced by the library boundary. -->
+</Project>

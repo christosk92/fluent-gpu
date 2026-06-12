@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <!-- The swappable Windows backend behind the Engine's Rhi/Pal/Text/Media seams: Win32 interop (Interop/), the
+       Win32 window/input pump (Pal/), the D3D12 renderer (D3D12/), DirectWrite text (DirectWrite/), the WIC image
+       codec (Wic/), and the UIA accessibility provider (Uia/). The ONLY FluentGpu library with a native-interop
+       package. A macOS port supplies a parallel backend library (Metal/Cocoa/CoreText/NSAccessibility) — the seam
+       is interface-level, so swapping the backend means swapping this one reference. -->
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
+  </ItemGroup>
+</Project>

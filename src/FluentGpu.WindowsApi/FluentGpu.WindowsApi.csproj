@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <!-- Windows OS-services surface (WinAppSDK-shaped): runtime wrappers for toast notifications, credential
+       vault, package identity, and activation. Scaffold today — grows as app needs land. MSIX packaging is
+       deliberately NOT here: packaging is delivered app-side (.wapproj / packaging MSBuild props on the consuming
+       app), not by a class library. -->
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+  </ItemGroup>
+</Project>

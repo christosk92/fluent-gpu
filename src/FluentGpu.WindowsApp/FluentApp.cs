@@ -8,7 +8,6 @@ using FluentGpu.Pal;
 using FluentGpu.Pal.Windows;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
-using FluentGpu.Rhi.Gdi;
 using FluentGpu.Scene;
 using FluentGpu.Text.DirectWrite;
 
