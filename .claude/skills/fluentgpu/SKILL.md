@@ -17,7 +17,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 
 | Mechanism | Re-runs | Cost | For |
 |---|---|---|---|
-| Binding (`TransformBind`/`OpacityBind`/`FillBind`) | one effect → one node prop | compositor-only (no render/reconcile/layout) | slider scrub, scroll, progress, hover glow |
+| Binding (`Transform`/`Opacity`/`Fill` set to a Func/signal) | one effect → one node prop | compositor-only (no render/reconcile/layout) | slider scrub, scroll, progress, hover glow |
 | Granular re-render (`UseState`/`UseSignal`) | owning component's subtree | render + reconcile + scoped relayout of that subtree | normal state, value-displaying text |
 | Reactive control-flow (`Flow.For`/`Flow.Show`) | one boundary effect → keyed diff | structural reconcile of that boundary | dynamic lists / conditionals |
 
@@ -26,10 +26,10 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only — never because a parent re-rendered.
    **Parent→child data flows via signals or context, never constructor args** (those freeze at mount).
-3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **binding** (`TextBind = () => sig.Value`),
+3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
    never `Ui.Text(sig.Value)`. (#1 signals-native mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
-5. `TransformBind`/`OpacityBind`/`FillBind` = compositor-only. `WidthBind`/`HeightBind`/`TextBind` = scoped relayout.
+5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    Prefer a transform bind for hot values.
 6. Never write a signal during render (loops). Use an event handler or `UseEffect`.
 7. Hooks run in stable call order (no hooks in `if`/loops).

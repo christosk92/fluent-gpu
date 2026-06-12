@@ -21,7 +21,7 @@ Three ways an update reaches the screen, cheapest first:
 
 | Mechanism | What re-runs | Cost | Use for |
 |---|---|---|---|
-| **Binding** (`TransformBind`/`OpacityBind`/`FillBind`) | one effect → one scene node prop | compositor-only: **no render, no reconcile, no layout** | high-frequency scalars: slider scrub, scroll, progress, hover glow |
+| **Binding** (`Transform`/`Opacity`/`Fill` set to a Func/signal) | one effect → one scene node prop | compositor-only: **no render, no reconcile, no layout** | high-frequency scalars: slider scrub, scroll, progress, hover glow |
 | **Granular re-render** (`UseState`/`UseSignal`) | the owning component's subtree | render + reconcile that subtree + **scoped** relayout | normal UI state, text that shows a value |
 | **Reactive control-flow** (`Flow.For`/`Flow.Show`) | one boundary effect → keyed diff of its children | structural reconcile of that boundary only | dynamic lists / conditionals |
 
@@ -80,11 +80,11 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    Parent→child data flows through **signals or context**, *not* through the component's constructor args (those are
    captured once at mount and frozen). See [reactivity.md#props](./reactivity.md#props-dont-flow-through-constructors).
 3. **`ReactiveComponent.Setup()` runs exactly once.** Reading `signal.Value` there is a one-time read. To show a
-   changing value you must use a **binding** (`TextBind = () => sig.Value`), never `Text(sig.Value.ToString())`.
+   changing value you must use a **bound prop** (`Text = sig`, or `Text = Prop.Of(() => …)` for derived text), never `Text(sig.Value.ToString())`.
    This is the #1 signals-native mistake. See [pitfalls.md](./pitfalls.md).
 4. **Binding thunks must read `.Value` (not `.Peek()`).** The thunk runs inside the binding effect; `.Value`
    subscribes it so it re-runs. `.Peek()` would wire a binding that never updates.
-5. **`TransformBind`/`OpacityBind`/`FillBind` are compositor-only (no layout).** `WidthBind`/`HeightBind`/`TextBind`
+5. **Bound `Transform`/`Opacity`/`Fill` are compositor-only (no layout).** Bound `Width`/`Height`/`Text`
    trigger a **scoped** relayout. Don't drive a high-frequency value through a layout bind if a transform will do.
 6. **Don't put a `setState` in render.** A signal write during render re-schedules the same render → loops. Put it in
    an event handler or `UseEffect`.

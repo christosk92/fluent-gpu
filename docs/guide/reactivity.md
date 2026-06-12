@@ -31,19 +31,21 @@ that one effect writes one scene-node property. Use for high-frequency scalars.
 var x = UseFloatSignal(0f);
 new BoxEl {
     Width = 200, Height = 8,
-    TransformBind = () => Affine2D.Translation(x.Value, 0f),  // reads x.Value => subscribes this binding
+    Transform = Prop.Of(() => Affine2D.Translation(x.Value, 0f)),  // reads x.Value => subscribes this binding
 };
 // elsewhere: x.Value = pointerX;  // → this binding re-runs → node transform updates → recomposite. NO re-render.
 ```
 
 | Bind prop (on `BoxEl`) | Writes | Cost |
 |---|---|---|
-| `TransformBind : Func<Affine2D>` | `LocalTransform` | compositor-only |
-| `OpacityBind : Func<float>` | `Opacity` | compositor-only |
-| `FillBind : Func<ColorF>` | `Fill` | compositor-only (re-record this node) |
-| `WidthBind`/`HeightBind : Func<float>` | layout size | **scoped relayout** |
-| (`TextEl`) `TextBind : Func<string>` | text content | **scoped relayout** (metrics may change) |
-| (`TextEl`) `ColorBind : Func<ColorF>` | text color | compositor-only |
+| `Transform : Prop<Affine2D>` | `LocalTransform` | compositor-only |
+| `Opacity : Prop<float>` | `Opacity` | compositor-only |
+| `Fill : Prop<ColorF>` | `Fill` | compositor-only (re-record this node) |
+| `Width`/`Height : Prop<float>` | layout size | **scoped relayout** |
+| (`TextEl`) `Text : Prop<string>` | text content | **scoped relayout** (metrics may change) |
+| (`TextEl`) `Color : Prop<ColorF>` | text color | compositor-only |
+
+Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: a static value (`Opacity = 0.5f` — written at reconcile, granular re-render tier), a derived thunk (`Opacity = Prop.Of(() => f(sig.Value))`, or assign a typed `Func<T>` local — inline lambdas need `Prop.Of` because C# cannot chain a lambda conversion into a user conversion), or a **concrete signal** (`Opacity = sig` — signal-direct, no closure; `Signal<T>`/`FloatSignal`/`Memo<T>`; through an `IReadSignal<T>` parameter use the thunk form). A BOUND channel ignores its static sibling and is wired **once at mount** — a fresh thunk on re-render is ignored (change the signal's value, not the bind). `UseState` values feed the static form (setState → re-render); the hot-scalar upgrade is `UseState` → `UseSignal` and the assignment flips from value to signal with no property-name change. Never use `default(Prop<T>)` to mean "unset", and in a `cond ? value : signal` ternary put the `(Prop<T>)` cast on the value arm. `Prop<T>` is a property type, not a parameter type — factories take `T`/`Func<T>`/`Signal<T>` params.
 
 > **Rule:** a bind thunk must read `.Value` (subscribes), not `.Peek()`. And prefer a transform/opacity/fill bind over
 > a width/height/text bind when you can express the change as a transform — it skips layout entirely.
@@ -108,14 +110,14 @@ sealed class Clock : ReactiveComponent
     public override Element Setup()
     {
         var t = UseSignal("00:00");
-        return new TextEl("") { TextBind = () => t.Value };   // ✅ updates when t changes
+        return new TextEl("") { Text = t };                   // ✅ signal-direct: updates when t changes
         // return Ui.Text(t.Value);                            // ❌ reads once, never updates (Setup runs once!)
     }
 }
 ```
 
 > 🤖 **AGENT:** the `❌` line above is the #1 signals-native mistake. In `Setup()`, `signal.Value` is a one-time read.
-> Anything that should change over time must go through a **bind** (`TextBind`/`TransformBind`/…) or `For`/`Show`.
+> Anything that should change over time must go through a **bound prop** (`Text`/`Transform`/… set to a Func/signal) or `For`/`Show`.
 
 ## Effects
 

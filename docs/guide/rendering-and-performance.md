@@ -87,13 +87,13 @@ render/reconcile/layout and just re-records. Proof: harness check #60 — a boun
 
 ```csharp
 var v = UseFloatSignal(0.5f);
-Slider.Bind(v);                                   // built-in: thumb OffsetX + fill ScaleX are TransformBinds
+Slider.Bind(v);                                   // built-in: thumb offset + fill scale are bound Transforms
 // or hand-rolled:
-new BoxEl { /*…*/ TransformBind = () => Affine2D.Translation(v.Value * trackW, 0f) };
+new BoxEl { /*…*/ Transform = Prop.Of(() => Affine2D.Translation(v.Value * trackW, 0f)) };
 ```
 
 If a value is *also* shown as text ("70%"), let that small label take a scoped re-render (read `v.Value` in a tiny
-component, or `TextBind = () => $"{v.Value:P0}"`), while the thumb stays on the compositor path — the two are decoupled.
+component, or `Text = Prop.Of(() => $"{v.Value:P0}")`), while the thumb stays on the compositor path — the two are decoupled.
 
 ## Zero-allocation discipline (phases 6–13)
 
@@ -109,7 +109,7 @@ stay clean:
 
 | Situation | Do this |
 |---|---|
-| A value changes many times/second (drag, scroll, progress, animation) | bind it to `TransformBind`/`OpacityBind` (compositor-only), or use the animation hooks (`UseSpring`/`UseTransition`) — never `setState` per tick |
+| A value changes many times/second (drag, scroll, progress, animation) | bind it (`Transform`/`Opacity` = a Func/signal, compositor-only), or use the animation hooks (`UseSpring`/`UseTransition`) — never `setState` per tick |
 | A value that changes occasionally and is shown as text/affects layout | `UseState`/`UseSignal` + read it in render (granular re-render) |
 | A long/large list | `Virtual.*` / `Repeater.ItemsRepeater` with a stable `keyOf` (virtualized) |
 | A dynamic list/conditional that *isn't* huge | `Flow.For` / `Flow.Show` (restructure with no parent re-render) |

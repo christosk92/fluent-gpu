@@ -80,12 +80,12 @@ new Expander
 ```
 
 Rules: (1) a modifier is a PURE `with`-copy of its input; (2) signal **reads** inside subscribe the owning control —
-the granular `:stuck` restyle loop; never **write** a signal in a modifier, and use binds (`FillBind`/`TransformBind`)
+the granular `:stuck` restyle loop; never **write** a signal in a modifier, and use bound props (`Fill`/`Transform` set to a Func/signal)
 for per-frame-hot values; (3) type-preserving — a modifier that changes the record type is ignored (parts *style*,
 content **slots** like `Content`/`HeaderContent` *restructure*); (4) don't reshape `Children`; (5) the control
 re-asserts its mechanics-critical props AFTER your modifier (toggle clicks, reflow specs, ref captures — chained, see
 each part const's doc for the owned list), so you can restyle everything but break nothing; (6) one transform owner —
-don't put `StickyTop`/`TransformBind` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
+don't put `StickyTop`/a bound `Transform` on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
 ## Layout

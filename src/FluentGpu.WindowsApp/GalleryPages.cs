@@ -1378,6 +1378,7 @@ sealed class StatePage : Component
             Embed.Comp(() => new StatePage_CounterHost()),
             Embed.Comp(() => new StatePage_SignalHost()),
             Embed.Comp(() => new StatePage_BindHost()),
+            Embed.Comp(() => new StatePage_ThreeFormsHost()),
             Embed.Comp(() => new StatePage_MemoHost()),
             Embed.Comp(() => new StatePage_ShowHost()),
             Embed.Comp(() => new StatePage_ForHost()),
@@ -1396,7 +1397,7 @@ sealed class StatePage : Component
         [
             TableRow(true, "Mechanism", "Re-runs", "Cost"),
             Divider(),
-            TableRow(false, "Binding — TransformBind / OpacityBind / FillBind / TextBind", "one effect → one node property", "compositor-only (no render, no reconcile, no layout)"),
+            TableRow(false, "Binding — Transform / Opacity / Fill / Text set to a Func or signal", "one effect → one node property", "compositor-only (no render, no reconcile, no layout)"),
             Divider(),
             TableRow(false, "Granular re-render — UseState / UseSignal read in Render()", "the owning component's subtree", "render + reconcile + scoped relayout of that subtree"),
             Divider(),
@@ -1447,7 +1448,7 @@ sealed class StatePage : Component
         [
             BodyStrong("Rules that prevent most state bugs"),
             Rule(".Value subscribes the current computation; .Peek() reads without subscribing. A bind thunk must read .Value."),
-            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bind (TextBind = () => sig.Value), never Ui.Text(sig.Value)."),
+            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
             Rule("Never write a signal during render (infinite loop) — write from an event handler or UseEffect."),
             Rule("Parent→child data flows through signals or context, never constructor args — those freeze at mount."),
             Rule("Prefer Transform/Opacity/Fill binds for hot values; Width/Height/Text binds cost a scoped relayout."),
@@ -1530,12 +1531,12 @@ sealed class StatePage_SignalHost : Component
 
             Button.Accent("n.Value++", () => n.Value = n.Peek() + 1);
 
-            new TextEl("") { TextBind = () => $"n = {n.Value}" };   // only this thunk re-runs on writes
+            new TextEl("") { Text = Prop.Of(() => $"n = {n.Value}") };   // only this thunk re-runs on writes
             """);
     }
 }
 
-/// <summary>Compositor-only bindings: a FloatSignal drives TransformBind/FillBind — no render, no layout.</summary>
+/// <summary>Compositor-only bindings: a FloatSignal drives the bound Transform/Fill — no render, no layout.</summary>
 sealed class StatePage_BindHost : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(96, 96, 104);
@@ -1559,9 +1560,9 @@ sealed class StatePage_BindHost : Component
                 },
             ],
         };
-        return ControlExample.Build("Compositor-only binding — Slider.Bind + TransformBind",
+        return ControlExample.Build("Compositor-only binding — Slider.Bind + a bound Transform",
             VStack(14, Slider.Bind(x), track),
-            description: "The slider drag writes the FloatSignal (no setState per move); the box rides TransformBind + FillBind. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
+            description: "The slider drag writes the FloatSignal (no setState per move); the box rides bound Transform + Fill thunks. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
             output: VStack(4, GalleryPage.LiveText(() => $"x = {x.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
@@ -1574,6 +1575,48 @@ sealed class StatePage_BindHost : Component
                 Transform = Prop.Of(() => Affine2D.Translation(x.Value * 184f, 0f)),  // compositor-only
                 Fill = Prop.Of(() => ColorF.Lerp(grey, Tok.AccentDefault, x.Value)),  // compositor-only
             };
+            """);
+    }
+}
+
+/// <summary>The unified property surface: ONE channel (Opacity), driven all three ways — static value (re-render
+/// tier), derived Func thunk, and signal-direct (both compositor-only). The render counter is the proof: the static
+/// button re-renders this host; the slider scrub never does.</summary>
+sealed class StatePage_ThreeFormsHost : Component
+{
+    int _renders;
+
+    public override Element Render()
+    {
+        _renders++;
+        var (staticOp, setStaticOp) = UseState(1.0f);
+        var op = UseFloatSignal(0.8f);
+
+        // The helper takes Prop<float> — every form flows through the SAME parameter type.
+        static Element Chip(string label, Prop<float> opacity) => VStack(4,
+            new BoxEl { Width = 56f, Height = 36f, Corners = Radii.ControlAll, Fill = Tok.AccentDefault, Opacity = opacity },
+            Caption(label).Tertiary());
+
+        return ControlExample.Build("One channel, three forms — Opacity",
+            VStack(14,
+                HStack(20,
+                    Chip("value (re-render)", staticOp),                  // float        → Prop<float>
+                    Chip("Func (compositor)", Prop.Of(() => op.Value * op.Value)),   // derived thunk
+                    Chip("signal (compositor)", op)),                     // FloatSignal  → Prop<float>, no closure
+                HStack(12,
+                    Button.Standard($"static → {(staticOp > 0.7f ? "0.4" : "1.0")}", () => setStaticOp(staticOp > 0.7f ? 0.4f : 1.0f)),
+                    Slider.Bind(op))),
+            description: "Every bindable channel is one Prop<T> property accepting a static value, a Func<T> thunk, or a concrete signal. " +
+                         "The static form re-asserts on re-render (the button bumps the counter); the two bound forms ride the compositor — " +
+                         "scrubbing the slider updates both right-hand chips with zero host re-renders.",
+            output: VStack(4, GalleryPage.LiveText(() => $"op = {op.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
+            code: """
+            var (staticOp, setStaticOp) = UseState(1.0f);   // value → re-render tier
+            var op = UseFloatSignal(0.8f);                  // signal → compositor tier
+
+            new BoxEl { Opacity = staticOp };                          // 1) static value
+            new BoxEl { Opacity = Prop.Of(() => op.Value * op.Value) };// 2) derived Func (Prop.Of wraps inline lambdas)
+            new BoxEl { Opacity = op };                                // 3) signal-direct — no closure at all
             """);
     }
 }
@@ -1599,14 +1642,14 @@ sealed class StatePage_MemoHost : Component
                     Button.Standard("b++", () => b.Value = b.Peek() + 1),
                 ],
             },
-            description: "A memo caches its value and recomputes lazily when an input signal changes; readers subscribe through it. The readout is a TextBind through the memo — the host still never re-renders.",
+            description: "A memo caches its value and recomputes lazily when an input signal changes; readers subscribe through it. The readout binds Text through the memo — the host still never re-renders.",
             output: VStack(4, GalleryPage.LiveText(() => $"{a.Value} × {b.Value} = {product.Value}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var a = UseSignal(2);
             var b = UseSignal(3);
             var product = UseComputed(() => a.Value * b.Value);   // Memo<int>: cached, lazy
 
-            new TextEl("") { TextBind = () => $"{a.Value} × {b.Value} = {product.Value}" };
+            new TextEl("") { Text = Prop.Of(() => $"{a.Value} × {b.Value} = {product.Value}") };
             """);
     }
 }

@@ -50,12 +50,19 @@ contracts owned elsewhere:
   own subtree** (granular; no app-wide re-render, no global dirty bool). `ReactiveComponent.Setup()` is the
   run-once (signals-native) variant whose body is untracked, so it never re-renders — reactivity comes purely from
   bindings/`For`/`Show` inside.
-- **Fine-grained bindings.** `BoxEl.TransformBind/OpacityBind/FillBind/WidthBind/HeightBind` and
-  `TextEl.TextBind/ColorBind` are thunks the reconciler turns into effects at mount; a bound signal change writes
-  ONE scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text →
-  scoped relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
+- **Fine-grained bindings — one `Prop<T>` per bindable channel.** Each channel is ONE property (BoxEl
+  `Transform : Prop<Affine2D>` / `Opacity` / `Fill` / `Width` / `Height`; TextEl `Text` / `Color`; ImageEl
+  `Source` / `Placeholder`) accepting a static `T`, a `Func<T>` thunk, or a concrete signal (signal-direct — the
+  engine effect reads `sig.Value`, the caller allocates no closure; inline lambdas wrap in `Prop.Of(...)`). The
+  reconciler wires a BOUND channel into an effect **once at mount** (a fresh thunk on a re-render is ignored —
+  the signals-first contract: change the signal's value, not the bind; check `bind.mount-only.stale`); the STATIC
+  value is re-asserted on every reconcile **iff `!IsBound`** — the single chokepoint rule that fixed the historical
+  Opacity `!= 1f` reappear bug and the Fill/TextColor bound-value clobbers by construction. A bound fire writes ONE
+  scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
+  relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
   `Slider.Bind(FloatSignal)`, scroll offset) updates the exact node with **zero render/reconcile/layout** — the
-  "slider tank" fix (vertical-slice check #60).
+  "slider tank" fix (vertical-slice check #60). The superseded dual surface spelled each bind as a parallel
+  `*Bind` prop (TransformBind/OpacityBind/…) beside its static twin <!-- canon-allow: names the superseded *Bind form on purpose -->.
 - **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
   and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
   parent re-render (`src/FluentGpu.Hooks/ControlFlow.cs`, check #61).

@@ -461,7 +461,7 @@ owned by `com-interop.md`; this is the DSL `WGPU####` set). Error unless noted:
 | ID | Rule |
 |----|------|
 | WGPU0001 | `[Element]` type must be `sealed partial record` deriving `Element`. |
-| WGPU0002 | `[Prop]` type must be diffable (value/`StringId`/handle/`BrushSpec`/delegate); no `string`/heavy COM types (cross-platform + paint-path-string ban, `foundations.md` §1). |
+| WGPU0002 | `[Prop]` type must be diffable (value/`StringId`/handle/`BrushSpec`/delegate); no `string`/heavy COM types (cross-platform + paint-path-string ban, `foundations.md` §1). `Prop<T>` (the unified reactive channel, reconciler-hooks.md §0bis) is a PERMITTED `[Prop]` type: a value struct whose `object?` payload diffs by reference — the shipped engine relies on element value-equality nowhere (only `ReferenceEquals` shortcuts), so a fresh thunk making records reference-unequal is a non-issue for `DiffProps`. |
 | WGPU0003 | Duplicate `ElementTypeId` across `[Element]` types. |
 | WGPU0004 | `.Set(Action<TWinUI>)` removed → suggest `.Set(Action<SceneWriter>)` / `with`. |
 | WGPU0005 | Hook called outside `Component.Render` / conditionally (rules-of-hooks; Reactor's runtime `HookOrderException` promoted to a *compile-time* error). |
