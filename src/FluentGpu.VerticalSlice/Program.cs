@@ -1783,11 +1783,11 @@ static class Slice
     public static readonly Context<int> NumCtx = new(0);
 
     // Phase-3 (GestureArena, §7A/§7B) headline-gate evidence echoed into the final summary line so the orchestrator can
-    // read arena health straight off the slice tail (the FixLoop contract): the four load-bearing arena gates write a
+    // read arena health straight off the slice tail (the FixLoop contract): the five load-bearing arena gates write a
     // CONDENSED form of their own computed detail here, at the point each one is asserted, so the summary never
-    // recomputes or drifts. Null until the corresponding gate runs (the arena suite is unconditional, so all four are
+    // recomputes or drifts. Null until the corresponding gate runs (the arena suite is unconditional, so all five are
     // populated on a normal run). Startup-only assignments — not a hot path, so plain strings are fine.
-    static string? s_arenaDeterminism, s_arenaIntegratorSweep, s_arenaFastpath, s_arenaAllocZero;
+    static string? s_arenaDeterminism, s_arenaIntegratorSweep, s_arenaFastpath, s_arenaAllocZero, s_arenaDispatchAllocZero;
 
     static void Check(string name, bool ok, string? detail = null)
     {
@@ -4996,11 +4996,16 @@ static class Slice
             s_arenaFastpath = $"press={valAfterPress:0.00} after1move={valAfterOneMove:0.00} tentativeMidDrag={tentativeMidDrag}";
         }
 
-        // gate.arena.alloc-zero: a MULTI-recognizer competition frame allocates 0 managed bytes on the hot half — the
-        // arena + the per-pointer FSMs + the selection teams are all slab/fixed storage (§7A.4). Drive the
-        // reorder-vs-pan race (DragReorder + Tap + Pan members competing, axis-locked votes resolving) for 30 frames and
-        // assert HotPhaseAllocBytes==0 the whole window (measured the SAME way the touch alloc gates do — the hot half,
-        // the reconcile edge excluded). No recorder is attached (the production path; the recorder is a test seam).
+        // gate.arena.alloc-zero: a MULTI-recognizer competition gesture allocates 0 managed bytes on the FRAME HOT HALF —
+        // the phase-7+ work the resolved gesture drives (the captured drag/reorder controller + the scroll write/virtual
+        // re-realize + record) is slab/fixed storage. Drive the reorder-vs-pan race (DragReorder + Tap + Pan members
+        // competing, axis-locked votes resolving) for 30 frames and assert HotPhaseAllocBytes==0 the whole window.
+        // SCOPE (matters): HotPhaseAllocBytes = GetAllocatedBytesForCurrentThread delta captured INSIDE Paint (AppHost.cs:597)
+        // → it spans phases 3-11 ONLY. The per-event arena arbitration itself — EnrollTouchArena / the StepTouchArena vote
+        // loop / the PointerFsm bank / the selection-team enroll / UpSweepTouchArena — runs in phase-2 Dispatch (RunFrame,
+        // BEFORE Paint), OUTSIDE this window. So this gate proves the DOWNSTREAM (post-resolution) path is 0-alloc; the
+        // per-event coordinator surface is covered DIRECTLY by gate.arena.dispatch-alloc-zero below (a delta wrapped around
+        // host.Input.Dispatch). No recorder is attached (the production path; the recorder is a test seam).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("arena-alloc", new Size2(360, 340), 1f)); window.Show();
@@ -5038,9 +5043,112 @@ static class Slice
             var fu = host.RunFrame();
             if (fu.HotPhaseAllocBytes > worst) worst = fu.HotPhaseAllocBytes;
             s_touchClockMs = t + 2000;
-            Check("gate.arena.alloc-zero a 30-frame multi-recognizer competition (DragReorder vs Tap vs Pan, axis-locked votes resolving) allocates 0 managed bytes on the hot half — the arena, the per-pointer FSMs, and the selection teams are slab/fixed storage (§7A.4)",
+            Check("gate.arena.alloc-zero a 30-frame multi-recognizer competition (DragReorder vs Tap vs Pan, axis-locked votes resolving) allocates 0 managed bytes on the frame hot half (phases 3-11) — the resolved gesture's downstream drag/scroll/re-realize/record is slab/fixed storage (§7A.4); the per-event arbitration in phase-2 dispatch is gated by gate.arena.dispatch-alloc-zero",
                 worst == 0, $"{worst} bytes worst over the 30-frame reorder-vs-pan race");
             s_arenaAllocZero = $"{worst} bytes";
+        }
+
+        // gate.arena.dispatch-alloc-zero: the COMPANION that closes gate.arena.alloc-zero's instrument gap. It measures the
+        // GetAllocatedBytesForCurrentThread delta wrapped DIRECTLY around the phase-2 dispatch entrypoint — host.Input.Dispatch
+        // (the public seam RunFrame calls at AppHost.cs:494, BEFORE Paint) — so the measured window IS the per-event arena
+        // path the headline names: EnrollTouchArena (OpenArena + innermost-first Enroll + ArmMemberFsm = PointerFsm.Init/OnDown
+        // + EnrollTeam), the StepTouchArena vote loop (PointerFsm.OnMove per live member + ResolveStep + the RouteGestureWin
+        // sink), and UpSweepTouchArena (PointerFsm.OnUp + ResolveUp). Two REAL multi-recognizer scenes are driven through the
+        // real dispatcher: (A) DragReorder-vs-Tap-vs-Pan (the full StepTouchArena vote loop + an eager-win sweep), and (B) a
+        // selectable editor inside a scroller (the §7A.3 selection TEAM enroll: Tap/DoubleTap/SelectionDrag under a captain,
+        // plus the VelocitySampler ring on the captured drag). The scene is laid out by RunFrame BEFORE measuring; the down +
+        // a couple of warm moves JIT the path; the steady move stream + up is the measured window. A forced alloc on ANY of
+        // those phase-2 paths (e.g. a stray new[]/closure in StepTouchArena) is caught HERE — the gap the audit demonstrated
+        // with a `new byte[64]` in StepTouchArena that gate.arena.alloc-zero could not see. No recorder attached.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("arena-dispatch-alloc", new Size2(360, 340), 1f)); window.Show();
+            var fonts = new HeadlessFontSystem(strings);
+
+            // Dispatch directly via a reused 1-element buffer so the SPAN itself never allocates (the measured window must
+            // contain only the dispatcher's own work, not the harness's plumbing). DispatchOne returns the dispatch's click
+            // count (unused) — the call is the point. The buffer is filled in place per event.
+            var one = new InputEvent[1];
+            long deltaA = 0, deltaB = 0;
+
+            // (A) The DragReorder-vs-Tap-vs-Pan race: opens an arena with three competing members and runs the full
+            // StepTouchArena vote loop (axis-locked OnMove votes + ResolveStep) every move, then an eager-win sweep.
+            {
+                var probe = new ArenaReorderInScrollerProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();                                   // lay out the scene (cold; not measured)
+                var scene = host.Scene;
+                var scroller = FindScrollable(scene, scene.Root);
+                scene.TryGetScroll(scroller, out var sc0);
+                var strip = Child(scene, sc0.ContentNode, 0);
+                var itemA = Child(scene, strip, 0);
+                var aCenter = CenterOf(scene, itemA);
+
+                // Helper: drive ONE complete horizontal drag-reorder gesture (down → slop-crossing moves → up) through the
+                // real dispatcher. DragReorder eager-wins along the item axis, so this exercises ClaimTouchReorder →
+                // DragController.Promote/Move/Complete (the drag-ghost SetShadow/ClearShadow round-trip) AND the FSM bank.
+                void DriveReorder(uint t0)
+                {
+                    one[0] = Touch(InputKind.PointerDown, aCenter, t0, 71); host.Input.Dispatch(one);
+                    for (int i = 1; i <= 14; i++) { one[0] = Touch(InputKind.PointerMove, new Point2(aCenter.X + i * 6f, aCenter.Y), t0 + (uint)i * 16, 71); host.Input.Dispatch(one); }
+                    one[0] = Touch(InputKind.PointerUp, new Point2(aCenter.X + 15 * 6f, aCenter.Y), t0 + 15 * 16, 71); host.Input.Dispatch(one);
+                }
+
+                // WARM a FULL gesture first: besides JITting the claim/promote path, this seats the drag-ghost's shadow in
+                // the SceneStore shadow side-table (a Dictionary whose backing is lazily grown on the first insert, then
+                // freed-not-shrunk on ClearShadow at drag-up). The MEASURED gesture below reuses that freed slot at zero
+                // alloc — the one-time side-table init is a cold edge (the same warm-up discipline the churn gate uses),
+                // not steady per-event work. Without this warm, the first SetShadow's Dictionary growth shows as ~256B.
+                DriveReorder(s_touchClockMs);
+                s_touchClockMs += 2000;
+
+                // MEASURED: a second identical complete drag-reorder gesture. The arena open/enroll/vote/resolve/sweep, the
+                // PointerFsm bank, ClaimTouchReorder, and the SetShadow/ClearShadow round-trip all run on warmed storage.
+                uint t = s_touchClockMs;
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                DriveReorder(t);
+                deltaA = GC.GetAllocatedBytesForCurrentThread() - before;
+                s_touchClockMs = t + 2000;
+            }
+
+            // (B) The selection TEAM: a selectable editor inside a scroller. The down enrolls Tap + DoubleTap + SelectionDrag
+            // (the editor's OnDrag) under a captain (EnrollTeam) and arms their FSMs; the drag-extend moves run the captured
+            // OnDrag (the §7A.5 fast-path) while the VelocitySampler ring samples — all on fixed storage.
+            {
+                const float Adv = 14f * 0.55f;   // headless advance model @ FontSize 14 (the EditableTextCoreChecks model)
+                static NodeHandle TextVis(SceneStore s, NodeHandle n)   // nearest Text-visual descendant (the Phase-2 helper, inlined)
+                {
+                    if (n.IsNull) return NodeHandle.Null;
+                    if (s.Paint(n).VisualKind == VisualKind.Text) return n;
+                    for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) { var r = TextVis(s, c); if (!r.IsNull) return r; }
+                    return NodeHandle.Null;
+                }
+                var root = new TouchEditInScrollerProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, root);
+                host.RunFrame();                                   // lay out the scene (cold; not measured)
+                var scene = host.Scene;
+                var field = FindRole(scene, scene.Root, AutomationRole.Text);
+                var tn = TextVis(scene, field);
+                var ta = scene.AbsoluteRect(tn);
+                float wy = ta.Y + ta.H / 2f;
+                uint t = s_touchClockMs;
+
+                // Down (opens the arena + enrolls the selection team + arms the FSMs) + 2 warm moves — excluded.
+                one[0] = Touch(InputKind.PointerDown, new Point2(ta.X + 1f * Adv + 1f, wy), t, 17); host.Input.Dispatch(one);
+                for (int i = 1; i <= 2; i++) { one[0] = Touch(InputKind.PointerMove, new Point2(ta.X + (1f + i) * Adv + 1f, wy), t + (uint)i * 16, 17); host.Input.Dispatch(one); }
+
+                // Measured: 8 drag-extend moves (captured OnDrag + VelocitySampler ring) + the up.
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 3; i <= 10; i++) { one[0] = Touch(InputKind.PointerMove, new Point2(ta.X + (1f + i) * Adv + 1f, wy + i * 4f), t + (uint)i * 16, 17); host.Input.Dispatch(one); }
+                one[0] = Touch(InputKind.PointerUp, new Point2(ta.X + 11f * Adv + 1f, wy + 44f), t + 11 * 16, 17); host.Input.Dispatch(one);
+                deltaB = GC.GetAllocatedBytesForCurrentThread() - before;
+                s_touchClockMs = t + 2000;
+            }
+
+            long worst = Math.Max(deltaA, deltaB);
+            Check("gate.arena.dispatch-alloc-zero the per-event arena path itself — EnrollTouchArena / the StepTouchArena vote loop / the PointerFsm bank / the selection-team enroll / UpSweepTouchArena, measured by a GetAllocatedBytesForCurrentThread delta wrapped DIRECTLY around host.Input.Dispatch (phase-2, before Paint) — allocates 0 managed bytes across a reorder-vs-pan race AND a selection-team drag (§7A.4)",
+                worst == 0, $"reorder-vs-pan={deltaA}B selection-team={deltaB}B (direct phase-2 dispatch delta)");
+            s_arenaDispatchAllocZero = $"{worst} bytes";
         }
     }
 
@@ -15028,18 +15136,20 @@ static class Slice
     }
 
     /// <summary>The Phase-3 (GestureArena, §7A/§7B) evidence appended to the success tail so the orchestrator reads arena
-    /// health off the slice tail: the total check count plus the four load-bearing arena gates (determinism, the
-    /// integrator-determinism dt-sweep, the single-recognizer fast-path regression guard, and the multi-recognizer
-    /// zero-alloc gate) with the condensed detail each one captured. Empty when the arena suite did not run (e.g. a
+    /// health off the slice tail: the total check count plus the five load-bearing arena gates (determinism, the
+    /// integrator-determinism dt-sweep, the single-recognizer fast-path regression guard, the multi-recognizer frame
+    /// hot-half zero-alloc gate, and the direct phase-2 dispatch zero-alloc gate) with the condensed detail each one
+    /// captured. Empty when the arena suite did not run (e.g. a
     /// future filtered run), so the bare success line is preserved in that case. The <c>check-canon.ps1</c> design-gate
     /// result is reported by the harness/orchestrator separately (it is a design-tree gate, not a slice-runtime check).</summary>
     static string ArenaSummarySuffix()
     {
-        if (s_arenaDeterminism is null && s_arenaIntegratorSweep is null && s_arenaFastpath is null && s_arenaAllocZero is null)
+        if (s_arenaDeterminism is null && s_arenaIntegratorSweep is null && s_arenaFastpath is null && s_arenaAllocZero is null && s_arenaDispatchAllocZero is null)
             return "";
         return $" ({s_total} checks; gate.arena.determinism PASS [{s_arenaDeterminism}], "
              + $"gate.arena.determinism.integrator-sweep PASS [{s_arenaIntegratorSweep}], "
              + $"gate.arena.fastpath-sync PASS [{s_arenaFastpath}], "
-             + $"gate.arena.alloc-zero PASS [{s_arenaAllocZero}].)";
+             + $"gate.arena.alloc-zero PASS [{s_arenaAllocZero}], "
+             + $"gate.arena.dispatch-alloc-zero PASS [{s_arenaDispatchAllocZero}].)";
     }
 }
