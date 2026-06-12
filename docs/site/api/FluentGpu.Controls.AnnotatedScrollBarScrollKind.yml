@@ -1,0 +1,176 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  id: AnnotatedScrollBarScrollKind
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AnnotatedScrollBarScrollKind.Click
+  - FluentGpu.Controls.AnnotatedScrollBarScrollKind.DecrementButton
+  - FluentGpu.Controls.AnnotatedScrollBarScrollKind.Drag
+  - FluentGpu.Controls.AnnotatedScrollBarScrollKind.IncrementButton
+  langs:
+  - csharp
+  - vb
+  name: AnnotatedScrollBarScrollKind
+  nameWithType: AnnotatedScrollBarScrollKind
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnnotatedScrollBarScrollKind
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Why an <xref href="FluentGpu.Controls.AnnotatedScrollBar" data-throw-if-not-resolved="false"></xref> scrolled — mirrors WinUI
+        <code>AnnotatedScrollBarScrollingEventKind</code> (AnnotatedScrollBar.idl:6-12).
+  example: []
+  syntax:
+    content: 'public enum AnnotatedScrollBarScrollKind : byte'
+    content.vb: Public Enum AnnotatedScrollBarScrollKind As Byte
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind.Click
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBarScrollKind.Click
+  id: Click
+  parent: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  langs:
+  - csharp
+  - vb
+  name: Click
+  nameWithType: AnnotatedScrollBarScrollKind.Click
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind.Click
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Click
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Click = 0
+    return:
+      type: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind.Drag
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBarScrollKind.Drag
+  id: Drag
+  parent: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  langs:
+  - csharp
+  - vb
+  name: Drag
+  nameWithType: AnnotatedScrollBarScrollKind.Drag
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind.Drag
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Drag
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Drag = 1
+    return:
+      type: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind.IncrementButton
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBarScrollKind.IncrementButton
+  id: IncrementButton
+  parent: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  langs:
+  - csharp
+  - vb
+  name: IncrementButton
+  nameWithType: AnnotatedScrollBarScrollKind.IncrementButton
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind.IncrementButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IncrementButton
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: IncrementButton = 2
+    return:
+      type: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind.DecrementButton
+  commentId: F:FluentGpu.Controls.AnnotatedScrollBarScrollKind.DecrementButton
+  id: DecrementButton
+  parent: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  langs:
+  - csharp
+  - vb
+  name: DecrementButton
+  nameWithType: AnnotatedScrollBarScrollKind.DecrementButton
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind.DecrementButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AnnotatedScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DecrementButton
+    path: ../../src/FluentGpu.Controls/AnnotatedScrollBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: DecrementButton = 3
+    return:
+      type: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+references:
+- uid: FluentGpu.Controls.AnnotatedScrollBar
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBar
+  href: FluentGpu.Controls.AnnotatedScrollBar.html
+  name: AnnotatedScrollBar
+  nameWithType: AnnotatedScrollBar
+  fullName: FluentGpu.Controls.AnnotatedScrollBar
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  commentId: T:FluentGpu.Controls.AnnotatedScrollBarScrollKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AnnotatedScrollBarScrollKind.html
+  name: AnnotatedScrollBarScrollKind
+  nameWithType: AnnotatedScrollBarScrollKind
+  fullName: FluentGpu.Controls.AnnotatedScrollBarScrollKind

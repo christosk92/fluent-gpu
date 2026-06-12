@@ -60,9 +60,12 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // SpanRunId (0 = plain) keys the SpanRunTable.Shared inline-run overlay (rtb-01): the renderer shapes the SAME single
 // flow with per-range weight/size/family and tints per-span colors; ForceColor != 0 makes Color override the span
 // colors too (the selected-text recolor re-emit — WinUI repaints selected glyphs uniformly).
+// InMotion (1 = the run's world transform was written THIS frame — scroll/fling/drag/FLIP): the renderer skips the
+// device-grid baseline snap so moving text rides sub-pixel WITH its plate (no 1px shear at half-pixel crossings),
+// then re-snaps crisp on the settle frame the host queues after the last transform write.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
-    int SpanRunId = 0, int ForceColor = 0);
+    int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -74,7 +77,9 @@ public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, String
 public readonly record struct ClipCmd(RectF DeviceRect, RectF RoundedRect = default, float CornerRadius = 0f);
 // An image quad. <see cref="ImageId"/> is the ImageCache handle; <see cref="Ready"/>==0 ⇒ draw <see cref="Placeholder"/>
 // (decode in flight). The GPU leaf samples the uploaded texture for the handle when ready (needs-pixels).
-public readonly record struct DrawImageCmd(RectF Rect, CornerRadius4 Radii, int ImageId, int Ready, ColorF Placeholder, Affine2D Transform, float Opacity, float CrossFade = 1f);
+// <see cref="UvRect"/> is the content-fit sub-rect in 0..1 source space ((0,0,1,1) = whole texture): the recorder
+// bakes ImageFit.Cover crops here; the device composes it with the texture's atlas cell before sampling.
+public readonly record struct DrawImageCmd(RectF Rect, CornerRadius4 Radii, int ImageId, int Ready, ColorF Placeholder, Affine2D Transform, float Opacity, RectF UvRect, float CrossFade = 1f);
 // An SDF outline (focus visual / border ring). Same SDF rounded-box as FillRoundRect, but the PS draws a
 // <see cref="StrokeWidth"/>-wide band centered on the edge instead of filling. Drawn over the control; works on any
 // fill/background. DashOn/DashOff (device-independent px along the perimeter) modulate the band into dashes:
@@ -157,11 +162,11 @@ public sealed class DrawList
 
     public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0,
-        int spanRunId = 0, bool forceColor = false)
+        int spanRunId = 0, bool forceColor = false, bool inMotion = false)
     {
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 
@@ -190,10 +195,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, float crossFade = 1f, ulong sortKey = 0)
+    public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, in RectF uvRect, float crossFade = 1f, ulong sortKey = 0)
     {
         WriteOp(DrawOp.DrawImage);
-        WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity, crossFade));
+        WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity, uvRect, crossFade));
         PushSort(sortKey);
     }
 

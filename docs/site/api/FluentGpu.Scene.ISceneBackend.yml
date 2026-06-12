@@ -1,0 +1,619 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ISceneBackend
+  commentId: T:FluentGpu.Scene.ISceneBackend
+  id: ISceneBackend
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ISceneBackend.AppendChild(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.ChildCount(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.CreateNode(System.UInt16)
+  - FluentGpu.Scene.ISceneBackend.FirstChild(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.FreeSubtree(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.GetClickHandler(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.Interaction(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.Layout(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.Mark(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeFlags)
+  - FluentGpu.Scene.ISceneBackend.NextSibling(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.Paint(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Scene.ISceneBackend.SetClickHandler(FluentGpu.Foundation.NodeHandle,System.Action)
+  langs:
+  - csharp
+  - vb
+  name: ISceneBackend
+  nameWithType: ISceneBackend
+  fullName: FluentGpu.Scene.ISceneBackend
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ISceneBackend
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    The reconciler's only window onto the retained tree — handle-in / handle-out, POD-only.
+
+    (The slice implements this directly on <xref href="FluentGpu.Scene.SceneStore" data-throw-if-not-resolved="false"></xref>.)
+  example: []
+  syntax:
+    content: public interface ISceneBackend
+    content.vb: Public Interface ISceneBackend
+  derivedClasses:
+  - FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene.ISceneBackend.CreateNode(System.UInt16)
+  commentId: M:FluentGpu.Scene.ISceneBackend.CreateNode(System.UInt16)
+  id: CreateNode(System.UInt16)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: CreateNode(ushort)
+  nameWithType: ISceneBackend.CreateNode(ushort)
+  fullName: FluentGpu.Scene.ISceneBackend.CreateNode(ushort)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreateNode
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: NodeHandle CreateNode(ushort elementTypeId)
+    parameters:
+    - id: elementTypeId
+      type: System.UInt16
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Function CreateNode(elementTypeId As UShort) As NodeHandle
+  overload: FluentGpu.Scene.ISceneBackend.CreateNode*
+  nameWithType.vb: ISceneBackend.CreateNode(UShort)
+  fullName.vb: FluentGpu.Scene.ISceneBackend.CreateNode(UShort)
+  name.vb: CreateNode(UShort)
+- uid: FluentGpu.Scene.ISceneBackend.FreeSubtree(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.FreeSubtree(FluentGpu.Foundation.NodeHandle)
+  id: FreeSubtree(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: FreeSubtree(NodeHandle)
+  nameWithType: ISceneBackend.FreeSubtree(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.FreeSubtree(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FreeSubtree
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: void FreeSubtree(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Sub FreeSubtree(node As NodeHandle)
+  overload: FluentGpu.Scene.ISceneBackend.FreeSubtree*
+- uid: FluentGpu.Scene.ISceneBackend.AppendChild(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.AppendChild(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle)
+  id: AppendChild(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: AppendChild(NodeHandle, NodeHandle)
+  nameWithType: ISceneBackend.AppendChild(NodeHandle, NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.AppendChild(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AppendChild
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: void AppendChild(NodeHandle parent, NodeHandle child)
+    parameters:
+    - id: parent
+      type: FluentGpu.Foundation.NodeHandle
+    - id: child
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Sub AppendChild(parent As NodeHandle, child As NodeHandle)
+  overload: FluentGpu.Scene.ISceneBackend.AppendChild*
+- uid: FluentGpu.Scene.ISceneBackend.Layout(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.Layout(FluentGpu.Foundation.NodeHandle)
+  id: Layout(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: Layout(NodeHandle)
+  nameWithType: ISceneBackend.Layout(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.Layout(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Layout
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: ref LayoutInput Layout(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Scene.LayoutInput
+    content.vb: ByRef Function Layout(node As NodeHandle) As LayoutInput
+  overload: FluentGpu.Scene.ISceneBackend.Layout*
+- uid: FluentGpu.Scene.ISceneBackend.Paint(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.Paint(FluentGpu.Foundation.NodeHandle)
+  id: Paint(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: Paint(NodeHandle)
+  nameWithType: ISceneBackend.Paint(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.Paint(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Paint
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: ref NodePaint Paint(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Scene.NodePaint
+    content.vb: ByRef Function Paint(node As NodeHandle) As NodePaint
+  overload: FluentGpu.Scene.ISceneBackend.Paint*
+- uid: FluentGpu.Scene.ISceneBackend.Interaction(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.Interaction(FluentGpu.Foundation.NodeHandle)
+  id: Interaction(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: Interaction(NodeHandle)
+  nameWithType: ISceneBackend.Interaction(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.Interaction(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Interaction
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: ref InteractionInfo Interaction(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Scene.InteractionInfo
+    content.vb: ByRef Function Interaction(node As NodeHandle) As InteractionInfo
+  overload: FluentGpu.Scene.ISceneBackend.Interaction*
+- uid: FluentGpu.Scene.ISceneBackend.SetClickHandler(FluentGpu.Foundation.NodeHandle,System.Action)
+  commentId: M:FluentGpu.Scene.ISceneBackend.SetClickHandler(FluentGpu.Foundation.NodeHandle,System.Action)
+  id: SetClickHandler(FluentGpu.Foundation.NodeHandle,System.Action)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: SetClickHandler(NodeHandle, Action?)
+  nameWithType: ISceneBackend.SetClickHandler(NodeHandle, Action?)
+  fullName: FluentGpu.Scene.ISceneBackend.SetClickHandler(FluentGpu.Foundation.NodeHandle, System.Action?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetClickHandler
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: void SetClickHandler(NodeHandle node, Action? handler)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: handler
+      type: System.Action
+    content.vb: Sub SetClickHandler(node As NodeHandle, handler As Action)
+  overload: FluentGpu.Scene.ISceneBackend.SetClickHandler*
+  nameWithType.vb: ISceneBackend.SetClickHandler(NodeHandle, Action)
+  fullName.vb: FluentGpu.Scene.ISceneBackend.SetClickHandler(FluentGpu.Foundation.NodeHandle, System.Action)
+  name.vb: SetClickHandler(NodeHandle, Action)
+- uid: FluentGpu.Scene.ISceneBackend.GetClickHandler(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.GetClickHandler(FluentGpu.Foundation.NodeHandle)
+  id: GetClickHandler(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: GetClickHandler(NodeHandle)
+  nameWithType: ISceneBackend.GetClickHandler(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.GetClickHandler(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GetClickHandler
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Action? GetClickHandler(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: System.Action
+    content.vb: Function GetClickHandler(node As NodeHandle) As Action
+  overload: FluentGpu.Scene.ISceneBackend.GetClickHandler*
+- uid: FluentGpu.Scene.ISceneBackend.Mark(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeFlags)
+  commentId: M:FluentGpu.Scene.ISceneBackend.Mark(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeFlags)
+  id: Mark(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.NodeFlags)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: Mark(NodeHandle, NodeFlags)
+  nameWithType: ISceneBackend.Mark(NodeHandle, NodeFlags)
+  fullName: FluentGpu.Scene.ISceneBackend.Mark(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.NodeFlags)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mark
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: void Mark(NodeHandle node, NodeFlags flags)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: flags
+      type: FluentGpu.Foundation.NodeFlags
+    content.vb: Sub Mark(node As NodeHandle, flags As NodeFlags)
+  overload: FluentGpu.Scene.ISceneBackend.Mark*
+- uid: FluentGpu.Scene.ISceneBackend.FirstChild(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.FirstChild(FluentGpu.Foundation.NodeHandle)
+  id: FirstChild(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: FirstChild(NodeHandle)
+  nameWithType: ISceneBackend.FirstChild(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.FirstChild(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FirstChild
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: NodeHandle FirstChild(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Function FirstChild(node As NodeHandle) As NodeHandle
+  overload: FluentGpu.Scene.ISceneBackend.FirstChild*
+- uid: FluentGpu.Scene.ISceneBackend.NextSibling(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.NextSibling(FluentGpu.Foundation.NodeHandle)
+  id: NextSibling(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: NextSibling(NodeHandle)
+  nameWithType: ISceneBackend.NextSibling(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.NextSibling(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextSibling
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: NodeHandle NextSibling(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Function NextSibling(node As NodeHandle) As NodeHandle
+  overload: FluentGpu.Scene.ISceneBackend.NextSibling*
+- uid: FluentGpu.Scene.ISceneBackend.ChildCount(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Scene.ISceneBackend.ChildCount(FluentGpu.Foundation.NodeHandle)
+  id: ChildCount(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Scene.ISceneBackend
+  langs:
+  - csharp
+  - vb
+  name: ChildCount(NodeHandle)
+  nameWithType: ISceneBackend.ChildCount(NodeHandle)
+  fullName: FluentGpu.Scene.ISceneBackend.ChildCount(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/SceneStore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChildCount
+    path: ../../src/FluentGpu.Scene/SceneStore.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: int ChildCount(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: System.Int32
+    content.vb: Function ChildCount(node As NodeHandle) As Integer
+  overload: FluentGpu.Scene.ISceneBackend.ChildCount*
+references:
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.ISceneBackend.CreateNode*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.CreateNode
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_CreateNode_System_UInt16_
+  name: CreateNode
+  nameWithType: ISceneBackend.CreateNode
+  fullName: FluentGpu.Scene.ISceneBackend.CreateNode
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Scene.ISceneBackend.FreeSubtree*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.FreeSubtree
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_FreeSubtree_FluentGpu_Foundation_NodeHandle_
+  name: FreeSubtree
+  nameWithType: ISceneBackend.FreeSubtree
+  fullName: FluentGpu.Scene.ISceneBackend.FreeSubtree
+- uid: FluentGpu.Scene.ISceneBackend.AppendChild*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.AppendChild
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_AppendChild_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_NodeHandle_
+  name: AppendChild
+  nameWithType: ISceneBackend.AppendChild
+  fullName: FluentGpu.Scene.ISceneBackend.AppendChild
+- uid: FluentGpu.Scene.ISceneBackend.Layout*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.Layout
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_Layout_FluentGpu_Foundation_NodeHandle_
+  name: Layout
+  nameWithType: ISceneBackend.Layout
+  fullName: FluentGpu.Scene.ISceneBackend.Layout
+- uid: FluentGpu.Scene.LayoutInput
+  commentId: T:FluentGpu.Scene.LayoutInput
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.LayoutInput.html
+  name: LayoutInput
+  nameWithType: LayoutInput
+  fullName: FluentGpu.Scene.LayoutInput
+- uid: FluentGpu.Scene.ISceneBackend.Paint*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.Paint
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_Paint_FluentGpu_Foundation_NodeHandle_
+  name: Paint
+  nameWithType: ISceneBackend.Paint
+  fullName: FluentGpu.Scene.ISceneBackend.Paint
+- uid: FluentGpu.Scene.NodePaint
+  commentId: T:FluentGpu.Scene.NodePaint
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.NodePaint.html
+  name: NodePaint
+  nameWithType: NodePaint
+  fullName: FluentGpu.Scene.NodePaint
+- uid: FluentGpu.Scene.ISceneBackend.Interaction*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.Interaction
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_Interaction_FluentGpu_Foundation_NodeHandle_
+  name: Interaction
+  nameWithType: ISceneBackend.Interaction
+  fullName: FluentGpu.Scene.ISceneBackend.Interaction
+- uid: FluentGpu.Scene.InteractionInfo
+  commentId: T:FluentGpu.Scene.InteractionInfo
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.InteractionInfo.html
+  name: InteractionInfo
+  nameWithType: InteractionInfo
+  fullName: FluentGpu.Scene.InteractionInfo
+- uid: FluentGpu.Scene.ISceneBackend.SetClickHandler*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.SetClickHandler
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_SetClickHandler_FluentGpu_Foundation_NodeHandle_System_Action_
+  name: SetClickHandler
+  nameWithType: ISceneBackend.SetClickHandler
+  fullName: FluentGpu.Scene.ISceneBackend.SetClickHandler
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Scene.ISceneBackend.GetClickHandler*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.GetClickHandler
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_GetClickHandler_FluentGpu_Foundation_NodeHandle_
+  name: GetClickHandler
+  nameWithType: ISceneBackend.GetClickHandler
+  fullName: FluentGpu.Scene.ISceneBackend.GetClickHandler
+- uid: FluentGpu.Scene.ISceneBackend.Mark*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.Mark
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_Mark_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_NodeFlags_
+  name: Mark
+  nameWithType: ISceneBackend.Mark
+  fullName: FluentGpu.Scene.ISceneBackend.Mark
+- uid: FluentGpu.Foundation.NodeFlags
+  commentId: T:FluentGpu.Foundation.NodeFlags
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeFlags.html
+  name: NodeFlags
+  nameWithType: NodeFlags
+  fullName: FluentGpu.Foundation.NodeFlags
+- uid: FluentGpu.Scene.ISceneBackend.FirstChild*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.FirstChild
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_FirstChild_FluentGpu_Foundation_NodeHandle_
+  name: FirstChild
+  nameWithType: ISceneBackend.FirstChild
+  fullName: FluentGpu.Scene.ISceneBackend.FirstChild
+- uid: FluentGpu.Scene.ISceneBackend.NextSibling*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.NextSibling
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_NextSibling_FluentGpu_Foundation_NodeHandle_
+  name: NextSibling
+  nameWithType: ISceneBackend.NextSibling
+  fullName: FluentGpu.Scene.ISceneBackend.NextSibling
+- uid: FluentGpu.Scene.ISceneBackend.ChildCount*
+  commentId: Overload:FluentGpu.Scene.ISceneBackend.ChildCount
+  href: FluentGpu.Scene.ISceneBackend.html#FluentGpu_Scene_ISceneBackend_ChildCount_FluentGpu_Foundation_NodeHandle_
+  name: ChildCount
+  nameWithType: ISceneBackend.ChildCount
+  fullName: FluentGpu.Scene.ISceneBackend.ChildCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer

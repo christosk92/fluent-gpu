@@ -1,0 +1,665 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  id: Edges4
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Edges4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.Edges4.All(System.Single)
+  - FluentGpu.Foundation.Edges4.Bottom
+  - FluentGpu.Foundation.Edges4.Horizontal
+  - FluentGpu.Foundation.Edges4.Left
+  - FluentGpu.Foundation.Edges4.Right
+  - FluentGpu.Foundation.Edges4.Top
+  - FluentGpu.Foundation.Edges4.Vertical
+  langs:
+  - csharp
+  - vb
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Edges4
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Per-edge thickness (margin/padding/border). [InlineArray]-shaped logically; struct of 4 floats here.
+  example: []
+  syntax:
+    content: 'public readonly record struct Edges4 : IEquatable<Edges4>'
+    content.vb: Public Structure Edges4 Implements IEquatable(Of Edges4)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.Edges4}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.Edges4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.Edges4.#ctor(System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Edges4(float, float, float, float)
+  nameWithType: Edges4.Edges4(float, float, float, float)
+  fullName: FluentGpu.Foundation.Edges4.Edges4(float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Per-edge thickness (margin/padding/border). [InlineArray]-shaped logically; struct of 4 floats here.
+  example: []
+  syntax:
+    content: public Edges4(float Left, float Top, float Right, float Bottom)
+    parameters:
+    - id: Left
+      type: System.Single
+    - id: Top
+      type: System.Single
+    - id: Right
+      type: System.Single
+    - id: Bottom
+      type: System.Single
+    content.vb: Public Sub New(Left As Single, Top As Single, Right As Single, Bottom As Single)
+  overload: FluentGpu.Foundation.Edges4.#ctor*
+  nameWithType.vb: Edges4.New(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.Edges4.New(Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.Edges4.Left
+  commentId: P:FluentGpu.Foundation.Edges4.Left
+  id: Left
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: Edges4.Left
+  fullName: FluentGpu.Foundation.Edges4.Left
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Left { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Left As Single
+  overload: FluentGpu.Foundation.Edges4.Left*
+- uid: FluentGpu.Foundation.Edges4.Top
+  commentId: P:FluentGpu.Foundation.Edges4.Top
+  id: Top
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: Edges4.Top
+  fullName: FluentGpu.Foundation.Edges4.Top
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Top { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Top As Single
+  overload: FluentGpu.Foundation.Edges4.Top*
+- uid: FluentGpu.Foundation.Edges4.Right
+  commentId: P:FluentGpu.Foundation.Edges4.Right
+  id: Right
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: Edges4.Right
+  fullName: FluentGpu.Foundation.Edges4.Right
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Right { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Right As Single
+  overload: FluentGpu.Foundation.Edges4.Right*
+- uid: FluentGpu.Foundation.Edges4.Bottom
+  commentId: P:FluentGpu.Foundation.Edges4.Bottom
+  id: Bottom
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: Edges4.Bottom
+  fullName: FluentGpu.Foundation.Edges4.Bottom
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Bottom { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Bottom As Single
+  overload: FluentGpu.Foundation.Edges4.Bottom*
+- uid: FluentGpu.Foundation.Edges4.All(System.Single)
+  commentId: M:FluentGpu.Foundation.Edges4.All(System.Single)
+  id: All(System.Single)
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: All(float)
+  nameWithType: Edges4.All(float)
+  fullName: FluentGpu.Foundation.Edges4.All(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: All
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Edges4 All(float v)
+    parameters:
+    - id: v
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared Function All(v As Single) As Edges4
+  overload: FluentGpu.Foundation.Edges4.All*
+  nameWithType.vb: Edges4.All(Single)
+  fullName.vb: FluentGpu.Foundation.Edges4.All(Single)
+  name.vb: All(Single)
+- uid: FluentGpu.Foundation.Edges4.Horizontal
+  commentId: P:FluentGpu.Foundation.Edges4.Horizontal
+  id: Horizontal
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Horizontal
+  nameWithType: Edges4.Horizontal
+  fullName: FluentGpu.Foundation.Edges4.Horizontal
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Horizontal
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Horizontal { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property Horizontal As Single
+  overload: FluentGpu.Foundation.Edges4.Horizontal*
+- uid: FluentGpu.Foundation.Edges4.Vertical
+  commentId: P:FluentGpu.Foundation.Edges4.Vertical
+  id: Vertical
+  parent: FluentGpu.Foundation.Edges4
+  langs:
+  - csharp
+  - vb
+  name: Vertical
+  nameWithType: Edges4.Vertical
+  fullName: FluentGpu.Foundation.Edges4.Vertical
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Vertical
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Vertical { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property Vertical As Single
+  overload: FluentGpu.Foundation.Edges4.Vertical*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.Edges4}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.Edges4}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Edges4>
+  nameWithType: IEquatable<Edges4>
+  fullName: System.IEquatable<FluentGpu.Foundation.Edges4>
+  nameWithType.vb: IEquatable(Of Edges4)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.Edges4)
+  name.vb: IEquatable(Of Edges4)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.Edges4
+    name: Edges4
+    href: FluentGpu.Foundation.Edges4.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.Edges4
+    name: Edges4
+    href: FluentGpu.Foundation.Edges4.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.Edges4.#ctor*
+  commentId: Overload:FluentGpu.Foundation.Edges4.#ctor
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4__ctor_System_Single_System_Single_System_Single_System_Single_
+  name: Edges4
+  nameWithType: Edges4.Edges4
+  fullName: FluentGpu.Foundation.Edges4.Edges4
+  nameWithType.vb: Edges4.New
+  fullName.vb: FluentGpu.Foundation.Edges4.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Edges4.Left*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Left
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Left
+  name: Left
+  nameWithType: Edges4.Left
+  fullName: FluentGpu.Foundation.Edges4.Left
+- uid: FluentGpu.Foundation.Edges4.Top*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Top
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Top
+  name: Top
+  nameWithType: Edges4.Top
+  fullName: FluentGpu.Foundation.Edges4.Top
+- uid: FluentGpu.Foundation.Edges4.Right*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Right
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Right
+  name: Right
+  nameWithType: Edges4.Right
+  fullName: FluentGpu.Foundation.Edges4.Right
+- uid: FluentGpu.Foundation.Edges4.Bottom*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Bottom
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Bottom
+  name: Bottom
+  nameWithType: Edges4.Bottom
+  fullName: FluentGpu.Foundation.Edges4.Bottom
+- uid: FluentGpu.Foundation.Edges4.All*
+  commentId: Overload:FluentGpu.Foundation.Edges4.All
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_All_System_Single_
+  name: All
+  nameWithType: Edges4.All
+  fullName: FluentGpu.Foundation.Edges4.All
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation.Edges4.Horizontal*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Horizontal
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Horizontal
+  name: Horizontal
+  nameWithType: Edges4.Horizontal
+  fullName: FluentGpu.Foundation.Edges4.Horizontal
+- uid: FluentGpu.Foundation.Edges4.Vertical*
+  commentId: Overload:FluentGpu.Foundation.Edges4.Vertical
+  href: FluentGpu.Foundation.Edges4.html#FluentGpu_Foundation_Edges4_Vertical
+  name: Vertical
+  nameWithType: Edges4.Vertical
+  fullName: FluentGpu.Foundation.Edges4.Vertical

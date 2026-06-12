@@ -1,0 +1,193 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.VisualKind
+  commentId: T:FluentGpu.Scene.VisualKind
+  id: VisualKind
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.VisualKind.Box
+  - FluentGpu.Scene.VisualKind.Image
+  - FluentGpu.Scene.VisualKind.None
+  - FluentGpu.Scene.VisualKind.PolylineStroke
+  - FluentGpu.Scene.VisualKind.Text
+  langs:
+  - csharp
+  - vb
+  name: VisualKind
+  nameWithType: VisualKind
+  fullName: FluentGpu.Scene.VisualKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VisualKind
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: 'public enum VisualKind : byte'
+    content.vb: Public Enum VisualKind As Byte
+- uid: FluentGpu.Scene.VisualKind.None
+  commentId: F:FluentGpu.Scene.VisualKind.None
+  id: None
+  parent: FluentGpu.Scene.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: VisualKind.None
+  fullName: FluentGpu.Scene.VisualKind.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Scene.VisualKind
+- uid: FluentGpu.Scene.VisualKind.Box
+  commentId: F:FluentGpu.Scene.VisualKind.Box
+  id: Box
+  parent: FluentGpu.Scene.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: Box
+  nameWithType: VisualKind.Box
+  fullName: FluentGpu.Scene.VisualKind.Box
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Box
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Box = 1
+    return:
+      type: FluentGpu.Scene.VisualKind
+- uid: FluentGpu.Scene.VisualKind.Text
+  commentId: F:FluentGpu.Scene.VisualKind.Text
+  id: Text
+  parent: FluentGpu.Scene.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: VisualKind.Text
+  fullName: FluentGpu.Scene.VisualKind.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Text = 2
+    return:
+      type: FluentGpu.Scene.VisualKind
+- uid: FluentGpu.Scene.VisualKind.Image
+  commentId: F:FluentGpu.Scene.VisualKind.Image
+  id: Image
+  parent: FluentGpu.Scene.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: Image
+  nameWithType: VisualKind.Image
+  fullName: FluentGpu.Scene.VisualKind.Image
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Image
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Image = 3
+    return:
+      type: FluentGpu.Scene.VisualKind
+- uid: FluentGpu.Scene.VisualKind.PolylineStroke
+  commentId: F:FluentGpu.Scene.VisualKind.PolylineStroke
+  id: PolylineStroke
+  parent: FluentGpu.Scene.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: PolylineStroke
+  nameWithType: VisualKind.PolylineStroke
+  fullName: FluentGpu.Scene.VisualKind.PolylineStroke
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PolylineStroke
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: PolylineStroke = 4
+    return:
+      type: FluentGpu.Scene.VisualKind
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.VisualKind
+  commentId: T:FluentGpu.Scene.VisualKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.VisualKind.html
+  name: VisualKind
+  nameWithType: VisualKind
+  fullName: FluentGpu.Scene.VisualKind

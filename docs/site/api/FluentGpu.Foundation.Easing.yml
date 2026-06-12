@@ -1,0 +1,470 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  id: Easing
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Easing.Back
+  - FluentGpu.Foundation.Easing.Bounce
+  - FluentGpu.Foundation.Easing.Cubic
+  - FluentGpu.Foundation.Easing.EaseIn
+  - FluentGpu.Foundation.Easing.EaseInOut
+  - FluentGpu.Foundation.Easing.EaseOut
+  - FluentGpu.Foundation.Easing.Elastic
+  - FluentGpu.Foundation.Easing.Expo
+  - FluentGpu.Foundation.Easing.FluentAccelerate
+  - FluentGpu.Foundation.Easing.FluentDecelerate
+  - FluentGpu.Foundation.Easing.FluentPopOpen
+  - FluentGpu.Foundation.Easing.FluentStandard
+  - FluentGpu.Foundation.Easing.Linear
+  - FluentGpu.Foundation.Easing.Quad
+  - FluentGpu.Foundation.Easing.Sine
+  langs:
+  - csharp
+  - vb
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Easing
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Easing curves — a FOUNDATIONAL motion primitive shared by every layer that animates: the animation-track engine,
+
+    declarative transitions, and the image placeholder→art cross-fade. Living in Foundation lets any subsystem (Dsl,
+
+    Scene, Render, Animation) spec a transition with the same vocabulary. Includes the real Fluent 2 / WinUI curves.
+  example: []
+  syntax:
+    content: 'public enum Easing : byte'
+    content.vb: Public Enum Easing As Byte
+- uid: FluentGpu.Foundation.Easing.Linear
+  commentId: F:FluentGpu.Foundation.Easing.Linear
+  id: Linear
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Linear
+  nameWithType: Easing.Linear
+  fullName: FluentGpu.Foundation.Easing.Linear
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Linear
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Linear = 0
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.EaseIn
+  commentId: F:FluentGpu.Foundation.Easing.EaseIn
+  id: EaseIn
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: EaseIn
+  nameWithType: Easing.EaseIn
+  fullName: FluentGpu.Foundation.Easing.EaseIn
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EaseIn
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: EaseIn = 1
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.EaseOut
+  commentId: F:FluentGpu.Foundation.Easing.EaseOut
+  id: EaseOut
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: EaseOut
+  nameWithType: Easing.EaseOut
+  fullName: FluentGpu.Foundation.Easing.EaseOut
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EaseOut
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: EaseOut = 2
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.EaseInOut
+  commentId: F:FluentGpu.Foundation.Easing.EaseInOut
+  id: EaseInOut
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: EaseInOut
+  nameWithType: Easing.EaseInOut
+  fullName: FluentGpu.Foundation.Easing.EaseInOut
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EaseInOut
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: EaseInOut = 3
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Sine
+  commentId: F:FluentGpu.Foundation.Easing.Sine
+  id: Sine
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Sine
+  nameWithType: Easing.Sine
+  fullName: FluentGpu.Foundation.Easing.Sine
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Sine
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Sine = 4
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Quad
+  commentId: F:FluentGpu.Foundation.Easing.Quad
+  id: Quad
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Quad
+  nameWithType: Easing.Quad
+  fullName: FluentGpu.Foundation.Easing.Quad
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Quad
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Quad = 5
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Cubic
+  commentId: F:FluentGpu.Foundation.Easing.Cubic
+  id: Cubic
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Cubic
+  nameWithType: Easing.Cubic
+  fullName: FluentGpu.Foundation.Easing.Cubic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cubic
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Cubic = 6
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Expo
+  commentId: F:FluentGpu.Foundation.Easing.Expo
+  id: Expo
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Expo
+  nameWithType: Easing.Expo
+  fullName: FluentGpu.Foundation.Easing.Expo
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Expo
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Expo = 7
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Back
+  commentId: F:FluentGpu.Foundation.Easing.Back
+  id: Back
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Back
+  nameWithType: Easing.Back
+  fullName: FluentGpu.Foundation.Easing.Back
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Back
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Back = 8
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Elastic
+  commentId: F:FluentGpu.Foundation.Easing.Elastic
+  id: Elastic
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Elastic
+  nameWithType: Easing.Elastic
+  fullName: FluentGpu.Foundation.Easing.Elastic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Elastic
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Elastic = 9
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.Bounce
+  commentId: F:FluentGpu.Foundation.Easing.Bounce
+  id: Bounce
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: Bounce
+  nameWithType: Easing.Bounce
+  fullName: FluentGpu.Foundation.Easing.Bounce
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bounce
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Bounce = 10
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.FluentStandard
+  commentId: F:FluentGpu.Foundation.Easing.FluentStandard
+  id: FluentStandard
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: FluentStandard
+  nameWithType: Easing.FluentStandard
+  fullName: FluentGpu.Foundation.Easing.FluentStandard
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FluentStandard
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FluentStandard = 11
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.FluentDecelerate
+  commentId: F:FluentGpu.Foundation.Easing.FluentDecelerate
+  id: FluentDecelerate
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: FluentDecelerate
+  nameWithType: Easing.FluentDecelerate
+  fullName: FluentGpu.Foundation.Easing.FluentDecelerate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FluentDecelerate
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FluentDecelerate = 12
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.FluentAccelerate
+  commentId: F:FluentGpu.Foundation.Easing.FluentAccelerate
+  id: FluentAccelerate
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: FluentAccelerate
+  nameWithType: Easing.FluentAccelerate
+  fullName: FluentGpu.Foundation.Easing.FluentAccelerate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FluentAccelerate
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FluentAccelerate = 13
+    return:
+      type: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.Easing.FluentPopOpen
+  commentId: F:FluentGpu.Foundation.Easing.FluentPopOpen
+  id: FluentPopOpen
+  parent: FluentGpu.Foundation.Easing
+  langs:
+  - csharp
+  - vb
+  name: FluentPopOpen
+  nameWithType: Easing.FluentPopOpen
+  fullName: FluentGpu.Foundation.Easing.FluentPopOpen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FluentPopOpen
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FluentPopOpen = 14
+    return:
+      type: FluentGpu.Foundation.Easing
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing

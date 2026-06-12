@@ -1,0 +1,1576 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ToggleButton.Style
+  commentId: T:FluentGpu.Controls.ToggleButton.Style
+  id: ToggleButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+  - FluentGpu.Controls.ToggleButton.Style.BorderWidth
+  - FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+  - FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+  - FluentGpu.Controls.ToggleButton.Style.CornerRadius
+  - FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+  - FluentGpu.Controls.ToggleButton.Style.FontSize
+  - FluentGpu.Controls.ToggleButton.Style.MinHeight
+  - FluentGpu.Controls.ToggleButton.Style.OffBackground
+  - FluentGpu.Controls.ToggleButton.Style.OffBorder
+  - FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+  - FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder
+  - FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+  - FluentGpu.Controls.ToggleButton.Style.OffForeground
+  - FluentGpu.Controls.ToggleButton.Style.OffHover
+  - FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+  - FluentGpu.Controls.ToggleButton.Style.OffPressed
+  - FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+  - FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+  - FluentGpu.Controls.ToggleButton.Style.OnBackground
+  - FluentGpu.Controls.ToggleButton.Style.OnBorder
+  - FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+  - FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+  - FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+  - FluentGpu.Controls.ToggleButton.Style.OnForeground
+  - FluentGpu.Controls.ToggleButton.Style.OnHover
+  - FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+  - FluentGpu.Controls.ToggleButton.Style.OnPressed
+  - FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+  - FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+  - FluentGpu.Controls.ToggleButton.Style.Padding
+  langs:
+  - csharp
+  - vb
+  name: ToggleButton.Style
+  nameWithType: ToggleButton.Style
+  fullName: FluentGpu.Controls.ToggleButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record ToggleButton.Style : IEquatable<ToggleButton.Style>'
+    content.vb: Public NotInheritable Class ToggleButton.Style Implements IEquatable(Of ToggleButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ToggleButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ToggleButton.Style.CornerRadius
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: ToggleButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.ToggleButton.Style.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.ToggleButton.Style.CornerRadius*
+- uid: FluentGpu.Controls.ToggleButton.Style.Padding
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.Padding
+  id: Padding
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: ToggleButton.Style.Padding
+  fullName: FluentGpu.Controls.ToggleButton.Style.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Controls.ToggleButton.Style.Padding*
+- uid: FluentGpu.Controls.ToggleButton.Style.MinHeight
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: ToggleButton.Style.MinHeight
+  fullName: FluentGpu.Controls.ToggleButton.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.ToggleButton.Style.MinHeight*
+- uid: FluentGpu.Controls.ToggleButton.Style.FontSize
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: ToggleButton.Style.FontSize
+  fullName: FluentGpu.Controls.ToggleButton.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.ToggleButton.Style.FontSize*
+- uid: FluentGpu.Controls.ToggleButton.Style.BorderWidth
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.BorderWidth
+  id: BorderWidth
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderWidth
+  nameWithType: ToggleButton.Style.BorderWidth
+  fullName: FluentGpu.Controls.ToggleButton.Style.BorderWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderWidth
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BorderWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BorderWidth As Single
+  overload: FluentGpu.Controls.ToggleButton.Style.BorderWidth*
+- uid: FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: ToggleButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI FocusVisualMargin = −3 (ToggleButton_themeresources.xaml:193); the engine draws the ring (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+  id: BrushTransitionMs
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BrushTransitionMs
+  nameWithType: ToggleButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BrushTransitionMs
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI ContentPresenter.BackgroundTransition = BrushTransition 83ms (lines 199-201): a logical state
+        flip (checked↔unchecked↔indeterminate) cross-fades the resting fill via the E3 sparse BrushAnim row instead
+        of snapping. WinUI scopes the transition to Background only; the engine also ramps the border diff —
+        a documented sub-100ms over-coverage. NaN = snap.
+  example: []
+  syntax:
+    content: public float BrushTransitionMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BrushTransitionMs As Single
+  overload: FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs*
+- uid: FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+  id: BackgroundSizing
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BackgroundSizing
+  nameWithType: ToggleButton.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackgroundSizing
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI BackgroundSizing: style default InnerBorderEdge (line 182). See
+        <xref href="FluentGpu.Controls.BackgroundSizing" data-throw-if-not-resolved="false"></xref> for the renderer-mapping note.
+  example: []
+  syntax:
+    content: public BackgroundSizing BackgroundSizing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+    content.vb: Public Property BackgroundSizing As BackgroundSizing
+  overload: FluentGpu.Controls.ToggleButton.Style.BackgroundSizing*
+- uid: FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+  id: CheckedBackgroundSizing
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: CheckedBackgroundSizing
+  nameWithType: ToggleButton.Style.CheckedBackgroundSizing
+  fullName: FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CheckedBackgroundSizing
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI flips to OuterBorderEdge while Checked/CheckedPointerOver/CheckedPressed
+        (ToggleButtonCheckedStateBackgroundSizing, lines 6 and 255-257/271-273/287-289).
+  example: []
+  syntax:
+    content: public BackgroundSizing CheckedBackgroundSizing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+    content.vb: Public Property CheckedBackgroundSizing As BackgroundSizing
+  overload: FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnBackground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnBackground
+  id: OnBackground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnBackground
+  nameWithType: ToggleButton.Style.OnBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnBackground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnBackground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnBackground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnHover
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnHover
+  id: OnHover
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnHover
+  nameWithType: ToggleButton.Style.OnHover
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnHover
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnHover As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnHover*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressed
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnPressed
+  id: OnPressed
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnPressed
+  nameWithType: ToggleButton.Style.OnPressed
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPressed
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnPressed As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnPressed*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+  id: OnDisabledBackground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnDisabledBackground
+  nameWithType: ToggleButton.Style.OnDisabledBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnDisabledBackground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnDisabledBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnDisabledBackground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnForeground
+  id: OnForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnForeground
+  nameWithType: ToggleButton.Style.OnForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+  id: OnPressedForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnPressedForeground
+  nameWithType: ToggleButton.Style.OnPressedForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPressedForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnPressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnPressedForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnPressedForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+  id: OnDisabledForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnDisabledForeground
+  nameWithType: ToggleButton.Style.OnDisabledForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnDisabledForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnDisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnDisabledForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnBorder
+  id: OnBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnBorder
+  nameWithType: ToggleButton.Style.OnBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OnBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OnBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OnBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+  id: OnHoverBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnHoverBorder
+  nameWithType: ToggleButton.Style.OnHoverBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnHoverBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OnHoverBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OnHoverBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OnHoverBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+  id: OnPressedBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnPressedBorder
+  nameWithType: ToggleButton.Style.OnPressedBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPressedBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OnPressedBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OnPressedBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OnPressedBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+  id: OnDisabledBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnDisabledBorder
+  nameWithType: ToggleButton.Style.OnDisabledBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnDisabledBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OnDisabledBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OnDisabledBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffBackground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffBackground
+  id: OffBackground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffBackground
+  nameWithType: ToggleButton.Style.OffBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffBackground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffBackground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffBackground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffHover
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffHover
+  id: OffHover
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffHover
+  nameWithType: ToggleButton.Style.OffHover
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffHover
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffHover As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffHover*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressed
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffPressed
+  id: OffPressed
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffPressed
+  nameWithType: ToggleButton.Style.OffPressed
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffPressed
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffPressed As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffPressed*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+  id: OffDisabledBackground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffDisabledBackground
+  nameWithType: ToggleButton.Style.OffDisabledBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffDisabledBackground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffDisabledBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffDisabledBackground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffForeground
+  id: OffForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffForeground
+  nameWithType: ToggleButton.Style.OffForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+  id: OffPressedForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffPressedForeground
+  nameWithType: ToggleButton.Style.OffPressedForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffPressedForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffPressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffPressedForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffPressedForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+  id: OffDisabledForeground
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffDisabledForeground
+  nameWithType: ToggleButton.Style.OffDisabledForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffDisabledForeground
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffDisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffDisabledForeground As ColorF
+  overload: FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffBorder
+  id: OffBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffBorder
+  nameWithType: ToggleButton.Style.OffBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OffBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OffBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OffBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+  id: OffHoverBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffHoverBorder
+  nameWithType: ToggleButton.Style.OffHoverBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffHoverBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OffHoverBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OffHoverBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OffHoverBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+  id: OffPressedBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffPressedBorder
+  nameWithType: ToggleButton.Style.OffPressedBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffPressedBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OffPressedBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OffPressedBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OffPressedBorder*
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder
+  commentId: P:FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder
+  id: OffDisabledBorder
+  parent: FluentGpu.Controls.ToggleButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffDisabledBorder
+  nameWithType: ToggleButton.Style.OffDisabledBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffDisabledBorder
+    path: ../../src/FluentGpu.Controls/ToggleButton.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? OffDisabledBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property OffDisabledBorder As GradientSpec?
+  overload: FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.ToggleButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ToggleButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ToggleButton.Style>
+  nameWithType: IEquatable<ToggleButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.ToggleButton.Style>
+  nameWithType.vb: IEquatable(Of ToggleButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ToggleButton.Style)
+  name.vb: IEquatable(Of ToggleButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ToggleButton
+    name: ToggleButton
+    href: FluentGpu.Controls.ToggleButton.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleButton.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ToggleButton
+    name: ToggleButton
+    href: FluentGpu.Controls.ToggleButton.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleButton.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.ToggleButton.Style.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.CornerRadius
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_CornerRadius
+  name: CornerRadius
+  nameWithType: ToggleButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.ToggleButton.Style.CornerRadius
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ToggleButton.Style.Padding*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.Padding
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_Padding
+  name: Padding
+  nameWithType: ToggleButton.Style.Padding
+  fullName: FluentGpu.Controls.ToggleButton.Style.Padding
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.ToggleButton.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.MinHeight
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_MinHeight
+  name: MinHeight
+  nameWithType: ToggleButton.Style.MinHeight
+  fullName: FluentGpu.Controls.ToggleButton.Style.MinHeight
+- uid: FluentGpu.Controls.ToggleButton.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.FontSize
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_FontSize
+  name: FontSize
+  nameWithType: ToggleButton.Style.FontSize
+  fullName: FluentGpu.Controls.ToggleButton.Style.FontSize
+- uid: FluentGpu.Controls.ToggleButton.Style.BorderWidth*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.BorderWidth
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_BorderWidth
+  name: BorderWidth
+  nameWithType: ToggleButton.Style.BorderWidth
+  fullName: FluentGpu.Controls.ToggleButton.Style.BorderWidth
+- uid: FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: ToggleButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.ToggleButton.Style.FocusVisualMargin
+- uid: FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_BrushTransitionMs
+  name: BrushTransitionMs
+  nameWithType: ToggleButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.ToggleButton.Style.BrushTransitionMs
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.BackgroundSizing.html
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing
+- uid: FluentGpu.Controls.ToggleButton.Style.BackgroundSizing*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_BackgroundSizing
+  name: BackgroundSizing
+  nameWithType: ToggleButton.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.ToggleButton.Style.BackgroundSizing
+- uid: FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_CheckedBackgroundSizing
+  name: CheckedBackgroundSizing
+  nameWithType: ToggleButton.Style.CheckedBackgroundSizing
+  fullName: FluentGpu.Controls.ToggleButton.Style.CheckedBackgroundSizing
+- uid: FluentGpu.Controls.ToggleButton.Style.OnBackground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnBackground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnBackground
+  name: OnBackground
+  nameWithType: ToggleButton.Style.OnBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnBackground
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Controls.ToggleButton.Style.OnHover*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnHover
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnHover
+  name: OnHover
+  nameWithType: ToggleButton.Style.OnHover
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnHover
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressed*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnPressed
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnPressed
+  name: OnPressed
+  nameWithType: ToggleButton.Style.OnPressed
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressed
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnDisabledBackground
+  name: OnDisabledBackground
+  nameWithType: ToggleButton.Style.OnDisabledBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledBackground
+- uid: FluentGpu.Controls.ToggleButton.Style.OnForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnForeground
+  name: OnForeground
+  nameWithType: ToggleButton.Style.OnForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressedForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnPressedForeground
+  name: OnPressedForeground
+  nameWithType: ToggleButton.Style.OnPressedForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressedForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnDisabledForeground
+  name: OnDisabledForeground
+  nameWithType: ToggleButton.Style.OnDisabledForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OnBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnBorder
+  name: OnBorder
+  nameWithType: ToggleButton.Style.OnBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnBorder
+- uid: System.Nullable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.Nullable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec?
+  nameWithType: GradientSpec?
+  fullName: FluentGpu.Foundation.GradientSpec?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.ToggleButton.Style.OnHoverBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnHoverBorder
+  name: OnHoverBorder
+  nameWithType: ToggleButton.Style.OnHoverBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnHoverBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OnPressedBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnPressedBorder
+  name: OnPressedBorder
+  nameWithType: ToggleButton.Style.OnPressedBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnPressedBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OnDisabledBorder
+  name: OnDisabledBorder
+  nameWithType: ToggleButton.Style.OnDisabledBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OnDisabledBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OffBackground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffBackground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffBackground
+  name: OffBackground
+  nameWithType: ToggleButton.Style.OffBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffBackground
+- uid: FluentGpu.Controls.ToggleButton.Style.OffHover*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffHover
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffHover
+  name: OffHover
+  nameWithType: ToggleButton.Style.OffHover
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffHover
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressed*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffPressed
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffPressed
+  name: OffPressed
+  nameWithType: ToggleButton.Style.OffPressed
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressed
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffDisabledBackground
+  name: OffDisabledBackground
+  nameWithType: ToggleButton.Style.OffDisabledBackground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledBackground
+- uid: FluentGpu.Controls.ToggleButton.Style.OffForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffForeground
+  name: OffForeground
+  nameWithType: ToggleButton.Style.OffForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressedForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffPressedForeground
+  name: OffPressedForeground
+  nameWithType: ToggleButton.Style.OffPressedForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressedForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffDisabledForeground
+  name: OffDisabledForeground
+  nameWithType: ToggleButton.Style.OffDisabledForeground
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledForeground
+- uid: FluentGpu.Controls.ToggleButton.Style.OffBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffBorder
+  name: OffBorder
+  nameWithType: ToggleButton.Style.OffBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OffHoverBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffHoverBorder
+  name: OffHoverBorder
+  nameWithType: ToggleButton.Style.OffHoverBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffHoverBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OffPressedBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffPressedBorder
+  name: OffPressedBorder
+  nameWithType: ToggleButton.Style.OffPressedBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffPressedBorder
+- uid: FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder*
+  commentId: Overload:FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder
+  href: FluentGpu.Controls.ToggleButton.Style.html#FluentGpu_Controls_ToggleButton_Style_OffDisabledBorder
+  name: OffDisabledBorder
+  nameWithType: ToggleButton.Style.OffDisabledBorder
+  fullName: FluentGpu.Controls.ToggleButton.Style.OffDisabledBorder

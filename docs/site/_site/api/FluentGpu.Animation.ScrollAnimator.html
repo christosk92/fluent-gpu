@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class ScrollAnimator | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class ScrollAnimator | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="Smooth scrolling (phase 7): eases each armed viewport&#39;s live offset toward its target (the WinUI inertial wheel feel), applies the content&#39;s -offset transform, re-realizes the virtual window at guard-band edges, and drives the auto-hiding scrollbar&#39;s WinUI &amp;quot;conscious&amp;quot; state machine. Only viewports actively scrolling/transitioning are ticked; zero work / zero alloc once everything settles ( == false). Conscious-scrollbar timing — verified against microsoft-ui-xaml controls\dev\CommonStyles\ScrollBar_themeresources.xaml: Expand: pointer dwells over the scrollbar lane for ScrollBarExpandBeginTime = 400ms (:188), then the thumb grows / track+buttons fade in over ScrollBarExpandDuration = 167ms (:173) with KeySpline 0,0,0,1 (:587) — .Contract (lane left, pointer still inside the viewport): begins after ScrollBarContractBeginTime = 500ms (:189), plays over ScrollBarContractDuration = 167ms (:176), same spline (:543).Indicator fades over ScrollBarOpacityChangeDuration = 83ms (:174), linear (the storyboards&#39; plain DoubleAnimation).Idle auto-hide after a SCROLL: ScrollBarContractDelay = 2s (:178; ScrollViewer&#39;s SeparatorContractDelay is the same 2s — ScrollViewer_themeresources.xaml) then the 83ms fade.ENGINE-DELIBERATE (documented deviation): when the pointer leaves the whole viewport and the bar was revealed by hover alone (no scroll since it appeared), it contracts immediately and retires after ContractBeginTime + ContractDuration (≈667ms) + the 83ms fade — WinUI would hold the expanded bar 500ms and the thin indicator the full 2s; an untouched hover-flash retiring early reads cleaner and keeps the frame loop idle. Scroll-revealed bars keep the WinUI 2s ContractDelay.While the pointer rests inside the viewport the thin indicator stays visible (the WinUI MouseIndicator hold); it never idle-hides under the pointer.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Animation_ScrollAnimator.md&amp;value=---%0Auid%3A%20FluentGpu.Animation.ScrollAnimator%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Animation.ScrollAnimator">
+
+
+
+  <h1 id="FluentGpu_Animation_ScrollAnimator" data-uid="FluentGpu.Animation.ScrollAnimator" class="text-break">
+Class ScrollAnimator  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L33"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Animation.html">Animation</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Animation.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>Smooth scrolling (phase 7): eases each armed viewport's live offset toward its target (the WinUI inertial wheel feel),
+applies the content's -offset transform, re-realizes the virtual window at guard-band edges, and drives the
+auto-hiding scrollbar's WinUI &quot;conscious&quot; state machine. Only viewports actively scrolling/transitioning are ticked;
+zero work / zero alloc once everything settles (<a class="xref" href="FluentGpu.Animation.ScrollAnimator.html#FluentGpu_Animation_ScrollAnimator_HasActive">HasActive</a> == false).</p>
+<p>Conscious-scrollbar timing — verified against microsoft-ui-xaml
+controls\dev\CommonStyles\ScrollBar_themeresources.xaml:</p>
+<ul><li>Expand: pointer dwells over the scrollbar lane for ScrollBarExpandBeginTime = 400ms (:188), then the thumb
+grows / track+buttons fade in over ScrollBarExpandDuration = 167ms (:173) with KeySpline 0,0,0,1 (:587) —
+<a class="xref" href="FluentGpu.Foundation.Easing.html#FluentGpu_Foundation_Easing_FluentPopOpen">FluentPopOpen</a>.</li><li>Contract (lane left, pointer still inside the viewport): begins after ScrollBarContractBeginTime = 500ms
+(:189), plays over ScrollBarContractDuration = 167ms (:176), same spline (:543).</li><li>Indicator fades over ScrollBarOpacityChangeDuration = 83ms (:174), linear (the storyboards' plain
+DoubleAnimation).</li><li>Idle auto-hide after a SCROLL: ScrollBarContractDelay = 2s (:178; ScrollViewer's SeparatorContractDelay is
+the same 2s — ScrollViewer_themeresources.xaml) then the 83ms fade.</li><li>ENGINE-DELIBERATE (documented deviation): when the pointer leaves the whole viewport and the bar was revealed
+by hover alone (no scroll since it appeared), it contracts immediately and retires after
+ContractBeginTime + ContractDuration (≈667ms) + the 83ms fade — WinUI would hold the expanded bar 500ms and the
+thin indicator the full 2s; an untouched hover-flash retiring early reads cleaner and keeps the frame loop idle.
+Scroll-revealed bars keep the WinUI 2s ContractDelay.</li><li>While the pointer rests inside the viewport the thin indicator stays visible (the WinUI MouseIndicator
+hold); it never idle-hides under the pointer.</li></ul>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class ScrollAnimator</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">ScrollAnimator</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator__ctor_" data-uid="FluentGpu.Animation.ScrollAnimator.#ctor*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator__ctor_FluentGpu_Scene_SceneStore_" data-uid="FluentGpu.Animation.ScrollAnimator.#ctor(FluentGpu.Scene.SceneStore)">
+  ScrollAnimator(SceneStore)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ScrollAnimator(SceneStore scene)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>scene</code> <a class="xref" href="FluentGpu.Scene.SceneStore.html">SceneStore</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_ContractBeginMs" data-uid="FluentGpu.Animation.ScrollAnimator.ContractBeginMs">
+  ContractBeginMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L37"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ContractBeginMs = 500</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_ExpandBeginMs" data-uid="FluentGpu.Animation.ScrollAnimator.ExpandBeginMs">
+  ExpandBeginMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L36"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ExpandBeginMs = 400</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_ExpandContractMs" data-uid="FluentGpu.Animation.ScrollAnimator.ExpandContractMs">
+  ExpandContractMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L38"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ExpandContractMs = 167</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_FadeMs" data-uid="FluentGpu.Animation.ScrollAnimator.FadeMs">
+  FadeMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L39"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float FadeMs = 83</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_IdleHideMs" data-uid="FluentGpu.Animation.ScrollAnimator.IdleHideMs">
+  IdleHideMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L40"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float IdleHideMs = 2000</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_LeaveHideMs" data-uid="FluentGpu.Animation.ScrollAnimator.LeaveHideMs">
+  LeaveHideMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L42"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Engine-deliberate hover-flash retire delay (see class remarks): contract-begin + contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float LeaveHideMs = 667</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_ActiveCount_" data-uid="FluentGpu.Animation.ScrollAnimator.ActiveCount*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_ActiveCount" data-uid="FluentGpu.Animation.ScrollAnimator.ActiveCount">
+  ActiveCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Viewports currently scrolling/transitioning (the armed set) — O(1) census.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int ActiveCount { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_ConsciousStateCount_" data-uid="FluentGpu.Animation.ScrollAnimator.ConsciousStateCount*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_ConsciousStateCount" data-uid="FluentGpu.Animation.ScrollAnimator.ConsciousStateCount">
+  ConsciousStateCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L69"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Viewports retaining a conscious-scrollbar timer row (survives drops until fully hidden) — O(1) census.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int ConsciousStateCount { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_HasActive_" data-uid="FluentGpu.Animation.ScrollAnimator.HasActive*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_HasActive" data-uid="FluentGpu.Animation.ScrollAnimator.HasActive">
+  HasActive
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L65"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool HasActive { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_RequestRerender_" data-uid="FluentGpu.Animation.ScrollAnimator.RequestRerender*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_RequestRerender" data-uid="FluentGpu.Animation.ScrollAnimator.RequestRerender">
+  RequestRerender
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L64"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action RequestRerender { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_Arm_" data-uid="FluentGpu.Animation.ScrollAnimator.Arm*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_Arm_FluentGpu_Foundation_NodeHandle_" data-uid="FluentGpu.Animation.ScrollAnimator.Arm(FluentGpu.Foundation.NodeHandle)">
+  Arm(NodeHandle)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L71"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Arm(NodeHandle n)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>n</code> <a class="xref" href="FluentGpu.Foundation.NodeHandle.html">NodeHandle</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_Hover_" data-uid="FluentGpu.Animation.ScrollAnimator.Hover*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_Hover_FluentGpu_Foundation_NodeHandle_System_Boolean_" data-uid="FluentGpu.Animation.ScrollAnimator.Hover(FluentGpu.Foundation.NodeHandle,System.Boolean)">
+  Hover(NodeHandle, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Reveal a viewport's scrollbar (pointer is over the scrollable area) and reset its idle timer so it
+stays up while hovered; lane hover arms the WinUI 400ms-delayed expand.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Hover(NodeHandle n, bool overScrollbar)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>n</code> <a class="xref" href="FluentGpu.Foundation.NodeHandle.html">NodeHandle</a></dt>
+    <dd></dd>
+    <dt><code>overScrollbar</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_Leave_" data-uid="FluentGpu.Animation.ScrollAnimator.Leave*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_Leave_FluentGpu_Foundation_NodeHandle_" data-uid="FluentGpu.Animation.ScrollAnimator.Leave(FluentGpu.Foundation.NodeHandle)">
+  Leave(NodeHandle)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L89"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Leave(NodeHandle n)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>n</code> <a class="xref" href="FluentGpu.Foundation.NodeHandle.html">NodeHandle</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Animation_ScrollAnimator_Tick_" data-uid="FluentGpu.Animation.ScrollAnimator.Tick*"></a>
+
+  <h3 id="FluentGpu_Animation_ScrollAnimator_Tick_System_Single_" data-uid="FluentGpu.Animation.ScrollAnimator.Tick(System.Single)">
+  Tick(float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Animation/ScrollAnimator.cs/#L98"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Tick(float dtMs)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>dtMs</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

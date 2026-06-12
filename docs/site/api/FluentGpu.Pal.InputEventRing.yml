@@ -1,0 +1,450 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.InputEventRing
+  commentId: T:FluentGpu.Pal.InputEventRing
+  id: InputEventRing
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.InputEventRing.Clear
+  - FluentGpu.Pal.InputEventRing.Drain
+  - FluentGpu.Pal.InputEventRing.Write(FluentGpu.Pal.InputEvent@)
+  langs:
+  - csharp
+  - vb
+  name: InputEventRing
+  nameWithType: InputEventRing
+  fullName: FluentGpu.Pal.InputEventRing
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InputEventRing
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Drained by the host each frame; the window writes POD events into it (move-coalesced).
+  example: []
+  syntax:
+    content: public sealed class InputEventRing
+    content.vb: Public NotInheritable Class InputEventRing
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Pal.InputEventRing.Write(FluentGpu.Pal.InputEvent@)
+  commentId: M:FluentGpu.Pal.InputEventRing.Write(FluentGpu.Pal.InputEvent@)
+  id: Write(FluentGpu.Pal.InputEvent@)
+  parent: FluentGpu.Pal.InputEventRing
+  langs:
+  - csharp
+  - vb
+  name: Write(in InputEvent)
+  nameWithType: InputEventRing.Write(in InputEvent)
+  fullName: FluentGpu.Pal.InputEventRing.Write(in FluentGpu.Pal.InputEvent)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Write
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public void Write(in InputEvent e)
+    parameters:
+    - id: e
+      type: FluentGpu.Pal.InputEvent
+    content.vb: Public Sub Write(e As InputEvent)
+  overload: FluentGpu.Pal.InputEventRing.Write*
+  nameWithType.vb: InputEventRing.Write(InputEvent)
+  fullName.vb: FluentGpu.Pal.InputEventRing.Write(FluentGpu.Pal.InputEvent)
+  name.vb: Write(InputEvent)
+- uid: FluentGpu.Pal.InputEventRing.Drain
+  commentId: M:FluentGpu.Pal.InputEventRing.Drain
+  id: Drain
+  parent: FluentGpu.Pal.InputEventRing
+  langs:
+  - csharp
+  - vb
+  name: Drain()
+  nameWithType: InputEventRing.Drain()
+  fullName: FluentGpu.Pal.InputEventRing.Drain()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Drain
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public ReadOnlySpan<InputEvent> Drain()
+    return:
+      type: System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+    content.vb: Public Function Drain() As ReadOnlySpan(Of InputEvent)
+  overload: FluentGpu.Pal.InputEventRing.Drain*
+- uid: FluentGpu.Pal.InputEventRing.Clear
+  commentId: M:FluentGpu.Pal.InputEventRing.Clear
+  id: Clear
+  parent: FluentGpu.Pal.InputEventRing
+  langs:
+  - csharp
+  - vb
+  name: Clear()
+  nameWithType: InputEventRing.Clear()
+  fullName: FluentGpu.Pal.InputEventRing.Clear()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clear
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public void Clear()
+    content.vb: Public Sub Clear()
+  overload: FluentGpu.Pal.InputEventRing.Clear*
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.InputEventRing.Write*
+  commentId: Overload:FluentGpu.Pal.InputEventRing.Write
+  href: FluentGpu.Pal.InputEventRing.html#FluentGpu_Pal_InputEventRing_Write_FluentGpu_Pal_InputEvent__
+  name: Write
+  nameWithType: InputEventRing.Write
+  fullName: FluentGpu.Pal.InputEventRing.Write
+- uid: FluentGpu.Pal.InputEvent
+  commentId: T:FluentGpu.Pal.InputEvent
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.InputEvent.html
+  name: InputEvent
+  nameWithType: InputEvent
+  fullName: FluentGpu.Pal.InputEvent
+- uid: FluentGpu.Pal.InputEventRing.Drain*
+  commentId: Overload:FluentGpu.Pal.InputEventRing.Drain
+  href: FluentGpu.Pal.InputEventRing.html#FluentGpu_Pal_InputEventRing_Drain
+  name: Drain
+  nameWithType: InputEventRing.Drain
+  fullName: FluentGpu.Pal.InputEventRing.Drain
+- uid: System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Pal.InputEvent}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<InputEvent>
+  nameWithType: ReadOnlySpan<InputEvent>
+  fullName: System.ReadOnlySpan<FluentGpu.Pal.InputEvent>
+  nameWithType.vb: ReadOnlySpan(Of InputEvent)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Pal.InputEvent)
+  name.vb: ReadOnlySpan(Of InputEvent)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    href: FluentGpu.Pal.InputEvent.html
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Pal.InputEventRing.Clear*
+  commentId: Overload:FluentGpu.Pal.InputEventRing.Clear
+  href: FluentGpu.Pal.InputEventRing.html#FluentGpu_Pal_InputEventRing_Clear
+  name: Clear
+  nameWithType: InputEventRing.Clear
+  fullName: FluentGpu.Pal.InputEventRing.Clear

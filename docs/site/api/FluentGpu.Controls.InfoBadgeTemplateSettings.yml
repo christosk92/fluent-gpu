@@ -1,0 +1,980 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBadgeTemplateSettings
+  id: InfoBadgeTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor(System.Byte,System.Single,System.Single,System.Single,FluentGpu.Foundation.Edges4)
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginSymbolIcon
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.For(System.Int32,System.Boolean)
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeFull
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizePadded
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeSymbol
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.MaxHeight
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.MinDim
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+  - FluentGpu.Controls.InfoBadgeTemplateSettings.ValueFontSize
+  langs:
+  - csharp
+  - vb
+  name: InfoBadgeTemplateSettings
+  nameWithType: InfoBadgeTemplateSettings
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBadgeTemplateSettings
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the <xref href="FluentGpu.Controls.InfoBadge" data-throw-if-not-resolved="false"></xref> — the typed-record convention modelled on
+
+    <xref href="FluentGpu.Controls.ExpanderTemplateSettings" data-throw-if-not-resolved="false"></xref>. Mirrors WinUI's generated <code>InfoBadgeTemplateSettings</code>: the display kind
+
+    (Dot vs Value vs Icon, derived from Value/Icon exactly like <code>OnDisplayKindPropertiesChanged</code>), the resolved badge
+
+    height/width and the pill corner radius (= ActualHeight/2, per <code>OnSizeChanged</code>), and the per-kind content margin.
+  example: []
+  syntax:
+    content: 'public readonly record struct InfoBadgeTemplateSettings : IEquatable<InfoBadgeTemplateSettings>'
+    content.vb: Public Structure InfoBadgeTemplateSettings Implements IEquatable(Of InfoBadgeTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.InfoBadgeTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor(System.Byte,System.Single,System.Single,System.Single,FluentGpu.Foundation.Edges4)
+  commentId: M:FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor(System.Byte,System.Single,System.Single,System.Single,FluentGpu.Foundation.Edges4)
+  id: '#ctor(System.Byte,System.Single,System.Single,System.Single,FluentGpu.Foundation.Edges4)'
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: InfoBadgeTemplateSettings(byte, float, float, float, Edges4)
+  nameWithType: InfoBadgeTemplateSettings.InfoBadgeTemplateSettings(byte, float, float, float, Edges4)
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.InfoBadgeTemplateSettings(byte, float, float, float, FluentGpu.Foundation.Edges4)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the <xref href="FluentGpu.Controls.InfoBadge" data-throw-if-not-resolved="false"></xref> — the typed-record convention modelled on
+
+    <xref href="FluentGpu.Controls.ExpanderTemplateSettings" data-throw-if-not-resolved="false"></xref>. Mirrors WinUI's generated <code>InfoBadgeTemplateSettings</code>: the display kind
+
+    (Dot vs Value vs Icon, derived from Value/Icon exactly like <code>OnDisplayKindPropertiesChanged</code>), the resolved badge
+
+    height/width and the pill corner radius (= ActualHeight/2, per <code>OnSizeChanged</code>), and the per-kind content margin.
+  example: []
+  syntax:
+    content: public InfoBadgeTemplateSettings(byte Kind, float Height, float MinWidth, float CornerRadius, Edges4 ContentMargin)
+    parameters:
+    - id: Kind
+      type: System.Byte
+      description: 0 = Dot, 1 = Value (text), 2 = Icon (font/glyph).
+    - id: Height
+      type: System.Single
+      description: 'Resolved badge height: 4 for a Dot, otherwise clamped to MaxHeight = 16.'
+    - id: MinWidth
+      type: System.Single
+      description: 'Resolved minimum width: 4 for a Dot, otherwise 16 (MeasureOverride squares a too-narrow badge).'
+    - id: CornerRadius
+      type: System.Single
+      description: InfoBadgeCornerRadius = Height / 2 — a full pill (2 for a Dot, 8 for a 16-tall badge).
+    - id: ContentMargin
+      type: FluentGpu.Foundation.Edges4
+      description: >-
+        Per-kind inner margin: Value/FontIcon = 4,0,4,2; a non-font IconElement = 4,4,4,4
+            (IconInfoBadgeIconMargin, InfoBadge_themeresources.xaml:16).
+    content.vb: Public Sub New(Kind As Byte, Height As Single, MinWidth As Single, CornerRadius As Single, ContentMargin As Edges4)
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor*
+  nameWithType.vb: InfoBadgeTemplateSettings.New(Byte, Single, Single, Single, Edges4)
+  fullName.vb: FluentGpu.Controls.InfoBadgeTemplateSettings.New(Byte, Single, Single, Single, FluentGpu.Foundation.Edges4)
+  name.vb: New(Byte, Single, Single, Single, Edges4)
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+  commentId: P:FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+  id: Kind
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: InfoBadgeTemplateSettings.Kind
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 0 = Dot, 1 = Value (text), 2 = Icon (font/glyph).
+  example: []
+  syntax:
+    content: public byte Kind { get; init; }
+    parameters: []
+    return:
+      type: System.Byte
+    content.vb: Public Property Kind As Byte
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.Kind*
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+  commentId: P:FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+  id: Height
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: InfoBadgeTemplateSettings.Height
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Resolved badge height: 4 for a Dot, otherwise clamped to MaxHeight = 16.'
+  example: []
+  syntax:
+    content: public float Height { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Height As Single
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.Height*
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+  commentId: P:FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: InfoBadgeTemplateSettings.MinWidth
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Resolved minimum width: 4 for a Dot, otherwise 16 (MeasureOverride squares a too-narrow badge).'
+  example: []
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth*
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+  commentId: P:FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: InfoBadgeTemplateSettings.CornerRadius
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: InfoBadgeCornerRadius = Height / 2 — a full pill (2 for a Dot, 8 for a 16-tall badge).
+  example: []
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius*
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+  commentId: P:FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+  id: ContentMargin
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContentMargin
+  nameWithType: InfoBadgeTemplateSettings.ContentMargin
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentMargin
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Per-kind inner margin: Value/FontIcon = 4,0,4,2; a non-font IconElement = 4,4,4,4
+        (IconInfoBadgeIconMargin, InfoBadge_themeresources.xaml:16).
+  example: []
+  syntax:
+    content: public Edges4 ContentMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property ContentMargin As Edges4
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin*
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.MinDim
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.MinDim
+  id: MinDim
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: MinDim
+  nameWithType: InfoBadgeTemplateSettings.MinDim
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.MinDim
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinDim
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MinDim = 4
+    return:
+      type: System.Single
+    content.vb: Public Const MinDim As Single = 4
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.MaxHeight
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: InfoBadgeTemplateSettings.MaxHeight
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.MaxHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MaxHeight = 16
+    return:
+      type: System.Single
+    content.vb: Public Const MaxHeight As Single = 16
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizePadded
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizePadded
+  id: IconGlyphSizePadded
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: IconGlyphSizePadded
+  nameWithType: InfoBadgeTemplateSettings.IconGlyphSizePadded
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizePadded
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconGlyphSizePadded
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI renders the icon inside a <code>Viewbox</code> (IconPresenter, VerticalAlignment=Stretch) that fills
+        the RootGrid content box, so the glyph is scaled to the box HEIGHT, not a fixed font size. The box height is
+        16 minus the RootGrid Padding AND the IconPresenter margin: the FontIcon state margin is 4,0,4,2
+        (IconInfoBadgeFontIconMargin, InfoBadge_themeresources.xaml:14, applied at :71) — the Attention/Informational
+        Icon STYLES additionally pad the root <code>0,4,0,2</code> (:96/:108) → 16 − (4+2) − (0+2) = 8 tall, while an unpadded
+        FontIcon keeps 16 − (0+2) = 14; the non-font 'Icon' state (SymbolIconSource) margin is 4,4,4,4
+        (IconInfoBadgeIconMargin, :16, applied at :65) → 16 − (4+4) = 8. We reproduce that by driving the glyph
+        <code>Size</code> off these per-state target heights.
+  example: []
+  syntax:
+    content: public const float IconGlyphSizePadded = 8
+    return:
+      type: System.Single
+    content.vb: Public Const IconGlyphSizePadded As Single = 8
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeFull
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeFull
+  id: IconGlyphSizeFull
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: IconGlyphSizeFull
+  nameWithType: InfoBadgeTemplateSettings.IconGlyphSizeFull
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeFull
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconGlyphSizeFull
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float IconGlyphSizeFull = 14
+    return:
+      type: System.Single
+    content.vb: Public Const IconGlyphSizeFull As Single = 14
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeSymbol
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeSymbol
+  id: IconGlyphSizeSymbol
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: IconGlyphSizeSymbol
+  nameWithType: InfoBadgeTemplateSettings.IconGlyphSizeSymbol
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.IconGlyphSizeSymbol
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconGlyphSizeSymbol
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float IconGlyphSizeSymbol = 8
+    return:
+      type: System.Single
+    content.vb: Public Const IconGlyphSizeSymbol As Single = 8
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.ValueFontSize
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.ValueFontSize
+  id: ValueFontSize
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ValueFontSize
+  nameWithType: InfoBadgeTemplateSettings.ValueFontSize
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.ValueFontSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValueFontSize
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ValueFontSize = 11
+    return:
+      type: System.Single
+    content.vb: Public Const ValueFontSize As Single = 11
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon
+  id: ContentMarginValueOrFontIcon
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContentMarginValueOrFontIcon
+  nameWithType: InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentMarginValueOrFontIcon
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static readonly Edges4 ContentMarginValueOrFontIcon
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared ReadOnly ContentMarginValueOrFontIcon As Edges4
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginSymbolIcon
+  commentId: F:FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginSymbolIcon
+  id: ContentMarginSymbolIcon
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ContentMarginSymbolIcon
+  nameWithType: InfoBadgeTemplateSettings.ContentMarginSymbolIcon
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMarginSymbolIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentMarginSymbolIcon
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static readonly Edges4 ContentMarginSymbolIcon
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Shared ReadOnly ContentMarginSymbolIcon As Edges4
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.For(System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Controls.InfoBadgeTemplateSettings.For(System.Int32,System.Boolean)
+  id: For(System.Int32,System.Boolean)
+  parent: FluentGpu.Controls.InfoBadgeTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(int, bool)
+  nameWithType: InfoBadgeTemplateSettings.For(int, bool)
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.For(int, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Pure factory — recomputes the kind/geometry from Value &amp; whether an icon glyph is present, exactly
+        like WinUI's <code>OnDisplayKindPropertiesChanged</code> (Value &gt;= 0 wins, then Icon, else Dot) and <code>OnSizeChanged</code>
+        (corner = height/2). Called once at reconcile time, never in a hot bind thunk.
+  example: []
+  syntax:
+    content: public static InfoBadgeTemplateSettings For(int value, bool hasIcon)
+    parameters:
+    - id: value
+      type: System.Int32
+    - id: hasIcon
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.InfoBadgeTemplateSettings
+    content.vb: Public Shared Function [For](value As Integer, hasIcon As Boolean) As InfoBadgeTemplateSettings
+  overload: FluentGpu.Controls.InfoBadgeTemplateSettings.For*
+  nameWithType.vb: InfoBadgeTemplateSettings.For(Integer, Boolean)
+  fullName.vb: FluentGpu.Controls.InfoBadgeTemplateSettings.For(Integer, Boolean)
+  name.vb: For(Integer, Boolean)
+references:
+- uid: FluentGpu.Controls.InfoBadge
+  commentId: T:FluentGpu.Controls.InfoBadge
+  href: FluentGpu.Controls.InfoBadge.html
+  name: InfoBadge
+  nameWithType: InfoBadge
+  fullName: FluentGpu.Controls.InfoBadge
+- uid: FluentGpu.Controls.ExpanderTemplateSettings
+  commentId: T:FluentGpu.Controls.ExpanderTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ExpanderTemplateSettings.html
+  name: ExpanderTemplateSettings
+  nameWithType: ExpanderTemplateSettings
+  fullName: FluentGpu.Controls.ExpanderTemplateSettings
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.InfoBadgeTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.InfoBadgeTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<InfoBadgeTemplateSettings>
+  nameWithType: IEquatable<InfoBadgeTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.InfoBadgeTemplateSettings>
+  nameWithType.vb: IEquatable(Of InfoBadgeTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.InfoBadgeTemplateSettings)
+  name.vb: IEquatable(Of InfoBadgeTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+    name: InfoBadgeTemplateSettings
+    href: FluentGpu.Controls.InfoBadgeTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+    name: InfoBadgeTemplateSettings
+    href: FluentGpu.Controls.InfoBadgeTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.#ctor
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings__ctor_System_Byte_System_Single_System_Single_System_Single_FluentGpu_Foundation_Edges4_
+  name: InfoBadgeTemplateSettings
+  nameWithType: InfoBadgeTemplateSettings.InfoBadgeTemplateSettings
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.InfoBadgeTemplateSettings
+  nameWithType.vb: InfoBadgeTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.InfoBadgeTemplateSettings.New
+  name.vb: New
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.Kind*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_Kind
+  name: Kind
+  nameWithType: InfoBadgeTemplateSettings.Kind
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.Kind
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.Height*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_Height
+  name: Height
+  nameWithType: InfoBadgeTemplateSettings.Height
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.Height
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_MinWidth
+  name: MinWidth
+  nameWithType: InfoBadgeTemplateSettings.MinWidth
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.MinWidth
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_CornerRadius
+  name: CornerRadius
+  nameWithType: InfoBadgeTemplateSettings.CornerRadius
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.CornerRadius
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_ContentMargin
+  name: ContentMargin
+  nameWithType: InfoBadgeTemplateSettings.ContentMargin
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.ContentMargin
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.InfoBadgeTemplateSettings.For
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html#FluentGpu_Controls_InfoBadgeTemplateSettings_For_System_Int32_System_Boolean_
+  name: For
+  nameWithType: InfoBadgeTemplateSettings.For
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings.For
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBadgeTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeTemplateSettings.html
+  name: InfoBadgeTemplateSettings
+  nameWithType: InfoBadgeTemplateSettings
+  fullName: FluentGpu.Controls.InfoBadgeTemplateSettings

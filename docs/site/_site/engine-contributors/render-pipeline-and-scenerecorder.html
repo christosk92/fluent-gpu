@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Render pipeline and SceneRecorder | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Render pipeline and SceneRecorder | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/render-pipeline-and-scenerecorder.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="render-pipeline-and-scenerecorder">Render pipeline and SceneRecorder</h1>
+
+<p><a href="index.html">← Contributing to the engine</a> · <a href="reconciler-and-scene.html">Reconciler and the retained scene</a> · <a href="layout-internals.html">Layout internals</a></p>
+<p>This page is for engine contributors changing the <strong>record half</strong> of the frame — phase 8 and its neighbours. It tells you
+how <a href="../../../src/FluentGpu.Render/SceneRecorder.cs"><code>SceneRecorder</code></a> walks the retained scene into a <code>DrawList</code>, what the
+DrawList POD stream is (and who owns its opcode shapes), the rounded-rect SDF pipeline rules that every <code>BoxEl</code> rasterizes
+through, the color/coordinate contract those pipelines honour, why a bound transform re-records without relayout, how
+record stays allocation-free, and exactly how to verify a change in the headless harness.</p>
+<p>It does <strong>not</strong> restate opcode payload shapes or the color/DPI contract — those are owned by the design corpus and linked
+inline. The rule on this page is the same one the whole corpus runs on: <strong>define an artifact in its owner; reference it
+everywhere else.</strong> A <code>DrawList</code> opcode's fields live in <a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>;
+the byte container that holds them lives in <a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>; this page is
+the working view of the code that fills the container.</p>
+<blockquote>
+<p><strong>Where to change what.</strong> Record walk + DrawList emit: <code>src/FluentGpu.Render/SceneRecorder.cs</code>. The POD command stream</p>
+<ul>
+<li><code>DrawOp</code> enum + <code>DrawList</code> writer: <code>src/FluentGpu.Render/DrawList.cs</code>. The rounded-rect / gradient SDF pipelines and
+their HLSL: <code>src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs</code> and <code>GradientPipeline.cs</code>. The headless decoder you assert
+against: <code>src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs</code>. The harness that drives them: <code>src/FluentGpu.VerticalSlice/Program.cs</code>.</li>
+</ul>
+</blockquote>
+<hr>
+<h2 id="the-frame-loop-phases-612">The frame loop, phases 6–12</h2>
+<p>The record pass does not stand alone — it consumes a scene the earlier phases have already settled. The full single-UI-thread
+loop is owned by <a href="../../guide/rendering-and-performance.md">rendering-and-performance.md</a> (the as-built map) and the
+<a href="frame-pipeline-and-verification-harness.html">frame pipeline page</a>; the slice that ends in pixels is phases 6–12, driven
+from <code>AppHost.RunFrame</code> → <code>Paint</code>:</p>
+<pre><code>6    layout          full Run only on first-frame/resize/DPI/root change; else SCOPED relayout of dirty subtrees
+6.5  layout effects  UseLayoutEffect (Bounds now valid) — seeds animations on nodes
+7    animation        AnimEngine.Tick: writes Transform / Opacity / presented-size / FLIP projections / smooth scroll
+8    record           SceneRecorder.Record walks the scene → DrawList (clips, world transforms, glyphs, images)
+10   submit           DrawList bytes → GPU command list (RHI SubmitDrawList)
+11   present          swapchain commit
+12   passive effects  UseEffect
+</code></pre>
+<p>Two facts about phase 8 set everything below:</p>
+<ul>
+<li><strong>Record reads only the settled scene.</strong> By the time <code>Record</code> runs, layout has filled every node's <code>Bounds</code> and animation
+has written every node's <code>LocalTransform</code>/<code>Opacity</code>. The recorder <em>derives</em> world transforms top-down during the walk; it
+never mutates the scene. That is why it is safe for the render thread to own this phase reading an immutable snapshot in
+the hardened topology (<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> §2, threading row) — record is pure over its input.</li>
+<li><strong>Animation writes Transform/Paint, never Layout.</strong> A frame whose only change was a bound transform/opacity (or an
+animation tick) sets <code>TransformDirty</code>/<code>PaintDirty</code> only, so phases 6/6.5 do no work and the frame is &quot;record-only&quot;. This
+is the compositor bypass (see <a href="#compositor-bypass-re-record-without-relayout">below</a>).</li>
+</ul>
+<hr>
+<h2 id="scenerecorder-walking-the-scene-into-a-drawlist">SceneRecorder: walking the scene into a DrawList</h2>
+<p><code>SceneRecorder.Record</code> resets the <code>DrawList</code>, then recurses the tree from <code>scene.Root</code> via the private <code>Walk</code>, carrying the
+<strong>parent world transform</strong>, the <strong>cumulative opacity</strong>, the <strong>active device-space clip rect</strong>, and a <strong>painter-order depth</strong>
+down each branch. It composites <em>like a browser</em>: every node's own geometry is emitted in <strong>local space</strong> with a world
+transform and a cumulative alpha, so a transform/opacity change re-records cheap matrices without re-recording content.</p>
+<h3 id="world-transform-parent--translatepos--localtransform-about-the-origin">World transform: <code>parent ∘ translate(pos) ∘ LocalTransform</code> about the origin</h3>
+<p>The core composition in <code>Walk</code> (<code>SceneRecorder.cs</code>) is:</p>
+<pre><code class="lang-csharp">// node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node's transform-origin)
+Affine2D world = parentWorld.Multiply(Affine2D.Translation(b.X, b.Y));
+float ox = b.W * p.OriginX, oy = b.H * p.OriginY;        // transform origin (default centre)
+if (!p.LocalTransform.IsIdentity)
+    world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
+</code></pre>
+<p><code>Affine2D</code> is the engine's 2×3 affine (<a href="../../../src/FluentGpu.Foundation/Geometry.cs"><code>src/FluentGpu.Foundation/Geometry.cs</code></a>).
+Its <code>Multiply</code> is <code>this ∘ other</code> (apply <code>other</code> first), and <code>TransformBounds</code> gives the device-space AABB of a local rect —
+the recorder uses it for every cull/clip test. <code>Bounds</code> are <strong>node-LOCAL</strong> (<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>
+§2, color/coordinate row), and <code>LocalTransform</code> maps local→parent, which is exactly why the recorder rebuilds <code>world</code> on the
+way down instead of reading a stored absolute matrix.</p>
+<p>On top of the local transform, <code>Walk</code> also composes (in order): an <strong>interaction-driven scale</strong> (hover/press thumb-grow,
+eased by the node's own or nearest interactive ancestor's progress via <code>TryResolveInteractionProgress</code>), a <strong><code>CounterScaled</code></strong>
+inverse for children that opted out of an ancestor's animated scale (Framer-Motion-style projection), and a <strong>child-group
+shift</strong> (<code>ChildShiftX/Y</code>, the <code>SizeMode.Reflow</code> trailing-anchor slide) applied only to the children's world, never the node's
+own fill.</p>
+<h3 id="opacity-cumulative-with-flat-opacity-groups-for-overlap">Opacity: cumulative, with flat opacity groups for overlap</h3>
+<p>Opacity multiplies down the tree: <code>opacity = parentOpacity * ResolveOpacity(...)</code>. <code>ResolveOpacity</code> eases hover/press opacity
+targets when present, else returns the resting <code>Opacity</code>. The default model is <strong>per-node multiplied alpha</strong> (WinUI's plain
+<code>Visual.Opacity</code>).</p>
+<p>When a node sets <code>OpacityGroup</code> and its cumulative alpha is <code>&lt; 1</code>, the recorder instead emits a <strong>flat opacity layer</strong>: the
+subtree renders at full alpha into a pooled offscreen and composites <strong>once</strong> at the group alpha, so overlapping children
+(a fading dialog plate + its buttons) don't double-blend. <code>Walk</code> pushes the layer, resets local <code>opacity</code> to <code>1f</code> for
+everything inside, and pops it last:</p>
+<pre><code class="lang-csharp">bool isOpacityGroup = p.OpacityGroup &amp;&amp; opacity &lt; 0.999f &amp;&amp; deviceBounds.Overlaps(clip);
+if (isOpacityGroup) { dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key); opacity = 1f; }
+</code></pre>
+<p>This is <code>LayerKind.Opacity</code> on the shared <code>PushLayer</code>/<code>PopLayer</code> opcode pair (acrylic is <code>LayerKind.Acrylic</code> on the same
+pair) — see <code>DrawList.cs</code> and the layer-semantics note in <a href="../../../design/subsystems/gpu-renderer.md">gpu-renderer.md §7.1</a>.</p>
+<h3 id="clip-intersection-scissor-plus-a-tier-2-rounded-clamp">Clip intersection: scissor, plus a tier-2 rounded clamp</h3>
+<p>A clipping node intersects the active clip with its own device bounds (and with an authored <code>ClipRect</code> if present) and
+pushes the result. The recorder always feeds the RHI a clip rect that is <strong>already intersected with the enclosing clip</strong>, so
+the backend just sets the scissor — it never has to walk a clip stack:</p>
+<pre><code class="lang-csharp">if ((flags &amp; NodeFlags.ClipsToBounds) != 0)  childClip = childClip.Intersect(deviceBounds);
+if (!p.ClipRect.IsInfinite)                   childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
+</code></pre>
+<p>When the clipping node has rounded corners, <code>Walk</code> emits <code>PushClipRounded</code> instead of <code>PushClip</code>: the scissor still clamps
+rectangularly, <em>and</em> RoundRect-pipeline primitives additionally clamp to the node's rounded-box SDF. The honest scope is
+documented on <code>ClipCmd</code> — the rounded clamp covers the rounded-rect pipeline only; glyphs, images, gradients, arcs, and
+polylines still clip by scissor. That caveat is real; don't paper over it when you touch the clip path.</p>
+<h3 id="emit-order-within-a-node-subtle-load-bearing">Emit order within a node (subtle, load-bearing)</h3>
+<p><code>Walk</code> emits a node's primitives in a deliberate order, each justified by a real bug. Keep it:</p>
+<ol>
+<li><strong>Shadow</strong> — <em>before</em> this node pushes its own clip (a <code>ClipsToBounds</code> surface would otherwise scissor its own soft halo
+away), still bounded by the parent clip.</li>
+<li><strong>Arc</strong> (ProgressRing) when present.</li>
+<li><strong>Push clip</strong> (scissor, or tier-2 rounded).</li>
+<li><strong>Acrylic layer</strong> (<code>PushLayer</code> with the AcrylicBrush recipe) when present.</li>
+<li><strong>Self visual</strong> — the <code>VisualKind</code> switch (<code>Box</code> fill, <code>Text</code> glyph run + decorations + selection/caret, <code>Image</code>,
+<code>PolylineStroke</code>). The <strong>border ring is deferred</strong> here (its parameters are stashed in <code>pending*</code> locals).</li>
+<li><strong>Children</strong> (unpinned first, then <code>StickyPinned</code> children, so sticky content paints over what scrolls beneath it).</li>
+<li><strong>Border ring</strong> — <em>after</em> descendants, so a control border stays visible over filled child regions.</li>
+<li><strong>Pop acrylic / pop clip.</strong></li>
+<li><strong>Focus ring</strong> — <em>after the clip pops</em>, because the WinUI focus visual lives outside the bounds (<code>FocusVisualMargin -3</code>),
+so a <code>ClipsToBounds</code> field must not scissor away its own ring. Ancestor clips still apply.</li>
+<li><strong>Scrollbar overlay</strong> — after the content clip pops, so the expanded gutter/thumb aren't chopped at the viewport edge.</li>
+<li><strong>Pop opacity group</strong> (last).</li>
+</ol>
+<p><code>Record</code> also handles three things outside the main walk: <strong>exit orphans</strong> (removed subtrees kept alive for their exit
+animation, drawn behind the live tree at their frozen parent origin), the <strong>drag ghost</strong> (re-walked last in an <em>infinite</em>
+clip so a row dragged out of a clipped list keeps drawing above everything), and <strong>windowed-popup skip-roots</strong> (<code>RecordSubtree</code>
+re-origins one subtree into its own popup swapchain's DrawList; the subtree stays in the one <code>SceneStore</code>).</p>
+<hr>
+<h2 id="the-drawlist-pod-command-stream">The DrawList POD command stream</h2>
+<p>The DrawList is a flat byte stream: <code>[int op][POD payload]</code> per command, with a <strong>parallel <code>ulong[]</code> of sort keys</strong> (one per
+command). <code>DrawList.Record</code> resets, <code>WriteOp</code> writes the 4-byte opcode, <code>WritePayload&lt;T&gt;</code> blits the unmanaged payload, and
+<code>PushSort</code> appends the painter-order key:</p>
+<pre><code class="lang-csharp">public ReadOnlySpan&lt;byte&gt;  Bytes     =&gt; _buf.AsSpan(0, _len);
+public ReadOnlySpan&lt;ulong&gt; SortKeys  =&gt; _sort.AsSpan(0, _sortLen);
+public int CommandCount { get; private set; }
+public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; }
+</code></pre>
+<p>The <code>DrawOp</code> enum and the per-opcode writer methods (<code>FillRoundRect</code>, <code>DrawGlyphRun</code>, <code>PushClip</code>/<code>PushClipRounded</code>/<code>PopClip</code>,
+<code>DrawImage</code>, <code>StrokeRoundRect</code>/<code>StrokeRoundRectDashed</code>, <code>Shadow</code>, <code>GradientRect</code>, <code>GradientStroke</code>, <code>PushLayer</code>/<code>PushOpacityLayer</code>/<code>PopLayer</code>,
+<code>Arc</code>, <code>PolylineStroke</code>, <code>TabShape</code>) all live in <code>DrawList.cs</code>. Each payload is a <code>readonly record struct</code> of POD only —
+geometry, colors, the <strong>composited world <code>Affine2D</code></strong>, the cumulative <code>Opacity</code>, and <strong>handle/index references</strong> (e.g.
+<code>StringId Text</code>, <code>int ImageId</code>), never a GC pointer. That POD-and-handles-only rule is what lets the threading seam <code>memcpy</code>
+a clean span across threads.</p>
+<h3 id="ownership-where-opcode-shapes-are-defined-do-not-restate-them-here">Ownership: where opcode shapes are defined (do not restate them here)</h3>
+<p>This is the single most important canon rule for this page. The split is exact:</p>
+<ul>
+<li><a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code> §4</a> owns the <strong>encoding framework</strong> — the command header,
+the render-private byte arenas, the parallel <code>ulong[]</code> sort arena, and the <strong><code>DrawOp</code> enum list registration</strong>.</li>
+<li><a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code> §3</a> owns each opcode's <strong>payload struct shape</strong> and the
+<strong>64-bit SortKey layout</strong> and the <strong>rasterization</strong> of each lane.</li>
+</ul>
+<p>So when you add or change an opcode: register the enum entry in <code>scene-memory.md</code>, define/own its payload shape + raster in
+<code>gpu-renderer.md</code>, then implement the writer in <code>DrawList.cs</code> and the emit in <code>SceneRecorder.cs</code>. <strong>Never</strong> paste a payload's
+field list into this page or any working doc — that restatement is exactly the drift the canon gate and reviews catch. (Note
+the production stream in this repo uses a 4-byte <code>int</code> opcode tag, not the design's 8-byte <code>DrawCmd</code> header; the design's
+SortKey bit-packing is the render-thread batcher's contract — the slice's parallel <code>ulong[]</code> is the same idea at slice scope.)</p>
+<hr>
+<h2 id="the-rounded-rect-sdf-pipeline-rules">The rounded-rect SDF pipeline rules</h2>
+<p>Every <code>BoxEl</code> rasterizes through <strong>one</strong> SDF rounded-rect pipeline: <a href="../../../src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs"><code>RoundRectPipeline</code></a>
+for solid, <a href="../../../src/FluentGpu.Rhi.D3D12/GradientPipeline.cs"><code>GradientPipeline</code></a> for gradient. A unit quad is drawn
+instanced; the VS positions it and the PS evaluates the analytic rounded-box SDF with single-pass derivative AA. Three rules
+govern how the recorder feeds them — each is the fix for a real, named bug; <strong>do not regress them</strong> (they are also the rules
+in <a href="../../guide/control-fidelity.md">control-fidelity.md §1</a>):</p>
+<h3 id="1-borders-are-a-hollow-sdf-ring-never-a-filled-donut">1. Borders are a hollow SDF ring, never a filled donut</h3>
+<p><code>SceneRecorder</code> always <code>FillRoundRect</code>s the <strong>full</strong> interior with the fill, then draws <strong>one</strong> ring on top of the fill edge
+(<code>EmitBorderRing</code> solid / <code>EmitGradientBorderRing</code> gradient). The old &quot;fill the whole box with the border colour, then overlay
+an inset interior&quot; donut <strong>bled the border through any translucent fill</strong> (the unchecked-CheckBox grey-chip). A hollow ring
+composites correctly over <em>any</em> fill opacity. If you ever see a border-coloured fill, the donut is back.</p>
+<h3 id="2-the-stroke-rings-corner-radius-shrinks-by-bw2-insetcorners">2. The stroke ring's corner radius shrinks by <code>bw/2</code> (<code>InsetCorners</code>)</h3>
+<p>A centerline SDF stroke insets the rect by <code>bw/2</code>; to keep the band <strong>concentric</strong> with the box's rounded corner, the corner
+radius must shrink by the <strong>same</strong> <code>bw/2</code>, else 1px corners read rough/uneven. That is <code>EmitBorderRing</code> + the private
+<code>InsetCorners</code> helper in <code>SceneRecorder.cs</code>:</p>
+<pre><code class="lang-csharp">private static CornerRadius4 InsetCorners(in CornerRadius4 c, float d)
+    =&gt; new(MathF.Max(0f, c.TopLeft - d), MathF.Max(0f, c.TopRight - d), MathF.Max(0f, c.BottomRight - d), MathF.Max(0f, c.BottomLeft - d));
+
+private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, in Affine2D world, float opacity, ulong key)
+    =&gt; dl.StrokeRoundRect(new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw)),
+                          InsetCorners(corners, bw * 0.5f), border, bw, world, opacity, key);
+</code></pre>
+<p>The same <code>InsetCorners</code> discipline governs the dual focus ring (<code>EmitFocusRing</code>): the 2px primary band and the 1px secondary
+band each inset by half their thickness, and the corner radius <strong>grows</strong> with the focus-rect expansion so the arcs stay
+concentric with the control corner.</p>
+<h3 id="3-the-sdf-quad-is-inflated-by-stroke2--aa-margin-in-the-vertex-shader">3. The SDF quad is inflated by <code>stroke/2 + AA margin</code> in the vertex shader</h3>
+<p>A bare rect quad clips the outer half of the stroke band plus its AA feather — invisible on straight edges, but it slices the
+square quad corner through a rounded band, so corners and pill-ends read rough. Both pipelines inflate the quad outward in
+<code>VSMain</code>:</p>
+<pre><code class="lang-hlsl">// RoundRectPipeline.cs / GradientPipeline.cs — VSMain
+float margin = (it.stroke &gt; 0.0 ? it.stroke * 0.5 : 0.0) + 2.0;   // contain the outline's outer half + the AA feather
+float2 dir = corner * 2.0 - 1.0;                                  // -1 at corner 0, +1 at corner 1 (outward)
+float2 lp  = it.pos + corner * it.size + dir * margin;            // inflated local-space point
+</code></pre>
+<p>The PS then evaluates <code>SdRoundBox</code>, derives <code>aa = fwidth(d)</code>, and computes coverage. For a <strong>fill</strong> it is a crisp ~1px linear
+AA (<code>cov = clamp(0.5 - d/fw)</code>); for a <strong>ring</strong> it is a band centred on the edge (<code>cov = clamp(0.5 - (abs(d) - stroke*0.5)/fw)</code>)
+— the same formula the gradient PS swaps in when <code>Stroke &gt; 0</code>. The single <code>RoundRectPipeline</code> PS also carries the E9 variants
+in the same shader: dashed outlines (perimeter arc-length modulation), the checkerboard fill (ColorPicker alpha lane), the
+WinUI selected-tab shape, and the <strong>tier-2 rounded-clip coverage clamp</strong> (<code>i.clip.z &gt; 0</code> multiplies coverage by the clipping
+rounded-box SDF). One PS family, variants selected per-instance/per-batch — not a per-fragment runtime tree.</p>
+<p>The <code>InsetCorners</code>-and-inflation pair is also why <code>EmitGradientBorderRing</code> draws its band on a rect inset by <code>bw*0.5</code> with
+<code>InsetCorners(corners, bw*0.5)</code> and a stroke width of <code>bw</code>: the gradient elevation border (WinUI <code>ControlElevationBorderBrush</code>)
+sits <em>inside</em> the bounds, exactly like the solid ring.</p>
+<hr>
+<h2 id="the-color-coordinate-and-dpi-contract">The color, coordinate, and DPI contract</h2>
+<p>The canonical color/coordinate/DPI contract is owned by <a href="../../../design/SPEC-INDEX.md">foundations.md P8 + architecture-spec §1.3 bet 4</a>
+(see the <code>SPEC-INDEX.md</code> color row). This page only notes <strong>where the code honours it</strong> so you don't break it by accident:</p>
+<ul>
+<li><strong>Buffer / RTV.</strong> Both pipelines create the PSO with <code>RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM</code> (<code>BuildPipeline</code> in
+<code>RoundRectPipeline.cs</code> / <code>GradientPipeline.cs</code>). The canon is a <code>BGRA8_UNORM</code> buffer with a <code>BGRA8_UNORM_SRGB</code> RTV so the
+hardware does the sRGB encode on write and blend/resolve happen in linear — the swapchain/RTV wiring is the backend's job;
+the pipeline only fixes the buffer format here.</li>
+<li><strong>Premultiplied, linear blend.</strong> The blend state is <code>SrcBlend = ONE</code>, <code>DestBlend = INV_SRC_ALPHA</code> (premultiplied SrcOver),
+and the PS returns premultiplied output: <code>float aOut = baseCol.a * cov * opacity; return float4(baseCol.rgb * aOut, aOut);</code>.
+Every cross-fade the recorder computes (hover/press ramps, implicit <code>BrushTransition</code>, gradient stop morphs) goes through
+<code>ColorF.LerpLinear</code> — <strong>linear-light, alpha-weighted</strong> premultiplied blend (<code>Geometry.cs</code>), not a straight sRGB lerp. That
+weighting is load-bearing: a translucent white card fill cross-fading to an opaque dark solid must stay dark mid-flight; a
+straight per-channel lerp would flash bright half-transparent grey. <code>ColorF</code> itself stores <strong>straight-alpha sRGB</strong> (the
+authoring/dedup convention); linearization happens at blend/shader.</li>
+<li><strong>Coordinates / DPI.</strong> <code>Bounds</code> are node-LOCAL; the recorder builds device-space world transforms during the walk. DPI is
+applied once at the layout→world step (the canon), not in the recorder. The VS maps the inflated local point through the
+2×3 affine, then to NDC: <code>ndc = float2(world.x/gViewport.x*2-1, 1 - world.y/gViewport.y*2)</code>.</li>
+<li><strong>Text gamma is the deliberate exception.</strong> Glyph coverage blends with the text-gamma exception the canon calls out; the
+rounded-rect/gradient lanes are plain linear-premultiplied.</li>
+<li><strong>Acrylic.</strong> In-app acrylic math is portable and headless-verifiable in <a href="../../../src/FluentGpu.Render/AcrylicBackdropMath.cs"><code>AcrylicBackdropMath</code></a>
+(<code>DownsampleFactor</code>, <code>SnapshotRegion</code>, <code>BucketDim</code>, the fixed <code>KernelSigma = 7.5</code> separable kernel taps) so the GPU leaf's
+blur is a thin consumer; the COM/HLSL stays render-thread-confined. The recorder emits the frosted surface via the
+acrylic <code>PushLayer</code> (the WinUI <code>AcrylicBrush</code> recipe fields: tint / fallback / tint-opacity / blur-sigma / noise / luminosity).</li>
+</ul>
+<hr>
+<h2 id="compositor-bypass-re-record-without-relayout">Compositor bypass: re-record without relayout</h2>
+<p>This is the payoff of the local-space + world-transform model, and it is the thing you must not accidentally defeat when you
+edit the recorder. The three dirty axes (<code>NodeFlags</code>, owned by <a href="../../../design/subsystems/scene-memory.md">scene-memory.md §2.3</a>)
+decide how cheap a frame is:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Set by</th>
+<th>Frame does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TransformDirty</code> / <code>PaintDirty</code></td>
+<td>a <code>Transform</code>/<code>Opacity</code>/<code>Fill</code> bind, an animation tick, hover/press</td>
+<td><strong>re-record only</strong> — no layout, no reconcile</td>
+</tr>
+<tr>
+<td><code>LayoutDirty</code></td>
+<td>a component re-render, a width/height/text bind, a structural change</td>
+<td>scoped relayout of the affected subtree</td>
+</tr>
+<tr>
+<td>(structural)</td>
+<td>mount/remove/reorder in reconcile</td>
+<td>reconcile that subtree + scoped relayout</td>
+</tr>
+</tbody>
+</table>
+<p>Because the recorder emits content in local space and re-derives world matrices on the walk, a frame whose only change is a
+bound transform/opacity write does <strong>nothing</strong> in phases 3/6 — it skips render, reconcile, and layout, and just re-records
+(<code>FrameStats.Rendered == false</code>). High-frequency scalars (slider scrub, scroll offset, hover glow) should be bound to a
+<code>Transform</code>/<code>Opacity</code>, never pushed through <code>setState</code>. The app-side mental model and the <code>Prop.Of(() =&gt; Affine2D.Translation(...))</code>
+pattern are in <a href="../../guide/rendering-and-performance.md">rendering-and-performance.md → compositor bypass</a>; from the engine
+side, the contract you preserve is: <strong>the recorder must read the freshest <code>LocalTransform</code>/<code>Opacity</code>/<code>Fill</code> every frame and
+must not require any layout state that a transform-only tick failed to update.</strong> It already does — keep it that way.</p>
+<hr>
+<h2 id="zero-alloc-in-record">Zero-alloc in record</h2>
+<p>Phases 6–13 must not allocate managed memory on a steady frame (<code>FrameStats.HotPhaseAllocBytes == 0</code>, asserted by the
+harness — the near-zero-allocation guarantee; see the <a href="../app-authors/performance-rules-and-zero-alloc-boundaries.html">performance-rules page</a>
+and the <code>SPEC-INDEX.md</code> &quot;0 managed allocations in frame phases 6–13&quot; binding). The record path holds to this by construction:</p>
+<ul>
+<li><strong><code>Walk</code> is a <code>static</code> recursion over <code>ref</code>-returning column accessors</strong> (<code>scene.Bounds(node)</code>, <code>scene.Paint(node)</code>,
+<code>scene.Flags(node)</code>) — it reads SoA rows by <code>ref</code>, boxing nothing.</li>
+<li><strong>Per-node scratch is <code>stackalloc</code>/stack locals.</strong> <code>Record</code> builds the skip-root span with <code>stackalloc NodeHandle[...]</code>;
+<code>RemapAbsoluteAxis</code> uses <code>stackalloc float[4]</code>/<code>ColorF[4]</code>; gradient stop blends (<code>LerpStops</code>) interpolate four stack locals,
+never a new <code>GradientSpec</code>. The comments call this out explicitly (&quot;stack-only, zero alloc&quot;).</li>
+<li><strong>The <code>DrawList</code> reuses its buffers.</strong> <code>Reset</code> keeps capacity; the byte buffer is <code>GC.AllocateUninitializedArray&lt;byte&gt;</code>
+(grown by doubling only when a frame genuinely overflows it — a warmup cost, not a steady-state one); <code>MemoryMarshal.Write</code>
+blits each POD payload in place. In the full engine these are render-thread-private, ≥3-deep <code>ChunkedArena</code>s
+(<a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a> DrawList-arenas row); the slice grows one contiguous buffer, same contract.</li>
+<li><strong>The leaf upload ring is persistently mapped.</strong> <code>RoundRectPipeline</code>/<code>GradientPipeline</code> keep an upload-heap structured
+buffer mapped once (<code>_mapped</code>) and memcpy instances into it per frame — no per-frame GPU allocation.</li>
+</ul>
+<p>The practical rule when you edit the recorder: <strong>do not <code>new</code>/box/LINQ inside <code>Walk</code> or any <code>Emit*</code> helper.</strong> If you need a
+buffer, <code>stackalloc</code> it or stash it in a pre-sized field. A regression here is caught — see below.</p>
+<hr>
+<h2 id="verifying-balance-counters-per-opcode-logs-the-named-checks">Verifying: balance counters, per-opcode logs, the named checks</h2>
+<p>Verify with the <strong>headless harness</strong>, never by eye. <a href="../../../src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs"><code>HeadlessGpuDevice</code></a>
+is the structural test backend: <code>SubmitDrawList</code> decodes the POD stream into reusable, inspectable command lists (capacity
+retained → no per-frame alloc after warmup) and tracks push/pop balances. The workflow in the harness
+(<code>src/FluentGpu.VerticalSlice/Program.cs</code>) is: build a scene, <code>SceneRecorder.Record(scene, dl)</code>, <code>dev.SubmitDrawList(dl.Bytes, dl.SortKeys, frame)</code>,
+then assert on the decoded lists.</p>
+<h3 id="per-opcode-command-logs">Per-opcode command logs</h3>
+<p>The device exposes one list per opcode family — assert <em>what was drawn</em> without pixels:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>What it logs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LastRects</code></td>
+<td><code>FillRoundRectCmd</code>s (solid fills)</td>
+</tr>
+<tr>
+<td><code>LastStrokes</code> / <code>LastStrokeClipDepths</code></td>
+<td><code>DrawRoundRectStrokeCmd</code>s (focus rings / borders) + the clip-stack depth at each stroke</td>
+</tr>
+<tr>
+<td><code>LastGlyphs</code></td>
+<td><code>DrawGlyphRunCmd</code>s</td>
+</tr>
+<tr>
+<td><code>LastClips</code></td>
+<td>every <code>PushClip</code> (rounded clips visible via <code>ClipCmd.CornerRadius</code>/<code>RoundedRect</code>)</td>
+</tr>
+<tr>
+<td><code>LastImages</code></td>
+<td><code>DrawImageCmd</code>s (<code>Ready==0</code> ⇒ placeholder)</td>
+</tr>
+<tr>
+<td><code>LastShadows</code>, <code>LastArcs</code>, <code>LastPolylines</code></td>
+<td>shadows, ProgressRing arcs, stroked polylines</td>
+</tr>
+<tr>
+<td><code>LastGradients</code>, <code>LastGradientStrokes</code></td>
+<td>gradient fills, gradient elevation-border bands</td>
+</tr>
+<tr>
+<td><code>LastLayers</code></td>
+<td><code>PushLayerCmd</code>s — acrylic (Kind 0) <strong>and</strong> flat opacity groups (Kind 1, <code>GroupAlpha</code>)</td>
+</tr>
+<tr>
+<td><code>LastTabShapes</code></td>
+<td>WinUI selected-tab shapes</td>
+</tr>
+</tbody>
+</table>
+<h3 id="clip--layer-balance-counters">Clip / layer balance counters</h3>
+<p><code>ClipBalance</code> and <code>LayerBalance</code> must each be <strong>0</strong> at the end of a well-formed frame — the device increments on <code>PushClip</code>/<code>PushLayer</code>
+and decrements on <code>PopClip</code>/<code>PopLayer</code> while decoding. They are the cheap structural guard that the recorder's push/pop
+pairing is sound (a missing <code>PopClip</code> would scissor the rest of the frame). <code>LastStrokeClipDepths</code> is the parallel guard for
+the focus-ring-outside-its-clip rule: it records the clip depth at the moment each stroke decoded, so a check can assert a
+<code>ClipsToBounds</code> field's focus ring records at its <em>parent's</em> depth, not inside its own clip.</p>
+<h3 id="the-named-checks-to-read-and-extend">The named checks to read and extend</h3>
+<p>Two harness functions are the model for any rounded-rect/border/stroke change you make — read them before adding your own:</p>
+<ul>
+<li><strong><code>GradientBorderChecks</code></strong> (<code>Program.cs</code>) — check <strong>57</strong> asserts the gradient elevation border emits exactly one
+<code>DrawGradientStroke</code> band with the ring inset by <code>bw/2</code> (<code>Near(gs.Rect.X, 0.5f) &amp;&amp; Near(gs.Rect.W, 119f)</code> for a 120-wide
+box, <code>bw=1</code>) <strong>and</strong> the fill drew once over the full bounds (the hollow-ring rule). <strong>57b</strong> covers a gradient-only fill,
+<strong>57c</strong> the chrome paint order (parent border records <em>after</em> descendant fills — it walks <code>dl.Bytes</code> opcode-by-opcode),
+and <strong>57e</strong> the absolute-axis (<code>MappingMode=Absolute</code>) elevation band including the <code>AnchorEnd</code> mirror.</li>
+<li><strong><code>PolylineStrokeChecks</code></strong> (<code>Program.cs</code>) — check <strong>57d</strong> asserts a <code>PolylineStroke</code> emits one <code>DrawPolylineStroke</code> with the
+expected <code>PointCount</code>/<code>TrimEnd</code>, then drives <code>AnimEngine</code> keyframes on <code>AnimChannel.StrokeTrimEnd</code> and asserts the recorded
+<code>TrimEnd</code> tracks the eased value mid-flight (<code>t16 &gt; 0 &amp;&amp; t16 &lt; 0.35</code>) — proving the recorder reads the animated paint
+channel each frame.</li>
+</ul>
+<p>Run the whole spine after any change:</p>
+<pre><code class="lang-bash">dotnet build src/FluentGpu.VerticalSlice          # clean build first
+dotnet run   --project src/FluentGpu.VerticalSlice # expect: ALL CHECKS PASSED
+</code></pre>
+<p>Add a <code>Check(&quot;…&quot;, condition, detail)</code> for the behavior you changed and call it from <code>Main</code>. If your change is record-only,
+also assert on <code>FrameStats</code> (<code>Rendered == false</code> for a compositor-bypass frame, <code>HotPhaseAllocBytes == 0</code> for a steady one).
+On-screen D3D12 pixels are a separate manual &quot;needs-pixels&quot; pass on the real Windows path
+(<a href="../../guide/control-fidelity.md">control-fidelity.md §4</a> describes the <code>--screenshot</code>/<code>--shot</code> route and the slow-motion
+proof for animations) — the harness proves the <em>recorded DrawList</em> is correct, not that a control looks right on screen.
+Keep both bars distinct.</p>
+<hr>
+<h2 id="canon-links">Canon links</h2>
+<ul>
+<li><strong>Encoding framework</strong> (DrawList container, <code>DrawOp</code> enum registration, byte arenas, sort arena, clean-span reuse rule):
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code> §4</a>.</li>
+<li><strong>Opcode payload struct shapes + SortKey layout + per-lane rasterization</strong> (<code>FillRoundRectCmd</code>, <code>DrawGlyphRunCmd</code>,
+<code>DrawImageCmd</code>, <code>PushLayerCmd</code>, <code>DrawGradientStrokeCmd</code>, the SDFs, the RenderLane classifier, the clip tiers, layers/acrylic):
+<a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>.</li>
+<li><strong>Scene columns &amp; <code>NodeFlags</code></strong> (the 3 dirty axes, <code>NodePaint</code>, <code>VisualKind</code>): <a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code> §2</a>.</li>
+<li><strong>Color / coordinate / DPI contract</strong>: the <code>SPEC-INDEX.md</code> color row → <a href="../../../design/SPEC-INDEX.md">foundations.md P8 + architecture-spec §1.3</a>.</li>
+<li><strong>Frame loop &amp; the compositor-bypass mental model</strong> (app-author view): <a href="../../guide/rendering-and-performance.md">rendering-and-performance.md</a>;
+engine-side neighbours: <a href="reconciler-and-scene.html">reconciler &amp; scene</a>, <a href="layout-internals.html">layout internals</a>,
+<a href="seams-rhi-pal-text.html">the seams</a>, <a href="windows-backends.html">Windows backends</a>, and the
+<a href="frame-pipeline-and-verification-harness.html">frame pipeline &amp; verification harness</a>.</li>
+<li><strong>Rounded-rect rendering rules in control terms</strong> (the three bug-fix rules, the state ramps, the motion engines):
+<a href="../../guide/control-fidelity.md">control-fidelity.md</a>.</li>
+</ul>
+<p>Do not restate an opcode shape, a payload's fields, or the SortKey bit layout on this page — link to the owner. That is the
+single-owner discipline the whole corpus runs on.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

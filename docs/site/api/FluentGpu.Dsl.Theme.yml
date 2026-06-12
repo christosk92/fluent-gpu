@@ -1,0 +1,867 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.Theme
+  commentId: T:FluentGpu.Dsl.Theme
+  id: Theme
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.Theme.Accent
+  - FluentGpu.Dsl.Theme.AccentBorder
+  - FluentGpu.Dsl.Theme.AccentText
+  - FluentGpu.Dsl.Theme.BodyFont
+  - FluentGpu.Dsl.Theme.ControlBorder
+  - FluentGpu.Dsl.Theme.ControlFill
+  - FluentGpu.Dsl.Theme.ControlFillHover
+  - FluentGpu.Dsl.Theme.ControlFillPressed
+  - FluentGpu.Dsl.Theme.ControlText
+  - FluentGpu.Dsl.Theme.Dark
+  - FluentGpu.Dsl.Theme.IconFont
+  - FluentGpu.Dsl.Theme.WindowBackground
+  - FluentGpu.Dsl.Theme.WindowText
+  langs:
+  - csharp
+  - vb
+  name: Theme
+  nameWithType: Theme
+  fullName: FluentGpu.Dsl.Theme
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Theme
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Back-compat facade over the semantic token table (<xref href="FluentGpu.Dsl.Tok" data-throw-if-not-resolved="false"></xref>). The flat names here mirror what existing call
+
+    sites use; each forwards to the active <xref href="FluentGpu.Dsl.TokenSet" data-throw-if-not-resolved="false"></xref>, so a theme swap (<xref href="FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)" data-throw-if-not-resolved="false"></xref>) re-themes them
+
+    too. New code should prefer <xref href="FluentGpu.Dsl.Tok" data-throw-if-not-resolved="false"></xref> / <xref href="System.Type" data-throw-if-not-resolved="false"></xref> directly. The host still injects the OS accent +
+
+    Mica background through the <xref href="FluentGpu.Dsl.Theme.Accent" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Dsl.Theme.WindowBackground" data-throw-if-not-resolved="false"></xref> setters.
+  example: []
+  syntax:
+    content: public static class Theme
+    content.vb: Public Module Theme
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.Theme.Dark
+  commentId: P:FluentGpu.Dsl.Theme.Dark
+  id: Dark
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: Dark
+  nameWithType: Theme.Dark
+  fullName: FluentGpu.Dsl.Theme.Dark
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dark
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static bool Dark { get; set; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Property Dark As Boolean
+  overload: FluentGpu.Dsl.Theme.Dark*
+- uid: FluentGpu.Dsl.Theme.Accent
+  commentId: P:FluentGpu.Dsl.Theme.Accent
+  id: Accent
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: Accent
+  nameWithType: Theme.Accent
+  fullName: FluentGpu.Dsl.Theme.Accent
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Accent
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF Accent { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared Property Accent As ColorF
+  overload: FluentGpu.Dsl.Theme.Accent*
+- uid: FluentGpu.Dsl.Theme.AccentText
+  commentId: P:FluentGpu.Dsl.Theme.AccentText
+  id: AccentText
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: AccentText
+  nameWithType: Theme.AccentText
+  fullName: FluentGpu.Dsl.Theme.AccentText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentText
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentText { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentText As ColorF
+  overload: FluentGpu.Dsl.Theme.AccentText*
+- uid: FluentGpu.Dsl.Theme.AccentBorder
+  commentId: P:FluentGpu.Dsl.Theme.AccentBorder
+  id: AccentBorder
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: AccentBorder
+  nameWithType: Theme.AccentBorder
+  fullName: FluentGpu.Dsl.Theme.AccentBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentBorder
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF AccentBorder { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property AccentBorder As ColorF
+  overload: FluentGpu.Dsl.Theme.AccentBorder*
+- uid: FluentGpu.Dsl.Theme.ControlFill
+  commentId: P:FluentGpu.Dsl.Theme.ControlFill
+  id: ControlFill
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: ControlFill
+  nameWithType: Theme.ControlFill
+  fullName: FluentGpu.Dsl.Theme.ControlFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlFill
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ControlFill { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ControlFill As ColorF
+  overload: FluentGpu.Dsl.Theme.ControlFill*
+- uid: FluentGpu.Dsl.Theme.ControlFillHover
+  commentId: P:FluentGpu.Dsl.Theme.ControlFillHover
+  id: ControlFillHover
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: ControlFillHover
+  nameWithType: Theme.ControlFillHover
+  fullName: FluentGpu.Dsl.Theme.ControlFillHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlFillHover
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ControlFillHover { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ControlFillHover As ColorF
+  overload: FluentGpu.Dsl.Theme.ControlFillHover*
+- uid: FluentGpu.Dsl.Theme.ControlFillPressed
+  commentId: P:FluentGpu.Dsl.Theme.ControlFillPressed
+  id: ControlFillPressed
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: ControlFillPressed
+  nameWithType: Theme.ControlFillPressed
+  fullName: FluentGpu.Dsl.Theme.ControlFillPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlFillPressed
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ControlFillPressed { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ControlFillPressed As ColorF
+  overload: FluentGpu.Dsl.Theme.ControlFillPressed*
+- uid: FluentGpu.Dsl.Theme.ControlBorder
+  commentId: P:FluentGpu.Dsl.Theme.ControlBorder
+  id: ControlBorder
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: ControlBorder
+  nameWithType: Theme.ControlBorder
+  fullName: FluentGpu.Dsl.Theme.ControlBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlBorder
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ControlBorder { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ControlBorder As ColorF
+  overload: FluentGpu.Dsl.Theme.ControlBorder*
+- uid: FluentGpu.Dsl.Theme.ControlText
+  commentId: P:FluentGpu.Dsl.Theme.ControlText
+  id: ControlText
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: ControlText
+  nameWithType: Theme.ControlText
+  fullName: FluentGpu.Dsl.Theme.ControlText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlText
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF ControlText { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property ControlText As ColorF
+  overload: FluentGpu.Dsl.Theme.ControlText*
+- uid: FluentGpu.Dsl.Theme.WindowBackground
+  commentId: P:FluentGpu.Dsl.Theme.WindowBackground
+  id: WindowBackground
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: WindowBackground
+  nameWithType: Theme.WindowBackground
+  fullName: FluentGpu.Dsl.Theme.WindowBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowBackground
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF WindowBackground { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared Property WindowBackground As ColorF
+  overload: FluentGpu.Dsl.Theme.WindowBackground*
+- uid: FluentGpu.Dsl.Theme.WindowText
+  commentId: P:FluentGpu.Dsl.Theme.WindowText
+  id: WindowText
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: WindowText
+  nameWithType: Theme.WindowText
+  fullName: FluentGpu.Dsl.Theme.WindowText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowText
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static ColorF WindowText { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Shared ReadOnly Property WindowText As ColorF
+  overload: FluentGpu.Dsl.Theme.WindowText*
+- uid: FluentGpu.Dsl.Theme.BodyFont
+  commentId: F:FluentGpu.Dsl.Theme.BodyFont
+  id: BodyFont
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: BodyFont
+  nameWithType: Theme.BodyFont
+  fullName: FluentGpu.Dsl.Theme.BodyFont
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BodyFont
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static string BodyFont
+    return:
+      type: System.String
+    content.vb: Public Shared BodyFont As String
+- uid: FluentGpu.Dsl.Theme.IconFont
+  commentId: F:FluentGpu.Dsl.Theme.IconFont
+  id: IconFont
+  parent: FluentGpu.Dsl.Theme
+  langs:
+  - csharp
+  - vb
+  name: IconFont
+  nameWithType: Theme.IconFont
+  fullName: FluentGpu.Dsl.Theme.IconFont
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Theme.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconFont
+    path: ../../src/FluentGpu.Dsl/Theme.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static string IconFont
+    return:
+      type: System.String
+    content.vb: Public Shared IconFont As String
+references:
+- uid: FluentGpu.Dsl.Tok
+  commentId: T:FluentGpu.Dsl.Tok
+  href: FluentGpu.Dsl.Tok.html
+  name: Tok
+  nameWithType: Tok
+  fullName: FluentGpu.Dsl.Tok
+- uid: FluentGpu.Dsl.TokenSet
+  commentId: T:FluentGpu.Dsl.TokenSet
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TokenSet.html
+  name: TokenSet
+  nameWithType: TokenSet
+  fullName: FluentGpu.Dsl.TokenSet
+- uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  commentId: M:FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  name: Use(ThemeKind)
+  nameWithType: Tok.Use(ThemeKind)
+  fullName: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+  spec.csharp:
+  - uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+    name: Use
+    href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  - name: (
+  - uid: FluentGpu.Dsl.ThemeKind
+    name: ThemeKind
+    href: FluentGpu.Dsl.ThemeKind.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Dsl.Tok.Use(FluentGpu.Dsl.ThemeKind)
+    name: Use
+    href: FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_
+  - name: (
+  - uid: FluentGpu.Dsl.ThemeKind
+    name: ThemeKind
+    href: FluentGpu.Dsl.ThemeKind.html
+  - name: )
+- uid: System.Type
+  commentId: T:System.Type
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.type
+  name: Type
+  nameWithType: Type
+  fullName: System.Type
+- uid: FluentGpu.Dsl.Theme.Accent
+  commentId: P:FluentGpu.Dsl.Theme.Accent
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_Accent
+  name: Accent
+  nameWithType: Theme.Accent
+  fullName: FluentGpu.Dsl.Theme.Accent
+- uid: FluentGpu.Dsl.Theme.WindowBackground
+  commentId: P:FluentGpu.Dsl.Theme.WindowBackground
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_WindowBackground
+  name: WindowBackground
+  nameWithType: Theme.WindowBackground
+  fullName: FluentGpu.Dsl.Theme.WindowBackground
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl.Theme.Dark*
+  commentId: Overload:FluentGpu.Dsl.Theme.Dark
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_Dark
+  name: Dark
+  nameWithType: Theme.Dark
+  fullName: FluentGpu.Dsl.Theme.Dark
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.Theme.Accent*
+  commentId: Overload:FluentGpu.Dsl.Theme.Accent
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_Accent
+  name: Accent
+  nameWithType: Theme.Accent
+  fullName: FluentGpu.Dsl.Theme.Accent
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.Theme.AccentText*
+  commentId: Overload:FluentGpu.Dsl.Theme.AccentText
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_AccentText
+  name: AccentText
+  nameWithType: Theme.AccentText
+  fullName: FluentGpu.Dsl.Theme.AccentText
+- uid: FluentGpu.Dsl.Theme.AccentBorder*
+  commentId: Overload:FluentGpu.Dsl.Theme.AccentBorder
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_AccentBorder
+  name: AccentBorder
+  nameWithType: Theme.AccentBorder
+  fullName: FluentGpu.Dsl.Theme.AccentBorder
+- uid: FluentGpu.Dsl.Theme.ControlFill*
+  commentId: Overload:FluentGpu.Dsl.Theme.ControlFill
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_ControlFill
+  name: ControlFill
+  nameWithType: Theme.ControlFill
+  fullName: FluentGpu.Dsl.Theme.ControlFill
+- uid: FluentGpu.Dsl.Theme.ControlFillHover*
+  commentId: Overload:FluentGpu.Dsl.Theme.ControlFillHover
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_ControlFillHover
+  name: ControlFillHover
+  nameWithType: Theme.ControlFillHover
+  fullName: FluentGpu.Dsl.Theme.ControlFillHover
+- uid: FluentGpu.Dsl.Theme.ControlFillPressed*
+  commentId: Overload:FluentGpu.Dsl.Theme.ControlFillPressed
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_ControlFillPressed
+  name: ControlFillPressed
+  nameWithType: Theme.ControlFillPressed
+  fullName: FluentGpu.Dsl.Theme.ControlFillPressed
+- uid: FluentGpu.Dsl.Theme.ControlBorder*
+  commentId: Overload:FluentGpu.Dsl.Theme.ControlBorder
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_ControlBorder
+  name: ControlBorder
+  nameWithType: Theme.ControlBorder
+  fullName: FluentGpu.Dsl.Theme.ControlBorder
+- uid: FluentGpu.Dsl.Theme.ControlText*
+  commentId: Overload:FluentGpu.Dsl.Theme.ControlText
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_ControlText
+  name: ControlText
+  nameWithType: Theme.ControlText
+  fullName: FluentGpu.Dsl.Theme.ControlText
+- uid: FluentGpu.Dsl.Theme.WindowBackground*
+  commentId: Overload:FluentGpu.Dsl.Theme.WindowBackground
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_WindowBackground
+  name: WindowBackground
+  nameWithType: Theme.WindowBackground
+  fullName: FluentGpu.Dsl.Theme.WindowBackground
+- uid: FluentGpu.Dsl.Theme.WindowText*
+  commentId: Overload:FluentGpu.Dsl.Theme.WindowText
+  href: FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_WindowText
+  name: WindowText
+  nameWithType: Theme.WindowText
+  fullName: FluentGpu.Dsl.Theme.WindowText
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String

@@ -208,6 +208,7 @@ float4 PSMain(V i) : SV_Target
         ID3D12DescriptorHeap* rhp; Check(_device->CreateDescriptorHeap(&rh, __uuidof<ID3D12DescriptorHeap>(), (void**)&rhp), "Acrylic.RtvHeap");
         _rtvHeap = rhp;
         _rtvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12MemoryDiagnostics.Track(_rtvHeap, "Acrylic.RtvHeap", (ulong)rh.NumDescriptors * _rtvInc);
 
         D3D12_DESCRIPTOR_HEAP_DESC sh = default;
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -216,6 +217,7 @@ float4 PSMain(V i) : SV_Target
         ID3D12DescriptorHeap* shp; Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "Acrylic.SrvHeap");
         _srvHeap = shp;
         _srvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12MemoryDiagnostics.Track(_srvHeap, "Acrylic.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
     }
 
     private ID3D12RootSignature* SampleRootSig(int numConstants)
@@ -612,8 +614,8 @@ float4 PSMain(V i) : SV_Target
             _retired[i].Res->Release();
         }
         _retired.Clear();
-        if (_rtvHeap != null) _rtvHeap->Release();
-        if (_srvHeap != null) _srvHeap->Release();
+        if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "Acrylic.RtvHeap"); _rtvHeap->Release(); }
+        if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Acrylic.SrvHeap"); _srvHeap->Release(); }
         if (_copyPso != null) _copyPso->Release();
         if (_blurPso != null) _blurPso->Release();
         if (_compPso != null) _compPso->Release();

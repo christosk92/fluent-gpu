@@ -1,0 +1,538 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  id: SpringParams
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.SpringParams.#ctor(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Animation.SpringParams.Damping
+  - FluentGpu.Animation.SpringParams.Default
+  - FluentGpu.Animation.SpringParams.FromResponse(System.Single,System.Single,System.Single)
+  - FluentGpu.Animation.SpringParams.Mass
+  - FluentGpu.Animation.SpringParams.RestEps
+  - FluentGpu.Animation.SpringParams.Stiffness
+  langs:
+  - csharp
+  - vb
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpringParams
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: A spring (stateful ODE) — no duration; integrates toward Target, carrying velocity across retargets.
+  example: []
+  syntax:
+    content: public readonly struct SpringParams
+    content.vb: Public Structure SpringParams
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Animation.SpringParams.Stiffness
+  commentId: F:FluentGpu.Animation.SpringParams.Stiffness
+  id: Stiffness
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: Stiffness
+  nameWithType: SpringParams.Stiffness
+  fullName: FluentGpu.Animation.SpringParams.Stiffness
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stiffness
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public readonly float Stiffness
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Stiffness As Single
+- uid: FluentGpu.Animation.SpringParams.Damping
+  commentId: F:FluentGpu.Animation.SpringParams.Damping
+  id: Damping
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: Damping
+  nameWithType: SpringParams.Damping
+  fullName: FluentGpu.Animation.SpringParams.Damping
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Damping
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public readonly float Damping
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Damping As Single
+- uid: FluentGpu.Animation.SpringParams.Mass
+  commentId: F:FluentGpu.Animation.SpringParams.Mass
+  id: Mass
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: Mass
+  nameWithType: SpringParams.Mass
+  fullName: FluentGpu.Animation.SpringParams.Mass
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mass
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public readonly float Mass
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Mass As Single
+- uid: FluentGpu.Animation.SpringParams.RestEps
+  commentId: F:FluentGpu.Animation.SpringParams.RestEps
+  id: RestEps
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: RestEps
+  nameWithType: SpringParams.RestEps
+  fullName: FluentGpu.Animation.SpringParams.RestEps
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RestEps
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public readonly float RestEps
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly RestEps As Single
+- uid: FluentGpu.Animation.SpringParams.#ctor(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Animation.SpringParams.#ctor(System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: SpringParams(float, float, float, float)
+  nameWithType: SpringParams.SpringParams(float, float, float, float)
+  fullName: FluentGpu.Animation.SpringParams.SpringParams(float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public SpringParams(float stiffness, float damping, float mass = 1, float restEps = 0.001)
+    parameters:
+    - id: stiffness
+      type: System.Single
+    - id: damping
+      type: System.Single
+    - id: mass
+      type: System.Single
+    - id: restEps
+      type: System.Single
+    content.vb: Public Sub New(stiffness As Single, damping As Single, mass As Single = 1, restEps As Single = 0.001)
+  overload: FluentGpu.Animation.SpringParams.#ctor*
+  nameWithType.vb: SpringParams.New(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Animation.SpringParams.New(Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single)
+- uid: FluentGpu.Animation.SpringParams.FromResponse(System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Animation.SpringParams.FromResponse(System.Single,System.Single,System.Single)
+  id: FromResponse(System.Single,System.Single,System.Single)
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: FromResponse(float, float, float)
+  nameWithType: SpringParams.FromResponse(float, float, float)
+  fullName: FluentGpu.Animation.SpringParams.FromResponse(float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FromResponse
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: response = approx settle time (s); dampingRatio 1 = critical (no overshoot), &lt;1 = bouncy.
+  example: []
+  syntax:
+    content: public static SpringParams FromResponse(float responseSec, float dampingRatio = 1, float mass = 1)
+    parameters:
+    - id: responseSec
+      type: System.Single
+    - id: dampingRatio
+      type: System.Single
+    - id: mass
+      type: System.Single
+    return:
+      type: FluentGpu.Animation.SpringParams
+    content.vb: Public Shared Function FromResponse(responseSec As Single, dampingRatio As Single = 1, mass As Single = 1) As SpringParams
+  overload: FluentGpu.Animation.SpringParams.FromResponse*
+  nameWithType.vb: SpringParams.FromResponse(Single, Single, Single)
+  fullName.vb: FluentGpu.Animation.SpringParams.FromResponse(Single, Single, Single)
+  name.vb: FromResponse(Single, Single, Single)
+- uid: FluentGpu.Animation.SpringParams.Default
+  commentId: P:FluentGpu.Animation.SpringParams.Default
+  id: Default
+  parent: FluentGpu.Animation.SpringParams
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: SpringParams.Default
+  fullName: FluentGpu.Animation.SpringParams.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public static SpringParams Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.SpringParams
+    content.vb: Public Shared ReadOnly Property [Default] As SpringParams
+  overload: FluentGpu.Animation.SpringParams.Default*
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Animation.SpringParams.#ctor*
+  commentId: Overload:FluentGpu.Animation.SpringParams.#ctor
+  href: FluentGpu.Animation.SpringParams.html#FluentGpu_Animation_SpringParams__ctor_System_Single_System_Single_System_Single_System_Single_
+  name: SpringParams
+  nameWithType: SpringParams.SpringParams
+  fullName: FluentGpu.Animation.SpringParams.SpringParams
+  nameWithType.vb: SpringParams.New
+  fullName.vb: FluentGpu.Animation.SpringParams.New
+  name.vb: New
+- uid: FluentGpu.Animation.SpringParams.FromResponse*
+  commentId: Overload:FluentGpu.Animation.SpringParams.FromResponse
+  href: FluentGpu.Animation.SpringParams.html#FluentGpu_Animation_SpringParams_FromResponse_System_Single_System_Single_System_Single_
+  name: FromResponse
+  nameWithType: SpringParams.FromResponse
+  fullName: FluentGpu.Animation.SpringParams.FromResponse
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.SpringParams.html
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+- uid: FluentGpu.Animation.SpringParams.Default*
+  commentId: Overload:FluentGpu.Animation.SpringParams.Default
+  href: FluentGpu.Animation.SpringParams.html#FluentGpu_Animation_SpringParams_Default
+  name: Default
+  nameWithType: SpringParams.Default
+  fullName: FluentGpu.Animation.SpringParams.Default

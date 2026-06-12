@@ -1,0 +1,198 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.TitleBarHit
+  commentId: T:FluentGpu.Pal.TitleBarHit
+  id: TitleBarHit
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.TitleBarHit.Caption
+  - FluentGpu.Pal.TitleBarHit.Client
+  - FluentGpu.Pal.TitleBarHit.CloseButton
+  - FluentGpu.Pal.TitleBarHit.MaxButton
+  - FluentGpu.Pal.TitleBarHit.MinButton
+  langs:
+  - csharp
+  - vb
+  name: TitleBarHit
+  nameWithType: TitleBarHit
+  fullName: FluentGpu.Pal.TitleBarHit
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TitleBarHit
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Non-client classification for one engine-reported titlebar rect (engine → WM_NCHITTEST). <code>Client</code>
+        marks an INTERACTIVE ISLAND (search box, back/pane buttons) the engine keeps; <code>Caption</code> is the OS drag-move
+        band; the three buttons get HTMIN/HTMAX/HTCLOSE so Win11 shows the snap-layouts flyout over Max.
+  example: []
+  syntax:
+    content: 'public enum TitleBarHit : byte'
+    content.vb: Public Enum TitleBarHit As Byte
+- uid: FluentGpu.Pal.TitleBarHit.Client
+  commentId: F:FluentGpu.Pal.TitleBarHit.Client
+  id: Client
+  parent: FluentGpu.Pal.TitleBarHit
+  langs:
+  - csharp
+  - vb
+  name: Client
+  nameWithType: TitleBarHit.Client
+  fullName: FluentGpu.Pal.TitleBarHit.Client
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Client
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Client = 0
+    return:
+      type: FluentGpu.Pal.TitleBarHit
+- uid: FluentGpu.Pal.TitleBarHit.Caption
+  commentId: F:FluentGpu.Pal.TitleBarHit.Caption
+  id: Caption
+  parent: FluentGpu.Pal.TitleBarHit
+  langs:
+  - csharp
+  - vb
+  name: Caption
+  nameWithType: TitleBarHit.Caption
+  fullName: FluentGpu.Pal.TitleBarHit.Caption
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Caption
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Caption = 1
+    return:
+      type: FluentGpu.Pal.TitleBarHit
+- uid: FluentGpu.Pal.TitleBarHit.MinButton
+  commentId: F:FluentGpu.Pal.TitleBarHit.MinButton
+  id: MinButton
+  parent: FluentGpu.Pal.TitleBarHit
+  langs:
+  - csharp
+  - vb
+  name: MinButton
+  nameWithType: TitleBarHit.MinButton
+  fullName: FluentGpu.Pal.TitleBarHit.MinButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinButton
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: MinButton = 2
+    return:
+      type: FluentGpu.Pal.TitleBarHit
+- uid: FluentGpu.Pal.TitleBarHit.MaxButton
+  commentId: F:FluentGpu.Pal.TitleBarHit.MaxButton
+  id: MaxButton
+  parent: FluentGpu.Pal.TitleBarHit
+  langs:
+  - csharp
+  - vb
+  name: MaxButton
+  nameWithType: TitleBarHit.MaxButton
+  fullName: FluentGpu.Pal.TitleBarHit.MaxButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxButton
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: MaxButton = 3
+    return:
+      type: FluentGpu.Pal.TitleBarHit
+- uid: FluentGpu.Pal.TitleBarHit.CloseButton
+  commentId: F:FluentGpu.Pal.TitleBarHit.CloseButton
+  id: CloseButton
+  parent: FluentGpu.Pal.TitleBarHit
+  langs:
+  - csharp
+  - vb
+  name: CloseButton
+  nameWithType: TitleBarHit.CloseButton
+  fullName: FluentGpu.Pal.TitleBarHit.CloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButton
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: CloseButton = 4
+    return:
+      type: FluentGpu.Pal.TitleBarHit
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.TitleBarHit
+  commentId: T:FluentGpu.Pal.TitleBarHit
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.TitleBarHit.html
+  name: TitleBarHit
+  nameWithType: TitleBarHit
+  fullName: FluentGpu.Pal.TitleBarHit

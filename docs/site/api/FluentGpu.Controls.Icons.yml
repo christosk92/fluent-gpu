@@ -1,0 +1,2151 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Icons
+  commentId: T:FluentGpu.Controls.Icons
+  id: Icons
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Icons.Accept
+  - FluentGpu.Controls.Icons.Add
+  - FluentGpu.Controls.Icons.Attention
+  - FluentGpu.Controls.Icons.Back
+  - FluentGpu.Controls.Icons.Brush
+  - FluentGpu.Controls.Icons.Cancel
+  - FluentGpu.Controls.Icons.CaretDownSolid
+  - FluentGpu.Controls.Icons.CaretUpSolid
+  - FluentGpu.Controls.Icons.ChevronDown
+  - FluentGpu.Controls.Icons.ChevronDownSmall
+  - FluentGpu.Controls.Icons.ChevronRight
+  - FluentGpu.Controls.Icons.ChevronRightMed
+  - FluentGpu.Controls.Icons.ChevronUp
+  - FluentGpu.Controls.Icons.ChromeClose
+  - FluentGpu.Controls.Icons.ChromeMaximize
+  - FluentGpu.Controls.Icons.ChromeMinimize
+  - FluentGpu.Controls.Icons.ChromeRestore
+  - FluentGpu.Controls.Icons.ClearText
+  - FluentGpu.Controls.Icons.Clock
+  - FluentGpu.Controls.Icons.Code
+  - FluentGpu.Controls.Icons.Copy
+  - FluentGpu.Controls.Icons.Document
+  - FluentGpu.Controls.Icons.Download
+  - FluentGpu.Controls.Icons.FavoriteStar
+  - FluentGpu.Controls.Icons.Folder
+  - FluentGpu.Controls.Icons.Font
+  - FluentGpu.Controls.Icons.Forward
+  - FluentGpu.Controls.Icons.Globe
+  - FluentGpu.Controls.Icons.Grid
+  - FluentGpu.Controls.Icons.Heart
+  - FluentGpu.Controls.Icons.Home
+  - FluentGpu.Controls.Icons.Important
+  - FluentGpu.Controls.Icons.InfoBarBackgroundCircle
+  - FluentGpu.Controls.Icons.Link
+  - FluentGpu.Controls.Icons.List
+  - FluentGpu.Controls.Icons.Menu
+  - FluentGpu.Controls.Icons.More
+  - FluentGpu.Controls.Icons.Movie
+  - FluentGpu.Controls.Icons.MusicNote
+  - FluentGpu.Controls.Icons.Mute
+  - FluentGpu.Controls.Icons.Next
+  - FluentGpu.Controls.Icons.NumberBoxPopupIndicator
+  - FluentGpu.Controls.Icons.OpenInNewWindow
+  - FluentGpu.Controls.Icons.Pause
+  - FluentGpu.Controls.Icons.Picture
+  - FluentGpu.Controls.Icons.Play
+  - FluentGpu.Controls.Icons.Previous
+  - FluentGpu.Controls.Icons.RadioBullet
+  - FluentGpu.Controls.Icons.Refresh
+  - FluentGpu.Controls.Icons.Remove
+  - FluentGpu.Controls.Icons.RepeatAll
+  - FluentGpu.Controls.Icons.RepeatOne
+  - FluentGpu.Controls.Icons.RevealPassword
+  - FluentGpu.Controls.Icons.Search
+  - FluentGpu.Controls.Icons.Settings
+  - FluentGpu.Controls.Icons.Share
+  - FluentGpu.Controls.Icons.Shuffle
+  - FluentGpu.Controls.Icons.Star
+  - FluentGpu.Controls.Icons.StatusError
+  - FluentGpu.Controls.Icons.StatusInfo
+  - FluentGpu.Controls.Icons.StatusSuccess
+  - FluentGpu.Controls.Icons.StatusWarning
+  - FluentGpu.Controls.Icons.Stop
+  - FluentGpu.Controls.Icons.Tag
+  - FluentGpu.Controls.Icons.Volume
+  langs:
+  - csharp
+  - vb
+  name: Icons
+  nameWithType: Icons
+  fullName: FluentGpu.Controls.Icons
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Icons
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Standardized glyph constants (Segoe Fluent Icons / Segoe MDL2 Assets private-use codepoints) so icons are
+
+    consistent across the app. Use with Ui.Icon(Icons.Play) or IconButton.Create(Icons.Play, ...).
+
+    Font = Theme.IconFont by default; pass a custom "path.ttf#Family" for your own set.
+  example: []
+  syntax:
+    content: public static class Icons
+    content.vb: Public Module Icons
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.Icons.Back
+  commentId: F:FluentGpu.Controls.Icons.Back
+  id: Back
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Back
+  nameWithType: Icons.Back
+  fullName: FluentGpu.Controls.Icons.Back
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Back
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Back = ""
+    return:
+      type: System.String
+    content.vb: Public Const Back As String = ""
+- uid: FluentGpu.Controls.Icons.Forward
+  commentId: F:FluentGpu.Controls.Icons.Forward
+  id: Forward
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Forward
+  nameWithType: Icons.Forward
+  fullName: FluentGpu.Controls.Icons.Forward
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Forward
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Forward = ""
+    return:
+      type: System.String
+    content.vb: Public Const Forward As String = ""
+- uid: FluentGpu.Controls.Icons.ChevronDown
+  commentId: F:FluentGpu.Controls.Icons.ChevronDown
+  id: ChevronDown
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChevronDown
+  nameWithType: Icons.ChevronDown
+  fullName: FluentGpu.Controls.Icons.ChevronDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronDown
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChevronDown = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChevronDown As String = ""
+- uid: FluentGpu.Controls.Icons.ChevronDownSmall
+  commentId: F:FluentGpu.Controls.Icons.ChevronDownSmall
+  id: ChevronDownSmall
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChevronDownSmall
+  nameWithType: Icons.ChevronDownSmall
+  fullName: FluentGpu.Controls.Icons.ChevronDownSmall
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronDownSmall
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChevronDownSmall = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChevronDownSmall As String = ""
+- uid: FluentGpu.Controls.Icons.ChevronUp
+  commentId: F:FluentGpu.Controls.Icons.ChevronUp
+  id: ChevronUp
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChevronUp
+  nameWithType: Icons.ChevronUp
+  fullName: FluentGpu.Controls.Icons.ChevronUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronUp
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChevronUp = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChevronUp As String = ""
+- uid: FluentGpu.Controls.Icons.ChevronRight
+  commentId: F:FluentGpu.Controls.Icons.ChevronRight
+  id: ChevronRight
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChevronRight
+  nameWithType: Icons.ChevronRight
+  fullName: FluentGpu.Controls.Icons.ChevronRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronRight
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChevronRight = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChevronRight As String = ""
+- uid: FluentGpu.Controls.Icons.Clock
+  commentId: F:FluentGpu.Controls.Icons.Clock
+  id: Clock
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Clock
+  nameWithType: Icons.Clock
+  fullName: FluentGpu.Controls.Icons.Clock
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clock
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Clock = ""
+    return:
+      type: System.String
+    content.vb: Public Const Clock As String = ""
+- uid: FluentGpu.Controls.Icons.FavoriteStar
+  commentId: F:FluentGpu.Controls.Icons.FavoriteStar
+  id: FavoriteStar
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: FavoriteStar
+  nameWithType: Icons.FavoriteStar
+  fullName: FluentGpu.Controls.Icons.FavoriteStar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FavoriteStar
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string FavoriteStar = ""
+    return:
+      type: System.String
+    content.vb: Public Const FavoriteStar As String = ""
+- uid: FluentGpu.Controls.Icons.Code
+  commentId: F:FluentGpu.Controls.Icons.Code
+  id: Code
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Code
+  nameWithType: Icons.Code
+  fullName: FluentGpu.Controls.Icons.Code
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Code
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Code = ""
+    return:
+      type: System.String
+    content.vb: Public Const Code As String = ""
+- uid: FluentGpu.Controls.Icons.Home
+  commentId: F:FluentGpu.Controls.Icons.Home
+  id: Home
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Home
+  nameWithType: Icons.Home
+  fullName: FluentGpu.Controls.Icons.Home
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Home
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Home = ""
+    return:
+      type: System.String
+    content.vb: Public Const Home As String = ""
+- uid: FluentGpu.Controls.Icons.Search
+  commentId: F:FluentGpu.Controls.Icons.Search
+  id: Search
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Search
+  nameWithType: Icons.Search
+  fullName: FluentGpu.Controls.Icons.Search
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Search
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Search = ""
+    return:
+      type: System.String
+    content.vb: Public Const Search As String = ""
+- uid: FluentGpu.Controls.Icons.Settings
+  commentId: F:FluentGpu.Controls.Icons.Settings
+  id: Settings
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Settings
+  nameWithType: Icons.Settings
+  fullName: FluentGpu.Controls.Icons.Settings
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Settings
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Settings = ""
+    return:
+      type: System.String
+    content.vb: Public Const Settings As String = ""
+- uid: FluentGpu.Controls.Icons.More
+  commentId: F:FluentGpu.Controls.Icons.More
+  id: More
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: More
+  nameWithType: Icons.More
+  fullName: FluentGpu.Controls.Icons.More
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: More
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string More = ""
+    return:
+      type: System.String
+    content.vb: Public Const More As String = ""
+- uid: FluentGpu.Controls.Icons.Menu
+  commentId: F:FluentGpu.Controls.Icons.Menu
+  id: Menu
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Menu
+  nameWithType: Icons.Menu
+  fullName: FluentGpu.Controls.Icons.Menu
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Menu
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Menu = ""
+    return:
+      type: System.String
+    content.vb: Public Const Menu As String = ""
+- uid: FluentGpu.Controls.Icons.Add
+  commentId: F:FluentGpu.Controls.Icons.Add
+  id: Add
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Add
+  nameWithType: Icons.Add
+  fullName: FluentGpu.Controls.Icons.Add
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Add
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Add = ""
+    return:
+      type: System.String
+    content.vb: Public Const Add As String = ""
+- uid: FluentGpu.Controls.Icons.Remove
+  commentId: F:FluentGpu.Controls.Icons.Remove
+  id: Remove
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Remove
+  nameWithType: Icons.Remove
+  fullName: FluentGpu.Controls.Icons.Remove
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Remove
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Remove = ""
+    return:
+      type: System.String
+    content.vb: Public Const Remove As String = ""
+- uid: FluentGpu.Controls.Icons.Cancel
+  commentId: F:FluentGpu.Controls.Icons.Cancel
+  id: Cancel
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Cancel
+  nameWithType: Icons.Cancel
+  fullName: FluentGpu.Controls.Icons.Cancel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Cancel = ""
+    return:
+      type: System.String
+    content.vb: Public Const Cancel As String = ""
+- uid: FluentGpu.Controls.Icons.Accept
+  commentId: F:FluentGpu.Controls.Icons.Accept
+  id: Accept
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Accept
+  nameWithType: Icons.Accept
+  fullName: FluentGpu.Controls.Icons.Accept
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Accept
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Accept = ""
+    return:
+      type: System.String
+    content.vb: Public Const Accept As String = ""
+- uid: FluentGpu.Controls.Icons.Refresh
+  commentId: F:FluentGpu.Controls.Icons.Refresh
+  id: Refresh
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Refresh
+  nameWithType: Icons.Refresh
+  fullName: FluentGpu.Controls.Icons.Refresh
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Refresh
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Refresh = ""
+    return:
+      type: System.String
+    content.vb: Public Const Refresh As String = ""
+- uid: FluentGpu.Controls.Icons.Play
+  commentId: F:FluentGpu.Controls.Icons.Play
+  id: Play
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Play
+  nameWithType: Icons.Play
+  fullName: FluentGpu.Controls.Icons.Play
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Play
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Play = ""
+    return:
+      type: System.String
+    content.vb: Public Const Play As String = ""
+- uid: FluentGpu.Controls.Icons.Pause
+  commentId: F:FluentGpu.Controls.Icons.Pause
+  id: Pause
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Pause
+  nameWithType: Icons.Pause
+  fullName: FluentGpu.Controls.Icons.Pause
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pause
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Pause = ""
+    return:
+      type: System.String
+    content.vb: Public Const Pause As String = ""
+- uid: FluentGpu.Controls.Icons.Stop
+  commentId: F:FluentGpu.Controls.Icons.Stop
+  id: Stop
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Stop
+  nameWithType: Icons.Stop
+  fullName: FluentGpu.Controls.Icons.Stop
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stop
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Stop = ""
+    return:
+      type: System.String
+    content.vb: Public Const Stop As String = ""
+- uid: FluentGpu.Controls.Icons.Previous
+  commentId: F:FluentGpu.Controls.Icons.Previous
+  id: Previous
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Previous
+  nameWithType: Icons.Previous
+  fullName: FluentGpu.Controls.Icons.Previous
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Previous
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Previous = ""
+    return:
+      type: System.String
+    content.vb: Public Const Previous As String = ""
+- uid: FluentGpu.Controls.Icons.Next
+  commentId: F:FluentGpu.Controls.Icons.Next
+  id: Next
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Next
+  nameWithType: Icons.Next
+  fullName: FluentGpu.Controls.Icons.Next
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Next
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Next = ""
+    return:
+      type: System.String
+    content.vb: Public Const Next As String = ""
+- uid: FluentGpu.Controls.Icons.Shuffle
+  commentId: F:FluentGpu.Controls.Icons.Shuffle
+  id: Shuffle
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Shuffle
+  nameWithType: Icons.Shuffle
+  fullName: FluentGpu.Controls.Icons.Shuffle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shuffle
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Shuffle = ""
+    return:
+      type: System.String
+    content.vb: Public Const Shuffle As String = ""
+- uid: FluentGpu.Controls.Icons.RepeatAll
+  commentId: F:FluentGpu.Controls.Icons.RepeatAll
+  id: RepeatAll
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: RepeatAll
+  nameWithType: Icons.RepeatAll
+  fullName: FluentGpu.Controls.Icons.RepeatAll
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatAll
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string RepeatAll = ""
+    return:
+      type: System.String
+    content.vb: Public Const RepeatAll As String = ""
+- uid: FluentGpu.Controls.Icons.RepeatOne
+  commentId: F:FluentGpu.Controls.Icons.RepeatOne
+  id: RepeatOne
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: RepeatOne
+  nameWithType: Icons.RepeatOne
+  fullName: FluentGpu.Controls.Icons.RepeatOne
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatOne
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string RepeatOne = ""
+    return:
+      type: System.String
+    content.vb: Public Const RepeatOne As String = ""
+- uid: FluentGpu.Controls.Icons.Volume
+  commentId: F:FluentGpu.Controls.Icons.Volume
+  id: Volume
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Volume
+  nameWithType: Icons.Volume
+  fullName: FluentGpu.Controls.Icons.Volume
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Volume
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Volume = ""
+    return:
+      type: System.String
+    content.vb: Public Const Volume As String = ""
+- uid: FluentGpu.Controls.Icons.Mute
+  commentId: F:FluentGpu.Controls.Icons.Mute
+  id: Mute
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Mute
+  nameWithType: Icons.Mute
+  fullName: FluentGpu.Controls.Icons.Mute
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mute
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Mute = ""
+    return:
+      type: System.String
+    content.vb: Public Const Mute As String = ""
+- uid: FluentGpu.Controls.Icons.Heart
+  commentId: F:FluentGpu.Controls.Icons.Heart
+  id: Heart
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Heart
+  nameWithType: Icons.Heart
+  fullName: FluentGpu.Controls.Icons.Heart
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Heart
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Heart = ""
+    return:
+      type: System.String
+    content.vb: Public Const Heart As String = ""
+- uid: FluentGpu.Controls.Icons.Star
+  commentId: F:FluentGpu.Controls.Icons.Star
+  id: Star
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Star
+  nameWithType: Icons.Star
+  fullName: FluentGpu.Controls.Icons.Star
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Star
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Star = ""
+    return:
+      type: System.String
+    content.vb: Public Const Star As String = ""
+- uid: FluentGpu.Controls.Icons.List
+  commentId: F:FluentGpu.Controls.Icons.List
+  id: List
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: List
+  nameWithType: Icons.List
+  fullName: FluentGpu.Controls.Icons.List
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: List
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string List = ""
+    return:
+      type: System.String
+    content.vb: Public Const List As String = ""
+- uid: FluentGpu.Controls.Icons.Grid
+  commentId: F:FluentGpu.Controls.Icons.Grid
+  id: Grid
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Grid
+  nameWithType: Icons.Grid
+  fullName: FluentGpu.Controls.Icons.Grid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Grid = ""
+    return:
+      type: System.String
+    content.vb: Public Const Grid As String = ""
+- uid: FluentGpu.Controls.Icons.MusicNote
+  commentId: F:FluentGpu.Controls.Icons.MusicNote
+  id: MusicNote
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: MusicNote
+  nameWithType: Icons.MusicNote
+  fullName: FluentGpu.Controls.Icons.MusicNote
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MusicNote
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string MusicNote = ""
+    return:
+      type: System.String
+    content.vb: Public Const MusicNote As String = ""
+- uid: FluentGpu.Controls.Icons.Picture
+  commentId: F:FluentGpu.Controls.Icons.Picture
+  id: Picture
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Picture
+  nameWithType: Icons.Picture
+  fullName: FluentGpu.Controls.Icons.Picture
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Picture
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Picture = ""
+    return:
+      type: System.String
+    content.vb: Public Const Picture As String = ""
+- uid: FluentGpu.Controls.Icons.Download
+  commentId: F:FluentGpu.Controls.Icons.Download
+  id: Download
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Download
+  nameWithType: Icons.Download
+  fullName: FluentGpu.Controls.Icons.Download
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Download
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Download = ""
+    return:
+      type: System.String
+    content.vb: Public Const Download As String = ""
+- uid: FluentGpu.Controls.Icons.Share
+  commentId: F:FluentGpu.Controls.Icons.Share
+  id: Share
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Share
+  nameWithType: Icons.Share
+  fullName: FluentGpu.Controls.Icons.Share
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Share
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Share = ""
+    return:
+      type: System.String
+    content.vb: Public Const Share As String = ""
+- uid: FluentGpu.Controls.Icons.Folder
+  commentId: F:FluentGpu.Controls.Icons.Folder
+  id: Folder
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Folder
+  nameWithType: Icons.Folder
+  fullName: FluentGpu.Controls.Icons.Folder
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Folder
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Folder = ""
+    return:
+      type: System.String
+    content.vb: Public Const Folder As String = ""
+- uid: FluentGpu.Controls.Icons.Tag
+  commentId: F:FluentGpu.Controls.Icons.Tag
+  id: Tag
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Tag
+  nameWithType: Icons.Tag
+  fullName: FluentGpu.Controls.Icons.Tag
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tag
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Tag = ""
+    return:
+      type: System.String
+    content.vb: Public Const Tag As String = ""
+- uid: FluentGpu.Controls.Icons.Document
+  commentId: F:FluentGpu.Controls.Icons.Document
+  id: Document
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Document
+  nameWithType: Icons.Document
+  fullName: FluentGpu.Controls.Icons.Document
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Document
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Document = ""
+    return:
+      type: System.String
+    content.vb: Public Const Document As String = ""
+- uid: FluentGpu.Controls.Icons.Copy
+  commentId: F:FluentGpu.Controls.Icons.Copy
+  id: Copy
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Copy
+  nameWithType: Icons.Copy
+  fullName: FluentGpu.Controls.Icons.Copy
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Copy
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Copy = ""
+    return:
+      type: System.String
+    content.vb: Public Const Copy As String = ""
+- uid: FluentGpu.Controls.Icons.Link
+  commentId: F:FluentGpu.Controls.Icons.Link
+  id: Link
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Link
+  nameWithType: Icons.Link
+  fullName: FluentGpu.Controls.Icons.Link
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Link
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Link = ""
+    return:
+      type: System.String
+    content.vb: Public Const Link As String = ""
+- uid: FluentGpu.Controls.Icons.Globe
+  commentId: F:FluentGpu.Controls.Icons.Globe
+  id: Globe
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Globe
+  nameWithType: Icons.Globe
+  fullName: FluentGpu.Controls.Icons.Globe
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Globe
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Globe = ""
+    return:
+      type: System.String
+    content.vb: Public Const Globe As String = ""
+- uid: FluentGpu.Controls.Icons.OpenInNewWindow
+  commentId: F:FluentGpu.Controls.Icons.OpenInNewWindow
+  id: OpenInNewWindow
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: OpenInNewWindow
+  nameWithType: Icons.OpenInNewWindow
+  fullName: FluentGpu.Controls.Icons.OpenInNewWindow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenInNewWindow
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string OpenInNewWindow = ""
+    return:
+      type: System.String
+    content.vb: Public Const OpenInNewWindow As String = ""
+- uid: FluentGpu.Controls.Icons.Font
+  commentId: F:FluentGpu.Controls.Icons.Font
+  id: Font
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Font
+  nameWithType: Icons.Font
+  fullName: FluentGpu.Controls.Icons.Font
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Font
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Font = ""
+    return:
+      type: System.String
+    content.vb: Public Const Font As String = ""
+- uid: FluentGpu.Controls.Icons.Brush
+  commentId: F:FluentGpu.Controls.Icons.Brush
+  id: Brush
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Brush
+  nameWithType: Icons.Brush
+  fullName: FluentGpu.Controls.Icons.Brush
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Brush
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Brush = ""
+    return:
+      type: System.String
+    content.vb: Public Const Brush As String = ""
+- uid: FluentGpu.Controls.Icons.Movie
+  commentId: F:FluentGpu.Controls.Icons.Movie
+  id: Movie
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Movie
+  nameWithType: Icons.Movie
+  fullName: FluentGpu.Controls.Icons.Movie
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Movie
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Movie = ""
+    return:
+      type: System.String
+    content.vb: Public Const Movie As String = ""
+- uid: FluentGpu.Controls.Icons.ChromeMinimize
+  commentId: F:FluentGpu.Controls.Icons.ChromeMinimize
+  id: ChromeMinimize
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChromeMinimize
+  nameWithType: Icons.ChromeMinimize
+  fullName: FluentGpu.Controls.Icons.ChromeMinimize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChromeMinimize
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChromeMinimize = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChromeMinimize As String = ""
+- uid: FluentGpu.Controls.Icons.ChromeMaximize
+  commentId: F:FluentGpu.Controls.Icons.ChromeMaximize
+  id: ChromeMaximize
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChromeMaximize
+  nameWithType: Icons.ChromeMaximize
+  fullName: FluentGpu.Controls.Icons.ChromeMaximize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChromeMaximize
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChromeMaximize = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChromeMaximize As String = ""
+- uid: FluentGpu.Controls.Icons.ChromeRestore
+  commentId: F:FluentGpu.Controls.Icons.ChromeRestore
+  id: ChromeRestore
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChromeRestore
+  nameWithType: Icons.ChromeRestore
+  fullName: FluentGpu.Controls.Icons.ChromeRestore
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChromeRestore
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChromeRestore = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChromeRestore As String = ""
+- uid: FluentGpu.Controls.Icons.ChromeClose
+  commentId: F:FluentGpu.Controls.Icons.ChromeClose
+  id: ChromeClose
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChromeClose
+  nameWithType: Icons.ChromeClose
+  fullName: FluentGpu.Controls.Icons.ChromeClose
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChromeClose
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ChromeClose = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChromeClose As String = ""
+- uid: FluentGpu.Controls.Icons.RevealPassword
+  commentId: F:FluentGpu.Controls.Icons.RevealPassword
+  id: RevealPassword
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: RevealPassword
+  nameWithType: Icons.RevealPassword
+  fullName: FluentGpu.Controls.Icons.RevealPassword
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RevealPassword
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string RevealPassword = ""
+    return:
+      type: System.String
+    content.vb: Public Const RevealPassword As String = ""
+- uid: FluentGpu.Controls.Icons.ClearText
+  commentId: F:FluentGpu.Controls.Icons.ClearText
+  id: ClearText
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ClearText
+  nameWithType: Icons.ClearText
+  fullName: FluentGpu.Controls.Icons.ClearText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClearText
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string ClearText = ""
+    return:
+      type: System.String
+    content.vb: Public Const ClearText As String = ""
+- uid: FluentGpu.Controls.Icons.CaretUpSolid
+  commentId: F:FluentGpu.Controls.Icons.CaretUpSolid
+  id: CaretUpSolid
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: CaretUpSolid
+  nameWithType: Icons.CaretUpSolid
+  fullName: FluentGpu.Controls.Icons.CaretUpSolid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretUpSolid
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string CaretUpSolid = ""
+    return:
+      type: System.String
+    content.vb: Public Const CaretUpSolid As String = ""
+- uid: FluentGpu.Controls.Icons.CaretDownSolid
+  commentId: F:FluentGpu.Controls.Icons.CaretDownSolid
+  id: CaretDownSolid
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: CaretDownSolid
+  nameWithType: Icons.CaretDownSolid
+  fullName: FluentGpu.Controls.Icons.CaretDownSolid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretDownSolid
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string CaretDownSolid = ""
+    return:
+      type: System.String
+    content.vb: Public Const CaretDownSolid As String = ""
+- uid: FluentGpu.Controls.Icons.NumberBoxPopupIndicator
+  commentId: F:FluentGpu.Controls.Icons.NumberBoxPopupIndicator
+  id: NumberBoxPopupIndicator
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: NumberBoxPopupIndicator
+  nameWithType: Icons.NumberBoxPopupIndicator
+  fullName: FluentGpu.Controls.Icons.NumberBoxPopupIndicator
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NumberBoxPopupIndicator
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string NumberBoxPopupIndicator = ""
+    return:
+      type: System.String
+    content.vb: Public Const NumberBoxPopupIndicator As String = ""
+- uid: FluentGpu.Controls.Icons.ChevronRightMed
+  commentId: F:FluentGpu.Controls.Icons.ChevronRightMed
+  id: ChevronRightMed
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: ChevronRightMed
+  nameWithType: Icons.ChevronRightMed
+  fullName: FluentGpu.Controls.Icons.ChevronRightMed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronRightMed
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The DEFAULT MenuFlyoutSubItem cascade chevron - ChevronRightMed E974 @12px
+        (MenuFlyout_themeresources.xaml:620 FlyoutButtonChevron + :720 SubItemChevron, both Glyph="&amp;#xE974;").
+        NOTE: the plain ChevronRight E76C is used only by the RadioMenuFlyoutSubItemStyle
+        (RadioMenuFlyoutItem_themeresources.xaml:198) and the CommandBarFlyout secondary sub-item
+        (CommandBarFlyout_themeresources.xaml:303) - see <xref href="FluentGpu.Controls.Icons.ChevronRight" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public const string ChevronRightMed = ""
+    return:
+      type: System.String
+    content.vb: Public Const ChevronRightMed As String = ""
+- uid: FluentGpu.Controls.Icons.RadioBullet
+  commentId: F:FluentGpu.Controls.Icons.RadioBullet
+  id: RadioBullet
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: RadioBullet
+  nameWithType: Icons.RadioBullet
+  fullName: FluentGpu.Controls.Icons.RadioBullet
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RadioBullet
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: RadioMenuFlyoutItem bullet (RadioMenuFlyoutItem_themeresources.xaml:94 CheckGlyph Glyph="&amp;#xE915;").
+  example: []
+  syntax:
+    content: public const string RadioBullet = ""
+    return:
+      type: System.String
+    content.vb: Public Const RadioBullet As String = ""
+- uid: FluentGpu.Controls.Icons.InfoBarBackgroundCircle
+  commentId: F:FluentGpu.Controls.Icons.InfoBarBackgroundCircle
+  id: InfoBarBackgroundCircle
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: InfoBarBackgroundCircle
+  nameWithType: Icons.InfoBarBackgroundCircle
+  fullName: FluentGpu.Controls.Icons.InfoBarBackgroundCircle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBarBackgroundCircle
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string InfoBarBackgroundCircle = ""
+    return:
+      type: System.String
+    content.vb: Public Const InfoBarBackgroundCircle As String = ""
+- uid: FluentGpu.Controls.Icons.StatusInfo
+  commentId: F:FluentGpu.Controls.Icons.StatusInfo
+  id: StatusInfo
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: StatusInfo
+  nameWithType: Icons.StatusInfo
+  fullName: FluentGpu.Controls.Icons.StatusInfo
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StatusInfo
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string StatusInfo = ""
+    return:
+      type: System.String
+    content.vb: Public Const StatusInfo As String = ""
+- uid: FluentGpu.Controls.Icons.StatusError
+  commentId: F:FluentGpu.Controls.Icons.StatusError
+  id: StatusError
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: StatusError
+  nameWithType: Icons.StatusError
+  fullName: FluentGpu.Controls.Icons.StatusError
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StatusError
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string StatusError = ""
+    return:
+      type: System.String
+    content.vb: Public Const StatusError As String = ""
+- uid: FluentGpu.Controls.Icons.StatusWarning
+  commentId: F:FluentGpu.Controls.Icons.StatusWarning
+  id: StatusWarning
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: StatusWarning
+  nameWithType: Icons.StatusWarning
+  fullName: FluentGpu.Controls.Icons.StatusWarning
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StatusWarning
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string StatusWarning = ""
+    return:
+      type: System.String
+    content.vb: Public Const StatusWarning As String = ""
+- uid: FluentGpu.Controls.Icons.StatusSuccess
+  commentId: F:FluentGpu.Controls.Icons.StatusSuccess
+  id: StatusSuccess
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: StatusSuccess
+  nameWithType: Icons.StatusSuccess
+  fullName: FluentGpu.Controls.Icons.StatusSuccess
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StatusSuccess
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string StatusSuccess = ""
+    return:
+      type: System.String
+    content.vb: Public Const StatusSuccess As String = ""
+- uid: FluentGpu.Controls.Icons.Attention
+  commentId: F:FluentGpu.Controls.Icons.Attention
+  id: Attention
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Attention
+  nameWithType: Icons.Attention
+  fullName: FluentGpu.Controls.Icons.Attention
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Attention
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Attention = ""
+    return:
+      type: System.String
+    content.vb: Public Const Attention As String = ""
+- uid: FluentGpu.Controls.Icons.Important
+  commentId: F:FluentGpu.Controls.Icons.Important
+  id: Important
+  parent: FluentGpu.Controls.Icons
+  langs:
+  - csharp
+  - vb
+  name: Important
+  nameWithType: Icons.Important
+  fullName: FluentGpu.Controls.Icons.Important
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Icons.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Important
+    path: ../../src/FluentGpu.Controls/Icons.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const string Important = ""
+    return:
+      type: System.String
+    content.vb: Public Const Important As String = ""
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.Icons.ChevronRight
+  commentId: F:FluentGpu.Controls.Icons.ChevronRight
+  href: FluentGpu.Controls.Icons.html#FluentGpu_Controls_Icons_ChevronRight
+  name: ChevronRight
+  nameWithType: Icons.ChevronRight
+  fullName: FluentGpu.Controls.Icons.ChevronRight

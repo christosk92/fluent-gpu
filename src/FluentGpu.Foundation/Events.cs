@@ -16,6 +16,56 @@ public enum KeyModifiers : byte
 public enum PointerKind : byte { Mouse = 0, Touch = 1, Pen = 2 }
 
 /// <summary>
+/// The public gesture taxonomy the <c>UseGesture</c> hook (input-a11y.md §13) declares against — the app-facing
+/// projection of the internal §7A.1 arena <c>GestureKind</c> (the recognizer-member identity stays Input-private). A
+/// component that declares one of these enrolls a matching gesture-arena member on its node; the dispatcher routes the
+/// arena WINNER's event to the handler (the §7A.5 first-accept/last-standing resolution decides which gesture fires).
+///
+/// <b>Phase-3 usable surface:</b> <see cref="Tap"/> (a within-slop down→up), <see cref="Hold"/> (a long-press that
+/// promotes mid-stream), and <see cref="Pan"/> (a directional drag over the node, carrying end-velocity for fling
+/// hand-off). <see cref="DoubleTap"/>/<see cref="RightTap"/>/<see cref="Drag"/>/<see cref="Pinch"/> are reserved
+/// names the arena already recognizes internally; their <c>UseGesture</c> wiring is Phase-4 surface (pinch-zoom, the
+/// double/right-tap routing) and a declaration against them is accepted but not yet routed.
+/// </summary>
+public enum GestureType : byte
+{
+    /// <summary>A within-slop press→release (the §7A pointer-up sweep resolves a clean tap to this).</summary>
+    Tap,
+    /// <summary>A long-press: the recognizer promotes to an eager arena win after the hold dwell (~500ms).</summary>
+    Hold,
+    /// <summary>A directional drag over the node: eager-wins on the slop cross; the end event carries the fling velocity.</summary>
+    Pan,
+    /// <summary>Reserved (Phase-4 routing): a double press→release inside the inter-tap window.</summary>
+    DoubleTap,
+    /// <summary>Reserved (Phase-4 routing): a right-button / long-press context tap.</summary>
+    RightTap,
+    /// <summary>Reserved (Phase-4 routing): a free drag (no scroll-axis lock).</summary>
+    Drag,
+    /// <summary>Reserved (Phase-4 routing): a two-contact pinch/zoom manipulation.</summary>
+    Pinch,
+}
+
+/// <summary>
+/// The payload routed to a <c>UseGesture</c> handler when its node WINS the gesture arena (input-a11y.md §13/§7A). ONE
+/// instance is reused for the whole gesture surface (0 steady-state alloc — the dispatcher fills it before each
+/// invocation); a handler copies what it keeps, never holds the reference. <see cref="Kind"/> is the resolved gesture,
+/// <see cref="Position"/> the window-space pointer (for <see cref="GestureType.Tap"/>/<see cref="GestureType.Hold"/>
+/// the down/press point; for <see cref="GestureType.Pan"/> the latest sample), and <see cref="Velocity"/> the
+/// end-of-gesture flick speed (px/s) — meaningful for the Pan-end fling, zero otherwise.
+/// </summary>
+public sealed class GestureEventArgs
+{
+    /// <summary>The resolved gesture this event reports (the arena winner's kind).</summary>
+    public GestureType Kind;
+    /// <summary>Pointer position in window space (tap/hold: the press point; pan: the latest sample).</summary>
+    public Point2 Position;
+    /// <summary>End-of-gesture flick velocity (px/s; Pan-end only — zero for tap/hold).</summary>
+    public Point2 Velocity;
+    /// <summary>The device class that drove the gesture (touch is the Phase-3 driver; mouse/pen route through it too).</summary>
+    public PointerKind Pointer;
+}
+
+/// <summary>
 /// Keyboard event passed to node handlers during tunnel/bubble routing. <see cref="Handled"/> stops propagation.
 /// Carries the modifier chord and the auto-repeat flag (Win32 lParam bit 30) so editors can do Ctrl+arrow word
 /// navigation and Shift+arrow selection without re-querying the keyboard.

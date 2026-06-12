@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Ui | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Ui | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="Fluent C# markup. using static FluentGpu.Dsl.Ui; to author trees as expressions.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Dsl_Ui.md&amp;value=---%0Auid%3A%20FluentGpu.Dsl.Ui%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Dsl.Ui">
+
+
+
+  <h1 id="FluentGpu_Dsl_Ui" data-uid="FluentGpu.Dsl.Ui" class="text-break">
+Class Ui  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L15"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Dsl.html">Dsl</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Dsl.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>Fluent C# markup. <code>using static FluentGpu.Dsl.Ui;</code> to author trees as expressions.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class Ui</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Ui</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Dsl_Ui_AutoGrid_" data-uid="FluentGpu.Dsl.Ui.AutoGrid*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_AutoGrid_System_Single_System_Single_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.AutoGrid(System.Single,System.Single,System.Single,FluentGpu.Dsl.Element[])">
+  AutoGrid(float, float, float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L130"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A responsive auto-fill grid: packs as many equal (1fr) columns as fit at ≥ <code class="paramref">minColWidth</code>,
+stretched to fill the width with no ragged edge, reflowing the column count as the width changes — CSS
+<code>repeat(auto-fill, minmax(minColWidth, 1fr))</code>. Cells flow row-major; <code class="paramref">gap</code> applies on both axes.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static GridEl AutoGrid(float minColWidth, float gap, float rowHeight, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>minColWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.GridEl.html">GridEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Body_" data-uid="FluentGpu.Dsl.Ui.Body*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Body_System_String_" data-uid="FluentGpu.Dsl.Ui.Body(System.String)">
+  Body(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L18"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Body(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_BodyLarge_" data-uid="FluentGpu.Dsl.Ui.BodyLarge*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_BodyLarge_System_String_" data-uid="FluentGpu.Dsl.Ui.BodyLarge(System.String)">
+  BodyLarge(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L20"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl BodyLarge(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_BodyStrong_" data-uid="FluentGpu.Dsl.Ui.BodyStrong*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_BodyStrong_System_String_" data-uid="FluentGpu.Dsl.Ui.BodyStrong(System.String)">
+  BodyStrong(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl BodyStrong(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Caption_" data-uid="FluentGpu.Dsl.Ui.Caption*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Caption_System_String_" data-uid="FluentGpu.Dsl.Ui.Caption(System.String)">
+  Caption(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L17"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Caption(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Card_" data-uid="FluentGpu.Dsl.Ui.Card*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Card_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.Card(FluentGpu.Dsl.Element[])">
+  Card(params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L137"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A Fluent card surface: CardBackground fill + CardStroke 1px border + OverlayCornerRadius + a resting
+elevation shadow + inner padding. The workhorse container for the gallery's example cards and sample tiles.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Card(params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Display_" data-uid="FluentGpu.Dsl.Ui.Display*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Display_System_String_" data-uid="FluentGpu.Dsl.Ui.Display(System.String)">
+  Display(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Display(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Divider_" data-uid="FluentGpu.Dsl.Ui.Divider*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Divider_System_Boolean_" data-uid="FluentGpu.Dsl.Ui.Divider(System.Boolean)">
+  Divider(bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L153"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A 1px hairline divider (DividerStroke). Horizontal by default; vertical stretches to its parent's cross axis.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Divider(bool vertical = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>vertical</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Grid_" data-uid="FluentGpu.Dsl.Ui.Grid*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Grid_FluentGpu_Foundation_TrackSize___System_Single_System_Single_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.Grid(FluentGpu.Foundation.TrackSize[],System.Single,System.Single,System.Single,FluentGpu.Dsl.Element[])">
+  Grid(TrackSize[], float, float, float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L116"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A CSS-grid of <code class="paramref">children</code> auto-flowed into <code class="paramref">columns</code> tracks.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static GridEl Grid(TrackSize[] columns, float colGap, float rowGap, float rowHeight, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>columns</code> <a class="xref" href="FluentGpu.Foundation.TrackSize.html">TrackSize</a>[]</dt>
+    <dd></dd>
+    <dt><code>colGap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowGap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.GridEl.html">GridEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_HStack_" data-uid="FluentGpu.Dsl.Ui.HStack*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_HStack_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.HStack(System.Single,FluentGpu.Dsl.Element[])">
+  HStack(float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L12"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl HStack(float gap, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Heading_" data-uid="FluentGpu.Dsl.Ui.Heading*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Heading_System_String_" data-uid="FluentGpu.Dsl.Ui.Heading(System.String)">
+  Heading(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L23"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Heading(string text)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Icon_" data-uid="FluentGpu.Dsl.Ui.Icon*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Icon_System_String_System_Single_System_Nullable_FluentGpu_Foundation_ColorF__System_String_" data-uid="FluentGpu.Dsl.Ui.Icon(System.String,System.Single,System.Nullable{FluentGpu.Foundation.ColorF},System.String)">
+  Icon(string, float, ColorF?, string?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A font icon (WinUI FontIcon): a glyph rendered from an icon font. Use Icons for the glyph,
+or pass any codepoint string (e.g. &quot;&quot;) + a <code class="paramref">family</code> (system name or &quot;path.ttf#Family&quot;).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Icon(string glyph, float size = 16, ColorF? color = null, string? family = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>glyph</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>size</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>color</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>family</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Image_" data-uid="FluentGpu.Dsl.Ui.Image*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Image_System_String_FluentGpu_Foundation_ImageFit_System_Single_System_Single_System_Single_System_Nullable_FluentGpu_Foundation_ColorF__System_String_System_Nullable_FluentGpu_Foundation_ImageTransition__" data-uid="FluentGpu.Dsl.Ui.Image(System.String,FluentGpu.Foundation.ImageFit,System.Single,System.Single,System.Single,System.Nullable{FluentGpu.Foundation.ColorF},System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})">
+  Image(string, ImageFit, float, float, float, ColorF?, string?, ImageTransition?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L61"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A responsive image: no fixed extent — it fills the width its layout gives it and (with
+<code class="paramref">aspect</code> set) derives its height (CSS <code>aspect-ratio</code>), then maps its pixels into that box
+per <code class="paramref">fit</code> (default <a class="xref" href="FluentGpu.Foundation.ImageFit.html#FluentGpu_Foundation_ImageFit_Cover">Cover</a> — aspect-preserving crop). The album/thumbnail
+grid shape. <code class="paramref">decodePx</code> is the decode-size hint (the real box size isn't known at request time).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ImageEl Image(string source, ImageFit fit, float aspect = NaN, float decodePx = NaN, float corners = 0, ColorF? placeholder = null, string? blurHash = null, ImageTransition? transition = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>source</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>fit</code> <a class="xref" href="FluentGpu.Foundation.ImageFit.html">ImageFit</a></dt>
+    <dd></dd>
+    <dt><code>aspect</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>decodePx</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>corners</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>blurHash</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>transition</code> <a class="xref" href="FluentGpu.Foundation.ImageTransition.html">ImageTransition</a>?</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.ImageEl.html">ImageEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Image_" data-uid="FluentGpu.Dsl.Ui.Image*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Image_System_String_FluentGpu_Foundation_ImageFit_System_Single_System_Single_System_Single_System_String_" data-uid="FluentGpu.Dsl.Ui.Image(System.String,FluentGpu.Foundation.ImageFit,System.Single,System.Single,System.Single,System.String)">
+  Image(string, ImageFit, float, float, float, string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L76"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A responsive image whose pending placeholder comes from a CSS-style hex color code.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ImageEl Image(string source, ImageFit fit, float aspect, float decodePx, float corners, string placeholder)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>source</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>fit</code> <a class="xref" href="FluentGpu.Foundation.ImageFit.html">ImageFit</a></dt>
+    <dd></dd>
+    <dt><code>aspect</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>decodePx</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>corners</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.ImageEl.html">ImageEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Image_" data-uid="FluentGpu.Dsl.Ui.Image*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Image_System_String_System_Single_System_Single_System_Single_System_Nullable_FluentGpu_Foundation_ColorF__System_String_System_Nullable_FluentGpu_Foundation_ImageTransition__" data-uid="FluentGpu.Dsl.Ui.Image(System.String,System.Single,System.Single,System.Single,System.Nullable{FluentGpu.Foundation.ColorF},System.String,System.Nullable{FluentGpu.Foundation.ImageTransition})">
+  Image(string, float, float, float, ColorF?, string?, ImageTransition?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L40"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>An async, cached, residency-pinned image (album art). Shows a placeholder (flat tint, or a BlurHash LQIP
+preview when <code class="paramref">blurHash</code> is given) until the full-res art decodes off-thread.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ImageEl Image(string source, float width, float height, float corners = 0, ColorF? placeholder = null, string? blurHash = null, ImageTransition? transition = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>source</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>width</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>corners</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>blurHash</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>transition</code> <a class="xref" href="FluentGpu.Foundation.ImageTransition.html">ImageTransition</a>?</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.ImageEl.html">ImageEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Image_" data-uid="FluentGpu.Dsl.Ui.Image*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Image_System_String_System_Single_System_Single_System_Single_System_String_" data-uid="FluentGpu.Dsl.Ui.Image(System.String,System.Single,System.Single,System.Single,System.String)">
+  Image(string, float, float, float, string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>An async image whose pending placeholder comes from a CSS-style hex color code.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ImageEl Image(string source, float width, float height, float corners, string placeholder)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>source</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>width</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>corners</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>placeholder</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.ImageEl.html">ImageEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Layer_" data-uid="FluentGpu.Dsl.Ui.Layer*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Layer_FluentGpu_Foundation_Edges4_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.Layer(FluentGpu.Foundation.Edges4,FluentGpu.Dsl.Element[])">
+  Layer(Edges4, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L145"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A layer surface (flyout / expander body): LayerFill + SurfaceStroke + OverlayCornerRadius + flyout shadow.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Layer(Edges4 pad, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pad</code> <a class="xref" href="FluentGpu.Foundation.Edges4.html">Edges4</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_LinearGradient_" data-uid="FluentGpu.Dsl.Ui.LinearGradient*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_LinearGradient_System_Single_FluentGpu_Foundation_GradientStop___" data-uid="FluentGpu.Dsl.Ui.LinearGradient(System.Single,FluentGpu.Foundation.GradientStop[])">
+  LinearGradient(float, params GradientStop[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L178"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A linear gradient fill spec (angle 0 = left→right, 90 = top→bottom). Apply with <code>.Gradient(...)</code>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static GradientSpec LinearGradient(float angleDeg, params GradientStop[] stops)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>angleDeg</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>stops</code> <a class="xref" href="FluentGpu.Foundation.GradientStop.html">GradientStop</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.GradientSpec.html">GradientSpec</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Panel_" data-uid="FluentGpu.Dsl.Ui.Panel*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Panel_FluentGpu_Foundation_Edges4_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.Panel(FluentGpu.Foundation.Edges4,System.Single,FluentGpu.Dsl.Element[])">
+  Panel(Edges4, float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L16"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A padded panel (container with inner padding) — gives content WinUI-like breathing room.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Panel(Edges4 padding, float gap, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>padding</code> <a class="xref" href="FluentGpu.Foundation.Edges4.html">Edges4</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_ParseColorCode_" data-uid="FluentGpu.Dsl.Ui.ParseColorCode*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_ParseColorCode_System_String_FluentGpu_Foundation_ColorF_" data-uid="FluentGpu.Dsl.Ui.ParseColorCode(System.String,FluentGpu.Foundation.ColorF)">
+  ParseColorCode(string?, ColorF)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L112"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ColorF ParseColorCode(string? value, ColorF fallback)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>fallback</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Pill_" data-uid="FluentGpu.Dsl.Ui.Pill*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Pill_System_String_System_Boolean_System_Action_" data-uid="FluentGpu.Dsl.Ui.Pill(System.String,System.Boolean,System.Action)">
+  Pill(string, bool, Action)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L167"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A SelectorBar pill: rounded-16, accent-filled when selected, subtle hover otherwise.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Pill(string label, bool selected, Action onClick)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>label</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>selected</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>onClick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_RadialGradient_" data-uid="FluentGpu.Dsl.Ui.RadialGradient*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_RadialGradient_FluentGpu_Foundation_GradientStop___" data-uid="FluentGpu.Dsl.Ui.RadialGradient(FluentGpu.Foundation.GradientStop[])">
+  RadialGradient(params GradientStop[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L182"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A radial gradient fill spec (center→edge). Apply with <code>.Gradient(...)</code>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static GradientSpec RadialGradient(params GradientStop[] stops)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>stops</code> <a class="xref" href="FluentGpu.Foundation.GradientStop.html">GradientStop</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.GradientSpec.html">GradientSpec</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_ScrollView_" data-uid="FluentGpu.Dsl.Ui.ScrollView*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_ScrollView_FluentGpu_Dsl_Element_System_Boolean_" data-uid="FluentGpu.Dsl.Ui.ScrollView(FluentGpu.Dsl.Element,System.Boolean)">
+  ScrollView(Element, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L35"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A vertically-scrolling, clipping viewport over <code class="paramref">content</code> (typically a tall VStack).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static ScrollEl ScrollView(Element content, bool horizontal = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>content</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+    <dt><code>horizontal</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.ScrollEl.html">ScrollEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_SectionHeader_" data-uid="FluentGpu.Dsl.Ui.SectionHeader*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_SectionHeader_System_String_System_String_" data-uid="FluentGpu.Dsl.Ui.SectionHeader(System.String,System.String)">
+  SectionHeader(string, string?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L158"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A section header: a BodyStrong title (+ optional Caption subtitle) with the standard top rhythm.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl SectionHeader(string title, string? caption = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>title</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>caption</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Subtitle_" data-uid="FluentGpu.Dsl.Ui.Subtitle*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Subtitle_System_String_" data-uid="FluentGpu.Dsl.Ui.Subtitle(System.String)">
+  Subtitle(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L21"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Subtitle(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Text_" data-uid="FluentGpu.Dsl.Ui.Text*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Text_System_String_" data-uid="FluentGpu.Dsl.Ui.Text(System.String)">
+  Text(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L26"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Text(string text)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_Title_" data-uid="FluentGpu.Dsl.Ui.Title*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_Title_System_String_" data-uid="FluentGpu.Dsl.Ui.Title(System.String)">
+  Title(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl Title(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_TitleLarge_" data-uid="FluentGpu.Dsl.Ui.TitleLarge*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_TitleLarge_System_String_" data-uid="FluentGpu.Dsl.Ui.TitleLarge(System.String)">
+  TitleLarge(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Typography.cs/#L23"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static TextEl TitleLarge(string t)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>t</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_TryParseColorCode_" data-uid="FluentGpu.Dsl.Ui.TryParseColorCode*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_TryParseColorCode_System_String_FluentGpu_Foundation_ColorF__" data-uid="FluentGpu.Dsl.Ui.TryParseColorCode(System.String,FluentGpu.Foundation.ColorF@)">
+  TryParseColorCode(string?, out ColorF)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static bool TryParseColorCode(string? value, out ColorF color)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>color</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_UniformGrid_" data-uid="FluentGpu.Dsl.Ui.UniformGrid*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_UniformGrid_System_Int32_System_Single_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.UniformGrid(System.Int32,System.Single,System.Single,FluentGpu.Dsl.Element[])">
+  UniformGrid(int, float, float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A uniform N-column grid of equal star tracks (the common album/artist card-grid shape).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static GridEl UniformGrid(int columns, float gap, float rowHeight, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>columns</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.GridEl.html">GridEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_VStack_" data-uid="FluentGpu.Dsl.Ui.VStack*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_VStack_System_Single_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.VStack(System.Single,FluentGpu.Dsl.Element[])">
+  VStack(float, params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L9"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl VStack(float gap, params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>gap</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_Ui_ZStack_" data-uid="FluentGpu.Dsl.Ui.ZStack*"></a>
+
+  <h3 id="FluentGpu_Dsl_Ui_ZStack_FluentGpu_Dsl_Element___" data-uid="FluentGpu.Dsl.Ui.ZStack(FluentGpu.Dsl.Element[])">
+  ZStack(params Element[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Factories.cs/#L20"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A z-stack: children overlay at the origin, painted in order (last on top) — overlays, scrims, flyouts.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl ZStack(params Element[] children)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>children</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

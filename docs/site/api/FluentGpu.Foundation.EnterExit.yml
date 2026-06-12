@@ -1,0 +1,636 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.EnterExit
+  commentId: T:FluentGpu.Foundation.EnterExit
+  id: EnterExit
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.EnterExit.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  - FluentGpu.Foundation.EnterExit.Active
+  - FluentGpu.Foundation.EnterExit.Dx
+  - FluentGpu.Foundation.EnterExit.Dy
+  - FluentGpu.Foundation.EnterExit.Opacity
+  - FluentGpu.Foundation.EnterExit.Sx
+  - FluentGpu.Foundation.EnterExit.Sy
+  langs:
+  - csharp
+  - vb
+  name: EnterExit
+  nameWithType: EnterExit
+  fullName: FluentGpu.Foundation.EnterExit
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EnterExit
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
+        (offset + scale + opacity), relative to its laid-out rect. <code>Active</code>=false ⇒ the node simply snaps in/out.
+  example: []
+  syntax:
+    content: 'public readonly record struct EnterExit : IEquatable<EnterExit>'
+    content.vb: Public Structure EnterExit Implements IEquatable(Of EnterExit)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.EnterExit}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.EnterExit.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  commentId: M:FluentGpu.Foundation.EnterExit.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Boolean)'
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: EnterExit(float, float, float, float, float, bool)
+  nameWithType: EnterExit.EnterExit(float, float, float, float, float, bool)
+  fullName: FluentGpu.Foundation.EnterExit.EnterExit(float, float, float, float, float, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Presented-space terminal for an inserted/removed node: where it animates FROM on enter / TO on exit
+        (offset + scale + opacity), relative to its laid-out rect. <code>Active</code>=false ⇒ the node simply snaps in/out.
+  example: []
+  syntax:
+    content: public EnterExit(float Dx = 0, float Dy = 0, float Sx = 1, float Sy = 1, float Opacity = 1, bool Active = false)
+    parameters:
+    - id: Dx
+      type: System.Single
+    - id: Dy
+      type: System.Single
+    - id: Sx
+      type: System.Single
+    - id: Sy
+      type: System.Single
+    - id: Opacity
+      type: System.Single
+    - id: Active
+      type: System.Boolean
+    content.vb: Public Sub New(Dx As Single = 0, Dy As Single = 0, Sx As Single = 1, Sy As Single = 1, Opacity As Single = 1, Active As Boolean = False)
+  overload: FluentGpu.Foundation.EnterExit.#ctor*
+  nameWithType.vb: EnterExit.New(Single, Single, Single, Single, Single, Boolean)
+  fullName.vb: FluentGpu.Foundation.EnterExit.New(Single, Single, Single, Single, Single, Boolean)
+  name.vb: New(Single, Single, Single, Single, Single, Boolean)
+- uid: FluentGpu.Foundation.EnterExit.Dx
+  commentId: P:FluentGpu.Foundation.EnterExit.Dx
+  id: Dx
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Dx
+  nameWithType: EnterExit.Dx
+  fullName: FluentGpu.Foundation.EnterExit.Dx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dx
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Dx { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Dx As Single
+  overload: FluentGpu.Foundation.EnterExit.Dx*
+- uid: FluentGpu.Foundation.EnterExit.Dy
+  commentId: P:FluentGpu.Foundation.EnterExit.Dy
+  id: Dy
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Dy
+  nameWithType: EnterExit.Dy
+  fullName: FluentGpu.Foundation.EnterExit.Dy
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dy
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Dy { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Dy As Single
+  overload: FluentGpu.Foundation.EnterExit.Dy*
+- uid: FluentGpu.Foundation.EnterExit.Sx
+  commentId: P:FluentGpu.Foundation.EnterExit.Sx
+  id: Sx
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Sx
+  nameWithType: EnterExit.Sx
+  fullName: FluentGpu.Foundation.EnterExit.Sx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Sx
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Sx { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Sx As Single
+  overload: FluentGpu.Foundation.EnterExit.Sx*
+- uid: FluentGpu.Foundation.EnterExit.Sy
+  commentId: P:FluentGpu.Foundation.EnterExit.Sy
+  id: Sy
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Sy
+  nameWithType: EnterExit.Sy
+  fullName: FluentGpu.Foundation.EnterExit.Sy
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Sy
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Sy { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Sy As Single
+  overload: FluentGpu.Foundation.EnterExit.Sy*
+- uid: FluentGpu.Foundation.EnterExit.Opacity
+  commentId: P:FluentGpu.Foundation.EnterExit.Opacity
+  id: Opacity
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: EnterExit.Opacity
+  fullName: FluentGpu.Foundation.EnterExit.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Foundation.EnterExit.Opacity*
+- uid: FluentGpu.Foundation.EnterExit.Active
+  commentId: P:FluentGpu.Foundation.EnterExit.Active
+  id: Active
+  parent: FluentGpu.Foundation.EnterExit
+  langs:
+  - csharp
+  - vb
+  name: Active
+  nameWithType: EnterExit.Active
+  fullName: FluentGpu.Foundation.EnterExit.Active
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Active
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Active { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Active As Boolean
+  overload: FluentGpu.Foundation.EnterExit.Active*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.EnterExit}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.EnterExit}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<EnterExit>
+  nameWithType: IEquatable<EnterExit>
+  fullName: System.IEquatable<FluentGpu.Foundation.EnterExit>
+  nameWithType.vb: IEquatable(Of EnterExit)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.EnterExit)
+  name.vb: IEquatable(Of EnterExit)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.EnterExit
+    name: EnterExit
+    href: FluentGpu.Foundation.EnterExit.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.EnterExit
+    name: EnterExit
+    href: FluentGpu.Foundation.EnterExit.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.EnterExit.#ctor*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.#ctor
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit__ctor_System_Single_System_Single_System_Single_System_Single_System_Single_System_Boolean_
+  name: EnterExit
+  nameWithType: EnterExit.EnterExit
+  fullName: FluentGpu.Foundation.EnterExit.EnterExit
+  nameWithType.vb: EnterExit.New
+  fullName.vb: FluentGpu.Foundation.EnterExit.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.EnterExit.Dx*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Dx
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Dx
+  name: Dx
+  nameWithType: EnterExit.Dx
+  fullName: FluentGpu.Foundation.EnterExit.Dx
+- uid: FluentGpu.Foundation.EnterExit.Dy*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Dy
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Dy
+  name: Dy
+  nameWithType: EnterExit.Dy
+  fullName: FluentGpu.Foundation.EnterExit.Dy
+- uid: FluentGpu.Foundation.EnterExit.Sx*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Sx
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Sx
+  name: Sx
+  nameWithType: EnterExit.Sx
+  fullName: FluentGpu.Foundation.EnterExit.Sx
+- uid: FluentGpu.Foundation.EnterExit.Sy*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Sy
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Sy
+  name: Sy
+  nameWithType: EnterExit.Sy
+  fullName: FluentGpu.Foundation.EnterExit.Sy
+- uid: FluentGpu.Foundation.EnterExit.Opacity*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Opacity
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Opacity
+  name: Opacity
+  nameWithType: EnterExit.Opacity
+  fullName: FluentGpu.Foundation.EnterExit.Opacity
+- uid: FluentGpu.Foundation.EnterExit.Active*
+  commentId: Overload:FluentGpu.Foundation.EnterExit.Active
+  href: FluentGpu.Foundation.EnterExit.html#FluentGpu_Foundation_EnterExit_Active
+  name: Active
+  nameWithType: EnterExit.Active
+  fullName: FluentGpu.Foundation.EnterExit.Active

@@ -41,6 +41,14 @@ public sealed class ScrollAnimator
     /// <summary>Engine-deliberate hover-flash retire delay (see class remarks): contract-begin + contract.</summary>
     public const float LeaveHideMs = ContractBeginMs + ExpandContractMs;
 
+    /// <summary>Touch-fling friction: per-second exponential survival factor applied to the velocity each tick
+    /// (v *= FlingDecayPerS^dt_s) — the WinUI ScrollPresenter default inertia decay
+    /// (controls\dev\ScrollPresenter\ScrollPresenter.cpp:31, c_scrollPresenterDefaultInertiaDecayRate = 0.95).</summary>
+    public const float FlingDecayPerS = 0.95f;
+    /// <summary>Below this speed the fling has settled: it reverts to TargetChase with zero velocity (a slow drift
+    /// reads as stopped, and snapping idle keeps the frame loop quiet). px/s.</summary>
+    public const float FlingMinVelocityPxPerS = 40f;
+
     private readonly SceneStore _scene;
     private readonly List<NodeHandle> _active = new();
     private readonly HashSet<int> _member = new();
@@ -60,13 +68,39 @@ public sealed class ScrollAnimator
         public float FadeFrom, FadeTarget, FadeClockMs;
     }
 
+    /// <summary><see cref="ScrollState.ScrollMode"/> value for an active touch fling (vs 0 = TargetChase).</summary>
+    private const byte FlingMode = 1;
+
     public ScrollAnimator(SceneStore scene) => _scene = scene;
     public Action RequestRerender { get; set; } = static () => { };
+
+    /// <summary>Set by the host: write an ABSOLUTE scroll offset through the Input chokepoint (<c>SetScrollOffset</c> —
+    /// clamp + content <c>-offset</c> transform + virtual re-realize), returning whether the viewport actually moved.
+    /// A Fling tick routes its integrated offset through here, NEVER raw <c>LocalTransform</c> / <c>LayoutDirty</c>; a
+    /// false return (or an unchanged offset) means a clamp boundary and ends the fling. Cross-assembly seam wired in the
+    /// host, the <c>AutoScrollBy</c>/<c>OnScrollArmed</c> precedent. Null = no fling write wired (a seeded fling no-ops).</summary>
+    public Func<NodeHandle, float, bool>? ScrollWrite { get; set; }
     public bool HasActive => _active.Count > 0;
+    /// <summary>Viewports currently scrolling/transitioning (the armed set) — O(1) census.</summary>
+    public int ActiveCount => _active.Count;
+    /// <summary>Viewports retaining a conscious-scrollbar timer row (survives drops until fully hidden) — O(1) census.</summary>
+    public int ConsciousStateCount => _state.Count;
 
     public void Arm(NodeHandle n)
     {
         if (!n.IsNull && _scene.IsLive(n) && _member.Add((int)n.Raw.Index)) _active.Add(n);
+    }
+
+    /// <summary>Cancel an active touch fling on <paramref name="n"/> (revert to TargetChase, zero the velocity) — the
+    /// explicit programmatic stop. The WIRED same-axis-wheel cancel is the <see cref="Tick"/> auto-detect: a smooth
+    /// wheel sets Target away from Offset, which the next fling tick sees and yields to TargetChase; this method covers
+    /// callers that want to abort a fling outright. Idempotent; leaves the node armed so the bar still settles.</summary>
+    public void CancelFling(NodeHandle n)
+    {
+        if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(n);
+        sc.ScrollMode = 0;
+        sc.FlingVelocity = 0f;
     }
 
     /// <summary>Reveal a viewport's scrollbar (pointer is over the scrollable area) and reset its idle timer so it
@@ -103,40 +137,73 @@ public sealed class ScrollAnimator
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
             float tgt = horizontal ? sc.TargetX : sc.TargetY;
-            float oldOff = off;
-            off += (tgt - off) * kOff;
-            if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
-            bool moved = off != oldOff;
-            if (horizontal) sc.OffsetX = off; else sc.OffsetY = off;
 
-            if (moved)
+            // ── Fling: friction-decay inertia (touch-up seeds FlingVelocity + ScrollMode=Fling). A same-axis wheel sets
+            // Target away from Offset (SetScrollOffset keeps Target==Offset every fling tick) → yield to TargetChase. ──
+            bool moved;
+            bool flinging = false;
+            if (sc.ScrollMode == FlingMode && MathF.Abs(tgt - off) < 0.5f)
             {
-                var content = sc.ContentNode;
-                if (!content.IsNull && _scene.IsLive(content))
+                float dtS = dtMs * 0.001f;
+                float v = sc.FlingVelocity * MathF.Pow(FlingDecayPerS, dtS);
+                moved = ScrollWrite?.Invoke(n, off + v * dtS) ?? false;   // through SetScrollOffset: clamp + transform + re-realize
+                off = horizontal ? sc.OffsetX : sc.OffsetY;              // re-read the clamped position (Target == Offset)
+                tgt = horizontal ? sc.TargetX : sc.TargetY;
+                if (!moved || MathF.Abs(v) < FlingMinVelocityPxPerS)     // a clamp boundary or a settle ends the fling
                 {
-                    ref NodePaint cp = ref _scene.Paint(content);
-                    cp.LocalTransform = Affine2D.Translation(horizontal ? -off : 0f, horizontal ? 0f : -off);
-                    _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                    sc.ScrollMode = 0;
+                    sc.FlingVelocity = 0f;
                 }
-                if (sc.ItemCount > 0)   // virtualization: re-realize only when visible range approaches realized-window edge
+                else
                 {
-                    int visibleFirst, visibleLast;
-                    float vp = horizontal ? sc.ViewportW : sc.ViewportH;
-                    if (sc.Layout is not null)
+                    sc.FlingVelocity = v;
+                    flinging = true;
+                }
+            }
+            else
+            {
+                if (sc.ScrollMode == FlingMode) { sc.ScrollMode = 0; sc.FlingVelocity = 0f; }   // wheel retargeted away → TargetChase
+                float oldOff = off;
+                off += (tgt - off) * kOff;
+                if (MathF.Abs(tgt - off) < 0.5f) off = tgt;
+                moved = off != oldOff;
+                if (horizontal) sc.OffsetX = off; else sc.OffsetY = off;
+
+                if (moved)
+                {
+                    var content = sc.ContentNode;
+                    if (!content.IsNull && _scene.IsLive(content))
                     {
-                        float cross = horizontal ? sc.ViewportH : sc.ViewportW;
-                        sc.Layout.Window(sc.ItemCount, cross, vp, off, 0, out visibleFirst, out visibleLast);
+                        ref NodePaint cp = ref _scene.Paint(content);
+                        cp.LocalTransform = Affine2D.Translation(horizontal ? -off : 0f, horizontal ? 0f : -off);
+                        _scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
                     }
-                    else if (_scene.TryGetExtents(n, out var t) && t is not null) { visibleFirst = t.IndexAt(off); visibleLast = Math.Min(sc.ItemCount, t.IndexAt(off + vp) + 1); }
-                    else { visibleFirst = visibleLast = 0; }
-                    if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
+                    if (sc.ItemCount > 0)   // virtualization: re-realize only when visible range approaches realized-window edge
+                    {
+                        int visibleFirst, visibleLast;
+                        float vp = horizontal ? sc.ViewportW : sc.ViewportH;
+                        if (sc.Layout is not null)
+                        {
+                            float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                            sc.Layout.Window(sc.ItemCount, cross, vp, off, 0, out visibleFirst, out visibleLast);
+                        }
+                        else if (_scene.TryGetExtents(n, out var t) && t is not null) { visibleFirst = t.IndexAt(off); visibleLast = Math.Min(sc.ItemCount, t.IndexAt(off + vp) + 1); }
+                        else { visibleFirst = visibleLast = 0; }
+                        if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast)) { _scene.Mark(n, NodeFlags.VirtualRangeDirty); RequestRerender(); }
+                    }
                 }
             }
 
             // ── conscious scrollbar state machine (WinUI timings; see class remarks) ──────────────────────
             int key = (int)n.Raw.Index;
             _state.TryGetValue(key, out Conscious cs);
-            bool movingNow = MathF.Abs(tgt - off) > 0.5f;
+            // A SYNCHRONOUS offset write this frame (touch content-pan / thumb-drag / edge auto-scroll — Offset == Target, so
+            // |tgt-off| can't see it) pulses ScrollMoved; consume it (one-frame) and count it as motion so the thin indicator
+            // reveals THROUGH a touch pan, then idle-hides on the pulse stopping. PointerOver/ExpandT stay untouched (a content
+            // pan is not a lane dwell — the bar must not expand to the full gutter, and there is no hover to clear on lift).
+            bool syncMoved = sc.ScrollMoved;
+            sc.ScrollMoved = false;
+            bool movingNow = flinging || syncMoved || MathF.Abs(tgt - off) > 0.5f;
             bool over = sc.PointerOver;
             bool lane = sc.PointerOverScrollbar;
 
@@ -226,4 +293,11 @@ public sealed class ScrollAnimator
         _active.RemoveAt(i);
         if (forget) _state.Remove((int)n.Raw.Index);
     }
+
+    /// <summary>Symmetric teardown when a scene slot is FREED (wired to <see cref="SceneStore.OnFreeIndex"/>): drop the
+    /// index-keyed conscious-bar timer row so a freed viewport leaves no dormant state the NEXT viewport reusing that
+    /// slot would inherit. The armed-set lists (<c>_active</c>/<c>_member</c>) hold gen-checked handles and self-prune at
+    /// the next Tick's IsLive guard, so only the index-keyed <c>_state</c> needs clearing here. 0-alloc; a no-op when the
+    /// slot had no row.</summary>
+    public void ClearForIndex(int index) => _state.Remove(index);
 }

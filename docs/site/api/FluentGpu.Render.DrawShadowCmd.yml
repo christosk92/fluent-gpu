@@ -1,0 +1,781 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawShadowCmd
+  commentId: T:FluentGpu.Render.DrawShadowCmd
+  id: DrawShadowCmd
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawShadowCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  - FluentGpu.Render.DrawShadowCmd.Blur
+  - FluentGpu.Render.DrawShadowCmd.Color
+  - FluentGpu.Render.DrawShadowCmd.OffsetX
+  - FluentGpu.Render.DrawShadowCmd.OffsetY
+  - FluentGpu.Render.DrawShadowCmd.Opacity
+  - FluentGpu.Render.DrawShadowCmd.Radii
+  - FluentGpu.Render.DrawShadowCmd.Rect
+  - FluentGpu.Render.DrawShadowCmd.Spread
+  - FluentGpu.Render.DrawShadowCmd.Transform
+  langs:
+  - csharp
+  - vb
+  name: DrawShadowCmd
+  nameWithType: DrawShadowCmd
+  fullName: FluentGpu.Render.DrawShadowCmd
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawShadowCmd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: 'public readonly record struct DrawShadowCmd : IEquatable<DrawShadowCmd>'
+    content.vb: Public Structure DrawShadowCmd Implements IEquatable(Of DrawShadowCmd)
+  implements:
+  - System.IEquatable{FluentGpu.Render.DrawShadowCmd}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.DrawShadowCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  commentId: M:FluentGpu.Render.DrawShadowCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  id: '#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)'
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: DrawShadowCmd(RectF, CornerRadius4, ColorF, float, float, float, float, Affine2D, float)
+  nameWithType: DrawShadowCmd.DrawShadowCmd(RectF, CornerRadius4, ColorF, float, float, float, float, Affine2D, float)
+  fullName: FluentGpu.Render.DrawShadowCmd.DrawShadowCmd(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, float, float, float, float, FluentGpu.Foundation.Affine2D, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawShadowCmd(RectF Rect, CornerRadius4 Radii, ColorF Color, float OffsetX, float OffsetY, float Blur, float Spread, Affine2D Transform, float Opacity)
+    parameters:
+    - id: Rect
+      type: FluentGpu.Foundation.RectF
+    - id: Radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: OffsetX
+      type: System.Single
+    - id: OffsetY
+      type: System.Single
+    - id: Blur
+      type: System.Single
+    - id: Spread
+      type: System.Single
+    - id: Transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: Opacity
+      type: System.Single
+    content.vb: Public Sub New(Rect As RectF, Radii As CornerRadius4, Color As ColorF, OffsetX As Single, OffsetY As Single, Blur As Single, Spread As Single, Transform As Affine2D, Opacity As Single)
+  overload: FluentGpu.Render.DrawShadowCmd.#ctor*
+  nameWithType.vb: DrawShadowCmd.New(RectF, CornerRadius4, ColorF, Single, Single, Single, Single, Affine2D, Single)
+  fullName.vb: FluentGpu.Render.DrawShadowCmd.New(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, Single, Single, Single, Single, FluentGpu.Foundation.Affine2D, Single)
+  name.vb: New(RectF, CornerRadius4, ColorF, Single, Single, Single, Single, Affine2D, Single)
+- uid: FluentGpu.Render.DrawShadowCmd.Rect
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Rect
+  id: Rect
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Rect
+  nameWithType: DrawShadowCmd.Rect
+  fullName: FluentGpu.Render.DrawShadowCmd.Rect
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public RectF Rect { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Rect As RectF
+  overload: FluentGpu.Render.DrawShadowCmd.Rect*
+- uid: FluentGpu.Render.DrawShadowCmd.Radii
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Radii
+  id: Radii
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Radii
+  nameWithType: DrawShadowCmd.Radii
+  fullName: FluentGpu.Render.DrawShadowCmd.Radii
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Radii
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public CornerRadius4 Radii { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Property Radii As CornerRadius4
+  overload: FluentGpu.Render.DrawShadowCmd.Radii*
+- uid: FluentGpu.Render.DrawShadowCmd.Color
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Color
+  id: Color
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: DrawShadowCmd.Color
+  fullName: FluentGpu.Render.DrawShadowCmd.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Render.DrawShadowCmd.Color*
+- uid: FluentGpu.Render.DrawShadowCmd.OffsetX
+  commentId: P:FluentGpu.Render.DrawShadowCmd.OffsetX
+  id: OffsetX
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: OffsetX
+  nameWithType: DrawShadowCmd.OffsetX
+  fullName: FluentGpu.Render.DrawShadowCmd.OffsetX
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetX
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float OffsetX { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property OffsetX As Single
+  overload: FluentGpu.Render.DrawShadowCmd.OffsetX*
+- uid: FluentGpu.Render.DrawShadowCmd.OffsetY
+  commentId: P:FluentGpu.Render.DrawShadowCmd.OffsetY
+  id: OffsetY
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: OffsetY
+  nameWithType: DrawShadowCmd.OffsetY
+  fullName: FluentGpu.Render.DrawShadowCmd.OffsetY
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetY
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float OffsetY { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property OffsetY As Single
+  overload: FluentGpu.Render.DrawShadowCmd.OffsetY*
+- uid: FluentGpu.Render.DrawShadowCmd.Blur
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Blur
+  id: Blur
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Blur
+  nameWithType: DrawShadowCmd.Blur
+  fullName: FluentGpu.Render.DrawShadowCmd.Blur
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Blur
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Blur { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Blur As Single
+  overload: FluentGpu.Render.DrawShadowCmd.Blur*
+- uid: FluentGpu.Render.DrawShadowCmd.Spread
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Spread
+  id: Spread
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Spread
+  nameWithType: DrawShadowCmd.Spread
+  fullName: FluentGpu.Render.DrawShadowCmd.Spread
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spread
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Spread { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Spread As Single
+  overload: FluentGpu.Render.DrawShadowCmd.Spread*
+- uid: FluentGpu.Render.DrawShadowCmd.Transform
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Transform
+  id: Transform
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Transform
+  nameWithType: DrawShadowCmd.Transform
+  fullName: FluentGpu.Render.DrawShadowCmd.Transform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Affine2D Transform { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Property Transform As Affine2D
+  overload: FluentGpu.Render.DrawShadowCmd.Transform*
+- uid: FluentGpu.Render.DrawShadowCmd.Opacity
+  commentId: P:FluentGpu.Render.DrawShadowCmd.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.DrawShadowCmd
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: DrawShadowCmd.Opacity
+  fullName: FluentGpu.Render.DrawShadowCmd.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Render.DrawShadowCmd.Opacity*
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.DrawShadowCmd}
+  commentId: T:System.IEquatable{FluentGpu.Render.DrawShadowCmd}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DrawShadowCmd>
+  nameWithType: IEquatable<DrawShadowCmd>
+  fullName: System.IEquatable<FluentGpu.Render.DrawShadowCmd>
+  nameWithType.vb: IEquatable(Of DrawShadowCmd)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.DrawShadowCmd)
+  name.vb: IEquatable(Of DrawShadowCmd)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.DrawShadowCmd
+    name: DrawShadowCmd
+    href: FluentGpu.Render.DrawShadowCmd.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.DrawShadowCmd
+    name: DrawShadowCmd
+    href: FluentGpu.Render.DrawShadowCmd.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.DrawShadowCmd.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.#ctor
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd__ctor_FluentGpu_Foundation_RectF_FluentGpu_Foundation_CornerRadius4_FluentGpu_Foundation_ColorF_System_Single_System_Single_System_Single_System_Single_FluentGpu_Foundation_Affine2D_System_Single_
+  name: DrawShadowCmd
+  nameWithType: DrawShadowCmd.DrawShadowCmd
+  fullName: FluentGpu.Render.DrawShadowCmd.DrawShadowCmd
+  nameWithType.vb: DrawShadowCmd.New
+  fullName.vb: FluentGpu.Render.DrawShadowCmd.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.DrawShadowCmd.Rect*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Rect
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Rect
+  name: Rect
+  nameWithType: DrawShadowCmd.Rect
+  fullName: FluentGpu.Render.DrawShadowCmd.Rect
+- uid: FluentGpu.Render.DrawShadowCmd.Radii*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Radii
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Radii
+  name: Radii
+  nameWithType: DrawShadowCmd.Radii
+  fullName: FluentGpu.Render.DrawShadowCmd.Radii
+- uid: FluentGpu.Render.DrawShadowCmd.Color*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Color
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Color
+  name: Color
+  nameWithType: DrawShadowCmd.Color
+  fullName: FluentGpu.Render.DrawShadowCmd.Color
+- uid: FluentGpu.Render.DrawShadowCmd.OffsetX*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.OffsetX
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_OffsetX
+  name: OffsetX
+  nameWithType: DrawShadowCmd.OffsetX
+  fullName: FluentGpu.Render.DrawShadowCmd.OffsetX
+- uid: FluentGpu.Render.DrawShadowCmd.OffsetY*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.OffsetY
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_OffsetY
+  name: OffsetY
+  nameWithType: DrawShadowCmd.OffsetY
+  fullName: FluentGpu.Render.DrawShadowCmd.OffsetY
+- uid: FluentGpu.Render.DrawShadowCmd.Blur*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Blur
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Blur
+  name: Blur
+  nameWithType: DrawShadowCmd.Blur
+  fullName: FluentGpu.Render.DrawShadowCmd.Blur
+- uid: FluentGpu.Render.DrawShadowCmd.Spread*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Spread
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Spread
+  name: Spread
+  nameWithType: DrawShadowCmd.Spread
+  fullName: FluentGpu.Render.DrawShadowCmd.Spread
+- uid: FluentGpu.Render.DrawShadowCmd.Transform*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Transform
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Transform
+  name: Transform
+  nameWithType: DrawShadowCmd.Transform
+  fullName: FluentGpu.Render.DrawShadowCmd.Transform
+- uid: FluentGpu.Render.DrawShadowCmd.Opacity*
+  commentId: Overload:FluentGpu.Render.DrawShadowCmd.Opacity
+  href: FluentGpu.Render.DrawShadowCmd.html#FluentGpu_Render_DrawShadowCmd_Opacity
+  name: Opacity
+  nameWithType: DrawShadowCmd.Opacity
+  fullName: FluentGpu.Render.DrawShadowCmd.Opacity

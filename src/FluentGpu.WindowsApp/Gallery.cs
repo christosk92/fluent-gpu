@@ -14,7 +14,9 @@ using static FluentGpu.Dsl.Ui;
 //   dotnet run --project src/FluentGpu.WindowsApp
 sealed class GalleryApp : Component
 {
-    static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD") || Diag.EnvFlag("FG_DIAG");
+    // FG_HUD mounts the on-screen fps/draw-count readout; FG_DIAG is engine diag OUTPUT only (stderr) and must NOT
+    // mount the HUD — the HUD's per-frame dynamic-text refresh is itself a wake source (it runs record+present forever).
+    static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD");
 
     // Mirrors the WinUI 3 Gallery's shape — Home, Fundamentals, Design, Controls (All + an expanded Basic input group) —
     // with the engine's own capability demos remapped under Fundamentals/Design/Samples. (Accessibility is out of scope.)
@@ -255,26 +257,33 @@ sealed class GalleryApp : Component
             // engine-drawn min/max/close on the custom frame. Back is COLLAPSED, not disabled — WinUI binds
             // IsBackButtonVisible to rootFrame.CanGoBack, and this gallery has no back stack yet (flip
             // ShowBackButton=true + BackEnabled when a Navigator lands).
-            Embed.Comp(() => new TitleBar
+            Embed.Comp(() =>
             {
-                Title = "FluentGpu Gallery",
-                IconGlyph = Icons.Grid,
-                IconColor = Tok.AccentDefault,
-                ShowBackButton = false,
-                ShowPaneToggle = true,
-                OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,
+                var tb = new TitleBar
+                {
+                    Title = "FluentGpu Gallery",
+                    IconGlyph = Icons.Grid,
+                    IconColor = Tok.AccentDefault,
+                    ShowBackButton = false,
+                    ShowPaneToggle = true,
+                    OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,
+                    ShowCaptionButtons = true,
+                };
                 // WinUI sizing: 580 is the MAX — the search gives way as the window narrows (caption buttons never
-                // move) and collapses entirely below a usable floor.
-                Content = avail => avail < 140f
+                // move) and collapses entirely below a usable floor. The avail ARGUMENT picks the shape per render
+                // (collapse vs box); the LIVE width must flow as a signal — the mounted AutoSuggestBox's plain
+                // fields froze at mount, so a lambda-recomputed width: could never resize it again.
+                tb.Content = avail => avail < 140f
                     ? new BoxEl()
                     : AutoSuggestBox.Create(
                         suggestions: SearchTitles,
                         placeholder: "Search controls and samples...",
-                        width: MathF.Min(580f, avail),
+                        width: 580f,
+                        widthSignal: tb.ContentAvail,
                         text: _searchText,
                         onSuggestionChosen: NavigateToTitle,
-                        onQuerySubmitted: NavigateToTitle),
-                ShowCaptionButtons = true,
+                        onQuerySubmitted: NavigateToTitle);
+                return tb;
             }),
             Embed.Comp(() => new NavigationView
             {

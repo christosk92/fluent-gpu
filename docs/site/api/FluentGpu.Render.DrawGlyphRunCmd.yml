@@ -1,0 +1,1096 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawGlyphRunCmd
+  commentId: T:FluentGpu.Render.DrawGlyphRunCmd
+  id: DrawGlyphRunCmd
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawGlyphRunCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D,System.Single,System.Int32,System.Int32)
+  - FluentGpu.Render.DrawGlyphRunCmd.Bounds
+  - FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+  - FluentGpu.Render.DrawGlyphRunCmd.Color
+  - FluentGpu.Render.DrawGlyphRunCmd.Family
+  - FluentGpu.Render.DrawGlyphRunCmd.FontSize
+  - FluentGpu.Render.DrawGlyphRunCmd.ForceColor
+  - FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+  - FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+  - FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+  - FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+  - FluentGpu.Render.DrawGlyphRunCmd.Opacity
+  - FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+  - FluentGpu.Render.DrawGlyphRunCmd.Text
+  - FluentGpu.Render.DrawGlyphRunCmd.Transform
+  - FluentGpu.Render.DrawGlyphRunCmd.Trim
+  - FluentGpu.Render.DrawGlyphRunCmd.Weight
+  - FluentGpu.Render.DrawGlyphRunCmd.Wrap
+  langs:
+  - csharp
+  - vb
+  name: DrawGlyphRunCmd
+  nameWithType: DrawGlyphRunCmd
+  fullName: FluentGpu.Render.DrawGlyphRunCmd
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGlyphRunCmd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: 'public readonly record struct DrawGlyphRunCmd : IEquatable<DrawGlyphRunCmd>'
+    content.vb: Public Structure DrawGlyphRunCmd Implements IEquatable(Of DrawGlyphRunCmd)
+  implements:
+  - System.IEquatable{FluentGpu.Render.DrawGlyphRunCmd}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.DrawGlyphRunCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D,System.Single,System.Int32,System.Int32)
+  commentId: M:FluentGpu.Render.DrawGlyphRunCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D,System.Single,System.Int32,System.Int32)
+  id: '#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.StringId,FluentGpu.Foundation.StringId,System.Single,System.Int32,System.Int32,System.Int32,System.Int32,System.Single,System.Single,System.Int32,System.Int32,FluentGpu.Foundation.Affine2D,System.Single,System.Int32,System.Int32)'
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: DrawGlyphRunCmd(RectF, ColorF, StringId, StringId, float, int, int, int, int, float, float, int, int, Affine2D, float, int, int)
+  nameWithType: DrawGlyphRunCmd.DrawGlyphRunCmd(RectF, ColorF, StringId, StringId, float, int, int, int, int, float, float, int, int, Affine2D, float, int, int)
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.DrawGlyphRunCmd(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, float, int, int, int, int, float, float, int, int, FluentGpu.Foundation.Affine2D, float, int, int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines, float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity, int SpanRunId = 0, int ForceColor = 0)
+    parameters:
+    - id: Bounds
+      type: FluentGpu.Foundation.RectF
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: Text
+      type: FluentGpu.Foundation.StringId
+    - id: Family
+      type: FluentGpu.Foundation.StringId
+    - id: FontSize
+      type: System.Single
+    - id: Weight
+      type: System.Int32
+    - id: Wrap
+      type: System.Int32
+    - id: Trim
+      type: System.Int32
+    - id: MaxLines
+      type: System.Int32
+    - id: CharSpacing
+      type: System.Single
+    - id: LineHeight
+      type: System.Single
+    - id: LineStacking
+      type: System.Int32
+    - id: LineBounds
+      type: System.Int32
+    - id: Transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: Opacity
+      type: System.Single
+    - id: SpanRunId
+      type: System.Int32
+    - id: ForceColor
+      type: System.Int32
+    content.vb: Public Sub New(Bounds As RectF, Color As ColorF, Text As StringId, Family As StringId, FontSize As Single, Weight As Integer, Wrap As Integer, Trim As Integer, MaxLines As Integer, CharSpacing As Single, LineHeight As Single, LineStacking As Integer, LineBounds As Integer, Transform As Affine2D, Opacity As Single, SpanRunId As Integer = 0, ForceColor As Integer = 0)
+  overload: FluentGpu.Render.DrawGlyphRunCmd.#ctor*
+  nameWithType.vb: DrawGlyphRunCmd.New(RectF, ColorF, StringId, StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, Affine2D, Single, Integer, Integer)
+  fullName.vb: FluentGpu.Render.DrawGlyphRunCmd.New(FluentGpu.Foundation.RectF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.StringId, FluentGpu.Foundation.StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, FluentGpu.Foundation.Affine2D, Single, Integer, Integer)
+  name.vb: New(RectF, ColorF, StringId, StringId, Single, Integer, Integer, Integer, Integer, Single, Single, Integer, Integer, Affine2D, Single, Integer, Integer)
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Bounds
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Bounds
+  id: Bounds
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Bounds
+  nameWithType: DrawGlyphRunCmd.Bounds
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Bounds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bounds
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public RectF Bounds { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Bounds As RectF
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Bounds*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Color
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Color
+  id: Color
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: DrawGlyphRunCmd.Color
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Color*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Text
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Text
+  id: Text
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: DrawGlyphRunCmd.Text
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Text
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public StringId Text { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Property Text As StringId
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Text*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Family
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Family
+  id: Family
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Family
+  nameWithType: DrawGlyphRunCmd.Family
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Family
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Family
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public StringId Family { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Property Family As StringId
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Family*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.FontSize
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.FontSize
+  id: FontSize
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: DrawGlyphRunCmd.FontSize
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Render.DrawGlyphRunCmd.FontSize*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Weight
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Weight
+  id: Weight
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Weight
+  nameWithType: DrawGlyphRunCmd.Weight
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Weight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Weight
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int Weight { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Weight As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Weight*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Wrap
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Wrap
+  id: Wrap
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: DrawGlyphRunCmd.Wrap
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Wrap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int Wrap { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Wrap As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Wrap*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Trim
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Trim
+  id: Trim
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Trim
+  nameWithType: DrawGlyphRunCmd.Trim
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Trim
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Trim
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int Trim { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Trim As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Trim*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+  id: MaxLines
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: MaxLines
+  nameWithType: DrawGlyphRunCmd.MaxLines
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxLines
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int MaxLines { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property MaxLines As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.MaxLines*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+  id: CharSpacing
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: CharSpacing
+  nameWithType: DrawGlyphRunCmd.CharSpacing
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CharSpacing
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float CharSpacing { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CharSpacing As Single
+  overload: FluentGpu.Render.DrawGlyphRunCmd.CharSpacing*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+  id: LineHeight
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: LineHeight
+  nameWithType: DrawGlyphRunCmd.LineHeight
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineHeight
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float LineHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property LineHeight As Single
+  overload: FluentGpu.Render.DrawGlyphRunCmd.LineHeight*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+  id: LineStacking
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: LineStacking
+  nameWithType: DrawGlyphRunCmd.LineStacking
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineStacking
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int LineStacking { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property LineStacking As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.LineStacking*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+  id: LineBounds
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: LineBounds
+  nameWithType: DrawGlyphRunCmd.LineBounds
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineBounds
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int LineBounds { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property LineBounds As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.LineBounds*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Transform
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Transform
+  id: Transform
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Transform
+  nameWithType: DrawGlyphRunCmd.Transform
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Transform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Affine2D Transform { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Property Transform As Affine2D
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Transform*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Opacity
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: DrawGlyphRunCmd.Opacity
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Render.DrawGlyphRunCmd.Opacity*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+  id: SpanRunId
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: SpanRunId
+  nameWithType: DrawGlyphRunCmd.SpanRunId
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanRunId
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int SpanRunId { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property SpanRunId As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.SpanRunId*
+- uid: FluentGpu.Render.DrawGlyphRunCmd.ForceColor
+  commentId: P:FluentGpu.Render.DrawGlyphRunCmd.ForceColor
+  id: ForceColor
+  parent: FluentGpu.Render.DrawGlyphRunCmd
+  langs:
+  - csharp
+  - vb
+  name: ForceColor
+  nameWithType: DrawGlyphRunCmd.ForceColor
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.ForceColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForceColor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int ForceColor { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ForceColor As Integer
+  overload: FluentGpu.Render.DrawGlyphRunCmd.ForceColor*
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.DrawGlyphRunCmd}
+  commentId: T:System.IEquatable{FluentGpu.Render.DrawGlyphRunCmd}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DrawGlyphRunCmd>
+  nameWithType: IEquatable<DrawGlyphRunCmd>
+  fullName: System.IEquatable<FluentGpu.Render.DrawGlyphRunCmd>
+  nameWithType.vb: IEquatable(Of DrawGlyphRunCmd)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.DrawGlyphRunCmd)
+  name.vb: IEquatable(Of DrawGlyphRunCmd)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.DrawGlyphRunCmd
+    name: DrawGlyphRunCmd
+    href: FluentGpu.Render.DrawGlyphRunCmd.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.DrawGlyphRunCmd
+    name: DrawGlyphRunCmd
+    href: FluentGpu.Render.DrawGlyphRunCmd.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.DrawGlyphRunCmd.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.#ctor
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd__ctor_FluentGpu_Foundation_RectF_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_StringId_FluentGpu_Foundation_StringId_System_Single_System_Int32_System_Int32_System_Int32_System_Int32_System_Single_System_Single_System_Int32_System_Int32_FluentGpu_Foundation_Affine2D_System_Single_System_Int32_System_Int32_
+  name: DrawGlyphRunCmd
+  nameWithType: DrawGlyphRunCmd.DrawGlyphRunCmd
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.DrawGlyphRunCmd
+  nameWithType.vb: DrawGlyphRunCmd.New
+  fullName.vb: FluentGpu.Render.DrawGlyphRunCmd.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Bounds*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Bounds
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Bounds
+  name: Bounds
+  nameWithType: DrawGlyphRunCmd.Bounds
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Bounds
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Color*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Color
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Color
+  name: Color
+  nameWithType: DrawGlyphRunCmd.Color
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Color
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Text*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Text
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Text
+  name: Text
+  nameWithType: DrawGlyphRunCmd.Text
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Text
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Family*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Family
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Family
+  name: Family
+  nameWithType: DrawGlyphRunCmd.Family
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Family
+- uid: FluentGpu.Render.DrawGlyphRunCmd.FontSize*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.FontSize
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_FontSize
+  name: FontSize
+  nameWithType: DrawGlyphRunCmd.FontSize
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.FontSize
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Weight*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Weight
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Weight
+  name: Weight
+  nameWithType: DrawGlyphRunCmd.Weight
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Weight
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Wrap*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Wrap
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Wrap
+  name: Wrap
+  nameWithType: DrawGlyphRunCmd.Wrap
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Wrap
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Trim*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Trim
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Trim
+  name: Trim
+  nameWithType: DrawGlyphRunCmd.Trim
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Trim
+- uid: FluentGpu.Render.DrawGlyphRunCmd.MaxLines*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_MaxLines
+  name: MaxLines
+  nameWithType: DrawGlyphRunCmd.MaxLines
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.MaxLines
+- uid: FluentGpu.Render.DrawGlyphRunCmd.CharSpacing*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_CharSpacing
+  name: CharSpacing
+  nameWithType: DrawGlyphRunCmd.CharSpacing
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.CharSpacing
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineHeight*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_LineHeight
+  name: LineHeight
+  nameWithType: DrawGlyphRunCmd.LineHeight
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineHeight
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineStacking*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_LineStacking
+  name: LineStacking
+  nameWithType: DrawGlyphRunCmd.LineStacking
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineStacking
+- uid: FluentGpu.Render.DrawGlyphRunCmd.LineBounds*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_LineBounds
+  name: LineBounds
+  nameWithType: DrawGlyphRunCmd.LineBounds
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.LineBounds
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Transform*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Transform
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Transform
+  name: Transform
+  nameWithType: DrawGlyphRunCmd.Transform
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Transform
+- uid: FluentGpu.Render.DrawGlyphRunCmd.Opacity*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.Opacity
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_Opacity
+  name: Opacity
+  nameWithType: DrawGlyphRunCmd.Opacity
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.Opacity
+- uid: FluentGpu.Render.DrawGlyphRunCmd.SpanRunId*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_SpanRunId
+  name: SpanRunId
+  nameWithType: DrawGlyphRunCmd.SpanRunId
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.SpanRunId
+- uid: FluentGpu.Render.DrawGlyphRunCmd.ForceColor*
+  commentId: Overload:FluentGpu.Render.DrawGlyphRunCmd.ForceColor
+  href: FluentGpu.Render.DrawGlyphRunCmd.html#FluentGpu_Render_DrawGlyphRunCmd_ForceColor
+  name: ForceColor
+  nameWithType: DrawGlyphRunCmd.ForceColor
+  fullName: FluentGpu.Render.DrawGlyphRunCmd.ForceColor

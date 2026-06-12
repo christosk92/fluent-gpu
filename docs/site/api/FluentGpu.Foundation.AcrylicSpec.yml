@@ -1,0 +1,842 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.AcrylicSpec
+  commentId: T:FluentGpu.Foundation.AcrylicSpec
+  id: AcrylicSpec
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  - FluentGpu.Foundation.AcrylicSpec.Fallback
+  - FluentGpu.Foundation.AcrylicSpec.Flyout
+  - FluentGpu.Foundation.AcrylicSpec.FlyoutLight
+  - FluentGpu.Foundation.AcrylicSpec.InAppBase
+  - FluentGpu.Foundation.AcrylicSpec.InAppDefault
+  - FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+  - FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+  - FluentGpu.Foundation.AcrylicSpec.Tint
+  - FluentGpu.Foundation.AcrylicSpec.TintOpacity
+  langs:
+  - csharp
+  - vb
+  name: AcrylicSpec
+  nameWithType: AcrylicSpec
+  fullName: FluentGpu.Foundation.AcrylicSpec
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcrylicSpec
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
+
+    through <xref href="FluentGpu.Foundation.AcrylicSpec.Fallback" data-throw-if-not-resolved="false"></xref>, blurs it (<xref href="FluentGpu.Foundation.AcrylicSpec.BlurSigma" data-throw-if-not-resolved="false"></xref>), then applies WinUI's luminosity/tint recipe.
+
+    Realized by the <code>PushLayer</code>/<code>PopLayer</code> backdrop subsystem.
+  example: []
+  syntax:
+    content: 'public readonly record struct AcrylicSpec : IEquatable<AcrylicSpec>'
+    content.vb: Public Structure AcrylicSpec Implements IEquatable(Of AcrylicSpec)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.AcrylicSpec}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.ColorF)
+  id: '#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.ColorF)'
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: AcrylicSpec(ColorF, float, float, float, float, ColorF)
+  nameWithType: AcrylicSpec.AcrylicSpec(ColorF, float, float, float, float, ColorF)
+  fullName: FluentGpu.Foundation.AcrylicSpec.AcrylicSpec(FluentGpu.Foundation.ColorF, float, float, float, float, FluentGpu.Foundation.ColorF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
+
+    through <xref href="FluentGpu.Foundation.AcrylicSpec.Fallback" data-throw-if-not-resolved="false"></xref>, blurs it (<xref href="FluentGpu.Foundation.AcrylicSpec.BlurSigma" data-throw-if-not-resolved="false"></xref>), then applies WinUI's luminosity/tint recipe.
+
+    Realized by the <code>PushLayer</code>/<code>PopLayer</code> backdrop subsystem.
+  example: []
+  syntax:
+    content: public AcrylicSpec(ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity, ColorF Fallback)
+    parameters:
+    - id: Tint
+      type: FluentGpu.Foundation.ColorF
+    - id: TintOpacity
+      type: System.Single
+    - id: BlurSigma
+      type: System.Single
+    - id: NoiseOpacity
+      type: System.Single
+    - id: LuminosityOpacity
+      type: System.Single
+    - id: Fallback
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Sub New(Tint As ColorF, TintOpacity As Single, BlurSigma As Single, NoiseOpacity As Single, LuminosityOpacity As Single, Fallback As ColorF)
+  overload: FluentGpu.Foundation.AcrylicSpec.#ctor*
+  nameWithType.vb: AcrylicSpec.New(ColorF, Single, Single, Single, Single, ColorF)
+  fullName.vb: FluentGpu.Foundation.AcrylicSpec.New(FluentGpu.Foundation.ColorF, Single, Single, Single, Single, FluentGpu.Foundation.ColorF)
+  name.vb: New(ColorF, Single, Single, Single, Single, ColorF)
+- uid: FluentGpu.Foundation.AcrylicSpec.Tint
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.Tint
+  id: Tint
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: Tint
+  nameWithType: AcrylicSpec.Tint
+  fullName: FluentGpu.Foundation.AcrylicSpec.Tint
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tint
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ColorF Tint { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Tint As ColorF
+  overload: FluentGpu.Foundation.AcrylicSpec.Tint*
+- uid: FluentGpu.Foundation.AcrylicSpec.TintOpacity
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.TintOpacity
+  id: TintOpacity
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: TintOpacity
+  nameWithType: AcrylicSpec.TintOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.TintOpacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TintOpacity
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float TintOpacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property TintOpacity As Single
+  overload: FluentGpu.Foundation.AcrylicSpec.TintOpacity*
+- uid: FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  id: BlurSigma
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: BlurSigma
+  nameWithType: AcrylicSpec.BlurSigma
+  fullName: FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BlurSigma
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float BlurSigma { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BlurSigma As Single
+  overload: FluentGpu.Foundation.AcrylicSpec.BlurSigma*
+- uid: FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+  id: NoiseOpacity
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: NoiseOpacity
+  nameWithType: AcrylicSpec.NoiseOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoiseOpacity
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float NoiseOpacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property NoiseOpacity As Single
+  overload: FluentGpu.Foundation.AcrylicSpec.NoiseOpacity*
+- uid: FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+  id: LuminosityOpacity
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: LuminosityOpacity
+  nameWithType: AcrylicSpec.LuminosityOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LuminosityOpacity
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float LuminosityOpacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property LuminosityOpacity As Single
+  overload: FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity*
+- uid: FluentGpu.Foundation.AcrylicSpec.Fallback
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.Fallback
+  id: Fallback
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: Fallback
+  nameWithType: AcrylicSpec.Fallback
+  fullName: FluentGpu.Foundation.AcrylicSpec.Fallback
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fallback
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ColorF Fallback { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Fallback As ColorF
+  overload: FluentGpu.Foundation.AcrylicSpec.Fallback*
+- uid: FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.AcrylicSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: AcrylicSpec(ColorF, float, float, float, float)
+  nameWithType: AcrylicSpec.AcrylicSpec(ColorF, float, float, float, float)
+  fullName: FluentGpu.Foundation.AcrylicSpec.AcrylicSpec(FluentGpu.Foundation.ColorF, float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public AcrylicSpec(ColorF tint, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity)
+    parameters:
+    - id: tint
+      type: FluentGpu.Foundation.ColorF
+    - id: tintOpacity
+      type: System.Single
+    - id: blurSigma
+      type: System.Single
+    - id: noiseOpacity
+      type: System.Single
+    - id: luminosityOpacity
+      type: System.Single
+    content.vb: Public Sub New(tint As ColorF, tintOpacity As Single, blurSigma As Single, noiseOpacity As Single, luminosityOpacity As Single)
+  overload: FluentGpu.Foundation.AcrylicSpec.#ctor*
+  nameWithType.vb: AcrylicSpec.New(ColorF, Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.AcrylicSpec.New(FluentGpu.Foundation.ColorF, Single, Single, Single, Single)
+  name.vb: New(ColorF, Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.AcrylicSpec.InAppDefault
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.InAppDefault
+  id: InAppDefault
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: InAppDefault
+  nameWithType: AcrylicSpec.InAppDefault
+  fullName: FluentGpu.Foundation.AcrylicSpec.InAppDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InAppDefault
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static AcrylicSpec InAppDefault { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.AcrylicSpec
+    content.vb: Public Shared ReadOnly Property InAppDefault As AcrylicSpec
+  overload: FluentGpu.Foundation.AcrylicSpec.InAppDefault*
+- uid: FluentGpu.Foundation.AcrylicSpec.InAppBase
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.InAppBase
+  id: InAppBase
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: InAppBase
+  nameWithType: AcrylicSpec.InAppBase
+  fullName: FluentGpu.Foundation.AcrylicSpec.InAppBase
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InAppBase
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static AcrylicSpec InAppBase { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.AcrylicSpec
+    content.vb: Public Shared ReadOnly Property InAppBase As AcrylicSpec
+  overload: FluentGpu.Foundation.AcrylicSpec.InAppBase*
+- uid: FluentGpu.Foundation.AcrylicSpec.Flyout
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.Flyout
+  id: Flyout
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: Flyout
+  nameWithType: AcrylicSpec.Flyout
+  fullName: FluentGpu.Foundation.AcrylicSpec.Flyout
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Flyout
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static AcrylicSpec Flyout { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.AcrylicSpec
+    content.vb: Public Shared ReadOnly Property Flyout As AcrylicSpec
+  overload: FluentGpu.Foundation.AcrylicSpec.Flyout*
+- uid: FluentGpu.Foundation.AcrylicSpec.FlyoutLight
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.FlyoutLight
+  id: FlyoutLight
+  parent: FluentGpu.Foundation.AcrylicSpec
+  langs:
+  - csharp
+  - vb
+  name: FlyoutLight
+  nameWithType: AcrylicSpec.FlyoutLight
+  fullName: FluentGpu.Foundation.AcrylicSpec.FlyoutLight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlyoutLight
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static AcrylicSpec FlyoutLight { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.AcrylicSpec
+    content.vb: Public Shared ReadOnly Property FlyoutLight As AcrylicSpec
+  overload: FluentGpu.Foundation.AcrylicSpec.FlyoutLight*
+references:
+- uid: FluentGpu.Foundation.AcrylicSpec.Fallback
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.Fallback
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_Fallback
+  name: Fallback
+  nameWithType: AcrylicSpec.Fallback
+  fullName: FluentGpu.Foundation.AcrylicSpec.Fallback
+- uid: FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  commentId: P:FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_BlurSigma
+  name: BlurSigma
+  nameWithType: AcrylicSpec.BlurSigma
+  fullName: FluentGpu.Foundation.AcrylicSpec.BlurSigma
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.AcrylicSpec}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.AcrylicSpec}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<AcrylicSpec>
+  nameWithType: IEquatable<AcrylicSpec>
+  fullName: System.IEquatable<FluentGpu.Foundation.AcrylicSpec>
+  nameWithType.vb: IEquatable(Of AcrylicSpec)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.AcrylicSpec)
+  name.vb: IEquatable(Of AcrylicSpec)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.AcrylicSpec
+    name: AcrylicSpec
+    href: FluentGpu.Foundation.AcrylicSpec.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.AcrylicSpec
+    name: AcrylicSpec
+    href: FluentGpu.Foundation.AcrylicSpec.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.AcrylicSpec.#ctor*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.#ctor
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec__ctor_FluentGpu_Foundation_ColorF_System_Single_System_Single_System_Single_System_Single_FluentGpu_Foundation_ColorF_
+  name: AcrylicSpec
+  nameWithType: AcrylicSpec.AcrylicSpec
+  fullName: FluentGpu.Foundation.AcrylicSpec.AcrylicSpec
+  nameWithType.vb: AcrylicSpec.New
+  fullName.vb: FluentGpu.Foundation.AcrylicSpec.New
+  name.vb: New
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.AcrylicSpec.Tint*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.Tint
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_Tint
+  name: Tint
+  nameWithType: AcrylicSpec.Tint
+  fullName: FluentGpu.Foundation.AcrylicSpec.Tint
+- uid: FluentGpu.Foundation.AcrylicSpec.TintOpacity*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.TintOpacity
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_TintOpacity
+  name: TintOpacity
+  nameWithType: AcrylicSpec.TintOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.TintOpacity
+- uid: FluentGpu.Foundation.AcrylicSpec.BlurSigma*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.BlurSigma
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_BlurSigma
+  name: BlurSigma
+  nameWithType: AcrylicSpec.BlurSigma
+  fullName: FluentGpu.Foundation.AcrylicSpec.BlurSigma
+- uid: FluentGpu.Foundation.AcrylicSpec.NoiseOpacity*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_NoiseOpacity
+  name: NoiseOpacity
+  nameWithType: AcrylicSpec.NoiseOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.NoiseOpacity
+- uid: FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_LuminosityOpacity
+  name: LuminosityOpacity
+  nameWithType: AcrylicSpec.LuminosityOpacity
+  fullName: FluentGpu.Foundation.AcrylicSpec.LuminosityOpacity
+- uid: FluentGpu.Foundation.AcrylicSpec.Fallback*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.Fallback
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_Fallback
+  name: Fallback
+  nameWithType: AcrylicSpec.Fallback
+  fullName: FluentGpu.Foundation.AcrylicSpec.Fallback
+- uid: FluentGpu.Foundation.AcrylicSpec.InAppDefault*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.InAppDefault
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_InAppDefault
+  name: InAppDefault
+  nameWithType: AcrylicSpec.InAppDefault
+  fullName: FluentGpu.Foundation.AcrylicSpec.InAppDefault
+- uid: FluentGpu.Foundation.AcrylicSpec
+  commentId: T:FluentGpu.Foundation.AcrylicSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.AcrylicSpec.html
+  name: AcrylicSpec
+  nameWithType: AcrylicSpec
+  fullName: FluentGpu.Foundation.AcrylicSpec
+- uid: FluentGpu.Foundation.AcrylicSpec.InAppBase*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.InAppBase
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_InAppBase
+  name: InAppBase
+  nameWithType: AcrylicSpec.InAppBase
+  fullName: FluentGpu.Foundation.AcrylicSpec.InAppBase
+- uid: FluentGpu.Foundation.AcrylicSpec.Flyout*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.Flyout
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_Flyout
+  name: Flyout
+  nameWithType: AcrylicSpec.Flyout
+  fullName: FluentGpu.Foundation.AcrylicSpec.Flyout
+- uid: FluentGpu.Foundation.AcrylicSpec.FlyoutLight*
+  commentId: Overload:FluentGpu.Foundation.AcrylicSpec.FlyoutLight
+  href: FluentGpu.Foundation.AcrylicSpec.html#FluentGpu_Foundation_AcrylicSpec_FlyoutLight
+  name: FlyoutLight
+  nameWithType: AcrylicSpec.FlyoutLight
+  fullName: FluentGpu.Foundation.AcrylicSpec.FlyoutLight

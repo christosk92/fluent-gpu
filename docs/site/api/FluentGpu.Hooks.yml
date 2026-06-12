@@ -1,0 +1,202 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  id: FluentGpu.Hooks
+  children:
+  - FluentGpu.Hooks.Component
+  - FluentGpu.Hooks.ComponentEl
+  - FluentGpu.Hooks.ContextProviderEl
+  - FluentGpu.Hooks.ContextStack
+  - FluentGpu.Hooks.Context`1
+  - FluentGpu.Hooks.Ctx
+  - FluentGpu.Hooks.Embed
+  - FluentGpu.Hooks.Flow
+  - FluentGpu.Hooks.ForEl
+  - FluentGpu.Hooks.FrameClock
+  - FluentGpu.Hooks.InputHooks
+  - FluentGpu.Hooks.MotionHooks
+  - FluentGpu.Hooks.ReactiveComponent
+  - FluentGpu.Hooks.Ref`1
+  - FluentGpu.Hooks.RenderContext
+  - FluentGpu.Hooks.ShowEl
+  - FluentGpu.Hooks.Viewport
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  type: Namespace
+  assemblies:
+  - FluentGpu.Hooks
+references:
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.ReactiveComponent
+  commentId: T:FluentGpu.Hooks.ReactiveComponent
+  href: FluentGpu.Hooks.ReactiveComponent.html
+  name: ReactiveComponent
+  nameWithType: ReactiveComponent
+  fullName: FluentGpu.Hooks.ReactiveComponent
+- uid: FluentGpu.Hooks.ComponentEl
+  commentId: T:FluentGpu.Hooks.ComponentEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ComponentEl.html
+  name: ComponentEl
+  nameWithType: ComponentEl
+  fullName: FluentGpu.Hooks.ComponentEl
+- uid: FluentGpu.Hooks.Embed
+  commentId: T:FluentGpu.Hooks.Embed
+  href: FluentGpu.Hooks.Embed.html
+  name: Embed
+  nameWithType: Embed
+  fullName: FluentGpu.Hooks.Embed
+- uid: FluentGpu.Hooks.Context`1
+  commentId: T:FluentGpu.Hooks.Context`1
+  href: FluentGpu.Hooks.Context-1.html
+  name: Context<T>
+  nameWithType: Context<T>
+  fullName: FluentGpu.Hooks.Context<T>
+  nameWithType.vb: Context(Of T)
+  fullName.vb: FluentGpu.Hooks.Context(Of T)
+  name.vb: Context(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context
+    href: FluentGpu.Hooks.Context-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.Viewport
+  commentId: T:FluentGpu.Hooks.Viewport
+  href: FluentGpu.Hooks.Viewport.html
+  name: Viewport
+  nameWithType: Viewport
+  fullName: FluentGpu.Hooks.Viewport
+- uid: FluentGpu.Hooks.FrameClock
+  commentId: T:FluentGpu.Hooks.FrameClock
+  href: FluentGpu.Hooks.FrameClock.html
+  name: FrameClock
+  nameWithType: FrameClock
+  fullName: FluentGpu.Hooks.FrameClock
+- uid: FluentGpu.Hooks.InputHooks
+  commentId: T:FluentGpu.Hooks.InputHooks
+  href: FluentGpu.Hooks.InputHooks.html
+  name: InputHooks
+  nameWithType: InputHooks
+  fullName: FluentGpu.Hooks.InputHooks
+- uid: FluentGpu.Hooks.ContextProviderEl
+  commentId: T:FluentGpu.Hooks.ContextProviderEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ContextProviderEl.html
+  name: ContextProviderEl
+  nameWithType: ContextProviderEl
+  fullName: FluentGpu.Hooks.ContextProviderEl
+- uid: FluentGpu.Hooks.Ctx
+  commentId: T:FluentGpu.Hooks.Ctx
+  href: FluentGpu.Hooks.Ctx.html
+  name: Ctx
+  nameWithType: Ctx
+  fullName: FluentGpu.Hooks.Ctx
+- uid: FluentGpu.Hooks.ContextStack
+  commentId: T:FluentGpu.Hooks.ContextStack
+  href: FluentGpu.Hooks.ContextStack.html
+  name: ContextStack
+  nameWithType: ContextStack
+  fullName: FluentGpu.Hooks.ContextStack
+- uid: FluentGpu.Hooks.ShowEl
+  commentId: T:FluentGpu.Hooks.ShowEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ShowEl.html
+  name: ShowEl
+  nameWithType: ShowEl
+  fullName: FluentGpu.Hooks.ShowEl
+- uid: FluentGpu.Hooks.ForEl
+  commentId: T:FluentGpu.Hooks.ForEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ForEl.html
+  name: ForEl
+  nameWithType: ForEl
+  fullName: FluentGpu.Hooks.ForEl
+- uid: FluentGpu.Hooks.Flow
+  commentId: T:FluentGpu.Hooks.Flow
+  href: FluentGpu.Hooks.Flow.html
+  name: Flow
+  nameWithType: Flow
+  fullName: FluentGpu.Hooks.Flow
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.Ref`1
+  commentId: T:FluentGpu.Hooks.Ref`1
+  href: FluentGpu.Hooks.Ref-1.html
+  name: Ref<T>
+  nameWithType: Ref<T>
+  fullName: FluentGpu.Hooks.Ref<T>
+  nameWithType.vb: Ref(Of T)
+  fullName.vb: FluentGpu.Hooks.Ref(Of T)
+  name.vb: Ref(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref
+    href: FluentGpu.Hooks.Ref-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.RenderContext
+  commentId: T:FluentGpu.Hooks.RenderContext
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.RenderContext.html
+  name: RenderContext
+  nameWithType: RenderContext
+  fullName: FluentGpu.Hooks.RenderContext
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html

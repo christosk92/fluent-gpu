@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class TeachingTip | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class TeachingTip | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="WinUI TeachingTip (controls/dev/TeachingTip/TeachingTip.xaml + _themeresources + .cpp/.idl): an anchored (targeted) or window-relative (untargeted) non-modal callout that teaches/highlights a feature. The body is a SOLID surface — SolidBackgroundFillColorTertiary background, SurfaceStrokeColorDefault 1px border, OverlayCornerRadius (8), an elevation shadow, and the 1px TeachingTipTopHighlightBrush top highlight (#0DFFFFFF dark / #99FFFFFF light, TeachingTip_themeresources.xaml:6/:28) — with (top→bottom) an optional hero image, an icon + title + subtitle row, the main content, and a footer button panel (Action + Close). A targeted tip grows a 16&#215;8 tail/beak that points at the target; an untargeted tip has no tail. NOT light-dismiss by default (IsLightDismissEnabled=false): only the close button, Escape, or a programmatic close dismisses it. The FULL 13-placement matrix (TeachingTip.xaml PlacementStates :115-264) is honored — Top/Bottom/Left/Right, the 8 corner variants, and Center — each mapping to the matching FlyoutPositioner placement with the tail pinned to the joined edge per the state&#39;s alignment setters (e.g. TopRight → tail at the LEFT of the bottom edge, :160-170).  nudges the tip away from the target (TeachingTip.cpp:480/:588 offset);  (default true, the WinUI idl default) opts the popup out of the window bounds via the E4 windowed-popup seam when false. 1:1 tokens/sizes (TeachingTip_themeresources.xaml, unitless = epx): • MinWidth 320, MaxWidth 336, MinHeight 40, MaxHeight 520 (TeachingTipMin/MaxWidth/Height). • Content margin 12 on all sides (TeachingTipContentMargin); button panel top margin 0,12,0,0 (TeachingTipButtonPanelMargin); both-buttons split — Action 0,12,4,0 (Left), Close 4,12,0,0 (Right). • MainContent present-margin 0,12,0,0 (gap below the title block when content exists); icon→title gap 12 (TeachingTipIconPresenterMarginWithIcon); title-stack right margin 28 when the header (alternate) close button shows. • Title FontSize 16 SemiBold; Subtitle FontSize 14; body content FontSize 14 (Foreground = TextPrimary). • Alternate (header) close button: 40&#215;40 (TeachingTipAlternateCloseButtonSize), E711 glyph at 16px, SubtleFill ramp, ControlCornerRadius. The footer ActionButton&#39;s DEFAULT style is the STANDARD button (TeachingTip.xaml:10 ActionButtonStyle = DefaultButtonStyle) — set  for the AccentButtonStyle the gallery samples use. Open/close motion (host-driven, PopupChrome.TeachingTip): expand scale → 1 over 300ms cubic-bezier(0.1,0.9,0.2,1); contract scale → 20/Width over 200ms cubic-bezier(0.7,0,1,0.5) (TeachingTip.cpp:1660-1712; .h:234-235 + :304-307 control points) — both at full opacity (the storyboards carry no opacity keyframes).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_TeachingTip.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.TeachingTip%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.TeachingTip">
+
+
+
+  <h1 id="FluentGpu_Controls_TeachingTip" data-uid="FluentGpu.Controls.TeachingTip" class="text-break">
+Class TeachingTip  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L42"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>WinUI <code>TeachingTip</code> (controls/dev/TeachingTip/TeachingTip.xaml + _themeresources + .cpp/.idl): an anchored
+(targeted) or window-relative (untargeted) non-modal callout that teaches/highlights a feature. The body is a SOLID
+surface — <code>SolidBackgroundFillColorTertiary</code> background, <code>SurfaceStrokeColorDefault</code> 1px border,
+<code>OverlayCornerRadius</code> (8), an elevation shadow, and the 1px <code>TeachingTipTopHighlightBrush</code> top highlight
+(#0DFFFFFF dark / #99FFFFFF light, TeachingTip_themeresources.xaml:6/:28) — with (top→bottom) an optional hero
+image, an icon + title + subtitle row, the main content, and a footer button panel (Action + Close). A targeted tip
+grows a 16×8 tail/beak that points at the target; an untargeted tip has no tail. NOT light-dismiss by default
+(<code>IsLightDismissEnabled=false</code>): only the close button, Escape, or a programmatic close dismisses it.</p>
+<p>The FULL 13-placement matrix (TeachingTip.xaml PlacementStates :115-264) is honored — Top/Bottom/Left/Right,
+the 8 corner variants, and Center — each mapping to the matching FlyoutPositioner placement with the tail pinned
+to the joined edge per the state's alignment setters (e.g. TopRight → tail at the LEFT of the bottom edge,
+:160-170). <a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_PlacementMargin">PlacementMargin</a> nudges the tip away from the target (TeachingTip.cpp:480/:588 offset);
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_ShouldConstrainToRootBounds">ShouldConstrainToRootBounds</a> (default true, the WinUI idl default) opts the popup out of the window
+bounds via the E4 windowed-popup seam when false.</p>
+<p>1:1 tokens/sizes (TeachingTip_themeresources.xaml, unitless = epx):
+• MinWidth 320, MaxWidth 336, MinHeight 40, MaxHeight 520 (TeachingTipMin/MaxWidth/Height).
+• Content margin 12 on all sides (TeachingTipContentMargin); button panel top margin 0,12,0,0
+(TeachingTipButtonPanelMargin); both-buttons split — Action 0,12,4,0 (Left), Close 4,12,0,0 (Right).
+• MainContent present-margin 0,12,0,0 (gap below the title block when content exists); icon→title gap 12
+(TeachingTipIconPresenterMarginWithIcon); title-stack right margin 28 when the header (alternate) close button shows.
+• Title FontSize 16 SemiBold; Subtitle FontSize 14; body content FontSize 14 (Foreground = TextPrimary).
+• Alternate (header) close button: 40×40 (TeachingTipAlternateCloseButtonSize), E711 glyph at 16px, SubtleFill
+ramp, ControlCornerRadius. The footer ActionButton's DEFAULT style is the STANDARD button
+(TeachingTip.xaml:10 ActionButtonStyle = DefaultButtonStyle) — set <a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_ActionButtonIsAccent">ActionButtonIsAccent</a> for the
+AccentButtonStyle the gallery samples use.</p>
+<p>Open/close motion (host-driven, PopupChrome.TeachingTip): expand scale → 1 over 300ms cubic-bezier(0.1,0.9,0.2,1);
+contract scale → 20/Width over 200ms cubic-bezier(0.7,0,1,0.5) (TeachingTip.cpp:1660-1712; .h:234-235 +
+:304-307 control points) — both at full opacity (the storyboards carry no opacity keyframes).</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class TeachingTip : Component</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Hooks.Component.html">Component</a></div>
+      <div><span class="xref">TeachingTip</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context">Component.Context</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce">Component.RunsOnce</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks">Component.RenderWithHooks()</a>
+    </div>
+    <div>
+      <a class="xref" href="FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount">Component.Unmount()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+  <dl class="typelist extensionMethods">
+    <dt>Extension Methods</dt>
+    <dd>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_">MotionHooks.UseEntrance(Component, float, object?)</a>
+  </div>
+  <div>
+      <a class="xref" href="FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_">MotionHooks.UseHoverScale(Component, bool, float)</a>
+  </div>
+  </dd></dl>
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_ActionButtonClick" data-uid="FluentGpu.Controls.TeachingTip.ActionButtonClick">
+  ActionButtonClick
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L98"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? ActionButtonClick</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_ActionButtonContent" data-uid="FluentGpu.Controls.TeachingTip.ActionButtonContent">
+  ActionButtonContent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>ActionButtonContent</code> — the footer action button. Empty = collapsed.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string ActionButtonContent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_ActionButtonIsAccent" data-uid="FluentGpu.Controls.TeachingTip.ActionButtonIsAccent">
+  ActionButtonIsAccent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The DEFAULT ActionButtonStyle is the standard button (TeachingTip.xaml:10); true opts into
+AccentButtonStyle (the common app override).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool ActionButtonIsAccent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Body" data-uid="FluentGpu.Controls.TeachingTip.Body">
+  Body
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L85"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Body content (WinUI <code>Content</code>). When empty, the MainContentPresenter collapses (NoContent VSM).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Body</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_CloseButtonClick" data-uid="FluentGpu.Controls.TeachingTip.CloseButtonClick">
+  CloseButtonClick
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L105"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? CloseButtonClick</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_CloseButtonContent" data-uid="FluentGpu.Controls.TeachingTip.CloseButtonContent">
+  CloseButtonContent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L104"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>CloseButtonContent</code> — the standard footer close button. Empty = the close moves to the 40×40
+header (alternate) close button (WinUI HeaderCloseButton VSM); set it to show a labelled footer close instead.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string CloseButtonContent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Closed" data-uid="FluentGpu.Controls.TeachingTip.Closed">
+  Closed
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L143"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;TeachingTip.CloseReason&gt;? Closed</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="FluentGpu.Controls.TeachingTip.html">TeachingTip</a>.<a class="xref" href="FluentGpu.Controls.TeachingTip.CloseReason.html">CloseReason</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Closing" data-uid="FluentGpu.Controls.TeachingTip.Closing">
+  Closing
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L142"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>Closing</code> — fires before close with the reason; setting <a class="xref" href="FluentGpu.Controls.TeachingTip.ClosingEventArgs.html#FluentGpu_Controls_TeachingTip_ClosingEventArgs_Cancel">Cancel</a>
+aborts the close (the synchronous slice of the deferral pipeline).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;TeachingTip.ClosingEventArgs&gt;? Closing</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="FluentGpu.Controls.TeachingTip.html">TeachingTip</a>.<a class="xref" href="FluentGpu.Controls.TeachingTip.ClosingEventArgs.html">ClosingEventArgs</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_HasTarget" data-uid="FluentGpu.Controls.TeachingTip.HasTarget">
+  HasTarget
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L136"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>Target</code> presence. When false the tip is untargeted (no beak unless
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_TailVisibility">TailVisibility</a> forces one) and is placed against the WINDOW edge — WinUI
+PositionUntargetedPopup: default Bottom of the window, UntargetedEdgeMargin = 24px from the
+edges, <a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_PreferredPlacement">PreferredPlacement</a> picking the corner/edge (TeachingTip.cpp:571-668, :2074-2090).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool HasTarget</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_HeroContent" data-uid="FluentGpu.Controls.TeachingTip.HeroContent">
+  HeroContent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Arbitrary hero content slot (overrides <a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HeroImage">HeroImage</a> when set) — WinUI HeroContent is a
+UIElement, not just an image.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element? HeroContent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_HeroContentPlacement" data-uid="FluentGpu.Controls.TeachingTip.HeroContentPlacement">
+  HeroContentPlacement
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L93"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TeachingTip.HeroPlacement HeroContentPlacement</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.TeachingTip.html">TeachingTip</a>.<a class="xref" href="FluentGpu.Controls.TeachingTip.HeroPlacement.html">HeroPlacement</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_HeroImage" data-uid="FluentGpu.Controls.TeachingTip.HeroImage">
+  HeroImage
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L89"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Hero image source (WinUI <code>HeroContent</code>): a full-bleed banner pinned to the top or bottom edge.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string HeroImage</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_IconGlyph" data-uid="FluentGpu.Controls.TeachingTip.IconGlyph">
+  IconGlyph
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L87"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Glyph icon (Segoe Fluent Icons codepoint) shown left of the title (WinUI <code>IconSource</code>). Empty = none.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string IconGlyph</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_IsLightDismissEnabled" data-uid="FluentGpu.Controls.TeachingTip.IsLightDismissEnabled">
+  IsLightDismissEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L110"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>IsLightDismissEnabled</code> (default false). When true, clicking outside dismisses the tip
+(and the surface swaps to the transient acrylic background — the LightDismiss VSM, TeachingTip.xaml:19-26).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsLightDismissEnabled</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_IsOpen" data-uid="FluentGpu.Controls.TeachingTip.IsOpen">
+  IsOpen
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L117"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>Boolean IsOpen</code> (TeachingTip.idl, MUX_DEFAULT_VALUE false) as a CONTROLLED two-way signal:
+when set, writes from anywhere open/close the tip with the full expand/contract motion, and EVERY close path
+(close button, light dismiss, Escape, programmatic) writes false back — WinUI's OnCloseButtonClicked and its
+light-dismiss handler both end in <code>IsOpen(false)</code> (TeachingTip.cpp:1271-1276, :1382-1388). A cancelled
+Closing restores true (the WinUI deferral revert). Null = open via the trigger/<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_OpenOnMount">OpenOnMount</a> only.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Signal&lt;bool&gt;? IsOpen</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Signals.Signal-1.html">Signal</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_OpenOnMount" data-uid="FluentGpu.Controls.TeachingTip.OpenOnMount">
+  OpenOnMount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L111"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool OpenOnMount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Opened" data-uid="FluentGpu.Controls.TeachingTip.Opened">
+  Opened
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L139"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? Opened</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PartBubble" data-uid="FluentGpu.Controls.TeachingTip.PartBubble">
+  PartBubble
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L65"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The solid callout card (WinUI ContentRootGrid): fill, border, corners, shadow, min/max sizes…
+The tail/beak and the 1px top highlight are composed AGAINST the card OUTSIDE this part (tail mechanics
+stay control-owned — restyling the card fill does not recolor the beak). Owned: Children (the
+hero · content · footer structure).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartBubble = &quot;Bubble&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PartCloseButton" data-uid="FluentGpu.Controls.TeachingTip.PartCloseButton">
+  PartCloseButton
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L72"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Whichever close button is in use: the 40×40 header (alternate) close button when
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_CloseButtonContent">CloseButtonContent</a> is empty, else the labelled footer close (WinUI AlternateCloseButton /
+CloseButton). Owned: OnClick (the Closing→Closed pipeline), Role.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartCloseButton = &quot;CloseButton&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PartHero" data-uid="FluentGpu.Controls.TeachingTip.PartHero">
+  PartHero
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L75"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The full-bleed hero banner wrapper (WinUI HeroContentPresenter host). Owned: Children (the
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HeroContent">HeroContent</a>/<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HeroImage">HeroImage</a> slot).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartHero = &quot;Hero&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PartTitle" data-uid="FluentGpu.Controls.TeachingTip.PartTitle">
+  PartTitle
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L68"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The title text — a TextEl part: customize via
+<code>Parts.Set&lt;TextEl&gt;(TeachingTip.PartTitle, t =&gt; t with { … })</code>. Owned: none (pure styling).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartTitle = &quot;Title&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Parts" data-uid="FluentGpu.Controls.TeachingTip.Parts">
+  Parts
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L147"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+<a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a> for the contract.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TemplateParts? Parts</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PlacementMargin" data-uid="FluentGpu.Controls.TeachingTip.PlacementMargin">
+  PlacementMargin
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L128"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>PlacementMargin</code> (idl:119): extra distance between the target and the tip, applied on the
+placement axis (TeachingTip.cpp:480/:588 read it as the offset).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float PlacementMargin</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_PreferredPlacement" data-uid="FluentGpu.Controls.TeachingTip.PreferredPlacement">
+  PreferredPlacement
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>PreferredPlacement</code> (default Auto = Top for a targeted tip).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TeachingTip.PlacementMode PreferredPlacement</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.TeachingTip.html">TeachingTip</a>.<a class="xref" href="FluentGpu.Controls.TeachingTip.PlacementMode.html">PlacementMode</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_ShouldConstrainToRootBounds" data-uid="FluentGpu.Controls.TeachingTip.ShouldConstrainToRootBounds">
+  ShouldConstrainToRootBounds
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L131"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>ShouldConstrainToRootBounds</code> (default TRUE — the tip stays inside the window). False →
+the popup goes windowed via the E4 seam and may escape the window.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool ShouldConstrainToRootBounds</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Subtitle" data-uid="FluentGpu.Controls.TeachingTip.Subtitle">
+  Subtitle
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L83"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Subtitle</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_TailVisibility" data-uid="FluentGpu.Controls.TeachingTip.TailVisibility">
+  TailVisibility
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L125"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TeachingTip.TailVisibilityMode TailVisibility</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.TeachingTip.html">TeachingTip</a>.<a class="xref" href="FluentGpu.Controls.TeachingTip.TailVisibilityMode.html">TailVisibilityMode</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Target" data-uid="FluentGpu.Controls.TeachingTip.Target">
+  Target
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L122"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>WinUI <code>FrameworkElement Target</code> (TeachingTip.idl) as the engine's anchor-thunk seam: the node the
+targeted tip points at (capture it via <a class="xref" href="FluentGpu.Dsl.BoxEl.html#FluentGpu_Dsl_BoxEl_OnRealized">OnRealized</a> on the target element). Null with
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HasTarget">HasTarget</a>=true anchors to this component's own wrapper/trigger (the pre-Target compat behavior);
+<a class="xref" href="FluentGpu.Controls.TeachingTip.html#FluentGpu_Controls_TeachingTip_HasTarget">HasTarget</a>=false ignores it (untargeted window-edge placement).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;NodeHandle&gt;? Target</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-1">Func</a>&lt;<a class="xref" href="FluentGpu.Foundation.NodeHandle.html">NodeHandle</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Title" data-uid="FluentGpu.Controls.TeachingTip.Title">
+  Title
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Title</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_TeachingTip_TriggerLabel" data-uid="FluentGpu.Controls.TeachingTip.TriggerLabel">
+  TriggerLabel
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Optional convenience trigger button label — WinUI's TeachingTip has NO trigger UI of its own (it is
+opened via <code>IsOpen</code> only, TeachingTip.idl); empty (the default) renders no trigger. Set it for the
+gallery-style &quot;button that shows the tip&quot; composition (the wrapper then doubles as the anchor).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string TriggerLabel</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_TeachingTip_Create_" data-uid="FluentGpu.Controls.TeachingTip.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Create_System_String_System_String_System_String_" data-uid="FluentGpu.Controls.TeachingTip.Create(System.String,System.String,System.String)">
+  Create(string, string, string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L182"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Embed a TeachingTip with a trigger label, title, and body (kept call-site-compatible with the prior API).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Element Create(string triggerLabel, string title, string body)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>triggerLabel</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>title</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>body</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_TeachingTip_Render_" data-uid="FluentGpu.Controls.TeachingTip.Render*"></a>
+
+  <h3 id="FluentGpu_Controls_TeachingTip_Render" data-uid="FluentGpu.Controls.TeachingTip.Render">
+  Render()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/TeachingTip.cs/#L208"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override Element Render()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

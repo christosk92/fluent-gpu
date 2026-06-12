@@ -1,0 +1,585 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.TextEditStyle
+  commentId: T:FluentGpu.Render.TextEditStyle
+  id: TextEditStyle
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.TextEditStyle.#ctor(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Render.TextEditStyle.CaretColor
+  - FluentGpu.Render.TextEditStyle.Enabled
+  - FluentGpu.Render.TextEditStyle.SelectedText
+  - FluentGpu.Render.TextEditStyle.SelectionFill
+  langs:
+  - csharp
+  - vb
+  name: TextEditStyle
+  nameWithType: TextEditStyle
+  fullName: FluentGpu.Render.TextEditStyle
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextEditStyle
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    The text-edit decoration brushes (WinUI TextControlSelectionHighlightColor = AccentFillColorSelectedTextBackgroundBrush,
+        TextOnAccentFillColorSelectedTextBrush, and the caret = the text foreground). Passed into the recorder by the host
+        (which reads the theme), like <xref href="FluentGpu.Render.FocusVisualStyle" data-throw-if-not-resolved="false"></xref>; default = disabled, so existing paths are untouched.
+  example: []
+  syntax:
+    content: 'public readonly record struct TextEditStyle : IEquatable<TextEditStyle>'
+    content.vb: Public Structure TextEditStyle Implements IEquatable(Of TextEditStyle)
+  implements:
+  - System.IEquatable{FluentGpu.Render.TextEditStyle}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.TextEditStyle.#ctor(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Render.TextEditStyle.#ctor(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  id: '#ctor(FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)'
+  parent: FluentGpu.Render.TextEditStyle
+  langs:
+  - csharp
+  - vb
+  name: TextEditStyle(ColorF, ColorF, ColorF)
+  nameWithType: TextEditStyle.TextEditStyle(ColorF, ColorF, ColorF)
+  fullName: FluentGpu.Render.TextEditStyle.TextEditStyle(FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    The text-edit decoration brushes (WinUI TextControlSelectionHighlightColor = AccentFillColorSelectedTextBackgroundBrush,
+        TextOnAccentFillColorSelectedTextBrush, and the caret = the text foreground). Passed into the recorder by the host
+        (which reads the theme), like <xref href="FluentGpu.Render.FocusVisualStyle" data-throw-if-not-resolved="false"></xref>; default = disabled, so existing paths are untouched.
+  example: []
+  syntax:
+    content: public TextEditStyle(ColorF SelectionFill, ColorF SelectedText, ColorF CaretColor)
+    parameters:
+    - id: SelectionFill
+      type: FluentGpu.Foundation.ColorF
+    - id: SelectedText
+      type: FluentGpu.Foundation.ColorF
+    - id: CaretColor
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Sub New(SelectionFill As ColorF, SelectedText As ColorF, CaretColor As ColorF)
+  overload: FluentGpu.Render.TextEditStyle.#ctor*
+  nameWithType.vb: TextEditStyle.New(ColorF, ColorF, ColorF)
+  fullName.vb: FluentGpu.Render.TextEditStyle.New(FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  name.vb: New(ColorF, ColorF, ColorF)
+- uid: FluentGpu.Render.TextEditStyle.SelectionFill
+  commentId: P:FluentGpu.Render.TextEditStyle.SelectionFill
+  id: SelectionFill
+  parent: FluentGpu.Render.TextEditStyle
+  langs:
+  - csharp
+  - vb
+  name: SelectionFill
+  nameWithType: TextEditStyle.SelectionFill
+  fullName: FluentGpu.Render.TextEditStyle.SelectionFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionFill
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF SelectionFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SelectionFill As ColorF
+  overload: FluentGpu.Render.TextEditStyle.SelectionFill*
+- uid: FluentGpu.Render.TextEditStyle.SelectedText
+  commentId: P:FluentGpu.Render.TextEditStyle.SelectedText
+  id: SelectedText
+  parent: FluentGpu.Render.TextEditStyle
+  langs:
+  - csharp
+  - vb
+  name: SelectedText
+  nameWithType: TextEditStyle.SelectedText
+  fullName: FluentGpu.Render.TextEditStyle.SelectedText
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectedText
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF SelectedText { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SelectedText As ColorF
+  overload: FluentGpu.Render.TextEditStyle.SelectedText*
+- uid: FluentGpu.Render.TextEditStyle.CaretColor
+  commentId: P:FluentGpu.Render.TextEditStyle.CaretColor
+  id: CaretColor
+  parent: FluentGpu.Render.TextEditStyle
+  langs:
+  - csharp
+  - vb
+  name: CaretColor
+  nameWithType: TextEditStyle.CaretColor
+  fullName: FluentGpu.Render.TextEditStyle.CaretColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretColor
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF CaretColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property CaretColor As ColorF
+  overload: FluentGpu.Render.TextEditStyle.CaretColor*
+- uid: FluentGpu.Render.TextEditStyle.Enabled
+  commentId: P:FluentGpu.Render.TextEditStyle.Enabled
+  id: Enabled
+  parent: FluentGpu.Render.TextEditStyle
+  langs:
+  - csharp
+  - vb
+  name: Enabled
+  nameWithType: TextEditStyle.Enabled
+  fullName: FluentGpu.Render.TextEditStyle.Enabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/SceneRecorder.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enabled
+    path: ../../src/FluentGpu.Render/SceneRecorder.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public bool Enabled { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property Enabled As Boolean
+  overload: FluentGpu.Render.TextEditStyle.Enabled*
+references:
+- uid: FluentGpu.Render.FocusVisualStyle
+  commentId: T:FluentGpu.Render.FocusVisualStyle
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.FocusVisualStyle.html
+  name: FocusVisualStyle
+  nameWithType: FocusVisualStyle
+  fullName: FluentGpu.Render.FocusVisualStyle
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.TextEditStyle}
+  commentId: T:System.IEquatable{FluentGpu.Render.TextEditStyle}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<TextEditStyle>
+  nameWithType: IEquatable<TextEditStyle>
+  fullName: System.IEquatable<FluentGpu.Render.TextEditStyle>
+  nameWithType.vb: IEquatable(Of TextEditStyle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.TextEditStyle)
+  name.vb: IEquatable(Of TextEditStyle)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.TextEditStyle
+    name: TextEditStyle
+    href: FluentGpu.Render.TextEditStyle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.TextEditStyle
+    name: TextEditStyle
+    href: FluentGpu.Render.TextEditStyle.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.TextEditStyle.#ctor*
+  commentId: Overload:FluentGpu.Render.TextEditStyle.#ctor
+  href: FluentGpu.Render.TextEditStyle.html#FluentGpu_Render_TextEditStyle__ctor_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_
+  name: TextEditStyle
+  nameWithType: TextEditStyle.TextEditStyle
+  fullName: FluentGpu.Render.TextEditStyle.TextEditStyle
+  nameWithType.vb: TextEditStyle.New
+  fullName.vb: FluentGpu.Render.TextEditStyle.New
+  name.vb: New
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.TextEditStyle.SelectionFill*
+  commentId: Overload:FluentGpu.Render.TextEditStyle.SelectionFill
+  href: FluentGpu.Render.TextEditStyle.html#FluentGpu_Render_TextEditStyle_SelectionFill
+  name: SelectionFill
+  nameWithType: TextEditStyle.SelectionFill
+  fullName: FluentGpu.Render.TextEditStyle.SelectionFill
+- uid: FluentGpu.Render.TextEditStyle.SelectedText*
+  commentId: Overload:FluentGpu.Render.TextEditStyle.SelectedText
+  href: FluentGpu.Render.TextEditStyle.html#FluentGpu_Render_TextEditStyle_SelectedText
+  name: SelectedText
+  nameWithType: TextEditStyle.SelectedText
+  fullName: FluentGpu.Render.TextEditStyle.SelectedText
+- uid: FluentGpu.Render.TextEditStyle.CaretColor*
+  commentId: Overload:FluentGpu.Render.TextEditStyle.CaretColor
+  href: FluentGpu.Render.TextEditStyle.html#FluentGpu_Render_TextEditStyle_CaretColor
+  name: CaretColor
+  nameWithType: TextEditStyle.CaretColor
+  fullName: FluentGpu.Render.TextEditStyle.CaretColor
+- uid: FluentGpu.Render.TextEditStyle.Enabled*
+  commentId: Overload:FluentGpu.Render.TextEditStyle.Enabled
+  href: FluentGpu.Render.TextEditStyle.html#FluentGpu_Render_TextEditStyle_Enabled
+  name: Enabled
+  nameWithType: TextEditStyle.Enabled
+  fullName: FluentGpu.Render.TextEditStyle.Enabled
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

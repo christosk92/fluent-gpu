@@ -1,0 +1,16 @@
+[wakediag] run 122 rendered 1 | reconciled 1 layout 0 recordOnly 121 | streak 122 idleAgo 1.0s minimized 0 | kept: frameNeeded=1 runtimePending=1 anim=122 | sole: anim=121
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 242 idleAgo 2.0s minimized 0 | kept: anim=120 | sole: anim=120
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 362 idleAgo 3.0s minimized 0 | kept: anim=120 | sole: anim=120
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 483 idleAgo 4.0s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 604 idleAgo 5.0s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 725 idleAgo 6.0s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 845 idleAgo 7.0s minimized 0 | kept: anim=120 | sole: anim=120
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 966 idleAgo 8.0s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 1086 idleAgo 9.0s minimized 0 | kept: anim=120 | sole: anim=120
+[wakediag] run 52 rendered 0 | reconciled 0 layout 0 recordOnly 52 | streak 1138 idleAgo 12.9s minimized 8 | kept: anim=52 | sole: anim=52
+[wakediag] run 1 rendered 0 | reconciled 0 layout 0 recordOnly 1 | streak 1139 idleAgo 17.5s minimized 1 | kept: anim=1 | sole: anim=1
+[wakediag] run 120 rendered 1 | reconciled 1 layout 0 recordOnly 119 | streak 1259 idleAgo 18.5s minimized 0 | kept: frameNeeded=2 runtimePending=1 anim=120 | sole: anim=118
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 1380 idleAgo 19.5s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 1500 idleAgo 20.5s minimized 0 | kept: anim=120 | sole: anim=120
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 1621 idleAgo 21.5s minimized 0 | kept: anim=121 | sole: anim=121
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 1742 idleAgo 22.5s minimized 0 | kept: anim=121 | sole: anim=121

@@ -1,0 +1,284 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  id: ImageFailureKind
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ImageFailureKind.Canceled
+  - FluentGpu.Scene.ImageFailureKind.Decode
+  - FluentGpu.Scene.ImageFailureKind.HttpError
+  - FluentGpu.Scene.ImageFailureKind.Network
+  - FluentGpu.Scene.ImageFailureKind.None
+  - FluentGpu.Scene.ImageFailureKind.NotFound
+  - FluentGpu.Scene.ImageFailureKind.ServerError
+  - FluentGpu.Scene.ImageFailureKind.Timeout
+  langs:
+  - csharp
+  - vb
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageFailureKind
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Why an image decode ended (for diagnostics + app fallbacks). Transient kinds are retried by the decoder
+        before a request is reported <xref href="FluentGpu.Scene.ImageState.Failed" data-throw-if-not-resolved="false"></xref>; permanent kinds fail immediately.
+  example: []
+  syntax:
+    content: 'public enum ImageFailureKind : byte'
+    content.vb: Public Enum ImageFailureKind As Byte
+- uid: FluentGpu.Scene.ImageFailureKind.None
+  commentId: F:FluentGpu.Scene.ImageFailureKind.None
+  id: None
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ImageFailureKind.None
+  fullName: FluentGpu.Scene.ImageFailureKind.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.Network
+  commentId: F:FluentGpu.Scene.ImageFailureKind.Network
+  id: Network
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: Network
+  nameWithType: ImageFailureKind.Network
+  fullName: FluentGpu.Scene.ImageFailureKind.Network
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Network
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Network = 1
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.Timeout
+  commentId: F:FluentGpu.Scene.ImageFailureKind.Timeout
+  id: Timeout
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: Timeout
+  nameWithType: ImageFailureKind.Timeout
+  fullName: FluentGpu.Scene.ImageFailureKind.Timeout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Timeout
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Timeout = 2
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.ServerError
+  commentId: F:FluentGpu.Scene.ImageFailureKind.ServerError
+  id: ServerError
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: ServerError
+  nameWithType: ImageFailureKind.ServerError
+  fullName: FluentGpu.Scene.ImageFailureKind.ServerError
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ServerError
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: ServerError = 3
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.NotFound
+  commentId: F:FluentGpu.Scene.ImageFailureKind.NotFound
+  id: NotFound
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: NotFound
+  nameWithType: ImageFailureKind.NotFound
+  fullName: FluentGpu.Scene.ImageFailureKind.NotFound
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NotFound
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: NotFound = 4
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.HttpError
+  commentId: F:FluentGpu.Scene.ImageFailureKind.HttpError
+  id: HttpError
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: HttpError
+  nameWithType: ImageFailureKind.HttpError
+  fullName: FluentGpu.Scene.ImageFailureKind.HttpError
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HttpError
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: HttpError = 5
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.Decode
+  commentId: F:FluentGpu.Scene.ImageFailureKind.Decode
+  id: Decode
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: Decode
+  nameWithType: ImageFailureKind.Decode
+  fullName: FluentGpu.Scene.ImageFailureKind.Decode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Decode
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Decode = 6
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.ImageFailureKind.Canceled
+  commentId: F:FluentGpu.Scene.ImageFailureKind.Canceled
+  id: Canceled
+  parent: FluentGpu.Scene.ImageFailureKind
+  langs:
+  - csharp
+  - vb
+  name: Canceled
+  nameWithType: ImageFailureKind.Canceled
+  fullName: FluentGpu.Scene.ImageFailureKind.Canceled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Canceled
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Canceled = 7
+    return:
+      type: FluentGpu.Scene.ImageFailureKind
+references:
+- uid: FluentGpu.Scene.ImageState.Failed
+  commentId: F:FluentGpu.Scene.ImageState.Failed
+  href: FluentGpu.Scene.ImageState.html#FluentGpu_Scene_ImageState_Failed
+  name: Failed
+  nameWithType: ImageState.Failed
+  fullName: FluentGpu.Scene.ImageState.Failed
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind

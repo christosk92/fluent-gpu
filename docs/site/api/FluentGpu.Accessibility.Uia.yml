@@ -1,0 +1,23 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Accessibility.Uia
+  commentId: N:FluentGpu.Accessibility.Uia
+  id: FluentGpu.Accessibility.Uia
+  children:
+  - FluentGpu.Accessibility.Uia.UiaBackend
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Accessibility.Uia
+  nameWithType: FluentGpu.Accessibility.Uia
+  fullName: FluentGpu.Accessibility.Uia
+  type: Namespace
+  assemblies:
+  - FluentGpu.Accessibility.Uia
+references:
+- uid: FluentGpu.Accessibility.Uia.UiaBackend
+  commentId: T:FluentGpu.Accessibility.Uia.UiaBackend
+  href: FluentGpu.Accessibility.Uia.UiaBackend.html
+  name: UiaBackend
+  nameWithType: UiaBackend
+  fullName: FluentGpu.Accessibility.Uia.UiaBackend

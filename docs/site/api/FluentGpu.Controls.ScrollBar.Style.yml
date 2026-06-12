@@ -1,0 +1,708 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ScrollBar.Style
+  commentId: T:FluentGpu.Controls.ScrollBar.Style
+  id: ScrollBar.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ScrollBar.Style.CornerRadius
+  - FluentGpu.Controls.ScrollBar.Style.MinThumb
+  - FluentGpu.Controls.ScrollBar.Style.Thumb
+  - FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+  - FluentGpu.Controls.ScrollBar.Style.ThumbHover
+  - FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+  - FluentGpu.Controls.ScrollBar.Style.ThumbPressScale
+  - FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+  - FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+  langs:
+  - csharp
+  - vb
+  name: ScrollBar.Style
+  nameWithType: ScrollBar.Style
+  fullName: FluentGpu.Controls.ScrollBar.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record ScrollBar.Style : IEquatable<ScrollBar.Style>'
+    content.vb: Public NotInheritable Class ScrollBar.Style Implements IEquatable(Of ScrollBar.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ScrollBar.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+  id: ThumbWidth
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbWidth
+  nameWithType: ScrollBar.Style.ThumbWidth
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbWidth
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 88
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ThumbWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbWidth As Single
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbWidth*
+- uid: FluentGpu.Controls.ScrollBar.Style.MinThumb
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.MinThumb
+  id: MinThumb
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: MinThumb
+  nameWithType: ScrollBar.Style.MinThumb
+  fullName: FluentGpu.Controls.ScrollBar.Style.MinThumb
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinThumb
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinThumb { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinThumb As Single
+  overload: FluentGpu.Controls.ScrollBar.Style.MinThumb*
+- uid: FluentGpu.Controls.ScrollBar.Style.CornerRadius
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: ScrollBar.Style.CornerRadius
+  fullName: FluentGpu.Controls.ScrollBar.Style.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.ScrollBar.Style.CornerRadius*
+- uid: FluentGpu.Controls.ScrollBar.Style.Thumb
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.Thumb
+  id: Thumb
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: Thumb
+  nameWithType: ScrollBar.Style.Thumb
+  fullName: FluentGpu.Controls.ScrollBar.Style.Thumb
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Thumb
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Thumb { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Thumb As ColorF
+  overload: FluentGpu.Controls.ScrollBar.Style.Thumb*
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbHover
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbHover
+  id: ThumbHover
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbHover
+  nameWithType: ScrollBar.Style.ThumbHover
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbHover
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbHover As ColorF
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbHover*
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+  id: ThumbPressed
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbPressed
+  nameWithType: ScrollBar.Style.ThumbPressed
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbPressed
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbPressed As ColorF
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbPressed*
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+  id: ThumbDisabled
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbDisabled
+  nameWithType: ScrollBar.Style.ThumbDisabled
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbDisabled
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ThumbDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ThumbDisabled As ColorF
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbDisabled*
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+  id: ThumbHoverScale
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbHoverScale
+  nameWithType: ScrollBar.Style.ThumbHoverScale
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbHoverScale
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ThumbHoverScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbHoverScale As Single
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale*
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbPressScale
+  commentId: P:FluentGpu.Controls.ScrollBar.Style.ThumbPressScale
+  id: ThumbPressScale
+  parent: FluentGpu.Controls.ScrollBar.Style
+  langs:
+  - csharp
+  - vb
+  name: ThumbPressScale
+  nameWithType: ScrollBar.Style.ThumbPressScale
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbPressScale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbPressScale
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ThumbPressScale { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ThumbPressScale As Single
+  overload: FluentGpu.Controls.ScrollBar.Style.ThumbPressScale*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.ScrollBar.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ScrollBar.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ScrollBar.Style>
+  nameWithType: IEquatable<ScrollBar.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.ScrollBar.Style>
+  nameWithType.vb: IEquatable(Of ScrollBar.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ScrollBar.Style)
+  name.vb: IEquatable(Of ScrollBar.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbWidth*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbWidth
+  name: ThumbWidth
+  nameWithType: ScrollBar.Style.ThumbWidth
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbWidth
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ScrollBar.Style.MinThumb*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.MinThumb
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_MinThumb
+  name: MinThumb
+  nameWithType: ScrollBar.Style.MinThumb
+  fullName: FluentGpu.Controls.ScrollBar.Style.MinThumb
+- uid: FluentGpu.Controls.ScrollBar.Style.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.CornerRadius
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_CornerRadius
+  name: CornerRadius
+  nameWithType: ScrollBar.Style.CornerRadius
+  fullName: FluentGpu.Controls.ScrollBar.Style.CornerRadius
+- uid: FluentGpu.Controls.ScrollBar.Style.Thumb*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.Thumb
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_Thumb
+  name: Thumb
+  nameWithType: ScrollBar.Style.Thumb
+  fullName: FluentGpu.Controls.ScrollBar.Style.Thumb
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbHover*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbHover
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbHover
+  name: ThumbHover
+  nameWithType: ScrollBar.Style.ThumbHover
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbHover
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbPressed*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbPressed
+  name: ThumbPressed
+  nameWithType: ScrollBar.Style.ThumbPressed
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbPressed
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbDisabled*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbDisabled
+  name: ThumbDisabled
+  nameWithType: ScrollBar.Style.ThumbDisabled
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbDisabled
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbHoverScale
+  name: ThumbHoverScale
+  nameWithType: ScrollBar.Style.ThumbHoverScale
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbHoverScale
+- uid: FluentGpu.Controls.ScrollBar.Style.ThumbPressScale*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Style.ThumbPressScale
+  href: FluentGpu.Controls.ScrollBar.Style.html#FluentGpu_Controls_ScrollBar_Style_ThumbPressScale
+  name: ThumbPressScale
+  nameWithType: ScrollBar.Style.ThumbPressScale
+  fullName: FluentGpu.Controls.ScrollBar.Style.ThumbPressScale

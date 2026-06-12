@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.PointerKind
+  commentId: T:FluentGpu.Foundation.PointerKind
+  id: PointerKind
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.PointerKind.Mouse
+  - FluentGpu.Foundation.PointerKind.Pen
+  - FluentGpu.Foundation.PointerKind.Touch
+  langs:
+  - csharp
+  - vb
+  name: PointerKind
+  nameWithType: PointerKind
+  fullName: FluentGpu.Foundation.PointerKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerKind
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The physical pointer device class an event came from (WinUI PointerDeviceType) — controls touch-vs-mouse
+        behavioral splits (RatingControl hover scale, touch paddings).
+  example: []
+  syntax:
+    content: 'public enum PointerKind : byte'
+    content.vb: Public Enum PointerKind As Byte
+- uid: FluentGpu.Foundation.PointerKind.Mouse
+  commentId: F:FluentGpu.Foundation.PointerKind.Mouse
+  id: Mouse
+  parent: FluentGpu.Foundation.PointerKind
+  langs:
+  - csharp
+  - vb
+  name: Mouse
+  nameWithType: PointerKind.Mouse
+  fullName: FluentGpu.Foundation.PointerKind.Mouse
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mouse
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Mouse = 0
+    return:
+      type: FluentGpu.Foundation.PointerKind
+- uid: FluentGpu.Foundation.PointerKind.Touch
+  commentId: F:FluentGpu.Foundation.PointerKind.Touch
+  id: Touch
+  parent: FluentGpu.Foundation.PointerKind
+  langs:
+  - csharp
+  - vb
+  name: Touch
+  nameWithType: PointerKind.Touch
+  fullName: FluentGpu.Foundation.PointerKind.Touch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Touch
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Touch = 1
+    return:
+      type: FluentGpu.Foundation.PointerKind
+- uid: FluentGpu.Foundation.PointerKind.Pen
+  commentId: F:FluentGpu.Foundation.PointerKind.Pen
+  id: Pen
+  parent: FluentGpu.Foundation.PointerKind
+  langs:
+  - csharp
+  - vb
+  name: Pen
+  nameWithType: PointerKind.Pen
+  fullName: FluentGpu.Foundation.PointerKind.Pen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pen
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Pen = 2
+    return:
+      type: FluentGpu.Foundation.PointerKind
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.PointerKind
+  commentId: T:FluentGpu.Foundation.PointerKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.PointerKind.html
+  name: PointerKind
+  nameWithType: PointerKind
+  fullName: FluentGpu.Foundation.PointerKind

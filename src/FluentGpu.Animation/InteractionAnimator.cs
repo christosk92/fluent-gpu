@@ -17,6 +17,8 @@ public sealed class InteractionAnimator
 
     public InteractionAnimator(SceneStore scene) => _scene = scene;
     public bool HasActive => _active.Count > 0;
+    /// <summary>Nodes currently easing a hover/press transition — O(1) census.</summary>
+    public int ActiveCount => _active.Count;
 
     public void SetHover(NodeHandle node, bool on)
     {

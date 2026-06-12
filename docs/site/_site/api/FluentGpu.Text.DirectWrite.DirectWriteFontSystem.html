@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class DirectWriteFontSystem | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class DirectWriteFontSystem | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="The DirectWrite text backend () — a thin wrapper over . Every member (measurement AND the editor queries) runs the full itemize → shape → wrap/trim → position pipeline (kerning, ligatures, complex script, UAX #14 line breaking, CJK/emoji font fallback), so the measured box, the hit-tested caret and the selection rects all come from the SAME layout the renderer — which uses the same engine — actually draws. measure ≡ hit-test ≡ render: this parity is what keeps shaped glyphs from overlapping (the divergence that read as bold when the renderer was shaped but measurement was per-char). Touched on the UI thread during phase-6 layout and at edit/drag time; the render thread owns a separate engine instance, so queries here can never corrupt render-side buffers. Query results live in the engine&#39;s reused grow-only tables — 0 steady-state allocation per keystroke/pointer-move.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Text_DirectWrite_DirectWriteFontSystem.md&amp;value=---%0Auid%3A%20FluentGpu.Text.DirectWrite.DirectWriteFontSystem%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem">
+
+
+
+  <h1 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem" class="text-break">
+Class DirectWriteFontSystem  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L17"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Text.html">Text</a>.<a class="xref" href="FluentGpu.Text.DirectWrite.html">DirectWrite</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Text.DirectWrite.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>The DirectWrite text backend (<a class="xref" href="FluentGpu.Text.IFontSystem.html">IFontSystem</a>) — a thin wrapper over <a class="xref" href="FluentGpu.Text.DirectWrite.TextLayoutEngine.html">TextLayoutEngine</a>.
+Every member (measurement AND the editor queries) runs the full itemize → shape → wrap/trim → position pipeline
+(kerning, ligatures, complex script, UAX #14 line breaking, CJK/emoji font fallback), so the measured box, the
+hit-tested caret and the selection rects all come from the SAME layout the renderer — which uses the same engine —
+actually draws. measure ≡ hit-test ≡ render: this parity is what keeps shaped glyphs from overlapping (the
+divergence that read as bold when the renderer was shaped but measurement was per-char). Touched on the UI thread
+during phase-6 layout and at edit/drag time; the render thread owns a separate engine instance, so queries here can
+never corrupt render-side buffers. Query results live in the engine's reused grow-only tables — 0 steady-state
+allocation per keystroke/pointer-move.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class DirectWriteFontSystem : IFontSystem, IDisposable</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">DirectWriteFontSystem</span></div>
+    </dd>
+  </dl>
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="FluentGpu.Text.IFontSystem.html">IFontSystem</a></div>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.idisposable">IDisposable</a></div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem__ctor_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.#ctor*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem__ctor_FluentGpu_Foundation_StringTable_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.#ctor(FluentGpu.Foundation.StringTable)">
+  DirectWriteFontSystem(StringTable)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L23"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public DirectWriteFontSystem(StringTable strings)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>strings</code> <a class="xref" href="FluentGpu.Foundation.StringTable.html">StringTable</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_Dispose_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.Dispose*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_Dispose" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.Dispose">
+  Dispose()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L99"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Dispose()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_GetCaret_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.GetCaret*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_GetCaret_System_ReadOnlySpan_System_Char__FluentGpu_Text_TextStyle__System_Single_System_Int32_System_Single__System_Single__System_Single__System_Int32__" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.GetCaret(System.ReadOnlySpan{System.Char},FluentGpu.Text.TextStyle@,System.Single,System.Int32,System.Single@,System.Single@,System.Single@,System.Int32@)">
+  GetCaret(ReadOnlySpan&lt;char&gt;, in TextStyle, float, int, out float, out float, out float, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L75"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Caret geometry for a UTF-16 index: x + the line's top/height (single line: top = 0, height = the line
+height) + line index. Returns the LEADING position of <code class="paramref">charIndex</code>; at a soft-wrap boundary the
+leading position is the START of the continuation line — trailing affinity (pinning the caret to the END of the
+wrapped line) is the CALLER's job. <code class="paramref">charIndex</code> == text length → the trailing edge of the last
+line. An index inside a multi-char cluster snaps to the cluster's edges. Editor-hosting backends must implement
+this; the default throws.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void GetCaret(ReadOnlySpan&lt;char&gt; text, in TextStyle style, float maxWidth, int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.char">char</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Text.TextStyle.html">TextStyle</a></dt>
+    <dd></dd>
+    <dt><code>maxWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>charIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>x</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineTop</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineHeight</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>lineIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_GetRangeRects_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.GetRangeRects*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_GetRangeRects_System_ReadOnlySpan_System_Char__FluentGpu_Text_TextStyle__System_Single_System_Int32_System_Int32_System_Span_FluentGpu_Foundation_RectF__" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.GetRangeRects(System.ReadOnlySpan{System.Char},FluentGpu.Text.TextStyle@,System.Single,System.Int32,System.Int32,System.Span{FluentGpu.Foundation.RectF})">
+  GetRangeRects(ReadOnlySpan&lt;char&gt;, in TextStyle, float, int, int, Span&lt;RectF&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>One rect per line fragment covered by [<code class="paramref">start</code>, <code class="paramref">end</code>), x-from/x-to
+via cluster edges. Returns the count written (≤ <code class="paramref">rects</code>.Length; excess fragments are dropped —
+callers size generously). Zero-width ranges produce nothing. Editor-hosting backends must implement this; the
+default throws.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int GetRangeRects(ReadOnlySpan&lt;char&gt; text, in TextStyle style, float maxWidth, int start, int end, Span&lt;RectF&gt; rects)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.char">char</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Text.TextStyle.html">TextStyle</a></dt>
+    <dd></dd>
+    <dt><code>maxWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>start</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>end</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>rects</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="FluentGpu.Foundation.RectF.html">RectF</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_HitTestText_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.HitTestText*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_HitTestText_System_ReadOnlySpan_System_Char__FluentGpu_Text_TextStyle__System_Single_FluentGpu_Foundation_Point2_System_Boolean__" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.HitTestText(System.ReadOnlySpan{System.Char},FluentGpu.Text.TextStyle@,System.Single,FluentGpu.Foundation.Point2,System.Boolean@)">
+  HitTestText(ReadOnlySpan&lt;char&gt;, in TextStyle, float, Point2, out bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L69"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Point → UTF-16 index. Returns the SNAPPED insertion index — the leading or trailing edge of the hit
+glyph cluster — and <code class="paramref">trailing</code> reports which half of the cluster was hit. Points outside the
+laid-out bounds clamp to the nearest valid index (above → first line, below → last line, left → line start,
+right → line end), so drag-selection keeps tracking past the box. Editor-hosting backends must implement this;
+the default throws (the experimental GDI path cannot host editable text).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int HitTestText(ReadOnlySpan&lt;char&gt; text, in TextStyle style, float maxWidth, Point2 point, out bool trailing)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.char">char</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Text.TextStyle.html">TextStyle</a></dt>
+    <dd></dd>
+    <dt><code>maxWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>point</code> <a class="xref" href="FluentGpu.Foundation.Point2.html">Point2</a></dt>
+    <dd></dd>
+    <dt><code>trailing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_Measure_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.Measure*"></a>
+
+  <h3 id="FluentGpu_Text_DirectWrite_DirectWriteFontSystem_Measure_FluentGpu_Foundation_StringId_FluentGpu_Text_TextStyle__System_Single_" data-uid="FluentGpu.Text.DirectWrite.DirectWriteFontSystem.Measure(FluentGpu.Foundation.StringId,FluentGpu.Text.TextStyle@,System.Single)">
+  Measure(StringId, in TextStyle, float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs/#L29"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Measure a string under a style (intrinsic content size). Feeds the layout engine. When
+<code class="paramref">maxWidth</code> is finite and the style wraps, the result is the word-wrapped multi-line box.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = Infinity)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>text</code> <a class="xref" href="FluentGpu.Foundation.StringId.html">StringId</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Text.TextStyle.html">TextStyle</a></dt>
+    <dd></dd>
+    <dt><code>maxWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Text.TextMetrics.html">TextMetrics</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -71,11 +71,24 @@ internal sealed class FlipViewCore : Component
     const float ButtonsShowDurationMs = 3000f;// FLIP_VIEW_BUTTONS_SHOW_DURATION_MS (FlipView_Partial.h:13)
     const float WheelDelayMs = 200f;          // FLIP_VIEW_DISTINCT_SCROLL_WHEEL_DELAY_MS (FlipView_Partial.h:10)
     const float PanSlopPx = 4f;               // the engine drag-box convention (ListViewBaseItem_Partial.cpp:1864-1878)
+    // Fling-distance projection divisor for the MandatorySingle commit. A release of speed v (px/s) coasts an extra
+    // v / FlickProjectK px in the snap-settle window before resting; the projected offset is then snapped to the nearest
+    // index. Derived from the engine scroller decay (ScrollAnimator.FlingDecayPerS = 0.95/s) over the ControlNormal settle
+    // window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T). A BOUNDED window (not the full
+    // infinite scroll coast) is the right model for a page snap — a slow under-50% drag springs back, a flick navigates. ≈ 4.0.
+    static readonly float FlickProjectK = ProjectDivisor(ScrollAnimator.FlingDecayPerS, Motion.ControlNormal / 1000f);
+    static float ProjectDivisor(float decayPerS, float windowS)
+    {
+        float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
+        float frac = 1f - MathF.Exp(-k * windowS);       // fraction of the full coast reached within the window
+        return frac > 1e-4f ? k / frac : k;              // divisor: projectedExtra = v / divisor = v·frac/k
+    }
 
     public override Element Render()
     {
         // Hooks — stable order, unconditionally.
         var props = UseContext(FlipView.Props.Channel);
+        var hooks = UseContext(InputHooks.Current);   // PointerVelocity: real flick speed for the touch commit
         var (idx, setIdx) = UseState(Math.Max(0, props?.SelectedIndex ?? 0));
         var stripRef = UseRef<NodeHandle>(default);
         var stripSeeded = UseRef(false);
@@ -264,7 +277,20 @@ internal sealed class FlipViewCore : Component
             if (!panning.Value || count == 0 || extent <= 0f) return;
             panning.Value = false;
             float live = panOffset.Value;
-            int target = Math.Clamp((int)MathF.Round(-live / extent), 0, count - 1);
+            // REAL release velocity from the arena VelocitySampler (px/s along the pan axis), projected to the inertia
+            // resting offset the WinUI ScrollViewer DManip would settle at, then snapped MandatorySingle (rail-bounded to
+            // ONE viewport either side of the start — FlipView_themeresources.xaml:297, FlipView_Partial.cpp:1643-1699).
+            // With UseTouchAnimationsForAllNavigation a touch FLICK navigates even short of 50% because the projected
+            // resting offset carries past the halfway snap; a slow drag commits only once it physically passes 50%.
+            float vAxis = animations ? (vertical ? (hooks.PointerVelocity?.Invoke().Y ?? 0f)
+                                                 : (hooks.PointerVelocity?.Invoke().X ?? 0f))
+                                     : 0f;
+            float projected = live + vAxis / FlickProjectK;   // + velocity ⇒ toward index 0 (offset rises toward 0)
+            // Rail to ±1 viewport of the start index (MandatorySingle never skips more than one per gesture).
+            float lo = -(cur + 1) * extent, hi = -(cur - 1) * extent;
+            projected = Math.Clamp(projected, lo, hi);
+            int target = Math.Clamp((int)MathF.Round(-projected / extent), 0, count - 1);
+            target = Math.Clamp(target, cur - 1, cur + 1);   // adjacent only (the rail)
             if (target != cur)
             {
                 setIdx(target);   // the selection effect glides from the live pan offset
@@ -272,7 +298,7 @@ internal sealed class FlipViewCore : Component
             }
             else if (!stripRef.Value.IsNull)
             {
-                // Same index: snap back to rest.
+                // Same index: spring back to rest from the live (un-projected) offset.
                 Context.Anim?.Animate(stripRef.Value, ch, live, -cur * extent, Motion.ControlFast, Easing.FluentPopOpen);
             }
         }
@@ -381,6 +407,9 @@ internal sealed class FlipViewCore : Component
         return new BoxEl
         {
             ZStack = true,
+            // A ZStack ignores Direction for layout (children overlay), so this is layout-neutral — it tags the swipe AXIS
+            // for the dispatcher's DragYieldsToPan inference: a vertical FlipView drags along Y, a horizontal one along X.
+            Direction = vertical ? (byte)1 : (byte)0,
             Width = w, Height = h,
             Corners = Radii.ControlAll,    // CornerRadius = ControlCornerRadius (FlipView_themeresources.xaml:98)
             Fill = Tok.FillSolidBase,      // FlipViewBackground = SolidBackgroundFillColorBaseBrush (:6)
@@ -392,6 +421,10 @@ internal sealed class FlipViewCore : Component
             OnPointerPressed = OnPressed,
             OnPointerDown = PanDown,
             OnDrag = PanMove,
+            // Cross-axis page drag (§7A): inside a scroller the FlipView's along-axis drag flips pages; a cross-axis drag
+            // yields to the list pan. (FlipView is rarely nested in a same-axis scroller, but the opt-in makes the race
+            // deterministic and unifies the touch commit on the arena's velocity.)
+            DragYieldsToPan = true,
             OnClick = CommitPan,
             OnFocusChanged = focused => { if (focused) ShowButtonsAndArmFade(); },   // keyboard focus shows buttons (:1471-1473)
             Children = children.ToArray(),

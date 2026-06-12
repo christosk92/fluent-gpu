@@ -1,0 +1,580 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.EasingSpec
+  commentId: T:FluentGpu.Foundation.EasingSpec
+  id: EasingSpec
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.EasingSpec.CubicBezier(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.EasingSpec.Default
+  - FluentGpu.Foundation.EasingSpec.IsDefault
+  - FluentGpu.Foundation.EasingSpec.Named(FluentGpu.Foundation.Easing)
+  - FluentGpu.Foundation.EasingSpec.op_Implicit(FluentGpu.Foundation.Easing)~FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: EasingSpec
+  nameWithType: EasingSpec
+  fullName: FluentGpu.Foundation.EasingSpec
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EasingSpec
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public readonly record struct EasingSpec : IEquatable<EasingSpec>'
+    content.vb: Public Structure EasingSpec Implements IEquatable(Of EasingSpec)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.EasingSpec}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.EasingSpec.Default
+  commentId: P:FluentGpu.Foundation.EasingSpec.Default
+  id: Default
+  parent: FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: EasingSpec.Default
+  fullName: FluentGpu.Foundation.EasingSpec.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static EasingSpec Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Shared ReadOnly Property [Default] As EasingSpec
+  overload: FluentGpu.Foundation.EasingSpec.Default*
+- uid: FluentGpu.Foundation.EasingSpec.Named(FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Foundation.EasingSpec.Named(FluentGpu.Foundation.Easing)
+  id: Named(FluentGpu.Foundation.Easing)
+  parent: FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: Named(Easing)
+  nameWithType: EasingSpec.Named(Easing)
+  fullName: FluentGpu.Foundation.EasingSpec.Named(FluentGpu.Foundation.Easing)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Named
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static EasingSpec Named(Easing easing)
+    parameters:
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Shared Function Named(easing As Easing) As EasingSpec
+  overload: FluentGpu.Foundation.EasingSpec.Named*
+- uid: FluentGpu.Foundation.EasingSpec.CubicBezier(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.EasingSpec.CubicBezier(System.Single,System.Single,System.Single,System.Single)
+  id: CubicBezier(System.Single,System.Single,System.Single,System.Single)
+  parent: FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: CubicBezier(float, float, float, float)
+  nameWithType: EasingSpec.CubicBezier(float, float, float, float)
+  fullName: FluentGpu.Foundation.EasingSpec.CubicBezier(float, float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CubicBezier
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static EasingSpec CubicBezier(float x1, float y1, float x2, float y2)
+    parameters:
+    - id: x1
+      type: System.Single
+    - id: y1
+      type: System.Single
+    - id: x2
+      type: System.Single
+    - id: y2
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Shared Function CubicBezier(x1 As Single, y1 As Single, x2 As Single, y2 As Single) As EasingSpec
+  overload: FluentGpu.Foundation.EasingSpec.CubicBezier*
+  nameWithType.vb: EasingSpec.CubicBezier(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.EasingSpec.CubicBezier(Single, Single, Single, Single)
+  name.vb: CubicBezier(Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.EasingSpec.op_Implicit(FluentGpu.Foundation.Easing)~FluentGpu.Foundation.EasingSpec
+  commentId: M:FluentGpu.Foundation.EasingSpec.op_Implicit(FluentGpu.Foundation.Easing)~FluentGpu.Foundation.EasingSpec
+  id: op_Implicit(FluentGpu.Foundation.Easing)~FluentGpu.Foundation.EasingSpec
+  parent: FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: implicit operator EasingSpec(Easing)
+  nameWithType: EasingSpec.implicit operator EasingSpec(Easing)
+  fullName: FluentGpu.Foundation.EasingSpec.implicit operator FluentGpu.Foundation.EasingSpec(FluentGpu.Foundation.Easing)
+  type: Operator
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: op_Implicit
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static implicit operator EasingSpec(Easing easing)
+    parameters:
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Shared Widening Operator CType(easing As Easing) As EasingSpec
+  overload: FluentGpu.Foundation.EasingSpec.op_Implicit*
+  nameWithType.vb: EasingSpec.CType(Easing)
+  fullName.vb: FluentGpu.Foundation.EasingSpec.CType(FluentGpu.Foundation.Easing)
+  name.vb: CType(Easing)
+- uid: FluentGpu.Foundation.EasingSpec.IsDefault
+  commentId: P:FluentGpu.Foundation.EasingSpec.IsDefault
+  id: IsDefault
+  parent: FluentGpu.Foundation.EasingSpec
+  langs:
+  - csharp
+  - vb
+  name: IsDefault
+  nameWithType: EasingSpec.IsDefault
+  fullName: FluentGpu.Foundation.EasingSpec.IsDefault
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Easing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsDefault
+    path: ../../src/FluentGpu.Foundation/Easing.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: True for a default-constructed spec ("no curve chosen") — consumers substitute their own default.
+  example: []
+  syntax:
+    content: public bool IsDefault { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsDefault As Boolean
+  overload: FluentGpu.Foundation.EasingSpec.IsDefault*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.EasingSpec}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.EasingSpec}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<EasingSpec>
+  nameWithType: IEquatable<EasingSpec>
+  fullName: System.IEquatable<FluentGpu.Foundation.EasingSpec>
+  nameWithType.vb: IEquatable(Of EasingSpec)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.EasingSpec)
+  name.vb: IEquatable(Of EasingSpec)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.EasingSpec
+    name: EasingSpec
+    href: FluentGpu.Foundation.EasingSpec.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.EasingSpec
+    name: EasingSpec
+    href: FluentGpu.Foundation.EasingSpec.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.EasingSpec.Default*
+  commentId: Overload:FluentGpu.Foundation.EasingSpec.Default
+  href: FluentGpu.Foundation.EasingSpec.html#FluentGpu_Foundation_EasingSpec_Default
+  name: Default
+  nameWithType: EasingSpec.Default
+  fullName: FluentGpu.Foundation.EasingSpec.Default
+- uid: FluentGpu.Foundation.EasingSpec
+  commentId: T:FluentGpu.Foundation.EasingSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EasingSpec.html
+  name: EasingSpec
+  nameWithType: EasingSpec
+  fullName: FluentGpu.Foundation.EasingSpec
+- uid: FluentGpu.Foundation.EasingSpec.Named*
+  commentId: Overload:FluentGpu.Foundation.EasingSpec.Named
+  href: FluentGpu.Foundation.EasingSpec.html#FluentGpu_Foundation_EasingSpec_Named_FluentGpu_Foundation_Easing_
+  name: Named
+  nameWithType: EasingSpec.Named
+  fullName: FluentGpu.Foundation.EasingSpec.Named
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.EasingSpec.CubicBezier*
+  commentId: Overload:FluentGpu.Foundation.EasingSpec.CubicBezier
+  href: FluentGpu.Foundation.EasingSpec.html#FluentGpu_Foundation_EasingSpec_CubicBezier_System_Single_System_Single_System_Single_System_Single_
+  name: CubicBezier
+  nameWithType: EasingSpec.CubicBezier
+  fullName: FluentGpu.Foundation.EasingSpec.CubicBezier
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.EasingSpec.op_Implicit*
+  commentId: Overload:FluentGpu.Foundation.EasingSpec.op_Implicit
+  name: implicit operator
+  nameWithType: EasingSpec.implicit operator
+  fullName: FluentGpu.Foundation.EasingSpec.implicit operator
+  nameWithType.vb: EasingSpec.CType
+  fullName.vb: FluentGpu.Foundation.EasingSpec.CType
+  name.vb: CType
+  spec.csharp:
+  - name: implicit
+  - name: " "
+  - name: operator
+- uid: FluentGpu.Foundation.EasingSpec.IsDefault*
+  commentId: Overload:FluentGpu.Foundation.EasingSpec.IsDefault
+  href: FluentGpu.Foundation.EasingSpec.html#FluentGpu_Foundation_EasingSpec_IsDefault
+  name: IsDefault
+  nameWithType: EasingSpec.IsDefault
+  fullName: FluentGpu.Foundation.EasingSpec.IsDefault
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

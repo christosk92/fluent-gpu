@@ -1,0 +1,631 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SlabAllocator`1
+  commentId: T:FluentGpu.Foundation.SlabAllocator`1
+  id: SlabAllocator`1
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SlabAllocator`1.#ctor(System.Int32)
+  - FluentGpu.Foundation.SlabAllocator`1.Alloc
+  - FluentGpu.Foundation.SlabAllocator`1.Capacity
+  - FluentGpu.Foundation.SlabAllocator`1.Free(FluentGpu.Foundation.Handle)
+  - FluentGpu.Foundation.SlabAllocator`1.Get(FluentGpu.Foundation.Handle)
+  - FluentGpu.Foundation.SlabAllocator`1.IsLive(FluentGpu.Foundation.Handle)
+  - FluentGpu.Foundation.SlabAllocator`1.LiveCount
+  langs:
+  - csharp
+  - vb
+  name: SlabAllocator<T>
+  nameWithType: SlabAllocator<T>
+  fullName: FluentGpu.Foundation.SlabAllocator<T>
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SlabAllocator
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Stable, generation-versioned slab over <code class="typeparamref">T</code>. Index 0 is reserved as the null slot,
+
+    so <code>default(Handle)</code> is null. Generation is bumped on Free (ABA defense). O(1) alloc/free via an
+
+    intrusive int free-list. Pointer-bearing T uses a side <code>_next</code> array (we always do, here).
+  example: []
+  syntax:
+    content: 'public sealed class SlabAllocator<T> where T : unmanaged'
+    typeParameters:
+    - id: T
+    content.vb: Public NotInheritable Class SlabAllocator(Of T As Structure)
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  nameWithType.vb: SlabAllocator(Of T)
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T)
+  name.vb: SlabAllocator(Of T)
+- uid: FluentGpu.Foundation.SlabAllocator`1.#ctor(System.Int32)
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: SlabAllocator(int)
+  nameWithType: SlabAllocator<T>.SlabAllocator(int)
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.SlabAllocator(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public SlabAllocator(int capacity = 16)
+    parameters:
+    - id: capacity
+      type: System.Int32
+    content.vb: Public Sub New(capacity As Integer = 16)
+  overload: FluentGpu.Foundation.SlabAllocator`1.#ctor*
+  nameWithType.vb: SlabAllocator(Of T).New(Integer)
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Foundation.SlabAllocator`1.Capacity
+  commentId: P:FluentGpu.Foundation.SlabAllocator`1.Capacity
+  id: Capacity
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: Capacity
+  nameWithType: SlabAllocator<T>.Capacity
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Capacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Capacity
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int Capacity { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Capacity As Integer
+  overload: FluentGpu.Foundation.SlabAllocator`1.Capacity*
+  nameWithType.vb: SlabAllocator(Of T).Capacity
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Capacity
+- uid: FluentGpu.Foundation.SlabAllocator`1.LiveCount
+  commentId: P:FluentGpu.Foundation.SlabAllocator`1.LiveCount
+  id: LiveCount
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: LiveCount
+  nameWithType: SlabAllocator<T>.LiveCount
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.LiveCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LiveCount
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int LiveCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property LiveCount As Integer
+  overload: FluentGpu.Foundation.SlabAllocator`1.LiveCount*
+  nameWithType.vb: SlabAllocator(Of T).LiveCount
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).LiveCount
+- uid: FluentGpu.Foundation.SlabAllocator`1.Alloc
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.Alloc
+  id: Alloc
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: Alloc()
+  nameWithType: SlabAllocator<T>.Alloc()
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Alloc()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Alloc
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Handle Alloc()
+    return:
+      type: FluentGpu.Foundation.Handle
+    content.vb: Public Function Alloc() As Handle
+  overload: FluentGpu.Foundation.SlabAllocator`1.Alloc*
+  nameWithType.vb: SlabAllocator(Of T).Alloc()
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Alloc()
+- uid: FluentGpu.Foundation.SlabAllocator`1.Free(FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.Free(FluentGpu.Foundation.Handle)
+  id: Free(FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: Free(Handle)
+  nameWithType: SlabAllocator<T>.Free(Handle)
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Free(FluentGpu.Foundation.Handle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Free
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public void Free(Handle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Foundation.Handle
+    content.vb: Public Sub Free(h As Handle)
+  overload: FluentGpu.Foundation.SlabAllocator`1.Free*
+  nameWithType.vb: SlabAllocator(Of T).Free(Handle)
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Free(FluentGpu.Foundation.Handle)
+- uid: FluentGpu.Foundation.SlabAllocator`1.IsLive(FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.IsLive(FluentGpu.Foundation.Handle)
+  id: IsLive(FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: IsLive(Handle)
+  nameWithType: SlabAllocator<T>.IsLive(Handle)
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.IsLive(FluentGpu.Foundation.Handle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsLive
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsLive(Handle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Foundation.Handle
+    return:
+      type: System.Boolean
+    content.vb: Public Function IsLive(h As Handle) As Boolean
+  overload: FluentGpu.Foundation.SlabAllocator`1.IsLive*
+  nameWithType.vb: SlabAllocator(Of T).IsLive(Handle)
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).IsLive(FluentGpu.Foundation.Handle)
+- uid: FluentGpu.Foundation.SlabAllocator`1.Get(FluentGpu.Foundation.Handle)
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.Get(FluentGpu.Foundation.Handle)
+  id: Get(FluentGpu.Foundation.Handle)
+  parent: FluentGpu.Foundation.SlabAllocator`1
+  langs:
+  - csharp
+  - vb
+  name: Get(Handle)
+  nameWithType: SlabAllocator<T>.Get(Handle)
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Get(FluentGpu.Foundation.Handle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Allocators.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Get
+    path: ../../src/FluentGpu.Foundation/Allocators.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Mutable view of the slot. Must NOT be held across an <xref href="FluentGpu.Foundation.SlabAllocator%601.Alloc" data-throw-if-not-resolved="false"></xref> that can grow.
+  example: []
+  syntax:
+    content: public ref T Get(Handle h)
+    parameters:
+    - id: h
+      type: FluentGpu.Foundation.Handle
+    return:
+      type: '{T}'
+    content.vb: Public ByRef Function [Get](h As Handle) As T
+  overload: FluentGpu.Foundation.SlabAllocator`1.Get*
+  nameWithType.vb: SlabAllocator(Of T).Get(Handle)
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Get(FluentGpu.Foundation.Handle)
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.SlabAllocator`1.#ctor*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.#ctor
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1__ctor_System_Int32_
+  name: SlabAllocator
+  nameWithType: SlabAllocator<T>.SlabAllocator
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.SlabAllocator
+  nameWithType.vb: SlabAllocator(Of T).New
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.SlabAllocator`1.Capacity*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.Capacity
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Capacity
+  name: Capacity
+  nameWithType: SlabAllocator<T>.Capacity
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Capacity
+  nameWithType.vb: SlabAllocator(Of T).Capacity
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Capacity
+- uid: FluentGpu.Foundation.SlabAllocator`1.LiveCount*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.LiveCount
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_LiveCount
+  name: LiveCount
+  nameWithType: SlabAllocator<T>.LiveCount
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.LiveCount
+  nameWithType.vb: SlabAllocator(Of T).LiveCount
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).LiveCount
+- uid: FluentGpu.Foundation.SlabAllocator`1.Alloc*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.Alloc
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Alloc
+  name: Alloc
+  nameWithType: SlabAllocator<T>.Alloc
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Alloc
+  nameWithType.vb: SlabAllocator(Of T).Alloc
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Alloc
+- uid: FluentGpu.Foundation.Handle
+  commentId: T:FluentGpu.Foundation.Handle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Handle.html
+  name: Handle
+  nameWithType: Handle
+  fullName: FluentGpu.Foundation.Handle
+- uid: FluentGpu.Foundation.SlabAllocator`1.Free*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.Free
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Free_FluentGpu_Foundation_Handle_
+  name: Free
+  nameWithType: SlabAllocator<T>.Free
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Free
+  nameWithType.vb: SlabAllocator(Of T).Free
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Free
+- uid: FluentGpu.Foundation.SlabAllocator`1.IsLive*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.IsLive
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_IsLive_FluentGpu_Foundation_Handle_
+  name: IsLive
+  nameWithType: SlabAllocator<T>.IsLive
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.IsLive
+  nameWithType.vb: SlabAllocator(Of T).IsLive
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).IsLive
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.SlabAllocator`1.Alloc
+  commentId: M:FluentGpu.Foundation.SlabAllocator`1.Alloc
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Alloc
+  name: Alloc()
+  nameWithType: SlabAllocator<T>.Alloc()
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Alloc()
+  nameWithType.vb: SlabAllocator(Of T).Alloc()
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Alloc()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.SlabAllocator`1.Alloc
+    name: Alloc
+    href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Alloc
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.SlabAllocator`1.Alloc
+    name: Alloc
+    href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Alloc
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation.SlabAllocator`1.Get*
+  commentId: Overload:FluentGpu.Foundation.SlabAllocator`1.Get
+  href: FluentGpu.Foundation.SlabAllocator-1.html#FluentGpu_Foundation_SlabAllocator_1_Get_FluentGpu_Foundation_Handle_
+  name: Get
+  nameWithType: SlabAllocator<T>.Get
+  fullName: FluentGpu.Foundation.SlabAllocator<T>.Get
+  nameWithType.vb: SlabAllocator(Of T).Get
+  fullName.vb: FluentGpu.Foundation.SlabAllocator(Of T).Get
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T

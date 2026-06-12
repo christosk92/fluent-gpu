@@ -1,0 +1,754 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBar
+  commentId: T:FluentGpu.Controls.InfoBar
+  id: InfoBar
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBar.Create(FluentGpu.Controls.InfoBarSeverity,System.String,System.String,System.Action,System.Boolean,System.Boolean,System.Boolean,FluentGpu.Dsl.Element,System.Action{FluentGpu.Controls.InfoBarClosingEventArgs},System.Action{FluentGpu.Controls.InfoBarClosedEventArgs},FluentGpu.Dsl.Element,System.String,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.InfoBar.PartCloseButton
+  - FluentGpu.Controls.InfoBar.PartIcon
+  - FluentGpu.Controls.InfoBar.PartMessage
+  - FluentGpu.Controls.InfoBar.PartRoot
+  - FluentGpu.Controls.InfoBar.PartTitle
+  langs:
+  - csharp
+  - vb
+  name: InfoBar
+  nameWithType: InfoBar
+  fullName: FluentGpu.Controls.InfoBar
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBar
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI InfoBar: an inline, app-wide status surface. A severity icon (a filled circle glyph with an inverse-colored
+
+    status glyph on top), a Title (SemiBold) + Message content panel (laid out horizontally when it fits on one line,
+
+    vertically otherwise, like WinUI's InfoBarPanel), an optional trailing action button, and an optional close button.
+
+    The background is a subtle severity tint over a card stroke. Controlled by <code>isOpen</code>.
+  example: []
+  syntax:
+    content: public static class InfoBar
+    content.vb: Public Module InfoBar
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.InfoBar.PartRoot
+  commentId: F:FluentGpu.Controls.InfoBar.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: InfoBar.PartRoot
+  fullName: FluentGpu.Controls.InfoBar.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The severity-tinted bar root. Owned: Children (the icon / panel / close columns — conditional
+        mounts), Role. The severity tint/stroke are stock per-render styling a modifier may override.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.InfoBar.PartIcon
+  commentId: F:FluentGpu.Controls.InfoBar.PartIcon
+  id: PartIcon
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: PartIcon
+  nameWithType: InfoBar.PartIcon
+  fullName: FluentGpu.Controls.InfoBar.PartIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartIcon
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The 16x16 standard severity icon Z-stack (WinUI StandardIcon area). Owned: none — the per-severity
+        glyph colors are recomputed per render in the stock build (override-able).
+  example: []
+  syntax:
+    content: public const string PartIcon = "Icon"
+    return:
+      type: System.String
+    content.vb: Public Const PartIcon As String = "Icon"
+- uid: FluentGpu.Controls.InfoBar.PartTitle
+  commentId: F:FluentGpu.Controls.InfoBar.PartTitle
+  id: PartTitle
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: PartTitle
+  nameWithType: InfoBar.PartTitle
+  fullName: FluentGpu.Controls.InfoBar.PartTitle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTitle
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The SemiBold title (WinUI Title). A TextEl part — restyle via
+        <code>parts.Set&lt;TextEl&gt;(InfoBar.PartTitle, t =&gt; t with { … })</code>. Owned: none.
+  example: []
+  syntax:
+    content: public const string PartTitle = "Title"
+    return:
+      type: System.String
+    content.vb: Public Const PartTitle As String = "Title"
+- uid: FluentGpu.Controls.InfoBar.PartMessage
+  commentId: F:FluentGpu.Controls.InfoBar.PartMessage
+  id: PartMessage
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: PartMessage
+  nameWithType: InfoBar.PartMessage
+  fullName: FluentGpu.Controls.InfoBar.PartMessage
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartMessage
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The message body (WinUI Message). A TextEl part — restyle via
+        <code>parts.Set&lt;TextEl&gt;(InfoBar.PartMessage, t =&gt; t with { … })</code>. Owned: none.
+  example: []
+  syntax:
+    content: public const string PartMessage = "Message"
+    return:
+      type: System.String
+    content.vb: Public Const PartMessage As String = "Message"
+- uid: FluentGpu.Controls.InfoBar.PartCloseButton
+  commentId: F:FluentGpu.Controls.InfoBar.PartCloseButton
+  id: PartCloseButton
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: PartCloseButton
+  nameWithType: InfoBar.PartCloseButton
+  fullName: FluentGpu.Controls.InfoBar.PartCloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartCloseButton
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The trailing 38x38 X button (WinUI CloseButton). Owned: OnClick (the Closing→onClose→Closed lifecycle
+        chain — kept whenever the control has close handlers; a modifier OnClick survives only when it has none), Role.
+  example: []
+  syntax:
+    content: public const string PartCloseButton = "CloseButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartCloseButton As String = "CloseButton"
+- uid: FluentGpu.Controls.InfoBar.Create(FluentGpu.Controls.InfoBarSeverity,System.String,System.String,System.Action,System.Boolean,System.Boolean,System.Boolean,FluentGpu.Dsl.Element,System.Action{FluentGpu.Controls.InfoBarClosingEventArgs},System.Action{FluentGpu.Controls.InfoBarClosedEventArgs},FluentGpu.Dsl.Element,System.String,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.InfoBar.Create(FluentGpu.Controls.InfoBarSeverity,System.String,System.String,System.Action,System.Boolean,System.Boolean,System.Boolean,FluentGpu.Dsl.Element,System.Action{FluentGpu.Controls.InfoBarClosingEventArgs},System.Action{FluentGpu.Controls.InfoBarClosedEventArgs},FluentGpu.Dsl.Element,System.String,FluentGpu.Dsl.TemplateParts)
+  id: Create(FluentGpu.Controls.InfoBarSeverity,System.String,System.String,System.Action,System.Boolean,System.Boolean,System.Boolean,FluentGpu.Dsl.Element,System.Action{FluentGpu.Controls.InfoBarClosingEventArgs},System.Action{FluentGpu.Controls.InfoBarClosedEventArgs},FluentGpu.Dsl.Element,System.String,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.InfoBar
+  langs:
+  - csharp
+  - vb
+  name: Create(InfoBarSeverity, string, string, Action?, bool, bool, bool, Element?, Action<InfoBarClosingEventArgs>?, Action<InfoBarClosedEventArgs>?, Element?, string?, TemplateParts?)
+  nameWithType: InfoBar.Create(InfoBarSeverity, string, string, Action?, bool, bool, bool, Element?, Action<InfoBarClosingEventArgs>?, Action<InfoBarClosedEventArgs>?, Element?, string?, TemplateParts?)
+  fullName: FluentGpu.Controls.InfoBar.Create(FluentGpu.Controls.InfoBarSeverity, string, string, System.Action?, bool, bool, bool, FluentGpu.Dsl.Element?, System.Action<FluentGpu.Controls.InfoBarClosingEventArgs>?, System.Action<FluentGpu.Controls.InfoBarClosedEventArgs>?, FluentGpu.Dsl.Element?, string?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 140
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public static Element Create(InfoBarSeverity severity, string title, string message, Action? onClose = null, bool isOpen = true, bool isClosable = true, bool isIconVisible = true, Element? actionButton = null, Action<InfoBarClosingEventArgs>? onClosing = null, Action<InfoBarClosedEventArgs>? onClosed = null, Element? content = null, string? iconGlyph = null, TemplateParts? parts = null)
+    parameters:
+    - id: severity
+      type: FluentGpu.Controls.InfoBarSeverity
+      description: Selects the status glyph + severity colors via <xref href="FluentGpu.Controls.InfoBar.InfoBarTemplateSettings" data-throw-if-not-resolved="false"></xref>.
+    - id: title
+      type: System.String
+      description: SemiBold title line (WinUI InfoBarTitleFontWeight). Empty =&gt; omitted.
+    - id: message
+      type: System.String
+      description: Regular message body. Empty =&gt; omitted.
+    - id: onClose
+      type: System.Action
+      description: >-
+        Invoked when the X is clicked (WinUI sets reason=CloseButton then IsOpen=false). Pair with
+            <code class="paramref">onClosing</code>/<code class="paramref">onClosed</code> for the full lifecycle.
+    - id: isOpen
+      type: System.Boolean
+      description: >-
+        Whether the bar is shown. WinUI's IsOpen defaults to <code>false</code>; this stateless factory
+            defaults to <code>true</code> so a constructed bar renders (callers gate visibility with their own signal/state).
+    - id: isClosable
+      type: System.Boolean
+      description: When true (the WinUI default) the trailing 38x38 close button is shown.
+    - id: isIconVisible
+      type: System.Boolean
+      description: When true (the WinUI default) the standard severity icon is shown.
+    - id: actionButton
+      type: FluentGpu.Dsl.Element
+      description: >-
+        Optional trailing action slot (WinUI ActionButton) - laid out inline after the
+            message when it fits, else below it. Pass e.g. <code>Button.Create(...)</code> or <code>HyperlinkButton.Create(...)</code>.
+    - id: onClosing
+      type: System.Action{FluentGpu.Controls.InfoBarClosingEventArgs}
+      description: >-
+        Closing hook (WinUI Closing). Set <code>e.Cancel = true</code> to veto: the close is aborted and
+            <code class="paramref">onClose</code>/<code class="paramref">onClosed</code> do not run (the caller keeps the bar open).
+    - id: onClosed
+      type: System.Action{FluentGpu.Controls.InfoBarClosedEventArgs}
+      description: Closed hook (WinUI Closed), fired after a non-canceled close.
+    - id: content
+      type: FluentGpu.Dsl.Element
+      description: >-
+        Optional expanded content (WinUI <code>Content</code>/<code>ContentTemplate</code>, InfoBar.idl:94-95):
+            rendered in the second row of the content column, below the title/message/action panel (ContentArea,
+            InfoBar.xaml:126). When title, message AND action are all absent it becomes the sole content of the column
+            (the NoBannerContent state, InfoBar.xaml:86-90 / InfoBar.cpp:282-286).
+    - id: iconGlyph
+      type: System.String
+      description: >-
+        Optional custom icon glyph (WinUI <code>IconSource</code>, InfoBar.idl:77). When set (and
+            <code class="paramref">isIconVisible</code>) it replaces the standard severity circle+status stack — the UserIconVisible
+            state (InfoBar.cpp:261-264) — capped at 16x16 with the standard icon margin (UserIconBox, InfoBar.xaml:111).
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+      description: >-
+        Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts —
+            see <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract. Title/Message are TextEl parts
+            (<code>parts.Set&lt;TextEl&gt;(InfoBar.PartTitle, …)</code>).
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(severity As InfoBarSeverity, title As String, message As String, onClose As Action = Nothing, isOpen As Boolean = True, isClosable As Boolean = True, isIconVisible As Boolean = True, actionButton As Element = Nothing, onClosing As Action(Of InfoBarClosingEventArgs) = Nothing, onClosed As Action(Of InfoBarClosedEventArgs) = Nothing, content As Element = Nothing, iconGlyph As String = Nothing, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.InfoBar.Create*
+  nameWithType.vb: InfoBar.Create(InfoBarSeverity, String, String, Action, Boolean, Boolean, Boolean, Element, Action(Of InfoBarClosingEventArgs), Action(Of InfoBarClosedEventArgs), Element, String, TemplateParts)
+  fullName.vb: FluentGpu.Controls.InfoBar.Create(FluentGpu.Controls.InfoBarSeverity, String, String, System.Action, Boolean, Boolean, Boolean, FluentGpu.Dsl.Element, System.Action(Of FluentGpu.Controls.InfoBarClosingEventArgs), System.Action(Of FluentGpu.Controls.InfoBarClosedEventArgs), FluentGpu.Dsl.Element, String, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(InfoBarSeverity, String, String, Action, Boolean, Boolean, Boolean, Element, Action(Of InfoBarClosingEventArgs), Action(Of InfoBarClosedEventArgs), Element, String, TemplateParts)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  commentId: T:FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar.InfoBarTemplateSettings
+  nameWithType: InfoBar.InfoBarTemplateSettings
+  fullName: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    href: FluentGpu.Controls.InfoBar.html
+  - name: .
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBarTemplateSettings
+    href: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings.html
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Controls.InfoBar.Create*
+  commentId: Overload:FluentGpu.Controls.InfoBar.Create
+  href: FluentGpu.Controls.InfoBar.html#FluentGpu_Controls_InfoBar_Create_FluentGpu_Controls_InfoBarSeverity_System_String_System_String_System_Action_System_Boolean_System_Boolean_System_Boolean_FluentGpu_Dsl_Element_System_Action_FluentGpu_Controls_InfoBarClosingEventArgs__System_Action_FluentGpu_Controls_InfoBarClosedEventArgs__FluentGpu_Dsl_Element_System_String_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: InfoBar.Create
+  fullName: FluentGpu.Controls.InfoBar.Create
+- uid: FluentGpu.Controls.InfoBarSeverity
+  commentId: T:FluentGpu.Controls.InfoBarSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarSeverity.html
+  name: InfoBarSeverity
+  nameWithType: InfoBarSeverity
+  fullName: FluentGpu.Controls.InfoBarSeverity
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.Action{FluentGpu.Controls.InfoBarClosingEventArgs}
+  commentId: T:System.Action{FluentGpu.Controls.InfoBarClosingEventArgs}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<InfoBarClosingEventArgs>
+  nameWithType: Action<InfoBarClosingEventArgs>
+  fullName: System.Action<FluentGpu.Controls.InfoBarClosingEventArgs>
+  nameWithType.vb: Action(Of InfoBarClosingEventArgs)
+  fullName.vb: System.Action(Of FluentGpu.Controls.InfoBarClosingEventArgs)
+  name.vb: Action(Of InfoBarClosingEventArgs)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.InfoBarClosingEventArgs
+    name: InfoBarClosingEventArgs
+    href: FluentGpu.Controls.InfoBarClosingEventArgs.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.InfoBarClosingEventArgs
+    name: InfoBarClosingEventArgs
+    href: FluentGpu.Controls.InfoBarClosingEventArgs.html
+  - name: )
+- uid: System.Action{FluentGpu.Controls.InfoBarClosedEventArgs}
+  commentId: T:System.Action{FluentGpu.Controls.InfoBarClosedEventArgs}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<InfoBarClosedEventArgs>
+  nameWithType: Action<InfoBarClosedEventArgs>
+  fullName: System.Action<FluentGpu.Controls.InfoBarClosedEventArgs>
+  nameWithType.vb: Action(Of InfoBarClosedEventArgs)
+  fullName.vb: System.Action(Of FluentGpu.Controls.InfoBarClosedEventArgs)
+  name.vb: Action(Of InfoBarClosedEventArgs)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.InfoBarClosedEventArgs
+    name: InfoBarClosedEventArgs
+    href: FluentGpu.Controls.InfoBarClosedEventArgs.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.InfoBarClosedEventArgs
+    name: InfoBarClosedEventArgs
+    href: FluentGpu.Controls.InfoBarClosedEventArgs.html
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

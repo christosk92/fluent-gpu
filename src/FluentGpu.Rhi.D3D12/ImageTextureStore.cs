@@ -73,12 +73,33 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private readonly List<Retire> _retired = new();
     private readonly List<AtlasPage> _pages = new();
     private readonly Dictionary<int, Stack<Pooled>> _pool = new();   // bucket → free textures
+    // Per-bucket FREE-pool cap (audit mem-02): without it the free stacks ratchet to the session-peak in-flight count
+    // for each bucket and never release GPU memory. Only two buckets are ever pooled (256/512 art; ≤128 thumbs atlas).
+    // The free stack only has to bridge the transient gap between a tile evicting and the NEXT tile re-residencing at
+    // the SAME bucket within the 2-frame fence window — a page-flip's worth of same-bucket recycle. 4 free per bucket
+    // covers that; a return beyond it is RELEASED (the resource is a GPU texture — surplus must give the memory back),
+    // routed through the existing fence-deferred retire path (Kind 0) so its SRV slot is reclaimed and it is freed only
+    // after the GPU has fenced past any in-flight use. Tradeoff: the next residency spike past the cap re-creates the
+    // texture (one CreateTexture of cold-pool-growth cost) instead of reusing a pooled one — never wrong pixels.
+    private const int MaxFreePooledTexturesPerBucket = 4;
     private int _atlasCount, _poolCount;
 
     public ID3D12DescriptorHeap* Heap => _srvHeap;
     public int DroppedThisRun { get; private set; }
     public int AtlasImages => _atlasCount;
     public int PoolImages => _poolCount;
+
+    // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
+    /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>
+    internal int AtlasImageCount => _atlasCount;
+    /// <summary>FREE pooled bucket textures retained for reuse — sum of the per-bucket free stacks (a handful of
+    /// buckets; census cadence). Distinct from <see cref="PoolImages"/> (pooled textures currently IN USE).</summary>
+    internal int PooledTextureCount
+    {
+        get { int n = 0; foreach (var stk in _pool.Values) n += stk.Count; return n; }
+    }
+    /// <summary>Resources awaiting the deferred fence-gated reclaim (the retire list) — O(1) census.</summary>
+    internal int RetiredCount => _retired.Count;
 
     public void Init(ID3D12Device* device)
     {
@@ -93,6 +114,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         _srvCpu0 = heap->GetCPUDescriptorHandleForHeapStart();
         _srvGpu0 = heap->GetGPUDescriptorHandleForHeapStart();
         _srvInc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12MemoryDiagnostics.Track(_srvHeap, "Image.SrvHeap", (ulong)MaxSrv * _srvInc);
     }
 
     private static int BucketFor(int px) => px <= 64 ? 64 : px <= 128 ? 128 : px <= 256 ? 256 : px <= 512 ? 512 : px;
@@ -261,6 +283,14 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private void ReleasePooled(int bucket, Pooled pt)
     {
         if (!_pool.TryGetValue(bucket, out var stk)) { stk = new Stack<Pooled>(); _pool[bucket] = stk; }
+        if (stk.Count >= MaxFreePooledTexturesPerBucket)
+        {
+            // Cap reached: the pool is already covering the working set for this bucket. Don't ratchet — give the GPU
+            // memory back. Re-queue as a standalone release (Kind 0) on the fence-deferred path: the texture is freed
+            // and its SRV slot reclaimed only after the GPU has fenced past any in-flight frame still sampling it.
+            _retired.Add(new Retire { Frame = _frame, Kind = 0, Resource = pt.Resource, Slot = pt.Slot });
+            return;
+        }
         stk.Push(pt);
     }
 
@@ -360,6 +390,6 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         foreach (var pg in _pages)
             if (pg.Tex != null) { D3D12MemoryDiagnostics.Release(pg.Tex, "Image.AtlasPage"); pg.Tex->Release(); }
         _byId.Clear(); _retired.Clear(); _pool.Clear(); _pages.Clear();
-        if (_srvHeap != null) { _srvHeap->Release(); _srvHeap = null; }
+        if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Image.SrvHeap"); _srvHeap->Release(); _srvHeap = null; }
     }
 }

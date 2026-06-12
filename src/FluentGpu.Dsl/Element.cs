@@ -52,6 +52,14 @@ public sealed record BoxEl : Element
     // Position-aware pointer (local coords) — for sliders/scrollbars: OnPointerDown fires on press, OnDrag while held.
     public Action<Point2>? OnPointerDown { get; init; }
     public Action<Point2>? OnDrag { get; init; }
+    /// <summary>Marks an <see cref="OnDrag"/> node a CROSS-AXIS content pan (SwipeControl row swipe, FlipView page drag):
+    /// instead of eagerly capturing the contact on touch-down — the Slider/EditableText scrub default — this drag enrolls
+    /// an AXIS-LOCKED gesture-arena member that competes with an enclosing scroller's Pan (input-a11y.md §7A). It wins the
+    /// contact only when the gesture runs ALONG its own axis and yields (the list scrolls) on a cross-axis drag — the
+    /// declarative form of <c>DragController.YieldsToPan</c>. Its axis is inferred from this node's main axis
+    /// (<see cref="Direction"/>): a row box (Direction=0) is a horizontal swipe, a column box a vertical one. No effect
+    /// without <see cref="OnDrag"/>, and no effect on the mouse path (mouse drag still captures immediately).</summary>
+    public bool DragYieldsToPan { get; init; }
     /// <summary>Position-aware press carrying click count (double/triple-click), modifier chord, button and device kind —
     /// the text-selection / list-interaction press handler. Fires alongside <see cref="OnPointerDown"/> on left press.</summary>
     public Action<PointerEventArgs>? OnPointerPressed { get; init; }
@@ -471,6 +479,18 @@ public sealed record ImageEl : Element
     public Prop<string> Source { get; init; } = "";
     public float Width { get; init; } = float.NaN;
     public float Height { get; init; } = float.NaN;
+    /// <summary>Width÷height ratio (CSS <c>aspect-ratio</c>). When set, a fluid image (one or both of
+    /// <see cref="Width"/>/<see cref="Height"/> left <c>NaN</c>) <i>derives</i> the missing dimension — e.g. a tile that
+    /// fills its column width and stays square (<c>1f</c>). The thing WinUI lacks (no SizeChanged/Viewbox hacks).
+    /// <c>NaN</c> = off (use explicit <see cref="Width"/>/<see cref="Height"/>).</summary>
+    public float AspectRatio { get; init; } = float.NaN;
+    /// <summary>How the decoded pixels map into the layout box — see <see cref="ImageFit"/>. Default
+    /// <see cref="ImageFit.Cover"/> (aspect-preserving crop), what most grids want; harmless for square-source/square-box.</summary>
+    public ImageFit Fit { get; init; } = ImageFit.Cover;
+    /// <summary>Decode-size hint (target px) used when the layout extent is fluid (<see cref="Width"/> is <c>NaN</c>, so the
+    /// real box size isn't known at request time). Ignored when <see cref="Width"/> is explicit (that drives the decode).
+    /// <c>NaN</c> ⇒ decode at source resolution.</summary>
+    public float DecodePx { get; init; } = float.NaN;
     public CornerRadius4 Corners { get; init; }
     /// <summary>Unified channel: static tint, thunk, or signal (pairs with a bound <see cref="Source"/>).</summary>
     public Prop<ColorF> Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);

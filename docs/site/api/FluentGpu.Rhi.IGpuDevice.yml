@@ -1,0 +1,547 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi.IGpuDevice
+  commentId: T:FluentGpu.Rhi.IGpuDevice
+  id: IGpuDevice
+  parent: FluentGpu.Rhi
+  children:
+  - FluentGpu.Rhi.IGpuDevice.BackendName
+  - FluentGpu.Rhi.IGpuDevice.CreateSwapchain(FluentGpu.Rhi.SwapchainDesc@)
+  - FluentGpu.Rhi.IGpuDevice.EvictImage(System.Int32)
+  - FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  - FluentGpu.Rhi.IGpuDevice.UploadImage(System.Int32,System.ReadOnlySpan{System.Byte},System.Int32,System.Int32)
+  langs:
+  - csharp
+  - vb
+  name: IGpuDevice
+  nameWithType: IGpuDevice
+  fullName: FluentGpu.Rhi.IGpuDevice
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IGpuDevice
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  summary: >-
+    Graphics-first render hardware interface. Zero COM types cross this seam — generational handles + POD + spans only.
+
+    <xref href="FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan%7bSystem.Byte%7d%2cSystem.ReadOnlySpan%7bSystem.UInt64%7d%2cFluentGpu.Rhi.FrameInfo%40)" data-throw-if-not-resolved="false"></xref> is the PRIMARY hot path: the leaf walks the POD opcode stream with concrete devirtualized
+
+    types. D3D12 is the reference backend; <code>Rhi.Headless</code> is the test backend; Metal slots in later behind this seam.
+  example: []
+  syntax:
+    content: 'public interface IGpuDevice : IDisposable'
+    content.vb: Public Interface IGpuDevice Inherits IDisposable
+  derivedClasses:
+  - FluentGpu.Rhi.D3D12.D3D12Device
+  inheritedMembers:
+  - System.IDisposable.Dispose
+- uid: FluentGpu.Rhi.IGpuDevice.BackendName
+  commentId: P:FluentGpu.Rhi.IGpuDevice.BackendName
+  id: BackendName
+  parent: FluentGpu.Rhi.IGpuDevice
+  langs:
+  - csharp
+  - vb
+  name: BackendName
+  nameWithType: IGpuDevice.BackendName
+  fullName: FluentGpu.Rhi.IGpuDevice.BackendName
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackendName
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: string BackendName { get; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: ReadOnly Property BackendName As String
+  overload: FluentGpu.Rhi.IGpuDevice.BackendName*
+- uid: FluentGpu.Rhi.IGpuDevice.CreateSwapchain(FluentGpu.Rhi.SwapchainDesc@)
+  commentId: M:FluentGpu.Rhi.IGpuDevice.CreateSwapchain(FluentGpu.Rhi.SwapchainDesc@)
+  id: CreateSwapchain(FluentGpu.Rhi.SwapchainDesc@)
+  parent: FluentGpu.Rhi.IGpuDevice
+  langs:
+  - csharp
+  - vb
+  name: CreateSwapchain(in SwapchainDesc)
+  nameWithType: IGpuDevice.CreateSwapchain(in SwapchainDesc)
+  fullName: FluentGpu.Rhi.IGpuDevice.CreateSwapchain(in FluentGpu.Rhi.SwapchainDesc)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreateSwapchain
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: ISwapchain CreateSwapchain(in SwapchainDesc desc)
+    parameters:
+    - id: desc
+      type: FluentGpu.Rhi.SwapchainDesc
+    return:
+      type: FluentGpu.Rhi.ISwapchain
+    content.vb: Function CreateSwapchain(desc As SwapchainDesc) As ISwapchain
+  overload: FluentGpu.Rhi.IGpuDevice.CreateSwapchain*
+  nameWithType.vb: IGpuDevice.CreateSwapchain(SwapchainDesc)
+  fullName.vb: FluentGpu.Rhi.IGpuDevice.CreateSwapchain(FluentGpu.Rhi.SwapchainDesc)
+  name.vb: CreateSwapchain(SwapchainDesc)
+- uid: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  commentId: M:FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  id: SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  parent: FluentGpu.Rhi.IGpuDevice
+  langs:
+  - csharp
+  - vb
+  name: SubmitDrawList(ReadOnlySpan<byte>, ReadOnlySpan<ulong>, in FrameInfo)
+  nameWithType: IGpuDevice.SubmitDrawList(ReadOnlySpan<byte>, ReadOnlySpan<ulong>, in FrameInfo)
+  fullName: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan<byte>, System.ReadOnlySpan<ulong>, in FluentGpu.Rhi.FrameInfo)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SubmitDrawList
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  summary: Record + batch + submit the per-frame DrawList. <code class="paramref">drawList</code> is the POD command stream.
+  example: []
+  syntax:
+    content: void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
+    parameters:
+    - id: drawList
+      type: System.ReadOnlySpan{System.Byte}
+    - id: sortKeys
+      type: System.ReadOnlySpan{System.UInt64}
+    - id: ctx
+      type: FluentGpu.Rhi.FrameInfo
+    content.vb: Sub SubmitDrawList(drawList As ReadOnlySpan(Of Byte), sortKeys As ReadOnlySpan(Of ULong), ctx As FrameInfo)
+  overload: FluentGpu.Rhi.IGpuDevice.SubmitDrawList*
+  nameWithType.vb: IGpuDevice.SubmitDrawList(ReadOnlySpan(Of Byte), ReadOnlySpan(Of ULong), FrameInfo)
+  fullName.vb: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan(Of Byte), System.ReadOnlySpan(Of ULong), FluentGpu.Rhi.FrameInfo)
+  name.vb: SubmitDrawList(ReadOnlySpan(Of Byte), ReadOnlySpan(Of ULong), FrameInfo)
+- uid: FluentGpu.Rhi.IGpuDevice.UploadImage(System.Int32,System.ReadOnlySpan{System.Byte},System.Int32,System.Int32)
+  commentId: M:FluentGpu.Rhi.IGpuDevice.UploadImage(System.Int32,System.ReadOnlySpan{System.Byte},System.Int32,System.Int32)
+  id: UploadImage(System.Int32,System.ReadOnlySpan{System.Byte},System.Int32,System.Int32)
+  parent: FluentGpu.Rhi.IGpuDevice
+  langs:
+  - csharp
+  - vb
+  name: UploadImage(int, ReadOnlySpan<byte>, int, int)
+  nameWithType: IGpuDevice.UploadImage(int, ReadOnlySpan<byte>, int, int)
+  fullName: FluentGpu.Rhi.IGpuDevice.UploadImage(int, System.ReadOnlySpan<byte>, int, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UploadImage
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  summary: >-
+    Hand decoded PREMULTIPLIED BGRA8 pixels for <code class="paramref">imageId</code> to the backend (the
+        media-pipeline §4.1 texture upload). The backend create-or-replaces a resident texture (or atlas page) keyed by
+        id and samples it from the <code>DrawImage</code> opcode. <code class="paramref">pbgra8</code> is valid only for this call —
+        the backend copies it into its texture-staging ring; it is never retained. Rows may not be 256-aligned; the
+        backend pads. Called once per decode completion, before <xref href="FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan%7bSystem.Byte%7d%2cSystem.ReadOnlySpan%7bSystem.UInt64%7d%2cFluentGpu.Rhi.FrameInfo%40)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+    parameters:
+    - id: imageId
+      type: System.Int32
+    - id: pbgra8
+      type: System.ReadOnlySpan{System.Byte}
+    - id: w
+      type: System.Int32
+    - id: h
+      type: System.Int32
+    content.vb: Sub UploadImage(imageId As Integer, pbgra8 As ReadOnlySpan(Of Byte), w As Integer, h As Integer)
+  overload: FluentGpu.Rhi.IGpuDevice.UploadImage*
+  nameWithType.vb: IGpuDevice.UploadImage(Integer, ReadOnlySpan(Of Byte), Integer, Integer)
+  fullName.vb: FluentGpu.Rhi.IGpuDevice.UploadImage(Integer, System.ReadOnlySpan(Of Byte), Integer, Integer)
+  name.vb: UploadImage(Integer, ReadOnlySpan(Of Byte), Integer, Integer)
+- uid: FluentGpu.Rhi.IGpuDevice.EvictImage(System.Int32)
+  commentId: M:FluentGpu.Rhi.IGpuDevice.EvictImage(System.Int32)
+  id: EvictImage(System.Int32)
+  parent: FluentGpu.Rhi.IGpuDevice
+  langs:
+  - csharp
+  - vb
+  name: EvictImage(int)
+  nameWithType: IGpuDevice.EvictImage(int)
+  fullName: FluentGpu.Rhi.IGpuDevice.EvictImage(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EvictImage
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  summary: >-
+    The residency manager evicted <code class="paramref">imageId</code> — release its GPU texture (deferred behind the
+        frame fence so an in-flight frame can't read freed memory). No-op if not resident.
+  example: []
+  syntax:
+    content: void EvictImage(int imageId)
+    parameters:
+    - id: imageId
+      type: System.Int32
+    content.vb: Sub EvictImage(imageId As Integer)
+  overload: FluentGpu.Rhi.IGpuDevice.EvictImage*
+  nameWithType.vb: IGpuDevice.EvictImage(Integer)
+  fullName.vb: FluentGpu.Rhi.IGpuDevice.EvictImage(Integer)
+  name.vb: EvictImage(Integer)
+references:
+- uid: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  commentId: M:FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+  parent: FluentGpu.Rhi.IGpuDevice
+  isExternal: true
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_SubmitDrawList_System_ReadOnlySpan_System_Byte__System_ReadOnlySpan_System_UInt64__FluentGpu_Rhi_FrameInfo__
+  name: SubmitDrawList(ReadOnlySpan<byte>, ReadOnlySpan<ulong>, in FrameInfo)
+  nameWithType: IGpuDevice.SubmitDrawList(ReadOnlySpan<byte>, ReadOnlySpan<ulong>, in FrameInfo)
+  fullName: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan<byte>, System.ReadOnlySpan<ulong>, in FluentGpu.Rhi.FrameInfo)
+  nameWithType.vb: IGpuDevice.SubmitDrawList(ReadOnlySpan(Of Byte), ReadOnlySpan(Of ULong), FrameInfo)
+  fullName.vb: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan(Of Byte), System.ReadOnlySpan(Of ULong), FluentGpu.Rhi.FrameInfo)
+  name.vb: SubmitDrawList(ReadOnlySpan(Of Byte), ReadOnlySpan(Of ULong), FrameInfo)
+  spec.csharp:
+  - uid: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+    name: SubmitDrawList
+    href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_SubmitDrawList_System_ReadOnlySpan_System_Byte__System_ReadOnlySpan_System_UInt64__FluentGpu_Rhi_FrameInfo__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Byte
+    name: byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.UInt64
+    name: ulong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: '>'
+  - name: ','
+  - name: " "
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Rhi.FrameInfo
+    name: FrameInfo
+    href: FluentGpu.Rhi.FrameInfo.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Rhi.IGpuDevice.SubmitDrawList(System.ReadOnlySpan{System.Byte},System.ReadOnlySpan{System.UInt64},FluentGpu.Rhi.FrameInfo@)
+    name: SubmitDrawList
+    href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_SubmitDrawList_System_ReadOnlySpan_System_Byte__System_ReadOnlySpan_System_UInt64__FluentGpu_Rhi_FrameInfo__
+  - name: (
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Byte
+    name: Byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.UInt64
+    name: ULong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Rhi.FrameInfo
+    name: FrameInfo
+    href: FluentGpu.Rhi.FrameInfo.html
+  - name: )
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: FluentGpu.Rhi.IGpuDevice
+  commentId: T:FluentGpu.Rhi.IGpuDevice
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.IGpuDevice.html
+  name: IGpuDevice
+  nameWithType: IGpuDevice
+  fullName: FluentGpu.Rhi.IGpuDevice
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Rhi.IGpuDevice.BackendName*
+  commentId: Overload:FluentGpu.Rhi.IGpuDevice.BackendName
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_BackendName
+  name: BackendName
+  nameWithType: IGpuDevice.BackendName
+  fullName: FluentGpu.Rhi.IGpuDevice.BackendName
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Rhi.IGpuDevice.CreateSwapchain*
+  commentId: Overload:FluentGpu.Rhi.IGpuDevice.CreateSwapchain
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_CreateSwapchain_FluentGpu_Rhi_SwapchainDesc__
+  name: CreateSwapchain
+  nameWithType: IGpuDevice.CreateSwapchain
+  fullName: FluentGpu.Rhi.IGpuDevice.CreateSwapchain
+- uid: FluentGpu.Rhi.SwapchainDesc
+  commentId: T:FluentGpu.Rhi.SwapchainDesc
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.SwapchainDesc.html
+  name: SwapchainDesc
+  nameWithType: SwapchainDesc
+  fullName: FluentGpu.Rhi.SwapchainDesc
+- uid: FluentGpu.Rhi.ISwapchain
+  commentId: T:FluentGpu.Rhi.ISwapchain
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.ISwapchain.html
+  name: ISwapchain
+  nameWithType: ISwapchain
+  fullName: FluentGpu.Rhi.ISwapchain
+- uid: FluentGpu.Rhi.IGpuDevice.SubmitDrawList*
+  commentId: Overload:FluentGpu.Rhi.IGpuDevice.SubmitDrawList
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_SubmitDrawList_System_ReadOnlySpan_System_Byte__System_ReadOnlySpan_System_UInt64__FluentGpu_Rhi_FrameInfo__
+  name: SubmitDrawList
+  nameWithType: IGpuDevice.SubmitDrawList
+  fullName: FluentGpu.Rhi.IGpuDevice.SubmitDrawList
+- uid: System.ReadOnlySpan{System.Byte}
+  commentId: T:System.ReadOnlySpan{System.Byte}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<byte>
+  nameWithType: ReadOnlySpan<byte>
+  fullName: System.ReadOnlySpan<byte>
+  nameWithType.vb: ReadOnlySpan(Of Byte)
+  fullName.vb: System.ReadOnlySpan(Of Byte)
+  name.vb: ReadOnlySpan(Of Byte)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Byte
+    name: byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Byte
+    name: Byte
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.byte
+  - name: )
+- uid: System.ReadOnlySpan{System.UInt64}
+  commentId: T:System.ReadOnlySpan{System.UInt64}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<ulong>
+  nameWithType: ReadOnlySpan<ulong>
+  fullName: System.ReadOnlySpan<ulong>
+  nameWithType.vb: ReadOnlySpan(Of ULong)
+  fullName.vb: System.ReadOnlySpan(Of ULong)
+  name.vb: ReadOnlySpan(Of ULong)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.UInt64
+    name: ulong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.UInt64
+    name: ULong
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint64
+  - name: )
+- uid: FluentGpu.Rhi.FrameInfo
+  commentId: T:FluentGpu.Rhi.FrameInfo
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.FrameInfo.html
+  name: FrameInfo
+  nameWithType: FrameInfo
+  fullName: FluentGpu.Rhi.FrameInfo
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Rhi.IGpuDevice.UploadImage*
+  commentId: Overload:FluentGpu.Rhi.IGpuDevice.UploadImage
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_UploadImage_System_Int32_System_ReadOnlySpan_System_Byte__System_Int32_System_Int32_
+  name: UploadImage
+  nameWithType: IGpuDevice.UploadImage
+  fullName: FluentGpu.Rhi.IGpuDevice.UploadImage
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Rhi.IGpuDevice.EvictImage*
+  commentId: Overload:FluentGpu.Rhi.IGpuDevice.EvictImage
+  href: FluentGpu.Rhi.IGpuDevice.html#FluentGpu_Rhi_IGpuDevice_EvictImage_System_Int32_
+  name: EvictImage
+  nameWithType: IGpuDevice.EvictImage
+  fullName: FluentGpu.Rhi.IGpuDevice.EvictImage

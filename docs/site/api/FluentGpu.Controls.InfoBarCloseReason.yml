@@ -1,0 +1,134 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBarCloseReason
+  commentId: T:FluentGpu.Controls.InfoBarCloseReason
+  id: InfoBarCloseReason
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  - FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  langs:
+  - csharp
+  - vb
+  name: InfoBarCloseReason
+  nameWithType: InfoBarCloseReason
+  fullName: FluentGpu.Controls.InfoBarCloseReason
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBarCloseReason
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Why an <xref href="FluentGpu.Controls.InfoBar" data-throw-if-not-resolved="false"></xref> closed (WinUI InfoBarCloseReason): the user clicked the X
+        (<xref href="FluentGpu.Controls.InfoBarCloseReason.CloseButton" data-throw-if-not-resolved="false"></xref>) or it was closed in code / by the host (<xref href="FluentGpu.Controls.InfoBarCloseReason.Programmatic" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: 'public enum InfoBarCloseReason : byte'
+    content.vb: Public Enum InfoBarCloseReason As Byte
+- uid: FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  commentId: F:FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  id: CloseButton
+  parent: FluentGpu.Controls.InfoBarCloseReason
+  langs:
+  - csharp
+  - vb
+  name: CloseButton
+  nameWithType: InfoBarCloseReason.CloseButton
+  fullName: FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseButton
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: CloseButton = 0
+    return:
+      type: FluentGpu.Controls.InfoBarCloseReason
+- uid: FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  commentId: F:FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  id: Programmatic
+  parent: FluentGpu.Controls.InfoBarCloseReason
+  langs:
+  - csharp
+  - vb
+  name: Programmatic
+  nameWithType: InfoBarCloseReason.Programmatic
+  fullName: FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Programmatic
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Programmatic = 1
+    return:
+      type: FluentGpu.Controls.InfoBarCloseReason
+references:
+- uid: FluentGpu.Controls.InfoBar
+  commentId: T:FluentGpu.Controls.InfoBar
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar
+  nameWithType: InfoBar
+  fullName: FluentGpu.Controls.InfoBar
+- uid: FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  commentId: F:FluentGpu.Controls.InfoBarCloseReason.CloseButton
+  href: FluentGpu.Controls.InfoBarCloseReason.html#FluentGpu_Controls_InfoBarCloseReason_CloseButton
+  name: CloseButton
+  nameWithType: InfoBarCloseReason.CloseButton
+  fullName: FluentGpu.Controls.InfoBarCloseReason.CloseButton
+- uid: FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  commentId: F:FluentGpu.Controls.InfoBarCloseReason.Programmatic
+  href: FluentGpu.Controls.InfoBarCloseReason.html#FluentGpu_Controls_InfoBarCloseReason_Programmatic
+  name: Programmatic
+  nameWithType: InfoBarCloseReason.Programmatic
+  fullName: FluentGpu.Controls.InfoBarCloseReason.Programmatic
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.InfoBarCloseReason
+  commentId: T:FluentGpu.Controls.InfoBarCloseReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarCloseReason.html
+  name: InfoBarCloseReason
+  nameWithType: InfoBarCloseReason
+  fullName: FluentGpu.Controls.InfoBarCloseReason

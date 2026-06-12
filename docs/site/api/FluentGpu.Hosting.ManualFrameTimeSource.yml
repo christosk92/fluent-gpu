@@ -1,0 +1,389 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hosting.ManualFrameTimeSource
+  commentId: T:FluentGpu.Hosting.ManualFrameTimeSource
+  id: ManualFrameTimeSource
+  parent: FluentGpu.Hosting
+  children:
+  - FluentGpu.Hosting.ManualFrameTimeSource.Advance(System.Single)
+  - FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs
+  langs:
+  - csharp
+  - vb
+  name: ManualFrameTimeSource
+  nameWithType: ManualFrameTimeSource
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/FrameTimeSource.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ManualFrameTimeSource
+    path: ../../src/FluentGpu.Hosting/FrameTimeSource.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: 'public sealed class ManualFrameTimeSource : IFrameTimeSource'
+    content.vb: Public NotInheritable Class ManualFrameTimeSource Implements IFrameTimeSource
+  inheritance:
+  - System.Object
+  implements:
+  - FluentGpu.Hosting.IFrameTimeSource
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Hosting.ManualFrameTimeSource.Advance(System.Single)
+  commentId: M:FluentGpu.Hosting.ManualFrameTimeSource.Advance(System.Single)
+  id: Advance(System.Single)
+  parent: FluentGpu.Hosting.ManualFrameTimeSource
+  langs:
+  - csharp
+  - vb
+  name: Advance(float)
+  nameWithType: ManualFrameTimeSource.Advance(float)
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource.Advance(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/FrameTimeSource.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Advance
+    path: ../../src/FluentGpu.Hosting/FrameTimeSource.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public void Advance(float ms)
+    parameters:
+    - id: ms
+      type: System.Single
+    content.vb: Public Sub Advance(ms As Single)
+  overload: FluentGpu.Hosting.ManualFrameTimeSource.Advance*
+  nameWithType.vb: ManualFrameTimeSource.Advance(Single)
+  fullName.vb: FluentGpu.Hosting.ManualFrameTimeSource.Advance(Single)
+  name.vb: Advance(Single)
+- uid: FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs
+  commentId: M:FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs
+  id: NextDeltaMs
+  parent: FluentGpu.Hosting.ManualFrameTimeSource
+  langs:
+  - csharp
+  - vb
+  name: NextDeltaMs()
+  nameWithType: ManualFrameTimeSource.NextDeltaMs()
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/FrameTimeSource.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NextDeltaMs
+    path: ../../src/FluentGpu.Hosting/FrameTimeSource.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  example: []
+  syntax:
+    content: public float NextDeltaMs()
+    return:
+      type: System.Single
+    content.vb: Public Function NextDeltaMs() As Single
+  overload: FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs*
+  implements:
+  - FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+references:
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  href: FluentGpu.html
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hosting.IFrameTimeSource
+  commentId: T:FluentGpu.Hosting.IFrameTimeSource
+  parent: FluentGpu.Hosting
+  href: FluentGpu.Hosting.IFrameTimeSource.html
+  name: IFrameTimeSource
+  nameWithType: IFrameTimeSource
+  fullName: FluentGpu.Hosting.IFrameTimeSource
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hosting.ManualFrameTimeSource.Advance*
+  commentId: Overload:FluentGpu.Hosting.ManualFrameTimeSource.Advance
+  href: FluentGpu.Hosting.ManualFrameTimeSource.html#FluentGpu_Hosting_ManualFrameTimeSource_Advance_System_Single_
+  name: Advance
+  nameWithType: ManualFrameTimeSource.Advance
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource.Advance
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs*
+  commentId: Overload:FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs
+  href: FluentGpu.Hosting.ManualFrameTimeSource.html#FluentGpu_Hosting_ManualFrameTimeSource_NextDeltaMs
+  name: NextDeltaMs
+  nameWithType: ManualFrameTimeSource.NextDeltaMs
+  fullName: FluentGpu.Hosting.ManualFrameTimeSource.NextDeltaMs
+- uid: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  commentId: M:FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+  parent: FluentGpu.Hosting.IFrameTimeSource
+  href: FluentGpu.Hosting.IFrameTimeSource.html#FluentGpu_Hosting_IFrameTimeSource_NextDeltaMs
+  name: NextDeltaMs()
+  nameWithType: IFrameTimeSource.NextDeltaMs()
+  fullName: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs()
+  spec.csharp:
+  - uid: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+    name: NextDeltaMs
+    href: FluentGpu.Hosting.IFrameTimeSource.html#FluentGpu_Hosting_IFrameTimeSource_NextDeltaMs
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hosting.IFrameTimeSource.NextDeltaMs
+    name: NextDeltaMs
+    href: FluentGpu.Hosting.IFrameTimeSource.html#FluentGpu_Hosting_IFrameTimeSource_NextDeltaMs
+  - name: (
+  - name: )

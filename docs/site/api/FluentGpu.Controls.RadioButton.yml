@@ -1,0 +1,1046 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RadioButton
+  commentId: T:FluentGpu.Controls.RadioButton
+  id: RadioButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RadioButton.Create(System.String,System.Boolean,System.Action,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.RadioButton.DefaultStyle
+  - FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.RadioButton.PartDot
+  - FluentGpu.Controls.RadioButton.PartLabel
+  - FluentGpu.Controls.RadioButton.PartPressedDot
+  - FluentGpu.Controls.RadioButton.PartRing
+  - FluentGpu.Controls.RadioButton.PartRoot
+  - FluentGpu.Controls.RadioButton.StyleOverride
+  langs:
+  - csharp
+  - vb
+  name: RadioButton
+  nameWithType: RadioButton
+  fullName: FluentGpu.Controls.RadioButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RadioButton
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI RadioButton — style values from microsoft-ui-xaml controls\dev\CommonStyles\RadioButton_themeresources.xaml
+
+    ("the template"; ThemeDictionaries Default=dark :4-61 / Light :120-177): a 20px ring (OuterEllipse/CheckOuterEllipse,
+
+    :371/373) + (when selected) a TextOnAccent dot (CheckGlyph, :374) that grows 12→14 on hover / shrinks →10 on press
+
+    over ControlNormalAnimationDuration (250ms) with the ControlFastOutSlowInKeySpline (:255-260/:292-297), plus the
+
+    unchecked-pressed 4px proto-dot (PressedCheckGlyph, :376) revealing toward 10 over ControlFastAnimationDuration
+
+    (167ms, :298-306). Mutual exclusion comes from a shared selected index — use <xref href="FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList%7bSystem.String%7d%2cSystem.Int32%2cSystem.Action%7bSystem.Int32%7d%2cSystem.Boolean%2cFluentGpu.Controls.RadioButton.Style%2cSystem.Boolean%2cFluentGpu.Dsl.TemplateParts)" data-throw-if-not-resolved="false"></xref> (an ad-hoc set) or
+
+    the full <xref href="FluentGpu.Controls.RadioButtons" data-throw-if-not-resolved="false"></xref> container (header, columns, roving keyboard). Controlled.
+  example: []
+  syntax:
+    content: public static class RadioButton
+    content.vb: Public Module RadioButton
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.RadioButton.PartRoot
+  commentId: F:FluentGpu.Controls.RadioButton.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: RadioButton.PartRoot
+  fullName: FluentGpu.Controls.RadioButton.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The returned clickable row (WinUI RootGrid). Owned: OnClick (the select), OnKeyDown (the container's
+        arrow roving), OnRealized (handle capture, chained), Role, TabStop (the roving single-tab-stop contract),
+        Children.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.RadioButton.PartRing
+  commentId: F:FluentGpu.Controls.RadioButton.PartRing
+  id: PartRing
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: PartRing
+  nameWithType: RadioButton.PartRing
+  fullName: FluentGpu.Controls.RadioButton.PartRing
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRing
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The 20px outer ellipse (WinUI OuterEllipse/CheckOuterEllipse). Owned: Children (the conditional dot
+        mount — CheckGlyph when selected, PressedCheckGlyph when not).
+  example: []
+  syntax:
+    content: public const string PartRing = "Ring"
+    return:
+      type: System.String
+    content.vb: Public Const PartRing As String = "Ring"
+- uid: FluentGpu.Controls.RadioButton.PartDot
+  commentId: F:FluentGpu.Controls.RadioButton.PartDot
+  id: PartDot
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: PartDot
+  nameWithType: RadioButton.PartDot
+  fullName: FluentGpu.Controls.RadioButton.PartDot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartDot
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The selected accent dot (WinUI CheckGlyph). Owned: Key (reconcile identity), Animate (the
+        disabled-entry 12→14 resize spec).
+  example: []
+  syntax:
+    content: public const string PartDot = "Dot"
+    return:
+      type: System.String
+    content.vb: Public Const PartDot As String = "Dot"
+- uid: FluentGpu.Controls.RadioButton.PartPressedDot
+  commentId: F:FluentGpu.Controls.RadioButton.PartPressedDot
+  id: PartPressedDot
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: PartPressedDot
+  nameWithType: RadioButton.PartPressedDot
+  fullName: FluentGpu.Controls.RadioButton.PartPressedDot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartPressedDot
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The unchecked-pressed 4px proto-dot (WinUI PressedCheckGlyph). Owned: Key (reconcile identity).'
+  example: []
+  syntax:
+    content: public const string PartPressedDot = "PressedDot"
+    return:
+      type: System.String
+    content.vb: Public Const PartPressedDot As String = "PressedDot"
+- uid: FluentGpu.Controls.RadioButton.PartLabel
+  commentId: F:FluentGpu.Controls.RadioButton.PartLabel
+  id: PartLabel
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: PartLabel
+  nameWithType: RadioButton.PartLabel
+  fullName: FluentGpu.Controls.RadioButton.PartLabel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartLabel
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The default text label (a <xref href="FluentGpu.Dsl.TextEl" data-throw-if-not-resolved="false"></xref> — use <code>Parts.Set&lt;TextEl&gt;(RadioButton.PartLabel, …)</code>);
+        not applied when a content element fills the slot (slots restructure, parts style). Owned: none.
+  example: []
+  syntax:
+    content: public const string PartLabel = "Label"
+    return:
+      type: System.String
+    content.vb: Public Const PartLabel As String = "Label"
+- uid: FluentGpu.Controls.RadioButton.StyleOverride
+  commentId: F:FluentGpu.Controls.RadioButton.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: RadioButton.StyleOverride
+  fullName: FluentGpu.Controls.RadioButton.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static RadioButton.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.RadioButton.Style
+    content.vb: Public Shared StyleOverride As RadioButton.Style
+- uid: FluentGpu.Controls.RadioButton.DefaultStyle
+  commentId: P:FluentGpu.Controls.RadioButton.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: RadioButton.DefaultStyle
+  fullName: FluentGpu.Controls.RadioButton.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static RadioButton.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.RadioButton.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As RadioButton.Style
+  overload: FluentGpu.Controls.RadioButton.DefaultStyle*
+- uid: FluentGpu.Controls.RadioButton.Create(System.String,System.Boolean,System.Action,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.RadioButton.Create(System.String,System.Boolean,System.Action,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.String,System.Boolean,System.Action,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, bool, Action, Style?, bool, TemplateParts?)
+  nameWithType: RadioButton.Create(string, bool, Action, RadioButton.Style?, bool, TemplateParts?)
+  fullName: FluentGpu.Controls.RadioButton.Create(string, bool, System.Action, FluentGpu.Controls.RadioButton.Style?, bool, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static BoxEl Create(string label, bool selected, Action onSelect, RadioButton.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    parameters:
+    - id: label
+      type: System.String
+    - id: selected
+      type: System.Boolean
+    - id: onSelect
+      type: System.Action
+    - id: style
+      type: FluentGpu.Controls.RadioButton.Style
+    - id: isEnabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(label As String, selected As Boolean, onSelect As Action, style As RadioButton.Style = Nothing, isEnabled As Boolean = True, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.RadioButton.Create*
+  nameWithType.vb: RadioButton.Create(String, Boolean, Action, RadioButton.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.RadioButton.Create(String, Boolean, System.Action, FluentGpu.Controls.RadioButton.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(String, Boolean, Action, Style, Boolean, TemplateParts)
+- uid: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  id: Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.RadioButton
+  langs:
+  - csharp
+  - vb
+  name: Group(IReadOnlyList<string>, int, Action<int>, bool, Style?, bool, TemplateParts?)
+  nameWithType: RadioButton.Group(IReadOnlyList<string>, int, Action<int>, bool, RadioButton.Style?, bool, TemplateParts?)
+  fullName: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList<string>, int, System.Action<int>, bool, FluentGpu.Controls.RadioButton.Style?, bool, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Group
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 236
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A mutually-exclusive group: renders one radio per option; clicking option i invokes <code class="paramref">onSelect</code>(i).
+        Ad-hoc (every item is a tab stop, no arrow roving) — prefer <xref href="FluentGpu.Controls.RadioButtons" data-throw-if-not-resolved="false"></xref> for the WinUI container semantics.
+  example: []
+  syntax:
+    content: public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, RadioButton.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    parameters:
+    - id: options
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: selected
+      type: System.Int32
+    - id: onSelect
+      type: System.Action{System.Int32}
+    - id: horizontal
+      type: System.Boolean
+    - id: style
+      type: FluentGpu.Controls.RadioButton.Style
+    - id: isEnabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Group(options As IReadOnlyList(Of String), selected As Integer, onSelect As Action(Of Integer), horizontal As Boolean = False, style As RadioButton.Style = Nothing, isEnabled As Boolean = True, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.RadioButton.Group*
+  nameWithType.vb: RadioButton.Group(IReadOnlyList(Of String), Integer, Action(Of Integer), Boolean, RadioButton.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList(Of String), Integer, System.Action(Of Integer), Boolean, FluentGpu.Controls.RadioButton.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Group(IReadOnlyList(Of String), Integer, Action(Of Integer), Boolean, Style, Boolean, TemplateParts)
+references:
+- uid: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  isExternal: true
+  href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_Group_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Action_System_Int32__System_Boolean_FluentGpu_Controls_RadioButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Group(IReadOnlyList<string>, int, Action<int>, bool, Style, bool, TemplateParts)
+  nameWithType: RadioButton.Group(IReadOnlyList<string>, int, Action<int>, bool, RadioButton.Style, bool, TemplateParts)
+  fullName: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList<string>, int, System.Action<int>, bool, FluentGpu.Controls.RadioButton.Style, bool, FluentGpu.Dsl.TemplateParts)
+  nameWithType.vb: RadioButton.Group(IReadOnlyList(Of String), Integer, Action(Of Integer), Boolean, RadioButton.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList(Of String), Integer, System.Action(Of Integer), Boolean, FluentGpu.Controls.RadioButton.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Group(IReadOnlyList(Of String), Integer, Action(Of Integer), Boolean, Style, Boolean, TemplateParts)
+  spec.csharp:
+  - uid: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+    name: Group
+    href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_Group_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Action_System_Int32__System_Boolean_FluentGpu_Controls_RadioButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.RadioButton.Group(System.Collections.Generic.IReadOnlyList{System.String},System.Int32,System.Action{System.Int32},System.Boolean,FluentGpu.Controls.RadioButton.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+    name: Group
+    href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_Group_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Action_System_Int32__System_Boolean_FluentGpu_Controls_RadioButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+- uid: FluentGpu.Controls.RadioButtons
+  commentId: T:FluentGpu.Controls.RadioButtons
+  href: FluentGpu.Controls.RadioButtons.html
+  name: RadioButtons
+  nameWithType: RadioButtons
+  fullName: FluentGpu.Controls.RadioButtons
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.RadioButton.Style
+  commentId: T:FluentGpu.Controls.RadioButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RadioButton.html
+  name: RadioButton.Style
+  nameWithType: RadioButton.Style
+  fullName: FluentGpu.Controls.RadioButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+- uid: FluentGpu.Controls.RadioButton.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.RadioButton.DefaultStyle
+  href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_DefaultStyle
+  name: DefaultStyle
+  nameWithType: RadioButton.DefaultStyle
+  fullName: FluentGpu.Controls.RadioButton.DefaultStyle
+- uid: FluentGpu.Controls.RadioButton.Create*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Create
+  href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_Create_System_String_System_Boolean_System_Action_FluentGpu_Controls_RadioButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: RadioButton.Create
+  fullName: FluentGpu.Controls.RadioButton.Create
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: FluentGpu.Controls.RadioButton.Group*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Group
+  href: FluentGpu.Controls.RadioButton.html#FluentGpu_Controls_RadioButton_Group_System_Collections_Generic_IReadOnlyList_System_String__System_Int32_System_Action_System_Int32__System_Boolean_FluentGpu_Controls_RadioButton_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Group
+  nameWithType: RadioButton.Group
+  fullName: FluentGpu.Controls.RadioButton.Group
+- uid: System.Collections.Generic.IReadOnlyList{System.String}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.String}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<string>
+  nameWithType: IReadOnlyList<string>
+  fullName: System.Collections.Generic.IReadOnlyList<string>
+  nameWithType.vb: IReadOnlyList(Of String)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of String)
+  name.vb: IReadOnlyList(Of String)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Action{System.Int32}
+  commentId: T:System.Action{System.Int32}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<int>
+  nameWithType: Action<int>
+  fullName: System.Action<int>
+  nameWithType.vb: Action(Of Integer)
+  fullName.vb: System.Action(Of Integer)
+  name.vb: Action(Of Integer)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

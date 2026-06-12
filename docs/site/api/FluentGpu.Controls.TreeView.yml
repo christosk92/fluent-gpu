@@ -1,0 +1,1416 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TreeView
+  commentId: T:FluentGpu.Controls.TreeView
+  id: TreeView
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TreeView.CanReorderItems
+  - FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode})
+  - FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode},System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element},System.Boolean,System.Action{FluentGpu.Controls.TreeNode},System.Action{FluentGpu.Controls.TreeNode,System.Boolean},System.Boolean,System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32})
+  - FluentGpu.Controls.TreeView.Expanding
+  - FluentGpu.Controls.TreeView.IsMultiSelectEnabled
+  - FluentGpu.Controls.TreeView.ItemInvoked
+  - FluentGpu.Controls.TreeView.ItemTemplate
+  - FluentGpu.Controls.TreeView.OnReorder
+  - FluentGpu.Controls.TreeView.Render
+  - FluentGpu.Controls.TreeView.Roots
+  - FluentGpu.Controls.TreeView.SelectionChanged
+  langs:
+  - csharp
+  - vb
+  name: TreeView
+  nameWithType: TreeView
+  fullName: FluentGpu.Controls.TreeView
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TreeView
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed class TreeView : Component'
+    content.vb: Public NotInheritable Class TreeView Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.TreeView.Roots
+  commentId: F:FluentGpu.Controls.TreeView.Roots
+  id: Roots
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: Roots
+  nameWithType: TreeView.Roots
+  fullName: FluentGpu.Controls.TreeView.Roots
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Roots
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<TreeNode> Roots
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode}
+    content.vb: Public Roots As IReadOnlyList(Of TreeNode)
+- uid: FluentGpu.Controls.TreeView.ItemTemplate
+  commentId: F:FluentGpu.Controls.TreeView.ItemTemplate
+  id: ItemTemplate
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: ItemTemplate
+  nameWithType: TreeView.ItemTemplate
+  fullName: FluentGpu.Controls.TreeView.ItemTemplate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemTemplate
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Custom row content (icon + label + metadata) — WinUI ContentTemplate (TreeViewItem.xaml:147).
+  example: []
+  syntax:
+    content: public Func<TreeNode, Element>? ItemTemplate
+    return:
+      type: System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element}
+    content.vb: Public ItemTemplate As Func(Of TreeNode, Element)
+- uid: FluentGpu.Controls.TreeView.IsMultiSelectEnabled
+  commentId: F:FluentGpu.Controls.TreeView.IsMultiSelectEnabled
+  id: IsMultiSelectEnabled
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: IsMultiSelectEnabled
+  nameWithType: TreeView.IsMultiSelectEnabled
+  fullName: FluentGpu.Controls.TreeView.IsMultiSelectEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsMultiSelectEnabled
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>TreeViewSelectionMode.Multiple</code>: checkbox lane + cascading subtree selection.'
+  example: []
+  syntax:
+    content: public bool IsMultiSelectEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsMultiSelectEnabled As Boolean
+- uid: FluentGpu.Controls.TreeView.ItemInvoked
+  commentId: F:FluentGpu.Controls.TreeView.ItemInvoked
+  id: ItemInvoked
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: ItemInvoked
+  nameWithType: TreeView.ItemInvoked
+  fullName: FluentGpu.Controls.TreeView.ItemInvoked
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemInvoked
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TreeView.ItemInvoked</code> — raised on row click/Enter (TreeView.cpp:159-165).
+  example: []
+  syntax:
+    content: public Action<TreeNode>? ItemInvoked
+    return:
+      type: System.Action{FluentGpu.Controls.TreeNode}
+    content.vb: Public ItemInvoked As Action(Of TreeNode)
+- uid: FluentGpu.Controls.TreeView.SelectionChanged
+  commentId: F:FluentGpu.Controls.TreeView.SelectionChanged
+  id: SelectionChanged
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: SelectionChanged
+  nameWithType: TreeView.SelectionChanged
+  fullName: FluentGpu.Controls.TreeView.SelectionChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionChanged
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Selection changed (node, isSelected). Multi mode reports each toggled node once per gesture root.
+  example: []
+  syntax:
+    content: public Action<TreeNode, bool>? SelectionChanged
+    return:
+      type: System.Action{FluentGpu.Controls.TreeNode,System.Boolean}
+    content.vb: Public SelectionChanged As Action(Of TreeNode, Boolean)
+- uid: FluentGpu.Controls.TreeView.Expanding
+  commentId: F:FluentGpu.Controls.TreeView.Expanding
+  id: Expanding
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: Expanding
+  nameWithType: TreeView.Expanding
+  fullName: FluentGpu.Controls.TreeView.Expanding
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Expanding
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<TreeNode, bool>? Expanding
+    return:
+      type: System.Action{FluentGpu.Controls.TreeNode,System.Boolean}
+    content.vb: Public Expanding As Action(Of TreeNode, Boolean)
+- uid: FluentGpu.Controls.TreeView.CanReorderItems
+  commentId: F:FluentGpu.Controls.TreeView.CanReorderItems
+  id: CanReorderItems
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: CanReorderItems
+  nameWithType: TreeView.CanReorderItems
+  fullName: FluentGpu.Controls.TreeView.CanReorderItems
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CanReorderItems
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>CanReorderItems</code>: rows drag-reorder among their siblings (kind scoped to this tree).
+        Defaults to <code>true</code>, matching WinUI (TreeView.idl:141 <code>[MUX_DEFAULT_VALUE("true")]</code> + TreeView.xaml:12
+        <code>&lt;Setter Property="CanReorderItems" Value="True"/&gt;</code>).
+  example: []
+  syntax:
+    content: public bool CanReorderItems
+    return:
+      type: System.Boolean
+    content.vb: Public CanReorderItems As Boolean
+- uid: FluentGpu.Controls.TreeView.OnReorder
+  commentId: F:FluentGpu.Controls.TreeView.OnReorder
+  id: OnReorder
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: OnReorder
+  nameWithType: TreeView.OnReorder
+  fullName: FluentGpu.Controls.TreeView.OnReorder
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnReorder
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Reorder commit: (parent — null at root level, fromChildIndex, toChildIndex). When null and the
+        sibling array is mutable, the tree moves the node in place (WinUI mutates its own node tree).
+  example: []
+  syntax:
+    content: public Action<TreeNode?, int, int>? OnReorder
+    return:
+      type: System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32}
+    content.vb: Public OnReorder As Action(Of TreeNode, Integer, Integer)
+- uid: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode})
+  commentId: M:FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode})
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode})
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<TreeNode>)
+  nameWithType: TreeView.Create(IReadOnlyList<TreeNode>)
+  fullName: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.TreeNode>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<TreeNode> roots)
+    parameters:
+    - id: roots
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(roots As IReadOnlyList(Of TreeNode)) As Element
+  overload: FluentGpu.Controls.TreeView.Create*
+  nameWithType.vb: TreeView.Create(IReadOnlyList(Of TreeNode))
+  fullName.vb: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.TreeNode))
+  name.vb: Create(IReadOnlyList(Of TreeNode))
+- uid: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode},System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element},System.Boolean,System.Action{FluentGpu.Controls.TreeNode},System.Action{FluentGpu.Controls.TreeNode,System.Boolean},System.Boolean,System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32})
+  commentId: M:FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode},System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element},System.Boolean,System.Action{FluentGpu.Controls.TreeNode},System.Action{FluentGpu.Controls.TreeNode,System.Boolean},System.Boolean,System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32})
+  id: Create(System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode},System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element},System.Boolean,System.Action{FluentGpu.Controls.TreeNode},System.Action{FluentGpu.Controls.TreeNode,System.Boolean},System.Boolean,System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32})
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<TreeNode>, Func<TreeNode, Element>?, bool, Action<TreeNode>?, Action<TreeNode, bool>?, bool, Action<TreeNode?, int, int>?)
+  nameWithType: TreeView.Create(IReadOnlyList<TreeNode>, Func<TreeNode, Element>?, bool, Action<TreeNode>?, Action<TreeNode, bool>?, bool, Action<TreeNode?, int, int>?)
+  fullName: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.TreeNode>, System.Func<FluentGpu.Controls.TreeNode, FluentGpu.Dsl.Element>?, bool, System.Action<FluentGpu.Controls.TreeNode>?, System.Action<FluentGpu.Controls.TreeNode, bool>?, bool, System.Action<FluentGpu.Controls.TreeNode?, int, int>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<TreeNode> roots, Func<TreeNode, Element>? itemTemplate, bool isMultiSelectEnabled = false, Action<TreeNode>? itemInvoked = null, Action<TreeNode, bool>? selectionChanged = null, bool canReorderItems = false, Action<TreeNode?, int, int>? onReorder = null)
+    parameters:
+    - id: roots
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode}
+    - id: itemTemplate
+      type: System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element}
+    - id: isMultiSelectEnabled
+      type: System.Boolean
+    - id: itemInvoked
+      type: System.Action{FluentGpu.Controls.TreeNode}
+    - id: selectionChanged
+      type: System.Action{FluentGpu.Controls.TreeNode,System.Boolean}
+    - id: canReorderItems
+      type: System.Boolean
+    - id: onReorder
+      type: System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(roots As IReadOnlyList(Of TreeNode), itemTemplate As Func(Of TreeNode, Element), isMultiSelectEnabled As Boolean = False, itemInvoked As Action(Of TreeNode) = Nothing, selectionChanged As Action(Of TreeNode, Boolean) = Nothing, canReorderItems As Boolean = False, onReorder As Action(Of TreeNode, Integer, Integer) = Nothing) As Element
+  overload: FluentGpu.Controls.TreeView.Create*
+  nameWithType.vb: TreeView.Create(IReadOnlyList(Of TreeNode), Func(Of TreeNode, Element), Boolean, Action(Of TreeNode), Action(Of TreeNode, Boolean), Boolean, Action(Of TreeNode, Integer, Integer))
+  fullName.vb: FluentGpu.Controls.TreeView.Create(System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.TreeNode), System.Func(Of FluentGpu.Controls.TreeNode, FluentGpu.Dsl.Element), Boolean, System.Action(Of FluentGpu.Controls.TreeNode), System.Action(Of FluentGpu.Controls.TreeNode, Boolean), Boolean, System.Action(Of FluentGpu.Controls.TreeNode, Integer, Integer))
+  name.vb: Create(IReadOnlyList(Of TreeNode), Func(Of TreeNode, Element), Boolean, Action(Of TreeNode), Action(Of TreeNode, Boolean), Boolean, Action(Of TreeNode, Integer, Integer))
+- uid: FluentGpu.Controls.TreeView.Render
+  commentId: M:FluentGpu.Controls.TreeView.Render
+  id: Render
+  parent: FluentGpu.Controls.TreeView
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: TreeView.Render()
+  fullName: FluentGpu.Controls.TreeView.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TreeView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/TreeView.cs
+    startLine: 113
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.TreeView.Render*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.TreeNode}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<TreeNode>
+  nameWithType: IReadOnlyList<TreeNode>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.TreeNode>
+  nameWithType.vb: IReadOnlyList(Of TreeNode)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.TreeNode)
+  name.vb: IReadOnlyList(Of TreeNode)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element}
+  commentId: T:System.Func{FluentGpu.Controls.TreeNode,FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<TreeNode, Element>
+  nameWithType: Func<TreeNode, Element>
+  fullName: System.Func<FluentGpu.Controls.TreeNode, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of TreeNode, Element)
+  fullName.vb: System.Func(Of FluentGpu.Controls.TreeNode, FluentGpu.Dsl.Element)
+  name.vb: Func(Of TreeNode, Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{FluentGpu.Controls.TreeNode}
+  commentId: T:System.Action{FluentGpu.Controls.TreeNode}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<TreeNode>
+  nameWithType: Action<TreeNode>
+  fullName: System.Action<FluentGpu.Controls.TreeNode>
+  nameWithType.vb: Action(Of TreeNode)
+  fullName.vb: System.Action(Of FluentGpu.Controls.TreeNode)
+  name.vb: Action(Of TreeNode)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{FluentGpu.Controls.TreeNode,System.Boolean}
+  commentId: T:System.Action{FluentGpu.Controls.TreeNode,System.Boolean}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<TreeNode, bool>
+  nameWithType: Action<TreeNode, bool>
+  fullName: System.Action<FluentGpu.Controls.TreeNode, bool>
+  nameWithType.vb: Action(Of TreeNode, Boolean)
+  fullName.vb: System.Action(Of FluentGpu.Controls.TreeNode, Boolean)
+  name.vb: Action(Of TreeNode, Boolean)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32}
+  commentId: T:System.Action{FluentGpu.Controls.TreeNode,System.Int32,System.Int32}
+  parent: System
+  definition: System.Action`3
+  href: https://learn.microsoft.com/dotnet/api/system.action-3
+  name: Action<TreeNode, int, int>
+  nameWithType: Action<TreeNode, int, int>
+  fullName: System.Action<FluentGpu.Controls.TreeNode, int, int>
+  nameWithType.vb: Action(Of TreeNode, Integer, Integer)
+  fullName.vb: System.Action(Of FluentGpu.Controls.TreeNode, Integer, Integer)
+  name.vb: Action(Of TreeNode, Integer, Integer)
+  spec.csharp:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: <
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    href: FluentGpu.Controls.TreeNode.html
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`3
+  commentId: T:System.Action`3
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-3
+  name: Action<T1, T2, T3>
+  nameWithType: Action<T1, T2, T3>
+  fullName: System.Action<T1, T2, T3>
+  nameWithType.vb: Action(Of T1, T2, T3)
+  fullName.vb: System.Action(Of T1, T2, T3)
+  name.vb: Action(Of T1, T2, T3)
+  spec.csharp:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: )
+- uid: FluentGpu.Controls.TreeView.Create*
+  commentId: Overload:FluentGpu.Controls.TreeView.Create
+  href: FluentGpu.Controls.TreeView.html#FluentGpu_Controls_TreeView_Create_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_TreeNode__
+  name: Create
+  nameWithType: TreeView.Create
+  fullName: FluentGpu.Controls.TreeView.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.TreeView.Render*
+  commentId: Overload:FluentGpu.Controls.TreeView.Render
+  href: FluentGpu.Controls.TreeView.html#FluentGpu_Controls_TreeView_Render
+  name: Render
+  nameWithType: TreeView.Render
+  fullName: FluentGpu.Controls.TreeView.Render

@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe = Windows GUI subsystem: no console window spawns when the app is launched.
+         FG_*_DIAG output still works when stdout/stderr are redirected to a file (e.g. > run.log);
+         a bare terminal launch shows nothing unless AttachConsole(ATTACH_PARENT_PROCESS) is added. -->
+    <OutputType>WinExe</OutputType>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bundled gallery assets (WinUI-Gallery control tile images, header art) copied next to the exe. -->

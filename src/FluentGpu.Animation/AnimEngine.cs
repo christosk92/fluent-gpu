@@ -165,6 +165,24 @@ public sealed class AnimEngine
     public AnimEngine(SceneStore scene) => _scene = scene;
     public bool HasActive => _tracks.Count > 0;
 
+    // ── census (read by the MemCensus sampler) ────────────────────────────────────────────────────
+    // _loopTrackCount is maintained at add/remove/loop-flag-change (NOT a per-call scan): a fresh track from Get
+    // starts Loop=false, so only Keyframes flips it; every _tracks removal funnels through RemoveTrackAt to decrement.
+    private int _loopTrackCount;
+    /// <summary>Active animation tracks (springs + eased/driven), all channels — O(1) census.</summary>
+    public int TrackCount => _tracks.Count;
+    /// <summary>Looping tracks (Loop==true) — O(1) maintained counter, not a scan.</summary>
+    public int LoopTrackCount => _loopTrackCount;
+    /// <summary>Live per-node layout-transition specs (the <c>_transitions</c> side-table) — O(1) census.</summary>
+    public int TransitionCount => _transitions.Count;
+
+    /// <summary>Remove a track, keeping <see cref="_loopTrackCount"/> exact. Every <c>_tracks</c> removal routes here.</summary>
+    private void RemoveTrackAt(int i)
+    {
+        if (_tracks[i].Loop) _loopTrackCount--;
+        _tracks.RemoveAt(i);
+    }
+
     // ── Seeding ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The LIVE value of an in-flight track on <paramref name="node"/>+<paramref name="channel"/> — so an
@@ -200,6 +218,7 @@ public sealed class AnimEngine
         var t = Get(node, channel, composite);
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DurationMs = durationMs; t.ElapsedMs = 0f;
         t.DelayRemainingMs = MathF.Max(0f, delayMs);
+        if (t.Loop != loop) _loopTrackCount += loop ? 1 : -1;   // maintain the loop-track census (Get-fresh tracks start false)
         t.Loop = loop; t.DrivenRef = -1; t.Done = false; t.JustSeeded = true;
         t.RestoreLayout = false;   // reused track: the seeder re-opts-in per mode (Relayout/Reflow set it after seeding)
         if (Diag.Enabled) Diag.Event("anim", $"keyframes SEED {channel} dur={durationMs:0}ms keys={keys.Length} loop={loop}");
@@ -210,6 +229,9 @@ public sealed class AnimEngine
                       CompositeOp composite = CompositeOp.Replace)
     {
         var t = Get(node, channel, composite);
+        // A reused track may carry Loop=true from a prior Keyframes(loop:true) seed — stale Loop on a DRIVEN track
+        // wraps u instead of clamping at the domain edge (and mislabels the loop-track census). Reset on re-seed.
+        if (t.Loop) { _loopTrackCount--; t.Loop = false; }
         t.Mode = IntegrationMode.Eased; t.Keys = keys; t.DrivenRef = drivenRef;
         t.DomainMin = domainMin; t.DomainMax = domainMax; t.Done = false; t.JustSeeded = true;
     }
@@ -229,6 +251,7 @@ public sealed class AnimEngine
             return;   // keep Pos + Vel → smooth handoff
         }
         var t = Get(node, channel, composite);
+        if (t.Loop) { _loopTrackCount--; t.Loop = false; }   // reused track: clear a stale Keyframes loop flag (census + Tick wrap)
         t.Mode = IntegrationMode.Spring; t.Target = to; t.Spring = spring;
         t.RestoreLayout = false;
         // a FRESH spring starts from the node's CURRENT value (not the target) so it actually travels — else it snaps.
@@ -260,7 +283,7 @@ public sealed class AnimEngine
 
     public void Cancel(NodeHandle node, AnimChannel channel)
     {
-        for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node && _tracks[i].Channel == channel) _tracks.RemoveAt(i);
+        for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node && _tracks[i].Channel == channel) RemoveTrackAt(i);
     }
 
     /// <summary>Cancel + reset the channel's paint to its settle-time resting sentinel — symmetric with the settle
@@ -286,7 +309,7 @@ public sealed class AnimEngine
     }
     public void CancelAll(NodeHandle node)
     {
-        for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node) _tracks.RemoveAt(i);
+        for (int i = _tracks.Count - 1; i >= 0; i--) if (_tracks[i].Node == node) RemoveTrackAt(i);
     }
 
     // ── Layout-transition side-table (node index → spec) ──────────────────────────────────────────
@@ -296,6 +319,12 @@ public sealed class AnimEngine
     public bool TryGetTransition(NodeHandle node, out LayoutTransition t) => _transitions.TryGetValue((int)node.Raw.Index, out t);
     /// <summary>Drop a node's layout-transition spec (the element stopped declaring Animate, or the slot was freed).</summary>
     public void ClearTransition(NodeHandle node) => _transitions.Remove((int)node.Raw.Index);
+
+    /// <summary>Symmetric teardown when a scene slot is FREED (wired to <see cref="SceneStore.OnFreeIndex"/>): drop the
+    /// index-keyed transition spec so a freed node leaves no dormant spec the NEXT node reusing that slot would inherit.
+    /// In-flight tracks are keyed by HANDLE (gen-checked) and self-prune at the next Tick's IsLive guard, so they need no
+    /// teardown here. 0-alloc; a no-op when the slot had no spec.</summary>
+    public void ClearForIndex(int index) => _transitions.Remove(index);
 
     // ── Layout-transition projection (continuous, retained FLIP) ──────────────────────────────────
     /// <summary>FLIP the node from its captured presented rect to its new laid-out rect, seeding/retargeting the channels
@@ -508,7 +537,7 @@ public sealed class AnimEngine
         for (int i = _tracks.Count - 1; i >= 0; i--)
         {
             Track t = _tracks[i];
-            if (!_scene.IsLive(t.Node)) { _tracks.RemoveAt(i); continue; }
+            if (!_scene.IsLive(t.Node)) { RemoveTrackAt(i); continue; }
             float stepMs = dtMs;
             // A JUST-seeded track must not consume its delay from THIS frame's dt: the dt accumulated BEFORE the
             // seed (idle frames roll their pending time into the next active frame), so charging it against the
@@ -675,7 +704,7 @@ public sealed class AnimEngine
                 else p.ClipRect = RectF.Infinite;   // any clip edge settling clears the authored clip override
                 _scene.Mark(t.Node, NodeFlags.PaintDirty);
             }
-            _tracks.RemoveAt(i);
+            RemoveTrackAt(i);
         }
     }
 

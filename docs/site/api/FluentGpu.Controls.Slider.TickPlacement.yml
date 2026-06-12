@@ -1,0 +1,219 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Slider.TickPlacement
+  commentId: T:FluentGpu.Controls.Slider.TickPlacement
+  id: Slider.TickPlacement
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Slider.TickPlacement.BottomRight
+  - FluentGpu.Controls.Slider.TickPlacement.Inline
+  - FluentGpu.Controls.Slider.TickPlacement.None
+  - FluentGpu.Controls.Slider.TickPlacement.Outside
+  - FluentGpu.Controls.Slider.TickPlacement.TopLeft
+  langs:
+  - csharp
+  - vb
+  name: Slider.TickPlacement
+  nameWithType: Slider.TickPlacement
+  fullName: FluentGpu.Controls.Slider.TickPlacement
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TickPlacement
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Where tick marks render — WinUI <code>TickPlacement</code> (visibility mapping: Slider_Partial.cpp:2248-2303).
+        WinUI's default is <xref href="FluentGpu.Controls.Slider.TickPlacement.Inline" data-throw-if-not-resolved="false"></xref> (marks inside the rail, SliderInlineTickBarFill).
+  example: []
+  syntax:
+    content: 'public enum Slider.TickPlacement : byte'
+    content.vb: Public Enum Slider.TickPlacement As Byte
+- uid: FluentGpu.Controls.Slider.TickPlacement.None
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.None
+  id: None
+  parent: FluentGpu.Controls.Slider.TickPlacement
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: Slider.TickPlacement.None
+  fullName: FluentGpu.Controls.Slider.TickPlacement.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.Slider.TickPlacement
+- uid: FluentGpu.Controls.Slider.TickPlacement.TopLeft
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.TopLeft
+  id: TopLeft
+  parent: FluentGpu.Controls.Slider.TickPlacement
+  langs:
+  - csharp
+  - vb
+  name: TopLeft
+  nameWithType: Slider.TickPlacement.TopLeft
+  fullName: FluentGpu.Controls.Slider.TickPlacement.TopLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TopLeft
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TopLeft = 1
+    return:
+      type: FluentGpu.Controls.Slider.TickPlacement
+- uid: FluentGpu.Controls.Slider.TickPlacement.BottomRight
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.BottomRight
+  id: BottomRight
+  parent: FluentGpu.Controls.Slider.TickPlacement
+  langs:
+  - csharp
+  - vb
+  name: BottomRight
+  nameWithType: Slider.TickPlacement.BottomRight
+  fullName: FluentGpu.Controls.Slider.TickPlacement.BottomRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BottomRight
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: BottomRight = 2
+    return:
+      type: FluentGpu.Controls.Slider.TickPlacement
+- uid: FluentGpu.Controls.Slider.TickPlacement.Outside
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.Outside
+  id: Outside
+  parent: FluentGpu.Controls.Slider.TickPlacement
+  langs:
+  - csharp
+  - vb
+  name: Outside
+  nameWithType: Slider.TickPlacement.Outside
+  fullName: FluentGpu.Controls.Slider.TickPlacement.Outside
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Outside
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Outside = 3
+    return:
+      type: FluentGpu.Controls.Slider.TickPlacement
+- uid: FluentGpu.Controls.Slider.TickPlacement.Inline
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.Inline
+  id: Inline
+  parent: FluentGpu.Controls.Slider.TickPlacement
+  langs:
+  - csharp
+  - vb
+  name: Inline
+  nameWithType: Slider.TickPlacement.Inline
+  fullName: FluentGpu.Controls.Slider.TickPlacement.Inline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Slider.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inline
+    path: ../../src/FluentGpu.Controls/Slider.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Inline = 4
+    return:
+      type: FluentGpu.Controls.Slider.TickPlacement
+references:
+- uid: FluentGpu.Controls.Slider.TickPlacement.Inline
+  commentId: F:FluentGpu.Controls.Slider.TickPlacement.Inline
+  href: FluentGpu.Controls.Slider.TickPlacement.html#FluentGpu_Controls_Slider_TickPlacement_Inline
+  name: Inline
+  nameWithType: Slider.TickPlacement.Inline
+  fullName: FluentGpu.Controls.Slider.TickPlacement.Inline
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.Slider.TickPlacement
+  commentId: T:FluentGpu.Controls.Slider.TickPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Slider.html
+  name: Slider.TickPlacement
+  nameWithType: Slider.TickPlacement
+  fullName: FluentGpu.Controls.Slider.TickPlacement
+  spec.csharp:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.TickPlacement
+    name: TickPlacement
+    href: FluentGpu.Controls.Slider.TickPlacement.html
+  spec.vb:
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    href: FluentGpu.Controls.Slider.html
+  - name: .
+  - uid: FluentGpu.Controls.Slider.TickPlacement
+    name: TickPlacement
+    href: FluentGpu.Controls.Slider.TickPlacement.html

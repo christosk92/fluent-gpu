@@ -1,0 +1,674 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CaptionButton
+  commentId: T:FluentGpu.Controls.CaptionButton
+  id: CaptionButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CaptionButton.Close
+  - FluentGpu.Controls.CaptionButton.Create(System.String,System.Action,FluentGpu.Controls.CaptionButton.Style,System.Boolean,System.Single,System.Action{FluentGpu.Foundation.NodeHandle})
+  - FluentGpu.Controls.CaptionButton.GlyphSize
+  - FluentGpu.Controls.CaptionButton.MinMax
+  - FluentGpu.Controls.CaptionButton.Width
+  langs:
+  - csharp
+  - vb
+  name: CaptionButton
+  nameWithType: CaptionButton
+  fullName: FluentGpu.Controls.CaptionButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaptionButton
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    An engine-drawn window caption button (minimize / maximize-restore / close) for the custom-frame
+
+    <xref href="FluentGpu.Controls.TitleBar" data-throw-if-not-resolved="false"></xref> — the Win11 shell look: 46×bar-height, square-edged (caption buttons abut the window edge,
+
+    no corner radius), a 10px Segoe Fluent chrome glyph, subtle hover/press fills (close = the shell red with a white
+
+    glyph). The OS owns those pixels' hit-testing (WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE so the Win11
+
+    snap-layouts flyout works); the Win32 PAL synthesizes pointer input back into the engine from the WM_NC* mouse
+
+    messages, so these ramps run through the normal InteractionAnimator path even though the pixels are non-client.
+
+    Visual states = BoxEl fill ramp + TextEl foreground ramp at 83ms (WinUI ControlFasterAnimationDuration) with the
+
+    BoxEl default (0,0,0,1) spline — never a per-control state machine.
+  example: []
+  syntax:
+    content: public static class CaptionButton
+    content.vb: Public Module CaptionButton
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.CaptionButton.Width
+  commentId: F:FluentGpu.Controls.CaptionButton.Width
+  id: Width
+  parent: FluentGpu.Controls.CaptionButton
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: CaptionButton.Width
+  fullName: FluentGpu.Controls.CaptionButton.Width
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Win11 caption button width @100% (FluentAvalonia WindowDecorations.axaml:9; ×scale at hit-test).
+  example: []
+  syntax:
+    content: public const float Width = 46
+    return:
+      type: System.Single
+    content.vb: Public Const Width As Single = 46
+- uid: FluentGpu.Controls.CaptionButton.GlyphSize
+  commentId: F:FluentGpu.Controls.CaptionButton.GlyphSize
+  id: GlyphSize
+  parent: FluentGpu.Controls.CaptionButton
+  langs:
+  - csharp
+  - vb
+  name: GlyphSize
+  nameWithType: CaptionButton.GlyphSize
+  fullName: FluentGpu.Controls.CaptionButton.GlyphSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphSize
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Chrome glyph point size (FluentAvalonia WindowDecorations.axaml:117).
+  example: []
+  syntax:
+    content: public const float GlyphSize = 10
+    return:
+      type: System.Single
+    content.vb: Public Const GlyphSize As Single = 10
+- uid: FluentGpu.Controls.CaptionButton.MinMax
+  commentId: P:FluentGpu.Controls.CaptionButton.MinMax
+  id: MinMax
+  parent: FluentGpu.Controls.CaptionButton
+  langs:
+  - csharp
+  - vb
+  name: MinMax
+  nameWithType: CaptionButton.MinMax
+  fullName: FluentGpu.Controls.CaptionButton.MinMax
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinMax
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Minimize/maximize ramp: transparent → SubtleSecondary → SubtleTertiary fills; glyph primary → secondary.'
+  example: []
+  syntax:
+    content: public static CaptionButton.Style MinMax { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.CaptionButton.Style
+    content.vb: Public Shared ReadOnly Property MinMax As CaptionButton.Style
+  overload: FluentGpu.Controls.CaptionButton.MinMax*
+- uid: FluentGpu.Controls.CaptionButton.Close
+  commentId: P:FluentGpu.Controls.CaptionButton.Close
+  id: Close
+  parent: FluentGpu.Controls.CaptionButton
+  langs:
+  - csharp
+  - vb
+  name: Close
+  nameWithType: CaptionButton.Close
+  fullName: FluentGpu.Controls.CaptionButton.Close
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Close
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Close ramp: the Win11 shell red on hover/press with a white glyph (pressed glyph at ~70%).'
+  example: []
+  syntax:
+    content: public static CaptionButton.Style Close { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.CaptionButton.Style
+    content.vb: Public Shared ReadOnly Property Close As CaptionButton.Style
+  overload: FluentGpu.Controls.CaptionButton.Close*
+- uid: FluentGpu.Controls.CaptionButton.Create(System.String,System.Action,FluentGpu.Controls.CaptionButton.Style,System.Boolean,System.Single,System.Action{FluentGpu.Foundation.NodeHandle})
+  commentId: M:FluentGpu.Controls.CaptionButton.Create(System.String,System.Action,FluentGpu.Controls.CaptionButton.Style,System.Boolean,System.Single,System.Action{FluentGpu.Foundation.NodeHandle})
+  id: Create(System.String,System.Action,FluentGpu.Controls.CaptionButton.Style,System.Boolean,System.Single,System.Action{FluentGpu.Foundation.NodeHandle})
+  parent: FluentGpu.Controls.CaptionButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, Action, Style, bool, float, Action<NodeHandle>?)
+  nameWithType: CaptionButton.Create(string, Action, CaptionButton.Style, bool, float, Action<NodeHandle>?)
+  fullName: FluentGpu.Controls.CaptionButton.Create(string, System.Action, FluentGpu.Controls.CaptionButton.Style, bool, float, System.Action<FluentGpu.Foundation.NodeHandle>?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CaptionButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/CaptionButton.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    <code class="paramref">active</code> = window activation (false dims the glyph to
+        <xref href="FluentGpu.Controls.CaptionButton.Style.InactiveForeground" data-throw-if-not-resolved="false"></xref> — fills stay wired; Win11 shows hover states on inactive captions too).
+        <code class="paramref">height</code> = the bar height (caption buttons stretch the full bar, flush to the top edge).
+        <code class="paramref">onRealized</code> captures the node handle for the TitleBar's WM_NCHITTEST region report.
+  example: []
+  syntax:
+    content: public static BoxEl Create(string glyph, Action onClick, CaptionButton.Style style, bool active = true, float height = 48, Action<NodeHandle>? onRealized = null)
+    parameters:
+    - id: glyph
+      type: System.String
+    - id: onClick
+      type: System.Action
+    - id: style
+      type: FluentGpu.Controls.CaptionButton.Style
+    - id: active
+      type: System.Boolean
+    - id: height
+      type: System.Single
+    - id: onRealized
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(glyph As String, onClick As Action, style As CaptionButton.Style, active As Boolean = True, height As Single = 48, onRealized As Action(Of NodeHandle) = Nothing) As BoxEl
+  overload: FluentGpu.Controls.CaptionButton.Create*
+  nameWithType.vb: CaptionButton.Create(String, Action, CaptionButton.Style, Boolean, Single, Action(Of NodeHandle))
+  fullName.vb: FluentGpu.Controls.CaptionButton.Create(String, System.Action, FluentGpu.Controls.CaptionButton.Style, Boolean, Single, System.Action(Of FluentGpu.Foundation.NodeHandle))
+  name.vb: Create(String, Action, Style, Boolean, Single, Action(Of NodeHandle))
+references:
+- uid: FluentGpu.Controls.TitleBar
+  commentId: T:FluentGpu.Controls.TitleBar
+  href: FluentGpu.Controls.TitleBar.html
+  name: TitleBar
+  nameWithType: TitleBar
+  fullName: FluentGpu.Controls.TitleBar
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.CaptionButton.MinMax*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.MinMax
+  href: FluentGpu.Controls.CaptionButton.html#FluentGpu_Controls_CaptionButton_MinMax
+  name: MinMax
+  nameWithType: CaptionButton.MinMax
+  fullName: FluentGpu.Controls.CaptionButton.MinMax
+- uid: FluentGpu.Controls.CaptionButton.Style
+  commentId: T:FluentGpu.Controls.CaptionButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CaptionButton.html
+  name: CaptionButton.Style
+  nameWithType: CaptionButton.Style
+  fullName: FluentGpu.Controls.CaptionButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    href: FluentGpu.Controls.CaptionButton.html
+  - name: .
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: Style
+    href: FluentGpu.Controls.CaptionButton.Style.html
+- uid: FluentGpu.Controls.CaptionButton.Close*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Close
+  href: FluentGpu.Controls.CaptionButton.html#FluentGpu_Controls_CaptionButton_Close
+  name: Close
+  nameWithType: CaptionButton.Close
+  fullName: FluentGpu.Controls.CaptionButton.Close
+- uid: FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  commentId: P:FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+  href: FluentGpu.Controls.CaptionButton.Style.html#FluentGpu_Controls_CaptionButton_Style_InactiveForeground
+  name: InactiveForeground
+  nameWithType: CaptionButton.Style.InactiveForeground
+  fullName: FluentGpu.Controls.CaptionButton.Style.InactiveForeground
+- uid: FluentGpu.Controls.CaptionButton.Create*
+  commentId: Overload:FluentGpu.Controls.CaptionButton.Create
+  href: FluentGpu.Controls.CaptionButton.html#FluentGpu_Controls_CaptionButton_Create_System_String_System_Action_FluentGpu_Controls_CaptionButton_Style_System_Boolean_System_Single_System_Action_FluentGpu_Foundation_NodeHandle__
+  name: Create
+  nameWithType: CaptionButton.Create
+  fullName: FluentGpu.Controls.CaptionButton.Create
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Action{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<NodeHandle>
+  nameWithType: Action<NodeHandle>
+  fullName: System.Action<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Action(Of NodeHandle)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Action(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html

@@ -1,0 +1,105 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ReorderCrossCommit
+  commentId: T:FluentGpu.Controls.ReorderCrossCommit
+  id: ReorderCrossCommit
+  parent: FluentGpu.Controls
+  children: []
+  langs:
+  - csharp
+  - vb
+  name: ReorderCrossCommit
+  nameWithType: ReorderCrossCommit
+  fullName: FluentGpu.Controls.ReorderCrossCommit
+  type: Delegate
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReorderCrossCommit
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The ONE cross-list commit callback (plan E5-L3): the app removes the item from <code class="paramref">from</code>
+        at <code class="paramref">fromIndex</code> and inserts <code class="paramref">payload</code> into <code class="paramref">to</code> at
+        <code class="paramref">toIndex</code> — one atomic model mutation, both lists re-render from it (signals-first).
+        <code class="paramref">from</code> is null (and <code class="paramref">fromIndex</code> −1) when the drag came from a plain
+        <code>BoxEl.Draggable</code> of the shared kind rather than another <xref href="FluentGpu.Controls.Reorderable" data-throw-if-not-resolved="false"></xref> (a deposit-style insert).
+  example: []
+  syntax:
+    content: public delegate void ReorderCrossCommit(object? payload, int fromIndex, Reorderable? from, Reorderable to, int toIndex)
+    parameters:
+    - id: payload
+      type: System.Object
+    - id: fromIndex
+      type: System.Int32
+    - id: from
+      type: FluentGpu.Controls.Reorderable
+    - id: to
+      type: FluentGpu.Controls.Reorderable
+    - id: toIndex
+      type: System.Int32
+    content.vb: Public Delegate Sub ReorderCrossCommit(payload As Object, fromIndex As Integer, from As Reorderable, [to] As Reorderable, toIndex As Integer)
+references:
+- uid: FluentGpu.Controls.Reorderable
+  commentId: T:FluentGpu.Controls.Reorderable
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.Reorderable.html
+  name: Reorderable
+  nameWithType: Reorderable
+  fullName: FluentGpu.Controls.Reorderable
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System

@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class CheckBox | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class CheckBox | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI CheckBox: a 20px box + label. Two-state via the  overload; three-state (adds the mixed &amp;quot;indeterminate&amp;quot; glyph) via the  overload, which cycles Unchecked → Checked → Indeterminate → Unchecked on click. Controlled — the caller owns the state. Visuals follow WinUI 1:1 but WITHOUT WinUI&#39;s 12-state matrix (Unchecked/Checked/Indeterminate &#215; Normal/PointerOver/ Pressed/Disabled, each restating 7 setters). Instead each property is a  ramp over the interaction axis, picked by the logical state; the engine eases Rest→Hover→Pressed using the element&#39;s interaction timing specs and the disabled leg is a flat swap. The glyph uses WinUI&#39;s AnimatedAccept draw-on timeline plus PressScale for the pressed &amp;quot;squish&amp;quot;. So ramps + one authored stroke-trim timeline express all reachable states — see .">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_CheckBox.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.CheckBox%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.CheckBox">
+
+
+
+  <h1 id="FluentGpu_Controls_CheckBox" data-uid="FluentGpu.Controls.CheckBox" class="text-break">
+Class CheckBox  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L20"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI CheckBox: a 20px box + label. Two-state via the <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a> overload; three-state (adds the mixed
+&quot;indeterminate&quot; glyph) via the <a class="xref" href="FluentGpu.Controls.CheckState.html">CheckState</a> overload, which cycles Unchecked → Checked → Indeterminate →
+Unchecked on click. Controlled — the caller owns the state.</p>
+<p>Visuals follow WinUI 1:1 but WITHOUT WinUI's 12-state matrix (Unchecked/Checked/Indeterminate × Normal/PointerOver/
+Pressed/Disabled, each restating 7 setters). Instead each property is a <a class="xref" href="FluentGpu.Controls.StateBrush.html">StateBrush</a> ramp over the
+interaction axis, picked by the logical state; the engine eases Rest→Hover→Pressed using the element's interaction
+timing specs and the disabled leg is a flat swap. The glyph uses WinUI's AnimatedAccept draw-on timeline plus
+<code>PressScale</code> for the pressed &quot;squish&quot;. So ramps + one authored stroke-trim timeline express all reachable
+states — see <a class="xref" href="FluentGpu.Controls.ControlMotion.html">ControlMotion</a>.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class CheckBox</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">CheckBox</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_CheckBox_PartBox" data-uid="FluentGpu.Controls.CheckBox.PartBox">
+  PartBox
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L28"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 20px check square (WinUI NormalRectangle). Owned: Children (the conditional draw-on mark mount —
+checkmark when Checked, dash when Indeterminate, none when Unchecked).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartBox = &quot;Box&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_CheckBox_PartLabel" data-uid="FluentGpu.Controls.CheckBox.PartLabel">
+  PartLabel
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L35"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The label (a <a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a> — use <code>Parts.Set&lt;TextEl&gt;(CheckBox.PartLabel, …)</code>).
+Owned: none (the fg ramp sits in the stock build; a modifier may restyle it).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartLabel = &quot;Label&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_CheckBox_PartMark" data-uid="FluentGpu.Controls.CheckBox.PartMark">
+  PartMark
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L32"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The drawn checkmark / indeterminate dash (WinUI CheckGlyph) — a <a class="xref" href="FluentGpu.Dsl.PolylineStrokeEl.html">PolylineStrokeEl</a>, so use
+<code>Parts.Set&lt;PolylineStrokeEl&gt;(CheckBox.PartMark, …)</code>. Owned: TrimStart/TrimEnd (the StrokeTrimEnd
+draw-on keyframes land there).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartMark = &quot;Mark&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_CheckBox_PartRoot" data-uid="FluentGpu.Controls.CheckBox.PartRoot">
+  PartRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L25"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The returned clickable row (WinUI RootGrid). Owned: OnClick (the toggle), Role, Children.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRoot = &quot;Root&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_CheckBox_StyleOverride" data-uid="FluentGpu.Controls.CheckBox.StyleOverride">
+  StyleOverride
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L62"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static CheckBox.Style? StyleOverride</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.CheckBox.html">CheckBox</a>.<a class="xref" href="FluentGpu.Controls.CheckBox.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_CheckBox_DefaultStyle_" data-uid="FluentGpu.Controls.CheckBox.DefaultStyle*"></a>
+
+  <h3 id="FluentGpu_Controls_CheckBox_DefaultStyle" data-uid="FluentGpu.Controls.CheckBox.DefaultStyle">
+  DefaultStyle
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L63"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static CheckBox.Style DefaultStyle { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.CheckBox.html">CheckBox</a>.<a class="xref" href="FluentGpu.Controls.CheckBox.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_CheckBox_Create_" data-uid="FluentGpu.Controls.CheckBox.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_CheckBox_Create_System_String_FluentGpu_Controls_CheckState_System_Action_FluentGpu_Controls_CheckState__FluentGpu_Controls_CheckBox_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.CheckBox.Create(System.String,FluentGpu.Controls.CheckState,System.Action{FluentGpu.Controls.CheckState},FluentGpu.Controls.CheckBox.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)">
+  Create(string, CheckState, Action&lt;CheckState&gt;, Style?, bool, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Create(string label, CheckState state, Action&lt;CheckState&gt; onChange, CheckBox.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>label</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>state</code> <a class="xref" href="FluentGpu.Controls.CheckState.html">CheckState</a></dt>
+    <dd></dd>
+    <dt><code>onChange</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="FluentGpu.Controls.CheckState.html">CheckState</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.CheckBox.html">CheckBox</a>.<a class="xref" href="FluentGpu.Controls.CheckBox.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_CheckBox_Create_" data-uid="FluentGpu.Controls.CheckBox.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_CheckBox_Create_System_String_System_Boolean_System_Action_FluentGpu_Controls_CheckBox_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.CheckBox.Create(System.String,System.Boolean,System.Action,FluentGpu.Controls.CheckBox.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)">
+  Create(string, bool, Action, Style?, bool, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/CheckBox.cs/#L74"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Create(string label, bool isChecked, Action onToggle, CheckBox.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>label</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>isChecked</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>onToggle</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.CheckBox.html">CheckBox</a>.<a class="xref" href="FluentGpu.Controls.CheckBox.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

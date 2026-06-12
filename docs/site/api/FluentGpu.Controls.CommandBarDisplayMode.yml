@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CommandBarDisplayMode
+  commentId: T:FluentGpu.Controls.CommandBarDisplayMode
+  id: CommandBarDisplayMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CommandBarDisplayMode.Compact
+  - FluentGpu.Controls.CommandBarDisplayMode.Hidden
+  - FluentGpu.Controls.CommandBarDisplayMode.Minimal
+  langs:
+  - csharp
+  - vb
+  name: CommandBarDisplayMode
+  nameWithType: CommandBarDisplayMode
+  fullName: FluentGpu.Controls.CommandBarDisplayMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CommandBarDisplayMode
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>CommandBar.ClosedDisplayMode</code>: how the CLOSED bar renders — Compact (48px icon strip),
+        Minimal (24px sliver with only the … More button), Hidden (collapsed).
+  example: []
+  syntax:
+    content: 'public enum CommandBarDisplayMode : byte'
+    content.vb: Public Enum CommandBarDisplayMode As Byte
+- uid: FluentGpu.Controls.CommandBarDisplayMode.Compact
+  commentId: F:FluentGpu.Controls.CommandBarDisplayMode.Compact
+  id: Compact
+  parent: FluentGpu.Controls.CommandBarDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Compact
+  nameWithType: CommandBarDisplayMode.Compact
+  fullName: FluentGpu.Controls.CommandBarDisplayMode.Compact
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Compact
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Compact = 0
+    return:
+      type: FluentGpu.Controls.CommandBarDisplayMode
+- uid: FluentGpu.Controls.CommandBarDisplayMode.Minimal
+  commentId: F:FluentGpu.Controls.CommandBarDisplayMode.Minimal
+  id: Minimal
+  parent: FluentGpu.Controls.CommandBarDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Minimal
+  nameWithType: CommandBarDisplayMode.Minimal
+  fullName: FluentGpu.Controls.CommandBarDisplayMode.Minimal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Minimal
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Minimal = 1
+    return:
+      type: FluentGpu.Controls.CommandBarDisplayMode
+- uid: FluentGpu.Controls.CommandBarDisplayMode.Hidden
+  commentId: F:FluentGpu.Controls.CommandBarDisplayMode.Hidden
+  id: Hidden
+  parent: FluentGpu.Controls.CommandBarDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Hidden
+  nameWithType: CommandBarDisplayMode.Hidden
+  fullName: FluentGpu.Controls.CommandBarDisplayMode.Hidden
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CommandBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hidden
+    path: ../../src/FluentGpu.Controls/CommandBar.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Hidden = 2
+    return:
+      type: FluentGpu.Controls.CommandBarDisplayMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CommandBarDisplayMode
+  commentId: T:FluentGpu.Controls.CommandBarDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CommandBarDisplayMode.html
+  name: CommandBarDisplayMode
+  nameWithType: CommandBarDisplayMode
+  fullName: FluentGpu.Controls.CommandBarDisplayMode

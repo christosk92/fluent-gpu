@@ -77,6 +77,11 @@ public sealed class TitleBar : Component
     /// AVAILABLE width (DIP) so fixed-width content can clamp itself (WinUI: the content area shrinks first; the
     /// caption buttons never move). Return a 0-sized element to collapse when too narrow.</summary>
     public Func<float, Element>? Content;
+    /// <summary>The measured content-slot width as a LIVE signal — the value behind the <see cref="Content"/>
+    /// lambda's argument. Component plain fields freeze at mount, so the lambda argument can pick the content's
+    /// SHAPE per render but cannot resize an already-mounted component; content that must track the slot at runtime
+    /// subscribes to this instead (e.g. <see cref="AutoSuggestBox.WidthSignal"/>).</summary>
+    public IReadSignal<float> ContentAvail => _availDip;
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
@@ -86,9 +91,11 @@ public sealed class TitleBar : Component
     NodeHandle _root, _back, _pane, _contentCol, _content, _min, _max, _close;
     // Reused region buffer: filled in place on each relayout push — no steady-state allocation (7 = islands(3)+buttons(3)+caption).
     readonly TitleBarRegion[] _regions = new TitleBarRegion[7];
-    // The content column's MEASURED width (DIP), fed back from the layout effect: the column is Grow=1, so its
-    // laid-out width IS the true available space between the clusters — no text-width estimating. Starts unmeasured
-    // (infinity → content renders at its natural max); the first layout corrects it within one frame.
+    // The content column's MEASURED width (DIP), fed back from the layout effect: the column is the row's ONE
+    // Grow=1 + Shrink=1 child, so its laid-out width IS the true available space between the clusters in BOTH
+    // directions — no text-width estimating, and on a narrowing window the column (never the caption cluster) gives
+    // way. Starts unmeasured (infinity → content renders at its natural max); the first layout corrects it within
+    // one frame, as does every resize.
     readonly Signal<float> _availDip = new(float.PositiveInfinity);
 
     public override Element Render()
@@ -192,7 +199,11 @@ public sealed class TitleBar : Component
         };
         var content = new BoxEl
         {
-            Grow = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            // Grow + Shrink: the column is the row's ONE flexible child, so it absorbs all free space AND all
+            // overflow — the fixed caption cluster after it never moves or clips (the WinUI sizing contract), and
+            // the arranged width PushRegions feeds back is the honest available space even on resize-down (without
+            // Shrink the column could only track the viewport UP and _availDip would floor at the content's width).
+            Grow = 1, Shrink = 1, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Height = ExpandedHeight,
             Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
             Children = [island],
@@ -257,8 +268,9 @@ public sealed class TitleBar : Component
     void PushRegions(InputHooks hooks)
     {
         if (hooks.GetNodeRect is not { } rectOf) return;
-        // Grow=1 ⇒ the column's laid-out width IS the available content space. Equality-gated signal write:
-        // re-renders (and re-pushes) only when the measurement actually changed (e.g. a window resize).
+        // Grow=1 + Shrink=1 ⇒ the column's laid-out width IS the available content space, tracking the viewport in
+        // BOTH directions. Equality-gated signal write: re-renders (and re-pushes) only when the measurement
+        // actually changed (e.g. a window resize).
         if (!_contentCol.IsNull)
         {
             float w = rectOf(_contentCol).W;

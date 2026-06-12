@@ -44,6 +44,12 @@ public sealed class InputHooks
     public Func<int, bool>? KeyPreview;
     public bool Preview(int key) => KeyPreview?.Invoke(key) ?? false;
 
+    /// <summary>The active contact's sampled flick velocity (px/s, window space) — host-wired to the dispatcher's
+    /// <c>PointerVelocity</c>. A cross-axis swipe control (SwipeControl/FlipView, <c>BoxEl.DragYieldsToPan</c>) reads it
+    /// from its <c>OnClick</c> release/commit edge to make the WinUI velocity snap (100px open / 31px/s close;
+    /// flick-navigate) instead of a fixed-duration substitute. Zero between gestures / on a mouse / 0-stamp stream.</summary>
+    public Func<Point2>? PointerVelocity;
+
     /// <summary>The currently-focused node (host-wired to the dispatcher). An opening overlay captures it so the focus
     /// can be restored when the overlay closes (WinUI flyout focus-restoration).</summary>
     public Func<NodeHandle>? GetFocus;

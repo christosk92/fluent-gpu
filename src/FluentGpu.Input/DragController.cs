@@ -162,8 +162,13 @@ public sealed class DragController
     /// <summary>Pointer move while armed or active. Armed: crossing the drag box either PROMOTES (fires
     /// <c>OnDragStarted</c> then the first <c>OnDragDelta</c>) or YIELDS to a cross-axis pan (arena-lite) and disarms.
     /// Active: applies the parent-space translate and fires <c>OnDragDelta</c>. Returns true iff the gesture owns the
-    /// pointer after this call (the dispatcher then skips hover/scroll/slider routing).</summary>
-    public bool Move(Point2 abs, KeyModifiers mods, uint timestampMs)
+    /// pointer after this call (the dispatcher then skips hover/scroll/slider routing).
+    ///
+    /// <paramref name="arenaGoverned"/> (the §7A touch path): when the gesture-arena already arbitrated this contact's
+    /// DragReorder-vs-Pan via the axis-locked recognizer votes (input-a11y.md §7A.2), the per-axis <see cref="YieldsToPan"/>
+    /// heuristic is BYPASSED — the arena's deterministic resolution is the single source of truth (the two-arbitration-models
+    /// risk the plan flags is closed). The mouse path leaves it false, keeping the heuristic until the mouse arena lands.</summary>
+    public bool Move(Point2 abs, KeyModifiers mods, uint timestampMs, bool arenaGoverned = false)
     {
         if (_node.IsNull) return false;
         if (!_scene.IsLive(_node)) { Reset(); return false; }
@@ -176,7 +181,10 @@ public sealed class DragController
         {
             // Per-axis drag box (dx > maxDx || dy > maxDy — ListViewBaseItem_Partial.cpp:1877).
             if (MathF.Abs(tx) <= DragThresholdPx && MathF.Abs(ty) <= DragThresholdPx) return false;
-            if (YieldsToPan(tx, ty)) { Reset(); return false; }   // cross-axis pan over a scrollable wins the arena
+            // Arena-governed touch (§7A): the DragReorder member already WON its arena over the Pan member on the
+            // axis-locked vote, so a yield here would double-arbitrate (and contradict the arena). The mouse path keeps
+            // the per-axis heuristic until its own arena lands.
+            if (!arenaGoverned && YieldsToPan(tx, ty)) { Reset(); return false; }   // cross-axis pan over a scrollable wins
             Promote(abs, tx, ty);
         }
 

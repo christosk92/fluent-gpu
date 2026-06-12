@@ -1,0 +1,1009 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.NumberBox.Style
+  commentId: T:FluentGpu.Controls.NumberBox.Style
+  id: NumberBox.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.NumberBox.Style.DownGlyph
+  - FluentGpu.Controls.NumberBox.Style.FieldHeight
+  - FluentGpu.Controls.NumberBox.Style.MinWidth
+  - FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+  - FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+  - FluentGpu.Controls.NumberBox.Style.PopupPadding
+  - FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+  - FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+  - FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+  - FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+  - FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+  - FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor
+  - FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+  - FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+  - FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+  - FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+  - FluentGpu.Controls.NumberBox.Style.UpGlyph
+  langs:
+  - csharp
+  - vb
+  name: NumberBox.Style
+  nameWithType: NumberBox.Style
+  fullName: FluentGpu.Controls.NumberBox.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Dims from NumberBox.xaml / NumberBox_themeresources.xaml.
+  example: []
+  syntax:
+    content: 'public sealed record NumberBox.Style : IEquatable<NumberBox.Style>'
+    content.vb: Public NotInheritable Class NumberBox.Style Implements IEquatable(Of NumberBox.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.NumberBox.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.NumberBox.Style.MinWidth
+  commentId: P:FluentGpu.Controls.NumberBox.Style.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: NumberBox.Style.MinWidth
+  fullName: FluentGpu.Controls.NumberBox.Style.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Controls.NumberBox.Style.MinWidth*
+- uid: FluentGpu.Controls.NumberBox.Style.FieldHeight
+  commentId: P:FluentGpu.Controls.NumberBox.Style.FieldHeight
+  id: FieldHeight
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: FieldHeight
+  nameWithType: NumberBox.Style.FieldHeight
+  fullName: FluentGpu.Controls.NumberBox.Style.FieldHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FieldHeight
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FieldHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FieldHeight As Single
+  overload: FluentGpu.Controls.NumberBox.Style.FieldHeight*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+  id: SpinButtonWidth
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinButtonWidth
+  nameWithType: NumberBox.Style.SpinButtonWidth
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinButtonWidth
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpinButtonWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpinButtonWidth As Single
+  overload: FluentGpu.Controls.NumberBox.Style.SpinButtonWidth*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+  id: SpinGlyphSize
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinGlyphSize
+  nameWithType: NumberBox.Style.SpinGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinGlyphSize
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpinGlyphSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpinGlyphSize As Single
+  overload: FluentGpu.Controls.NumberBox.Style.SpinGlyphSize*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+  id: SpinButtonMargin
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinButtonMargin
+  nameWithType: NumberBox.Style.SpinButtonMargin
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinButtonMargin
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float SpinButtonMargin { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SpinButtonMargin As Single
+  overload: FluentGpu.Controls.NumberBox.Style.SpinButtonMargin*
+- uid: FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+  commentId: P:FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+  id: PopupSpinButtonSize
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: PopupSpinButtonSize
+  nameWithType: NumberBox.Style.PopupSpinButtonSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupSpinButtonSize
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupSpinButtonSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupSpinButtonSize As Single
+  overload: FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize*
+- uid: FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+  commentId: P:FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+  id: PopupSpinGlyphSize
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: PopupSpinGlyphSize
+  nameWithType: NumberBox.Style.PopupSpinGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupSpinGlyphSize
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupSpinGlyphSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupSpinGlyphSize As Single
+  overload: FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize*
+- uid: FluentGpu.Controls.NumberBox.Style.PopupPadding
+  commentId: P:FluentGpu.Controls.NumberBox.Style.PopupPadding
+  id: PopupPadding
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: PopupPadding
+  nameWithType: NumberBox.Style.PopupPadding
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupPadding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupPadding
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupPadding { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupPadding As Single
+  overload: FluentGpu.Controls.NumberBox.Style.PopupPadding*
+- uid: FluentGpu.Controls.NumberBox.Style.UpGlyph
+  commentId: P:FluentGpu.Controls.NumberBox.Style.UpGlyph
+  id: UpGlyph
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: UpGlyph
+  nameWithType: NumberBox.Style.UpGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.UpGlyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UpGlyph
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string UpGlyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property UpGlyph As String
+  overload: FluentGpu.Controls.NumberBox.Style.UpGlyph*
+- uid: FluentGpu.Controls.NumberBox.Style.DownGlyph
+  commentId: P:FluentGpu.Controls.NumberBox.Style.DownGlyph
+  id: DownGlyph
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: DownGlyph
+  nameWithType: NumberBox.Style.DownGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.DownGlyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DownGlyph
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string DownGlyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property DownGlyph As String
+  overload: FluentGpu.Controls.NumberBox.Style.DownGlyph*
+- uid: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+  commentId: P:FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+  id: PopupIndicatorGlyph
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: PopupIndicatorGlyph
+  nameWithType: NumberBox.Style.PopupIndicatorGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupIndicatorGlyph
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string PopupIndicatorGlyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property PopupIndicatorGlyph As String
+  overload: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph*
+- uid: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+  commentId: P:FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+  id: PopupIndicatorGlyphSize
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: PopupIndicatorGlyphSize
+  nameWithType: NumberBox.Style.PopupIndicatorGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupIndicatorGlyphSize
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupIndicatorGlyphSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupIndicatorGlyphSize As Single
+  overload: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+  id: SpinHoverFill
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinHoverFill
+  nameWithType: NumberBox.Style.SpinHoverFill
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinHoverFill
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpinHoverFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpinHoverFill As ColorF
+  overload: FluentGpu.Controls.NumberBox.Style.SpinHoverFill*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+  id: SpinPressedFill
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinPressedFill
+  nameWithType: NumberBox.Style.SpinPressedFill
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinPressedFill
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpinPressedFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpinPressedFill As ColorF
+  overload: FluentGpu.Controls.NumberBox.Style.SpinPressedFill*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+  id: SpinGlyphColor
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinGlyphColor
+  nameWithType: NumberBox.Style.SpinGlyphColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinGlyphColor
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpinGlyphColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpinGlyphColor As ColorF
+  overload: FluentGpu.Controls.NumberBox.Style.SpinGlyphColor*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+  id: SpinGlyphPressedColor
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinGlyphPressedColor
+  nameWithType: NumberBox.Style.SpinGlyphPressedColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinGlyphPressedColor
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 116
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpinGlyphPressedColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpinGlyphPressedColor As ColorF
+  overload: FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor*
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor
+  commentId: P:FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor
+  id: SpinGlyphDisabledColor
+  parent: FluentGpu.Controls.NumberBox.Style
+  langs:
+  - csharp
+  - vb
+  name: SpinGlyphDisabledColor
+  nameWithType: NumberBox.Style.SpinGlyphDisabledColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinGlyphDisabledColor
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF SpinGlyphDisabledColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SpinGlyphDisabledColor As ColorF
+  overload: FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.NumberBox.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.NumberBox.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<NumberBox.Style>
+  nameWithType: IEquatable<NumberBox.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.NumberBox.Style>
+  nameWithType.vb: IEquatable(Of NumberBox.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.NumberBox.Style)
+  name.vb: IEquatable(Of NumberBox.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.NumberBox.Style.MinWidth*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.MinWidth
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_MinWidth
+  name: MinWidth
+  nameWithType: NumberBox.Style.MinWidth
+  fullName: FluentGpu.Controls.NumberBox.Style.MinWidth
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.NumberBox.Style.FieldHeight*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.FieldHeight
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_FieldHeight
+  name: FieldHeight
+  nameWithType: NumberBox.Style.FieldHeight
+  fullName: FluentGpu.Controls.NumberBox.Style.FieldHeight
+- uid: FluentGpu.Controls.NumberBox.Style.SpinButtonWidth*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinButtonWidth
+  name: SpinButtonWidth
+  nameWithType: NumberBox.Style.SpinButtonWidth
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinButtonWidth
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphSize*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinGlyphSize
+  name: SpinGlyphSize
+  nameWithType: NumberBox.Style.SpinGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphSize
+- uid: FluentGpu.Controls.NumberBox.Style.SpinButtonMargin*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinButtonMargin
+  name: SpinButtonMargin
+  nameWithType: NumberBox.Style.SpinButtonMargin
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinButtonMargin
+- uid: FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_PopupSpinButtonSize
+  name: PopupSpinButtonSize
+  nameWithType: NumberBox.Style.PopupSpinButtonSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupSpinButtonSize
+- uid: FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_PopupSpinGlyphSize
+  name: PopupSpinGlyphSize
+  nameWithType: NumberBox.Style.PopupSpinGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupSpinGlyphSize
+- uid: FluentGpu.Controls.NumberBox.Style.PopupPadding*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.PopupPadding
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_PopupPadding
+  name: PopupPadding
+  nameWithType: NumberBox.Style.PopupPadding
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupPadding
+- uid: FluentGpu.Controls.NumberBox.Style.UpGlyph*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.UpGlyph
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_UpGlyph
+  name: UpGlyph
+  nameWithType: NumberBox.Style.UpGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.UpGlyph
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.NumberBox.Style.DownGlyph*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.DownGlyph
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_DownGlyph
+  name: DownGlyph
+  nameWithType: NumberBox.Style.DownGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.DownGlyph
+- uid: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_PopupIndicatorGlyph
+  name: PopupIndicatorGlyph
+  nameWithType: NumberBox.Style.PopupIndicatorGlyph
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyph
+- uid: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_PopupIndicatorGlyphSize
+  name: PopupIndicatorGlyphSize
+  nameWithType: NumberBox.Style.PopupIndicatorGlyphSize
+  fullName: FluentGpu.Controls.NumberBox.Style.PopupIndicatorGlyphSize
+- uid: FluentGpu.Controls.NumberBox.Style.SpinHoverFill*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinHoverFill
+  name: SpinHoverFill
+  nameWithType: NumberBox.Style.SpinHoverFill
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinHoverFill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.NumberBox.Style.SpinPressedFill*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinPressedFill
+  name: SpinPressedFill
+  nameWithType: NumberBox.Style.SpinPressedFill
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinPressedFill
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphColor*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinGlyphColor
+  name: SpinGlyphColor
+  nameWithType: NumberBox.Style.SpinGlyphColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphColor
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinGlyphPressedColor
+  name: SpinGlyphPressedColor
+  nameWithType: NumberBox.Style.SpinGlyphPressedColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphPressedColor
+- uid: FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor
+  href: FluentGpu.Controls.NumberBox.Style.html#FluentGpu_Controls_NumberBox_Style_SpinGlyphDisabledColor
+  name: SpinGlyphDisabledColor
+  nameWithType: NumberBox.Style.SpinGlyphDisabledColor
+  fullName: FluentGpu.Controls.NumberBox.Style.SpinGlyphDisabledColor

@@ -1,0 +1,1387 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ContentDialog
+  commentId: T:FluentGpu.Controls.ContentDialog
+  id: ContentDialog
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ContentDialog.CloseClick
+  - FluentGpu.Controls.ContentDialog.CloseText
+  - FluentGpu.Controls.ContentDialog.Closed
+  - FluentGpu.Controls.ContentDialog.Create(System.String,System.String,System.String,System.String,System.String,System.String,FluentGpu.Controls.ContentDialog.DefaultBtn)
+  - FluentGpu.Controls.ContentDialog.DefaultButton
+  - FluentGpu.Controls.ContentDialog.Message
+  - FluentGpu.Controls.ContentDialog.OpenOnMount
+  - FluentGpu.Controls.ContentDialog.PartCommandRow
+  - FluentGpu.Controls.ContentDialog.PartContent
+  - FluentGpu.Controls.ContentDialog.PartPlate
+  - FluentGpu.Controls.ContentDialog.PartTitle
+  - FluentGpu.Controls.ContentDialog.Parts
+  - FluentGpu.Controls.ContentDialog.PrimaryClick
+  - FluentGpu.Controls.ContentDialog.PrimaryText
+  - FluentGpu.Controls.ContentDialog.Render
+  - FluentGpu.Controls.ContentDialog.SecondaryClick
+  - FluentGpu.Controls.ContentDialog.SecondaryText
+  - FluentGpu.Controls.ContentDialog.Title
+  - FluentGpu.Controls.ContentDialog.TriggerLabel
+  langs:
+  - csharp
+  - vb
+  name: ContentDialog
+  nameWithType: ContentDialog
+  fullName: FluentGpu.Controls.ContentDialog
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentDialog
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI-style ContentDialog: a modal, page-level smoke scrim with a centered solid card. The dialog is hosted through
+
+    <xref href="FluentGpu.Controls.OverlayHost" data-throw-if-not-resolved="false"></xref> instead of being drawn inside the sample card, so it overlays the whole page.
+
+
+    <p>1:1 with <code>ContentDialog_themeresources.xaml</code>:</p>
+
+    <ul><li>Chrome — smoke #4D000000 (SmokeFillColorDefault), background SolidBackgroundFillColorBase, 1px
+
+    SurfaceStrokeColorDefault border, OverlayCornerRadius 8, dialog padding 24 (ContentDialogPadding), title margin
+
+    0,0,0,12 (ContentDialogTitleMargin), button spacing 8 (ContentDialogButtonSpacing), separator
+
+    CardStrokeColorDefault 0,0,0,1, Min/Max 320×184 / 548×756 (:12-15).</li><li>Motion — open: scale 1.05→1.0 over ControlNormal (250ms) + opacity 0→1 over ControlFaster (83ms, linear);
+
+    close: scale 1.0→1.05 over ControlFast (167ms) + opacity 1→0 over 83ms; both scale legs on the
+
+    ControlFastOutSlowInKeySpline (0,0,0,1) — ContentDialog_themeresources.xaml:77-117 DialogShowing/Hidden
+
+    transitions, driven by the OverlayHost's Modal chrome.</li><li>Keyboard — Enter invokes the <xref href="FluentGpu.Controls.ContentDialog.DefaultButton" data-throw-if-not-resolved="false"></xref> (the accent-styled one); Escape closes with
+
+    <xref href="FluentGpu.Controls.ContentDialogResult.None" data-throw-if-not-resolved="false"></xref> (the overlay's Escape preview); Tab/Shift-Tab CYCLE inside the dialog
+
+    (DialogShowing sets BackgroundElement.TabFocusNavigation=Cycle, :123 — a REAL dispatcher focus scope via the
+
+    host's PopupOptions.FocusTrap). Initial focus lands on the default button (TabIndex ranks it first).</li></ul>
+  example: []
+  syntax:
+    content: 'public sealed class ContentDialog : Component'
+    content.vb: Public NotInheritable Class ContentDialog Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.ContentDialog.TriggerLabel
+  commentId: F:FluentGpu.Controls.ContentDialog.TriggerLabel
+  id: TriggerLabel
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: TriggerLabel
+  nameWithType: ContentDialog.TriggerLabel
+  fullName: FluentGpu.Controls.ContentDialog.TriggerLabel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TriggerLabel
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string TriggerLabel
+    return:
+      type: System.String
+    content.vb: Public TriggerLabel As String
+- uid: FluentGpu.Controls.ContentDialog.Title
+  commentId: F:FluentGpu.Controls.ContentDialog.Title
+  id: Title
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Title
+  nameWithType: ContentDialog.Title
+  fullName: FluentGpu.Controls.ContentDialog.Title
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Title
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Title
+    return:
+      type: System.String
+    content.vb: Public Title As String
+- uid: FluentGpu.Controls.ContentDialog.Message
+  commentId: F:FluentGpu.Controls.ContentDialog.Message
+  id: Message
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Message
+  nameWithType: ContentDialog.Message
+  fullName: FluentGpu.Controls.ContentDialog.Message
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Message
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Message
+    return:
+      type: System.String
+    content.vb: Public Message As String
+- uid: FluentGpu.Controls.ContentDialog.PrimaryText
+  commentId: F:FluentGpu.Controls.ContentDialog.PrimaryText
+  id: PrimaryText
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PrimaryText
+  nameWithType: ContentDialog.PrimaryText
+  fullName: FluentGpu.Controls.ContentDialog.PrimaryText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryText
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string PrimaryText
+    return:
+      type: System.String
+    content.vb: Public PrimaryText As String
+- uid: FluentGpu.Controls.ContentDialog.SecondaryText
+  commentId: F:FluentGpu.Controls.ContentDialog.SecondaryText
+  id: SecondaryText
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: SecondaryText
+  nameWithType: ContentDialog.SecondaryText
+  fullName: FluentGpu.Controls.ContentDialog.SecondaryText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SecondaryText
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string SecondaryText
+    return:
+      type: System.String
+    content.vb: Public SecondaryText As String
+- uid: FluentGpu.Controls.ContentDialog.CloseText
+  commentId: F:FluentGpu.Controls.ContentDialog.CloseText
+  id: CloseText
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: CloseText
+  nameWithType: ContentDialog.CloseText
+  fullName: FluentGpu.Controls.ContentDialog.CloseText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseText
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string CloseText
+    return:
+      type: System.String
+    content.vb: Public CloseText As String
+- uid: FluentGpu.Controls.ContentDialog.OpenOnMount
+  commentId: F:FluentGpu.Controls.ContentDialog.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: ContentDialog.OpenOnMount
+  fullName: FluentGpu.Controls.ContentDialog.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.ContentDialog.DefaultButton
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultButton
+  id: DefaultButton
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: DefaultButton
+  nameWithType: ContentDialog.DefaultButton
+  fullName: FluentGpu.Controls.ContentDialog.DefaultButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultButton
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ContentDialog.DefaultBtn DefaultButton
+    return:
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+    content.vb: Public DefaultButton As ContentDialog.DefaultBtn
+- uid: FluentGpu.Controls.ContentDialog.PrimaryClick
+  commentId: F:FluentGpu.Controls.ContentDialog.PrimaryClick
+  id: PrimaryClick
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PrimaryClick
+  nameWithType: ContentDialog.PrimaryClick
+  fullName: FluentGpu.Controls.ContentDialog.PrimaryClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryClick
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Command callbacks (WinUI PrimaryButtonClick / SecondaryButtonClick / CloseButtonClick).
+  example: []
+  syntax:
+    content: public Action? PrimaryClick
+    return:
+      type: System.Action
+    content.vb: Public PrimaryClick As Action
+- uid: FluentGpu.Controls.ContentDialog.SecondaryClick
+  commentId: F:FluentGpu.Controls.ContentDialog.SecondaryClick
+  id: SecondaryClick
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: SecondaryClick
+  nameWithType: ContentDialog.SecondaryClick
+  fullName: FluentGpu.Controls.ContentDialog.SecondaryClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SecondaryClick
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? SecondaryClick
+    return:
+      type: System.Action
+    content.vb: Public SecondaryClick As Action
+- uid: FluentGpu.Controls.ContentDialog.CloseClick
+  commentId: F:FluentGpu.Controls.ContentDialog.CloseClick
+  id: CloseClick
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: CloseClick
+  nameWithType: ContentDialog.CloseClick
+  fullName: FluentGpu.Controls.ContentDialog.CloseClick
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseClick
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? CloseClick
+    return:
+      type: System.Action
+    content.vb: Public CloseClick As Action
+- uid: FluentGpu.Controls.ContentDialog.Closed
+  commentId: F:FluentGpu.Controls.ContentDialog.Closed
+  id: Closed
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Closed
+  nameWithType: ContentDialog.Closed
+  fullName: FluentGpu.Controls.ContentDialog.Closed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Closed
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Raised once per close with the WinUI <code>ContentDialogResult</code> (the ShowAsync return value):
+        Primary/Secondary for the commands, None for the close button, Escape, or a programmatic close.
+  example: []
+  syntax:
+    content: public Action<ContentDialogResult>? Closed
+    return:
+      type: System.Action{FluentGpu.Controls.ContentDialogResult}
+    content.vb: Public Closed As Action(Of ContentDialogResult)
+- uid: FluentGpu.Controls.ContentDialog.PartPlate
+  commentId: F:FluentGpu.Controls.ContentDialog.PartPlate
+  id: PartPlate
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PartPlate
+  nameWithType: ContentDialog.PartPlate
+  fullName: FluentGpu.Controls.ContentDialog.PartPlate
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartPlate
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The dialog card (WinUI BackgroundElement): fill, border, corners, shadow, min/max sizes… Owned:
+        OnKeyDown (Enter → default button, chained with any modifier-supplied handler), Children (the content ·
+        separator · command-row structure).
+  example: []
+  syntax:
+    content: public const string PartPlate = "Plate"
+    return:
+      type: System.String
+    content.vb: Public Const PartPlate As String = "Plate"
+- uid: FluentGpu.Controls.ContentDialog.PartTitle
+  commentId: F:FluentGpu.Controls.ContentDialog.PartTitle
+  id: PartTitle
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PartTitle
+  nameWithType: ContentDialog.PartTitle
+  fullName: FluentGpu.Controls.ContentDialog.PartTitle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTitle
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The title text (the WinUI Title presenter) — a TextEl part: customize via
+        <code>Parts.Set&lt;TextEl&gt;(ContentDialog.PartTitle, t =&gt; t with { … })</code>. Owned: none (pure styling).
+  example: []
+  syntax:
+    content: public const string PartTitle = "Title"
+    return:
+      type: System.String
+    content.vb: Public Const PartTitle As String = "Title"
+- uid: FluentGpu.Controls.ContentDialog.PartContent
+  commentId: F:FluentGpu.Controls.ContentDialog.PartContent
+  id: PartContent
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PartContent
+  nameWithType: ContentDialog.PartContent
+  fullName: FluentGpu.Controls.ContentDialog.PartContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartContent
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The padded content region above the separator (the WinUI DialogSpace top overlay). Owned: Children
+        (the title + message structure).
+  example: []
+  syntax:
+    content: public const string PartContent = "Content"
+    return:
+      type: System.String
+    content.vb: Public Const PartContent As String = "Content"
+- uid: FluentGpu.Controls.ContentDialog.PartCommandRow
+  commentId: F:FluentGpu.Controls.ContentDialog.PartCommandRow
+  id: PartCommandRow
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: PartCommandRow
+  nameWithType: ContentDialog.PartCommandRow
+  fullName: FluentGpu.Controls.ContentDialog.PartCommandRow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartCommandRow
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The footer command row (WinUI CommandSpace) — built only when a button is shown. Owned: Children
+        (the command buttons: their click handlers, default-button accent, and TabIndex focus-trap ranking).
+  example: []
+  syntax:
+    content: public const string PartCommandRow = "CommandRow"
+    return:
+      type: System.String
+    content.vb: Public Const PartCommandRow As String = "CommandRow"
+- uid: FluentGpu.Controls.ContentDialog.Parts
+  commentId: F:FluentGpu.Controls.ContentDialog.Parts
+  id: Parts
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: ContentDialog.Parts
+  fullName: FluentGpu.Controls.ContentDialog.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.ContentDialog.Create(System.String,System.String,System.String,System.String,System.String,System.String,FluentGpu.Controls.ContentDialog.DefaultBtn)
+  commentId: M:FluentGpu.Controls.ContentDialog.Create(System.String,System.String,System.String,System.String,System.String,System.String,FluentGpu.Controls.ContentDialog.DefaultBtn)
+  id: Create(System.String,System.String,System.String,System.String,System.String,System.String,FluentGpu.Controls.ContentDialog.DefaultBtn)
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Create(string, string, string, string, string, string, DefaultBtn)
+  nameWithType: ContentDialog.Create(string, string, string, string, string, string, ContentDialog.DefaultBtn)
+  fullName: FluentGpu.Controls.ContentDialog.Create(string, string, string, string, string, string, FluentGpu.Controls.ContentDialog.DefaultBtn)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(string triggerLabel, string title, string message, string primaryText = "OK", string secondaryText = "", string closeText = "", ContentDialog.DefaultBtn defaultButton = DefaultBtn.Primary)
+    parameters:
+    - id: triggerLabel
+      type: System.String
+    - id: title
+      type: System.String
+    - id: message
+      type: System.String
+    - id: primaryText
+      type: System.String
+    - id: secondaryText
+      type: System.String
+    - id: closeText
+      type: System.String
+    - id: defaultButton
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(triggerLabel As String, title As String, message As String, primaryText As String = "OK", secondaryText As String = "", closeText As String = "", defaultButton As ContentDialog.DefaultBtn = DefaultBtn.Primary) As Element
+  overload: FluentGpu.Controls.ContentDialog.Create*
+  nameWithType.vb: ContentDialog.Create(String, String, String, String, String, String, ContentDialog.DefaultBtn)
+  fullName.vb: FluentGpu.Controls.ContentDialog.Create(String, String, String, String, String, String, FluentGpu.Controls.ContentDialog.DefaultBtn)
+  name.vb: Create(String, String, String, String, String, String, DefaultBtn)
+- uid: FluentGpu.Controls.ContentDialog.Render
+  commentId: M:FluentGpu.Controls.ContentDialog.Render
+  id: Render
+  parent: FluentGpu.Controls.ContentDialog
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: ContentDialog.Render()
+  fullName: FluentGpu.Controls.ContentDialog.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.ContentDialog.Render*
+references:
+- uid: FluentGpu.Controls.OverlayHost
+  commentId: T:FluentGpu.Controls.OverlayHost
+  href: FluentGpu.Controls.OverlayHost.html
+  name: OverlayHost
+  nameWithType: OverlayHost
+  fullName: FluentGpu.Controls.OverlayHost
+- uid: FluentGpu.Controls.ContentDialog.DefaultButton
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultButton
+  href: FluentGpu.Controls.ContentDialog.html#FluentGpu_Controls_ContentDialog_DefaultButton
+  name: DefaultButton
+  nameWithType: ContentDialog.DefaultButton
+  fullName: FluentGpu.Controls.ContentDialog.DefaultButton
+- uid: FluentGpu.Controls.ContentDialogResult.None
+  commentId: F:FluentGpu.Controls.ContentDialogResult.None
+  href: FluentGpu.Controls.ContentDialogResult.html#FluentGpu_Controls_ContentDialogResult_None
+  name: None
+  nameWithType: ContentDialogResult.None
+  fullName: FluentGpu.Controls.ContentDialogResult.None
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+  commentId: T:FluentGpu.Controls.ContentDialog.DefaultBtn
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ContentDialog.html
+  name: ContentDialog.DefaultBtn
+  nameWithType: ContentDialog.DefaultBtn
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn
+  spec.csharp:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Action{FluentGpu.Controls.ContentDialogResult}
+  commentId: T:System.Action{FluentGpu.Controls.ContentDialogResult}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<ContentDialogResult>
+  nameWithType: Action<ContentDialogResult>
+  fullName: System.Action<FluentGpu.Controls.ContentDialogResult>
+  nameWithType.vb: Action(Of ContentDialogResult)
+  fullName.vb: System.Action(Of FluentGpu.Controls.ContentDialogResult)
+  name.vb: Action(Of ContentDialogResult)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Controls.ContentDialogResult
+    name: ContentDialogResult
+    href: FluentGpu.Controls.ContentDialogResult.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ContentDialogResult
+    name: ContentDialogResult
+    href: FluentGpu.Controls.ContentDialogResult.html
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.ContentDialog.Create*
+  commentId: Overload:FluentGpu.Controls.ContentDialog.Create
+  href: FluentGpu.Controls.ContentDialog.html#FluentGpu_Controls_ContentDialog_Create_System_String_System_String_System_String_System_String_System_String_System_String_FluentGpu_Controls_ContentDialog_DefaultBtn_
+  name: Create
+  nameWithType: ContentDialog.Create
+  fullName: FluentGpu.Controls.ContentDialog.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.ContentDialog.Render*
+  commentId: Overload:FluentGpu.Controls.ContentDialog.Render
+  href: FluentGpu.Controls.ContentDialog.html#FluentGpu_Controls_ContentDialog_Render
+  name: Render
+  nameWithType: ContentDialog.Render
+  fullName: FluentGpu.Controls.ContentDialog.Render

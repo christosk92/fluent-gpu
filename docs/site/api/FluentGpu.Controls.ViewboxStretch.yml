@@ -1,0 +1,182 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ViewboxStretch
+  commentId: T:FluentGpu.Controls.ViewboxStretch
+  id: ViewboxStretch
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ViewboxStretch.Fill
+  - FluentGpu.Controls.ViewboxStretch.None
+  - FluentGpu.Controls.ViewboxStretch.Uniform
+  - FluentGpu.Controls.ViewboxStretch.UniformToFill
+  langs:
+  - csharp
+  - vb
+  name: ViewboxStretch
+  nameWithType: ViewboxStretch
+  fullName: FluentGpu.Controls.ViewboxStretch
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Viewbox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ViewboxStretch
+    path: ../../src/FluentGpu.Controls/Viewbox.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    How a <xref href="FluentGpu.Controls.Viewbox" data-throw-if-not-resolved="false"></xref> scales its child to the available box. Mirrors WinUI <code>Stretch</code>
+        (default <xref href="FluentGpu.Controls.ViewboxStretch.Uniform" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: 'public enum ViewboxStretch : byte'
+    content.vb: Public Enum ViewboxStretch As Byte
+- uid: FluentGpu.Controls.ViewboxStretch.None
+  commentId: F:FluentGpu.Controls.ViewboxStretch.None
+  id: None
+  parent: FluentGpu.Controls.ViewboxStretch
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ViewboxStretch.None
+  fullName: FluentGpu.Controls.ViewboxStretch.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Viewbox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/Viewbox.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.ViewboxStretch
+- uid: FluentGpu.Controls.ViewboxStretch.Fill
+  commentId: F:FluentGpu.Controls.ViewboxStretch.Fill
+  id: Fill
+  parent: FluentGpu.Controls.ViewboxStretch
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: ViewboxStretch.Fill
+  fullName: FluentGpu.Controls.ViewboxStretch.Fill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Viewbox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Controls/Viewbox.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Fill = 1
+    return:
+      type: FluentGpu.Controls.ViewboxStretch
+- uid: FluentGpu.Controls.ViewboxStretch.Uniform
+  commentId: F:FluentGpu.Controls.ViewboxStretch.Uniform
+  id: Uniform
+  parent: FluentGpu.Controls.ViewboxStretch
+  langs:
+  - csharp
+  - vb
+  name: Uniform
+  nameWithType: ViewboxStretch.Uniform
+  fullName: FluentGpu.Controls.ViewboxStretch.Uniform
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Viewbox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Uniform
+    path: ../../src/FluentGpu.Controls/Viewbox.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Uniform = 2
+    return:
+      type: FluentGpu.Controls.ViewboxStretch
+- uid: FluentGpu.Controls.ViewboxStretch.UniformToFill
+  commentId: F:FluentGpu.Controls.ViewboxStretch.UniformToFill
+  id: UniformToFill
+  parent: FluentGpu.Controls.ViewboxStretch
+  langs:
+  - csharp
+  - vb
+  name: UniformToFill
+  nameWithType: ViewboxStretch.UniformToFill
+  fullName: FluentGpu.Controls.ViewboxStretch.UniformToFill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Viewbox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UniformToFill
+    path: ../../src/FluentGpu.Controls/Viewbox.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: UniformToFill = 3
+    return:
+      type: FluentGpu.Controls.ViewboxStretch
+references:
+- uid: FluentGpu.Controls.Viewbox
+  commentId: T:FluentGpu.Controls.Viewbox
+  href: FluentGpu.Controls.Viewbox.html
+  name: Viewbox
+  nameWithType: Viewbox
+  fullName: FluentGpu.Controls.Viewbox
+- uid: FluentGpu.Controls.ViewboxStretch.Uniform
+  commentId: F:FluentGpu.Controls.ViewboxStretch.Uniform
+  href: FluentGpu.Controls.ViewboxStretch.html#FluentGpu_Controls_ViewboxStretch_Uniform
+  name: Uniform
+  nameWithType: ViewboxStretch.Uniform
+  fullName: FluentGpu.Controls.ViewboxStretch.Uniform
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ViewboxStretch
+  commentId: T:FluentGpu.Controls.ViewboxStretch
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ViewboxStretch.html
+  name: ViewboxStretch
+  nameWithType: ViewboxStretch
+  fullName: FluentGpu.Controls.ViewboxStretch

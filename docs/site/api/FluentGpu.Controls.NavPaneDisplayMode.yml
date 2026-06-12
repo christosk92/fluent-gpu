@@ -1,0 +1,203 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.NavPaneDisplayMode
+  commentId: T:FluentGpu.Controls.NavPaneDisplayMode
+  id: NavPaneDisplayMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.NavPaneDisplayMode.Auto
+  - FluentGpu.Controls.NavPaneDisplayMode.Left
+  - FluentGpu.Controls.NavPaneDisplayMode.LeftCompact
+  - FluentGpu.Controls.NavPaneDisplayMode.LeftMinimal
+  - FluentGpu.Controls.NavPaneDisplayMode.Top
+  langs:
+  - csharp
+  - vb
+  name: NavPaneDisplayMode
+  nameWithType: NavPaneDisplayMode
+  fullName: FluentGpu.Controls.NavPaneDisplayMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NavPaneDisplayMode
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>NavigationViewPaneDisplayMode</code> (NavigationView.idl): Auto adapts by width; Left/LeftCompact/
+        LeftMinimal force a left-pane mode; <xref href="FluentGpu.Controls.NavPaneDisplayMode.Top" data-throw-if-not-resolved="false"></xref> renders the horizontal top bar with overflow.
+  example: []
+  syntax:
+    content: 'public enum NavPaneDisplayMode : byte'
+    content.vb: Public Enum NavPaneDisplayMode As Byte
+- uid: FluentGpu.Controls.NavPaneDisplayMode.Auto
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.Auto
+  id: Auto
+  parent: FluentGpu.Controls.NavPaneDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: NavPaneDisplayMode.Auto
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.NavPaneDisplayMode
+- uid: FluentGpu.Controls.NavPaneDisplayMode.Left
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.Left
+  id: Left
+  parent: FluentGpu.Controls.NavPaneDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: NavPaneDisplayMode.Left
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Left = 1
+    return:
+      type: FluentGpu.Controls.NavPaneDisplayMode
+- uid: FluentGpu.Controls.NavPaneDisplayMode.LeftCompact
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.LeftCompact
+  id: LeftCompact
+  parent: FluentGpu.Controls.NavPaneDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: LeftCompact
+  nameWithType: NavPaneDisplayMode.LeftCompact
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.LeftCompact
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftCompact
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftCompact = 2
+    return:
+      type: FluentGpu.Controls.NavPaneDisplayMode
+- uid: FluentGpu.Controls.NavPaneDisplayMode.LeftMinimal
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.LeftMinimal
+  id: LeftMinimal
+  parent: FluentGpu.Controls.NavPaneDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: LeftMinimal
+  nameWithType: NavPaneDisplayMode.LeftMinimal
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.LeftMinimal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LeftMinimal
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: LeftMinimal = 3
+    return:
+      type: FluentGpu.Controls.NavPaneDisplayMode
+- uid: FluentGpu.Controls.NavPaneDisplayMode.Top
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.Top
+  id: Top
+  parent: FluentGpu.Controls.NavPaneDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: NavPaneDisplayMode.Top
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NavigationView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/NavigationView.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 4
+    return:
+      type: FluentGpu.Controls.NavPaneDisplayMode
+references:
+- uid: FluentGpu.Controls.NavPaneDisplayMode.Top
+  commentId: F:FluentGpu.Controls.NavPaneDisplayMode.Top
+  href: FluentGpu.Controls.NavPaneDisplayMode.html#FluentGpu_Controls_NavPaneDisplayMode_Top
+  name: Top
+  nameWithType: NavPaneDisplayMode.Top
+  fullName: FluentGpu.Controls.NavPaneDisplayMode.Top
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.NavPaneDisplayMode
+  commentId: T:FluentGpu.Controls.NavPaneDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NavPaneDisplayMode.html
+  name: NavPaneDisplayMode
+  nameWithType: NavPaneDisplayMode
+  fullName: FluentGpu.Controls.NavPaneDisplayMode

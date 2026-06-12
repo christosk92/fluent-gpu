@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class ReorderList | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class ReorderList | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="Reorder geometry for a one-axis item strip (the WinUI live-reorder model — ListViewBase_Partial_Reorder.cpp): given the items&#39; resting main-axis extents and the dragged item&#39;s accumulated drag delta (DragEventArgs.TotalDy for a vertical list / TotalDx for a horizontal strip), it computes the PENDING insertion slot under the pointer (midpoint rule: the dragged item&#39;s centre crossing a sibling&#39;s midpoint claims its slot — the engine analogue of IItemLookupPanel.GetClosestElementInfo + LiveReorderHelper::MovedItems::GetDragOverIndex, ListViewBase_Partial_Reorder.cpp:984-1063),the dwell-committed TARGET slot — WinUI moves displaced items only after the drag-over index has been stable for the live-reorder timer (200ms list / 300ms grid — LISTVIEW_LIVEREORDER_TIMER / GRIDVIEW_LIVEREORDER_TIMER, ListViewBase_Partial_Reorder.cpp:50-51), andper-sibling displacement hints (): items between the dragged slot and the target shift by one full dragged-extent (+spacing), the live-reorder &quot;items part to make room&quot; motion (LiveReorderTimerTickHandler → MoveItemsForLiveReorder, ListViewBase_Partial_Reorder.cpp:2125-2158). Consumers (ListView/GridView/TabView/TreeView item hosts) wire it to the drag lifecycle: Begin in OnDragStarted, Update(e.TotalDy) in OnDragDelta, Advance(dtMs) from the frame clock; when Advance commits a new target, re-render with the children ORDER projected to it ( — stable keys keep node identity) and a LayoutTransition (Animate) on every item: displaced siblings genuinely change slots, so the engine&#39;s FLIP pipeline animates the part-to-make-room motion, and Input.DragController re-anchors the pointer-held visual to its moved slot (no jump).  remains for offset-hint consumers — but an authored OffsetX/Y hint must NOT be combined with Animate on the same node: FLIP position tracks own the whole translate channel (CompositeOp.Replace — AnimEngine.ReframePosition) and would stomp the hint at seed and settle. Complete() in OnDragCompleted fires  with the collection move; Cancel() in OnDragCanceled drops every hint. All state is grow-only — steady-state reorder (drag at pointer rate) allocates nothing. TWO-DIMENSIONAL MODE ( /  / ) absorbs the GridView live-reorder geometry: the pending slot comes from the dragged tile&#39;s accumulated (dx,dy) against the grid (row from the vertical stride, column from the realized column width), with the 300ms grid dwell (GRIDVIEW_LIVEREORDER_TIMER = 300ms — ListViewBase_Partial_Reorder.cpp:51) re-armed on every drag-over change. A one-slot grid shift can WRAP A ROW (the trailing tile of a row dropping to the head of the next), so the 2-D displacement hint carries BOTH axes. The dwell ticker (), the moved-items projection ( — row-major, identical to 1-D),  and  are shared with the 1-D path unchanged.  = 0 selects the 1-D path;  sets it.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_ReorderList.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.ReorderList%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.ReorderList">
+
+
+
+  <h1 id="FluentGpu_Controls_ReorderList" data-uid="FluentGpu.Controls.ReorderList" class="text-break">
+Class ReorderList  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L40"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>Reorder geometry for a one-axis item strip (the WinUI live-reorder model — ListViewBase_Partial_Reorder.cpp):
+given the items' resting main-axis extents and the dragged item's accumulated drag delta
+(<code>DragEventArgs.TotalDy</code> for a vertical list / <code>TotalDx</code> for a horizontal strip), it computes</p>
+<ul><li>the PENDING insertion slot under the pointer (midpoint rule: the dragged item's centre crossing a sibling's
+midpoint claims its slot — the engine analogue of <code>IItemLookupPanel.GetClosestElementInfo</code> +
+<code>LiveReorderHelper::MovedItems::GetDragOverIndex</code>, ListViewBase_Partial_Reorder.cpp:984-1063),</li><li>the dwell-committed TARGET slot — WinUI moves displaced items only after the drag-over index has been stable
+for the live-reorder timer (200ms list / 300ms grid — LISTVIEW_LIVEREORDER_TIMER / GRIDVIEW_LIVEREORDER_TIMER,
+ListViewBase_Partial_Reorder.cpp:50-51), and</li><li>per-sibling displacement hints (<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_">OffsetFor(int)</a>): items between the dragged slot and the target shift
+by one full dragged-extent (+spacing), the live-reorder "items part to make room" motion
+(LiveReorderTimerTickHandler → MoveItemsForLiveReorder, ListViewBase_Partial_Reorder.cpp:2125-2158).</li></ul>
+<p>Consumers (ListView/GridView/TabView/TreeView item hosts) wire it to the drag lifecycle: <code>Begin</code> in
+<code>OnDragStarted</code>, <code>Update(e.TotalDy)</code> in <code>OnDragDelta</code>, <code>Advance(dtMs)</code> from the frame clock;
+when <code>Advance</code> commits a new target, re-render with the children ORDER projected to it
+(<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_ProjectOrder_System_Span_System_Int32__">ProjectOrder(Span&lt;int&gt;)</a> — stable keys keep node identity) and a <code>LayoutTransition</code> (<code>Animate</code>) on
+every item: displaced siblings genuinely change slots, so the engine's FLIP pipeline animates the
+part-to-make-room motion, and <code>Input.DragController</code> re-anchors the pointer-held visual to its moved slot (no
+jump). <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_">OffsetFor(int)</a> remains for offset-hint consumers — but an authored <code>OffsetX/Y</code> hint must NOT
+be combined with <code>Animate</code> on the same node: FLIP position tracks own the whole translate channel
+(<code>CompositeOp.Replace</code> — AnimEngine.ReframePosition) and would stomp the hint at seed and settle.
+<code>Complete()</code> in <code>OnDragCompleted</code> fires <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OnCommit">OnCommit</a> with the collection move;
+<code>Cancel()</code> in <code>OnDragCanceled</code> drops every hint. All state is grow-only — steady-state reorder
+(drag at pointer rate) allocates nothing.</p>
+<p>TWO-DIMENSIONAL MODE (<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin2D_System_Int32_System_Int32_System_Int32_">Begin2D(int, int, int)</a> / <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Update2D_System_Single_System_Single_System_Single_System_Single_">Update2D(float, float, float, float)</a> / <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor2D_System_Int32_System_Single_System_Single_System_Single__System_Single__">OffsetFor2D(int, float, float, out float, out float)</a>) absorbs the
+GridView live-reorder geometry: the pending slot comes from the dragged tile's accumulated (dx,dy) against the grid
+(row from the vertical stride, column from the realized column width), with the 300ms grid dwell
+(GRIDVIEW_LIVEREORDER_TIMER = 300ms — ListViewBase_Partial_Reorder.cpp:51) re-armed on every drag-over change. A
+one-slot grid shift can WRAP A ROW (the trailing tile of a row dropping to the head of the next), so the 2-D
+displacement hint carries BOTH axes. The dwell ticker (<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Advance_System_Single_">Advance(float)</a>), the moved-items projection
+(<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_ProjectOrder_System_Span_System_Int32__">ProjectOrder(Span&lt;int&gt;)</a> — row-major, identical to 1-D), <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Complete">Complete()</a> and <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Cancel">Cancel()</a> are
+shared with the 1-D path unchanged. <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Columns">Columns</a> = 0 selects the 1-D path; <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin2D_System_Int32_System_Int32_System_Int32_">Begin2D(int, int, int)</a> sets it.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class ReorderList</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">ReorderList</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_ReorderList_GridDwellMs" data-uid="FluentGpu.Controls.ReorderList.GridDwellMs">
+  GridDwellMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L47"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>GridView's dwell — GRIDVIEW_LIVEREORDER_TIMER = 300ms (ListViewBase_Partial_Reorder.cpp:51).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float GridDwellMs = 300</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ReorderList_ListDwellMs" data-uid="FluentGpu.Controls.ReorderList.ListDwellMs">
+  ListDwellMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L44"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Hint dwell before displaced items shift — LISTVIEW_LIVEREORDER_TIMER = 200ms
+(ListViewBase_Partial_Reorder.cpp:50).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float ListDwellMs = 200</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_ReorderList_OnCommit" data-uid="FluentGpu.Controls.ReorderList.OnCommit">
+  OnCommit
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L64"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The collection move, fired by <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Complete">Complete()</a> when the item lands on a new slot:
+(fromIndex, toIndex) in the ORIGINAL order — remove at <code>from</code>, insert at <code>to</code>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;int, int&gt;? OnCommit</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-2">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_ReorderList_Columns_" data-uid="FluentGpu.Controls.ReorderList.Columns*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Columns" data-uid="FluentGpu.Controls.ReorderList.Columns">
+  Columns
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L72"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Grid column count for the 2-D mode (0 ⇒ 1-D mode). Set by <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin2D_System_Int32_System_Int32_System_Int32_">Begin2D(int, int, int)</a>; the 1-D
+<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_">Begin(int, ReadOnlySpan&lt;float&gt;, float)</a> overloads leave it 0.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Columns { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Count_" data-uid="FluentGpu.Controls.ReorderList.Count*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Count" data-uid="FluentGpu.Controls.ReorderList.Count">
+  Count
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Count { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_DraggedIndex_" data-uid="FluentGpu.Controls.ReorderList.DraggedIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_DraggedIndex" data-uid="FluentGpu.Controls.ReorderList.DraggedIndex">
+  DraggedIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L68"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int DraggedIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_DraggedTargetStart_" data-uid="FluentGpu.Controls.ReorderList.DraggedTargetStart*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_DraggedTargetStart" data-uid="FluentGpu.Controls.ReorderList.DraggedTargetStart">
+  DraggedTargetStart
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L83"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The resting main-axis start the dragged item will occupy at the current <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_TargetIndex">TargetIndex</a> —
+the settle target for a consumer-drawn drop preview.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float DraggedTargetStart { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_DwellMs_" data-uid="FluentGpu.Controls.ReorderList.DwellMs*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_DwellMs" data-uid="FluentGpu.Controls.ReorderList.DwellMs">
+  DwellMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Dwell before a new pending slot becomes the shown target (WinUI restarts the timer on every drag-over
+index change — ListViewBase_Partial_Reorder.cpp:1068-1074). 0 ⇒ hints follow the pointer immediately.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float DwellMs { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_IsActive_" data-uid="FluentGpu.Controls.ReorderList.IsActive*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_IsActive" data-uid="FluentGpu.Controls.ReorderList.IsActive">
+  IsActive
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L66"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsActive { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_PendingIndex_" data-uid="FluentGpu.Controls.ReorderList.PendingIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_PendingIndex" data-uid="FluentGpu.Controls.ReorderList.PendingIndex">
+  PendingIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L75"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The latest computed insertion slot under the pointer (becomes <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_TargetIndex">TargetIndex</a> after the dwell).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int PendingIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_TargetIndex_" data-uid="FluentGpu.Controls.ReorderList.TargetIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_TargetIndex" data-uid="FluentGpu.Controls.ReorderList.TargetIndex">
+  TargetIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The dwell-committed slot the displacement hints currently show (= <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_DraggedIndex">DraggedIndex</a> until the
+first dwell elapses).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int TargetIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_ReorderList_Advance_" data-uid="FluentGpu.Controls.ReorderList.Advance*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Advance_System_Single_" data-uid="FluentGpu.Controls.ReorderList.Advance(System.Single)">
+  Advance(float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L239"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Advance the live-reorder dwell (drive from the frame clock while a drag is active). Returns true when
+the shown target changed — re-render the siblings with the new <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_">OffsetFor(int)</a> hints (their
+<code>LayoutTransition</code> FLIP animates the shift).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Advance(float dtMs)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>dtMs</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Begin_" data-uid="FluentGpu.Controls.ReorderList.Begin*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Begin_System_Int32_System_Int32_System_Single_System_Single_" data-uid="FluentGpu.Controls.ReorderList.Begin(System.Int32,System.Int32,System.Single,System.Single)">
+  Begin(int, int, float, float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L125"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Uniform-extent overload (fixed-row ListView / tab strip): all <code class="paramref">count</code> items share
+<code class="paramref">itemExtent</code>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Begin(int draggedIndex, int count, float itemExtent, float spacing = 0)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>draggedIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>count</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemExtent</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>spacing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Begin_" data-uid="FluentGpu.Controls.ReorderList.Begin*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_" data-uid="FluentGpu.Controls.ReorderList.Begin(System.Int32,System.ReadOnlySpan{System.Single},System.Single)">
+  Begin(int, ReadOnlySpan&lt;float&gt;, float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Start a reorder for <code class="paramref">draggedIndex</code> over items with the given resting main-axis
+<code class="paramref">itemExtents</code>, separated by <code class="paramref">spacing</code> (the container's Gap). Copies the
+extents into grow-only storage (no per-drag steady alloc once grown).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Begin(int draggedIndex, ReadOnlySpan&lt;float&gt; itemExtents, float spacing = 0)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>draggedIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>itemExtents</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>spacing</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Begin2D_" data-uid="FluentGpu.Controls.ReorderList.Begin2D*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Begin2D_System_Int32_System_Int32_System_Int32_" data-uid="FluentGpu.Controls.ReorderList.Begin2D(System.Int32,System.Int32,System.Int32)">
+  Begin2D(int, int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L153"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Begin a 2-D (grid) reorder for <code class="paramref">draggedIndex</code> over <code class="paramref">count</code> tiles laid
+out row-major in <code class="paramref">columns</code> columns (absorbs the GridView live-reorder geometry). No resting
+extents are stored — the 2-D slot math is grid-geometric (<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Update2D_System_Single_System_Single_System_Single_System_Single_">Update2D(float, float, float, float)</a> takes the realized column width
+and row stride per move). Sets <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Columns">Columns</a> &gt; 0 to select the 2-D path.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Begin2D(int draggedIndex, int count, int columns)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>draggedIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>count</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>columns</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Cancel_" data-uid="FluentGpu.Controls.ReorderList.Cancel*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Cancel" data-uid="FluentGpu.Controls.ReorderList.Cancel">
+  Cancel()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L306"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Abort the reorder (drag canceled): drop every hint without committing.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Cancel()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Complete_" data-uid="FluentGpu.Controls.ReorderList.Complete*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Complete" data-uid="FluentGpu.Controls.ReorderList.Complete">
+  Complete()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L295"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Finish the reorder at the LATEST pending slot (the release point under the pointer — the dwell shown
+state never delays the actual drop). Resets all hints BEFORE firing <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OnCommit">OnCommit</a>, so the commit's
+re-render reads zero offsets. Returns the destination index (−1 when idle).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Complete()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_MoveTarget_" data-uid="FluentGpu.Controls.ReorderList.MoveTarget*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_MoveTarget_System_Int32_" data-uid="FluentGpu.Controls.ReorderList.MoveTarget(System.Int32)">
+  MoveTarget(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L253"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Keyboard lift-mode move (rbd a11y — E5-L3): shift the shown target directly by <code class="paramref">delta</code>
+slots, clamped to the list, with NO dwell (a deliberate keystroke needs no stabilization timer; pending and
+target stay in lockstep so <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Complete">Complete()</a> commits exactly what the user sees). Returns true when the
+shown target changed — re-render with <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_ProjectOrder_System_Span_System_Int32__">ProjectOrder(Span&lt;int&gt;)</a> and the FLIP pipeline animates the move.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool MoveTarget(int delta)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>delta</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Move_" data-uid="FluentGpu.Controls.ReorderList.Move*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Move__1_System_Collections_Generic_IList___0__System_Int32_System_Int32_" data-uid="FluentGpu.Controls.ReorderList.Move``1(System.Collections.Generic.IList{``0},System.Int32,System.Int32)">
+  Move&lt;T&gt;(IList&lt;T&gt;, int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L312"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Apply a committed reorder to a collection in place: remove at <code class="paramref">from</code>, insert at
+<code class="paramref">to</code> — exactly the <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OnCommit">OnCommit</a> payload, and exactly WinUI's drop commit
+(ListViewBase::ReorderItemsTo → RemoveAt(realItemIndex) + InsertAt(insertIndex),
+ListViewBase_Partial_Reorder.cpp:1536-1537). Out-of-range / no-op indices are ignored. Cold path (one drop).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static void Move&lt;T&gt;(IList&lt;T&gt; list, int from, int to)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>list</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.ilist-1">IList</a>&lt;T&gt;</dt>
+    <dd></dd>
+    <dt><code>from</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>to</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>T</code></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_OffsetFor_" data-uid="FluentGpu.Controls.ReorderList.OffsetFor*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_" data-uid="FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)">
+  OffsetFor(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L267"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The main-axis displacement hint for sibling <code class="paramref">index</code> at the current shown target:
+items between the dragged slot and the target shift one dragged-extent (+spacing) to make room; everything
+else (and the dragged item itself) is 0.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float OffsetFor(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_OffsetFor2D_" data-uid="FluentGpu.Controls.ReorderList.OffsetFor2D*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_OffsetFor2D_System_Int32_System_Single_System_Single_System_Single__System_Single__" data-uid="FluentGpu.Controls.ReorderList.OffsetFor2D(System.Int32,System.Single,System.Single,System.Single@,System.Single@)">
+  OffsetFor2D(int, float, float, out float, out float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L187"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 2-D per-tile displacement hint at the current shown target: a tile in the block between the dragged
+slot and the target shifts by ONE slot toward the vacated source (row-major), which can WRAP A ROW — so the hint
+carries both axes (<code class="paramref">dx</code>, <code class="paramref">dy</code>). The dragged tile and everything outside the
+block get (0,0). A verbatim port of the GridView 2-D OffsetFor (ListViewBase_Partial_Reorder.cpp:2125-2158).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void OffsetFor2D(int index, float colWidth, float rowStride, out float dx, out float dy)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>colWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowStride</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>dx</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>dy</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_ProjectOrder_" data-uid="FluentGpu.Controls.ReorderList.ProjectOrder*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_ProjectOrder_System_Span_System_Int32__" data-uid="FluentGpu.Controls.ReorderList.ProjectOrder(System.Span{System.Int32})">
+  ProjectOrder(Span&lt;int&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L281"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Fill <code class="paramref">order</code> (length ≥ <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Count">Count</a>) with ORIGINAL item indices in the current
+dwell-committed projected order: the dragged item occupies <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_TargetIndex">TargetIndex</a>, everything else keeps its
+relative order (the live-reorder &quot;moved items&quot; view — LiveReorderHelper::MovedItems,
+ListViewBase_Partial_Reorder.cpp:2125-2157). Re-render the children from this projection (stable keys!) with a
+<code>LayoutTransition</code> and the FLIP pipeline animates the displaced siblings. Span-filling — 0 alloc.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void ProjectOrder(Span&lt;int&gt; order)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>order</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Update_" data-uid="FluentGpu.Controls.ReorderList.Update*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Update_System_Single_" data-uid="FluentGpu.Controls.ReorderList.Update(System.Single)">
+  Update(float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L207"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Recompute the pending slot from the dragged item's accumulated main-axis translation
+(<code>DragEventArgs.TotalDy</code> / <code>TotalDx</code>). Midpoints are evaluated in RESTING coordinates, so the hint
+motion never feeds back into the slot math. Returns true when the pending slot changed (the dwell re-arms —
+ListViewBase_Partial_Reorder.cpp:1068-1074).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Update(float dragDelta)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>dragDelta</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_ReorderList_Update2D_" data-uid="FluentGpu.Controls.ReorderList.Update2D*"></a>
+
+  <h3 id="FluentGpu_Controls_ReorderList_Update2D_System_Single_System_Single_System_Single_System_Single_" data-uid="FluentGpu.Controls.ReorderList.Update2D(System.Single,System.Single,System.Single,System.Single)">
+  Update2D(float, float, float, float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/ReorderList.cs/#L169"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Recompute the 2-D pending slot from the dragged tile's accumulated translation
+(<code class="paramref">totalDx</code>, <code class="paramref">totalDy</code>): column from <code class="paramref">colWidth</code>, row from
+<code class="paramref">rowStride</code>, clamped to the grid. Returns true when the pending slot changed (the dwell re-arms
+to <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_DwellMs">DwellMs</a> — already 300 for the grid preset; ListViewBase_Partial_Reorder.cpp:1068-1074). A
+verbatim port of the GridView 2-D update.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Update2D(float totalDx, float totalDy, float colWidth, float rowStride)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>totalDx</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>totalDy</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>colWidth</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>rowStride</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

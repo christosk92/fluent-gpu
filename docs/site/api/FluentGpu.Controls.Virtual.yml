@@ -1,0 +1,1876 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Virtual
+  commentId: T:FluentGpu.Controls.Virtual
+  id: Virtual
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  - FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.GridBound(System.Int32,System.Int32,System.Single,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  - FluentGpu.Controls.Virtual.GroupedList(System.Int32,System.Int32[],System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Scene.GroupedListVirtualLayout@,System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.HorizontalGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.LinedFlow(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.Single},System.Single,System.Single,System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.List(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  - FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  - FluentGpu.Controls.Virtual.SpanGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  - FluentGpu.Controls.Virtual.VariableList(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  langs:
+  - csharp
+  - vb
+  name: Virtual
+  nameWithType: Virtual
+  fullName: FluentGpu.Controls.Virtual
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Virtual
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Fluent factories for virtualized collections. All recycle over the slab free-list and keep a 0-alloc
+        in-window scroll. <xref href="FluentGpu.Controls.Virtual.Custom(System.Int32%2cFluentGpu.Scene.IVirtualLayout%2cSystem.Func%7bSystem.Int32%2cFluentGpu.Dsl.Element%7d%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Int32%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> takes any <xref href="FluentGpu.Scene.IVirtualLayout" data-throw-if-not-resolved="false"></xref> you implement. The returned
+        <xref href="FluentGpu.Reconciler.VirtualListEl" data-throw-if-not-resolved="false"></xref> record lives in FluentGpu.Reconciler (the reconciler diffs it directly).
+  example: []
+  syntax:
+    content: public static class Virtual
+    content.vb: Public Module Virtual
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.Virtual.List(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.List(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  id: List(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: List(int, float, Func<int, Element>, Func<int, string>?, int)
+  nameWithType: Virtual.List(int, float, Func<int, Element>, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.List(int, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: List
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A vertically-virtualized uniform list (the WaveeMusic track-list shape).
+  example: []
+  syntax:
+    content: public static VirtualListEl List(int itemCount, float itemExtent, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 4)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: itemExtent
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function List(itemCount As Integer, itemExtent As Single, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 4) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.List*
+  nameWithType.vb: Virtual.List(Integer, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.List(Integer, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: List(Integer, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  id: Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: Grid(int, int, float, float, Func<int, Element>, Func<int, string>?, int)
+  nameWithType: Virtual.Grid(int, int, float, float, Func<int, Element>, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.Grid(int, int, float, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A vertically-virtualized uniform card GRID (album/artist shelves) — virtualizes by row.
+  example: []
+  syntax:
+    content: public static VirtualListEl Grid(int itemCount, int columns, float itemHeight, float gap, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 2)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: columns
+      type: System.Int32
+    - id: itemHeight
+      type: System.Single
+    - id: gap
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function Grid(itemCount As Integer, columns As Integer, itemHeight As Single, gap As Single, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 2) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.Grid*
+  nameWithType.vb: Virtual.Grid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.Grid(Integer, Integer, Single, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: Grid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  id: Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: Custom(int, IVirtualLayout, Func<int, Element>, Func<int, string>?, int, bool)
+  nameWithType: Virtual.Custom(int, IVirtualLayout, Func<int, Element>, Func<int, string>?, int, bool)
+  fullName: FluentGpu.Controls.Virtual.Custom(int, FluentGpu.Scene.IVirtualLayout, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Custom
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A virtualized collection with ANY custom <xref href="FluentGpu.Scene.IVirtualLayout" data-throw-if-not-resolved="false"></xref> you supply.
+  example: []
+  syntax:
+    content: public static VirtualListEl Custom(int itemCount, IVirtualLayout layout, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: layout
+      type: FluentGpu.Scene.IVirtualLayout
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    - id: horizontal
+      type: System.Boolean
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function Custom(itemCount As Integer, layout As IVirtualLayout, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 4, horizontal As Boolean = False) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.Custom*
+  nameWithType.vb: Virtual.Custom(Integer, IVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  fullName.vb: FluentGpu.Controls.Virtual.Custom(Integer, FluentGpu.Scene.IVirtualLayout, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer, Boolean)
+  name.vb: Custom(Integer, IVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+- uid: FluentGpu.Controls.Virtual.VariableList(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.VariableList(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  id: VariableList(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: VariableList(int, float, Func<int, Element>, Func<int, string>?, int)
+  nameWithType: Virtual.VariableList(int, float, Func<int, Element>, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.VariableList(int, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VariableList
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A vertically-virtualized list of variable-height rows (Fenwick extent table + scroll anchoring) —
+        the legacy built-in variable path (<code>Layout = null</code>). The seam-shaped equivalent is
+        <xref href="FluentGpu.Controls.Virtual.Measured(System.Int32%2cFluentGpu.Scene.IMeasuredVirtualLayout%2cSystem.Func%7bSystem.Int32%2cFluentGpu.Dsl.Element%7d%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Int32%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> with a <xref href="FluentGpu.Scene.MeasuredStackVirtualLayout" data-throw-if-not-resolved="false"></xref> (E11-L0), which custom layouts mirror.
+  example: []
+  syntax:
+    content: public static VirtualListEl VariableList(int itemCount, float estimatedExtent, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 4)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: estimatedExtent
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function VariableList(itemCount As Integer, estimatedExtent As Single, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 4) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.VariableList*
+  nameWithType.vb: Virtual.VariableList(Integer, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.VariableList(Integer, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: VariableList(Integer, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  id: Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: Measured(int, IMeasuredVirtualLayout, Func<int, Element>, Func<int, string>?, int, bool)
+  nameWithType: Virtual.Measured(int, IMeasuredVirtualLayout, Func<int, Element>, Func<int, string>?, int, bool)
+  fullName: FluentGpu.Controls.Virtual.Measured(int, FluentGpu.Scene.IMeasuredVirtualLayout, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Measured
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A virtualized collection over ANY variable-extent <xref href="FluentGpu.Scene.IMeasuredVirtualLayout" data-throw-if-not-resolved="false"></xref> (E11-L0): rows
+        realize at the layout's estimate, correct to their measured extent on arrange, and the engine re-pins the
+        scroll anchor across corrections. The layout is STATEFUL — create it once (hoist in a <code>UseMemo</code>) and
+        reuse it across renders.
+  example: []
+  syntax:
+    content: public static VirtualListEl Measured(int itemCount, IMeasuredVirtualLayout layout, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: layout
+      type: FluentGpu.Scene.IMeasuredVirtualLayout
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    - id: horizontal
+      type: System.Boolean
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function Measured(itemCount As Integer, layout As IMeasuredVirtualLayout, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 4, horizontal As Boolean = False) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.Measured*
+  nameWithType.vb: Virtual.Measured(Integer, IMeasuredVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  fullName.vb: FluentGpu.Controls.Virtual.Measured(Integer, FluentGpu.Scene.IMeasuredVirtualLayout, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer, Boolean)
+  name.vb: Measured(Integer, IMeasuredVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+- uid: FluentGpu.Controls.Virtual.LinedFlow(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.Single},System.Single,System.Single,System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.LinedFlow(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.Single},System.Single,System.Single,System.Func{System.Int32,System.String},System.Int32)
+  id: LinedFlow(System.Int32,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.Single},System.Single,System.Single,System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: LinedFlow(int, float, Func<int, Element>, Func<int, float>?, float, float, Func<int, string>?, int)
+  nameWithType: Virtual.LinedFlow(int, float, Func<int, Element>, Func<int, float>?, float, float, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.LinedFlow(int, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, float>?, float, float, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LinedFlow
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The WinUI <code>LinedFlowLayout</code> photo-wall (ItemsView's signature layout): uniform-height lines,
+        per-item width = aspect × lineHeight, wrapping at the viewport edge. The layout instance is stateful — reuse
+        the returned element's <xref href="FluentGpu.Reconciler.VirtualListEl.Layout" data-throw-if-not-resolved="false"></xref> or hoist your own <xref href="FluentGpu.Scene.LinedFlowLayout" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public static VirtualListEl LinedFlow(int itemCount, float lineHeight, Func<int, Element> renderItem, Func<int, float>? aspectRatio = null, float lineSpacing = 0, float minItemSpacing = 0, Func<int, string>? keyOf = null, int overscan = 8)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: lineHeight
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: aspectRatio
+      type: System.Func{System.Int32,System.Single}
+    - id: lineSpacing
+      type: System.Single
+    - id: minItemSpacing
+      type: System.Single
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function LinedFlow(itemCount As Integer, lineHeight As Single, renderItem As Func(Of Integer, Element), aspectRatio As Func(Of Integer, Single) = Nothing, lineSpacing As Single = 0, minItemSpacing As Single = 0, keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 8) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.LinedFlow*
+  nameWithType.vb: Virtual.LinedFlow(Integer, Single, Func(Of Integer, Element), Func(Of Integer, Single), Single, Single, Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.LinedFlow(Integer, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, Single), Single, Single, System.Func(Of Integer, String), Integer)
+  name.vb: LinedFlow(Integer, Single, Func(Of Integer, Element), Func(Of Integer, Single), Single, Single, Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.GroupedList(System.Int32,System.Int32[],System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Scene.GroupedListVirtualLayout@,System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.GroupedList(System.Int32,System.Int32[],System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Scene.GroupedListVirtualLayout@,System.Func{System.Int32,System.String},System.Int32)
+  id: GroupedList(System.Int32,System.Int32[],System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},FluentGpu.Scene.GroupedListVirtualLayout@,System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: GroupedList(int, int[], float, float, Func<int, Element>, out GroupedListVirtualLayout, Func<int, string>?, int)
+  nameWithType: Virtual.GroupedList(int, int[], float, float, Func<int, Element>, out GroupedListVirtualLayout, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.GroupedList(int, int[], float, float, System.Func<int, FluentGpu.Dsl.Element>, out FluentGpu.Scene.GroupedListVirtualLayout, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GroupedList
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A grouped flat list with measured rows + sticky-header hook (E11-L0 grouping): headers occupy flat
+        indices of their own (<code class="paramref">headerIndices</code>, sorted ascending) and are rendered by the same
+        <code class="paramref">renderItem</code> — a group header is just a measured item KIND. Keep a reference to the
+        <xref href="FluentGpu.Scene.GroupedListVirtualLayout" data-throw-if-not-resolved="false"></xref> (via <code class="paramref">layout</code>) for <code>StickyHeaderIndexAt</code>.
+  example: []
+  syntax:
+    content: public static VirtualListEl GroupedList(int itemCount, int[] headerIndices, float headerExtent, float itemEstimate, Func<int, Element> renderItem, out GroupedListVirtualLayout layout, Func<int, string>? keyOf = null, int overscan = 4)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: headerIndices
+      type: System.Int32[]
+    - id: headerExtent
+      type: System.Single
+    - id: itemEstimate
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: layout
+      type: FluentGpu.Scene.GroupedListVirtualLayout
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function GroupedList(itemCount As Integer, headerIndices As Integer(), headerExtent As Single, itemEstimate As Single, renderItem As Func(Of Integer, Element), layout As GroupedListVirtualLayout, keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 4) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.GroupedList*
+  nameWithType.vb: Virtual.GroupedList(Integer, Integer(), Single, Single, Func(Of Integer, Element), GroupedListVirtualLayout, Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.GroupedList(Integer, Integer(), Single, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), FluentGpu.Scene.GroupedListVirtualLayout, System.Func(Of Integer, String), Integer)
+  name.vb: GroupedList(Integer, Integer(), Single, Single, Func(Of Integer, Element), GroupedListVirtualLayout, Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.SpanGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.SpanGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  id: SpanGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: SpanGrid(int, int, float, float, Func<int, int>, Func<int, Element>, Func<int, string>?, int)
+  nameWithType: Virtual.SpanGrid(int, int, float, float, Func<int, int>, Func<int, Element>, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.SpanGrid(int, int, float, float, System.Func<int, int>, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanGrid
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Uniform-row grid with ITEM SPANNING (hero-as-first-row): <code class="paramref">spanOf</code> returns each item's
+        column span (clamped 1..columns); items pack row-major and wrap when a span doesn't fit.
+  example: []
+  syntax:
+    content: public static VirtualListEl SpanGrid(int itemCount, int columns, float rowHeight, float gap, Func<int, int> spanOf, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 2)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: columns
+      type: System.Int32
+    - id: rowHeight
+      type: System.Single
+    - id: gap
+      type: System.Single
+    - id: spanOf
+      type: System.Func{System.Int32,System.Int32}
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function SpanGrid(itemCount As Integer, columns As Integer, rowHeight As Single, gap As Single, spanOf As Func(Of Integer, Integer), renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 2) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.SpanGrid*
+  nameWithType.vb: Virtual.SpanGrid(Integer, Integer, Single, Single, Func(Of Integer, Integer), Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.SpanGrid(Integer, Integer, Single, Single, System.Func(Of Integer, Integer), System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: SpanGrid(Integer, Integer, Single, Single, Func(Of Integer, Integer), Func(Of Integer, Element), Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.HorizontalGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.HorizontalGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  id: HorizontalGrid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: HorizontalGrid(int, int, float, float, Func<int, Element>, Func<int, string>?, int)
+  nameWithType: Virtual.HorizontalGrid(int, int, float, float, Func<int, Element>, Func<int, string>?, int)
+  fullName: FluentGpu.Controls.Virtual.HorizontalGrid(int, int, float, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HorizontalGrid
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A HORIZONTALLY-scrolling uniform card grid (a shelf <code class="paramref">rows</code> cells tall) — the
+        horizontal variant of <xref href="FluentGpu.Controls.Virtual.Grid(System.Int32%2cSystem.Int32%2cSystem.Single%2cSystem.Single%2cSystem.Func%7bSystem.Int32%2cFluentGpu.Dsl.Element%7d%2cSystem.Func%7bSystem.Int32%2cSystem.String%7d%2cSystem.Int32)" data-throw-if-not-resolved="false"></xref>; virtualizes by column.
+  example: []
+  syntax:
+    content: public static VirtualListEl HorizontalGrid(int itemCount, int rows, float itemWidth, float gap, Func<int, Element> renderItem, Func<int, string>? keyOf = null, int overscan = 2)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: rows
+      type: System.Int32
+    - id: itemWidth
+      type: System.Single
+    - id: gap
+      type: System.Single
+    - id: renderItem
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: keyOf
+      type: System.Func{System.Int32,System.String}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function HorizontalGrid(itemCount As Integer, rows As Integer, itemWidth As Single, gap As Single, renderItem As Func(Of Integer, Element), keyOf As Func(Of Integer, String) = Nothing, overscan As Integer = 2) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.HorizontalGrid*
+  nameWithType.vb: Virtual.HorizontalGrid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.HorizontalGrid(Integer, Integer, Single, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: HorizontalGrid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+- uid: FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  id: ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: ListBound(int, float, Func<IReadSignal<int>, Element>, int)
+  nameWithType: Virtual.ListBound(int, float, Func<IReadSignal<int>, Element>, int)
+  fullName: FluentGpu.Controls.Virtual.ListBound(int, float, System.Func<FluentGpu.Signals.IReadSignal<int>, FluentGpu.Dsl.Element>, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ListBound
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Signals-first BOUND list (the recycler fast path): <code class="paramref">row</code> runs ONCE per visible slot
+        with an index SIGNAL; scrolling rebinds a slot by writing its signal — zero element rebuild, zero reconcile,
+        zero keys. Express anything that varies by index as a reactive bind (<code>TextBind</code>/<code>FillBind</code>/
+        <code>SourceBind</code>/<code>PlaceholderBind</code>), never a captured value. The fastest path for huge uniform lists
+        (the WaveeMusic 100k track list under a scrollbar thumb-drag).
+  example: []
+  syntax:
+    content: public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row, int overscan = 4)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: itemExtent
+      type: System.Single
+    - id: row
+      type: System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function ListBound(itemCount As Integer, itemExtent As Single, row As Func(Of IReadSignal(Of Integer), Element), overscan As Integer = 4) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.ListBound*
+  nameWithType.vb: Virtual.ListBound(Integer, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.ListBound(Integer, Single, System.Func(Of FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Dsl.Element), Integer)
+  name.vb: ListBound(Integer, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+- uid: FluentGpu.Controls.Virtual.GridBound(System.Int32,System.Int32,System.Single,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.GridBound(System.Int32,System.Int32,System.Single,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  id: GridBound(System.Int32,System.Int32,System.Single,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  parent: FluentGpu.Controls.Virtual
+  langs:
+  - csharp
+  - vb
+  name: GridBound(int, int, float, float, Func<IReadSignal<int>, Element>, int)
+  nameWithType: Virtual.GridBound(int, int, float, float, Func<IReadSignal<int>, Element>, int)
+  fullName: FluentGpu.Controls.Virtual.GridBound(int, int, float, float, System.Func<FluentGpu.Signals.IReadSignal<int>, FluentGpu.Dsl.Element>, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Virtual.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GridBound
+    path: ../../src/FluentGpu.Controls/Virtual.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Signals-first BOUND uniform card grid — <xref href="FluentGpu.Controls.Virtual.ListBound(System.Int32%2cSystem.Single%2cSystem.Func%7bFluentGpu.Signals.IReadSignal%7bSystem.Int32%7d%2cFluentGpu.Dsl.Element%7d%2cSystem.Int32)" data-throw-if-not-resolved="false"></xref> semantics over <xref href="FluentGpu.Scene.GridVirtualLayout" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row, int overscan = 2)
+    parameters:
+    - id: itemCount
+      type: System.Int32
+    - id: columns
+      type: System.Int32
+    - id: itemHeight
+      type: System.Single
+    - id: gap
+      type: System.Single
+    - id: row
+      type: System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+    - id: overscan
+      type: System.Int32
+    return:
+      type: FluentGpu.Reconciler.VirtualListEl
+    content.vb: Public Shared Function GridBound(itemCount As Integer, columns As Integer, itemHeight As Single, gap As Single, row As Func(Of IReadSignal(Of Integer), Element), overscan As Integer = 2) As VirtualListEl
+  overload: FluentGpu.Controls.Virtual.GridBound*
+  nameWithType.vb: Virtual.GridBound(Integer, Integer, Single, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.GridBound(Integer, Integer, Single, Single, System.Func(Of FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Dsl.Element), Integer)
+  name.vb: GridBound(Integer, Integer, Single, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+references:
+- uid: FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  name: Custom(int, IVirtualLayout, Func<int, Element>, Func<int, string>, int, bool)
+  nameWithType: Virtual.Custom(int, IVirtualLayout, Func<int, Element>, Func<int, string>, int, bool)
+  fullName: FluentGpu.Controls.Virtual.Custom(int, FluentGpu.Scene.IVirtualLayout, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>, int, bool)
+  nameWithType.vb: Virtual.Custom(Integer, IVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  fullName.vb: FluentGpu.Controls.Virtual.Custom(Integer, FluentGpu.Scene.IVirtualLayout, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer, Boolean)
+  name.vb: Custom(Integer, IVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+    name: Custom
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.IVirtualLayout
+    name: IVirtualLayout
+    href: FluentGpu.Scene.IVirtualLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Virtual.Custom(System.Int32,FluentGpu.Scene.IVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+    name: Custom
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.IVirtualLayout
+    name: IVirtualLayout
+    href: FluentGpu.Scene.IVirtualLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IVirtualLayout.html
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+- uid: FluentGpu.Reconciler.VirtualListEl
+  commentId: T:FluentGpu.Reconciler.VirtualListEl
+  parent: FluentGpu.Reconciler
+  href: FluentGpu.Reconciler.VirtualListEl.html
+  name: VirtualListEl
+  nameWithType: VirtualListEl
+  fullName: FluentGpu.Reconciler.VirtualListEl
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Reconciler
+  commentId: N:FluentGpu.Reconciler
+  href: FluentGpu.html
+  name: FluentGpu.Reconciler
+  nameWithType: FluentGpu.Reconciler
+  fullName: FluentGpu.Reconciler
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.Virtual.List*
+  commentId: Overload:FluentGpu.Controls.Virtual.List
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_List_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: List
+  nameWithType: Virtual.List
+  fullName: FluentGpu.Controls.Virtual.List
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Func{System.Int32,FluentGpu.Dsl.Element}
+  commentId: T:System.Func{System.Int32,FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, Element>
+  nameWithType: Func<int, Element>
+  fullName: System.Func<int, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of Integer, Element)
+  fullName.vb: System.Func(Of Integer, FluentGpu.Dsl.Element)
+  name.vb: Func(Of Integer, Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.Func{System.Int32,System.String}
+  commentId: T:System.Func{System.Int32,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, string>
+  nameWithType: Func<int, string>
+  fullName: System.Func<int, string>
+  nameWithType.vb: Func(Of Integer, String)
+  fullName.vb: System.Func(Of Integer, String)
+  name.vb: Func(Of Integer, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Controls.Virtual.Grid*
+  commentId: Overload:FluentGpu.Controls.Virtual.Grid
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: Grid
+  nameWithType: Virtual.Grid
+  fullName: FluentGpu.Controls.Virtual.Grid
+- uid: FluentGpu.Controls.Virtual.Custom*
+  commentId: Overload:FluentGpu.Controls.Virtual.Custom
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Custom_System_Int32_FluentGpu_Scene_IVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  name: Custom
+  nameWithType: Virtual.Custom
+  fullName: FluentGpu.Controls.Virtual.Custom
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  commentId: M:FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  name: Measured(int, IMeasuredVirtualLayout, Func<int, Element>, Func<int, string>, int, bool)
+  nameWithType: Virtual.Measured(int, IMeasuredVirtualLayout, Func<int, Element>, Func<int, string>, int, bool)
+  fullName: FluentGpu.Controls.Virtual.Measured(int, FluentGpu.Scene.IMeasuredVirtualLayout, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>, int, bool)
+  nameWithType.vb: Virtual.Measured(Integer, IMeasuredVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  fullName.vb: FluentGpu.Controls.Virtual.Measured(Integer, FluentGpu.Scene.IMeasuredVirtualLayout, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer, Boolean)
+  name.vb: Measured(Integer, IMeasuredVirtualLayout, Func(Of Integer, Element), Func(Of Integer, String), Integer, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+    name: Measured
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout
+    name: IMeasuredVirtualLayout
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Virtual.Measured(System.Int32,FluentGpu.Scene.IMeasuredVirtualLayout,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32,System.Boolean)
+    name: Measured
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout
+    name: IMeasuredVirtualLayout
+    href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Scene.MeasuredStackVirtualLayout
+  commentId: T:FluentGpu.Scene.MeasuredStackVirtualLayout
+  href: FluentGpu.Scene.MeasuredStackVirtualLayout.html
+  name: MeasuredStackVirtualLayout
+  nameWithType: MeasuredStackVirtualLayout
+  fullName: FluentGpu.Scene.MeasuredStackVirtualLayout
+- uid: FluentGpu.Controls.Virtual.VariableList*
+  commentId: Overload:FluentGpu.Controls.Virtual.VariableList
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_VariableList_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: VariableList
+  nameWithType: Virtual.VariableList
+  fullName: FluentGpu.Controls.Virtual.VariableList
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+- uid: FluentGpu.Controls.Virtual.Measured*
+  commentId: Overload:FluentGpu.Controls.Virtual.Measured
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Measured_System_Int32_FluentGpu_Scene_IMeasuredVirtualLayout_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_System_Boolean_
+  name: Measured
+  nameWithType: Virtual.Measured
+  fullName: FluentGpu.Controls.Virtual.Measured
+- uid: FluentGpu.Reconciler.VirtualListEl.Layout
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Layout
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Layout
+  name: Layout
+  nameWithType: VirtualListEl.Layout
+  fullName: FluentGpu.Reconciler.VirtualListEl.Layout
+- uid: FluentGpu.Scene.LinedFlowLayout
+  commentId: T:FluentGpu.Scene.LinedFlowLayout
+  href: FluentGpu.Scene.LinedFlowLayout.html
+  name: LinedFlowLayout
+  nameWithType: LinedFlowLayout
+  fullName: FluentGpu.Scene.LinedFlowLayout
+- uid: FluentGpu.Controls.Virtual.LinedFlow*
+  commentId: Overload:FluentGpu.Controls.Virtual.LinedFlow
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_LinedFlow_System_Int32_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_Single__System_Single_System_Single_System_Func_System_Int32_System_String__System_Int32_
+  name: LinedFlow
+  nameWithType: Virtual.LinedFlow
+  fullName: FluentGpu.Controls.Virtual.LinedFlow
+- uid: System.Func{System.Int32,System.Single}
+  commentId: T:System.Func{System.Int32,System.Single}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, float>
+  nameWithType: Func<int, float>
+  fullName: System.Func<int, float>
+  nameWithType.vb: Func(Of Integer, Single)
+  fullName.vb: System.Func(Of Integer, Single)
+  name.vb: Func(Of Integer, Single)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Scene.GroupedListVirtualLayout
+  commentId: T:FluentGpu.Scene.GroupedListVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.GroupedListVirtualLayout.html
+  name: GroupedListVirtualLayout
+  nameWithType: GroupedListVirtualLayout
+  fullName: FluentGpu.Scene.GroupedListVirtualLayout
+- uid: FluentGpu.Controls.Virtual.GroupedList*
+  commentId: Overload:FluentGpu.Controls.Virtual.GroupedList
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_GroupedList_System_Int32_System_Int32___System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__FluentGpu_Scene_GroupedListVirtualLayout__System_Func_System_Int32_System_String__System_Int32_
+  name: GroupedList
+  nameWithType: Virtual.GroupedList
+  fullName: FluentGpu.Controls.Virtual.GroupedList
+- uid: System.Int32[]
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int[]
+  nameWithType: int[]
+  fullName: int[]
+  nameWithType.vb: Integer()
+  fullName.vb: Integer()
+  name.vb: Integer()
+  spec.csharp:
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.Virtual.SpanGrid*
+  commentId: Overload:FluentGpu.Controls.Virtual.SpanGrid
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_SpanGrid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_System_Int32__System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: SpanGrid
+  nameWithType: Virtual.SpanGrid
+  fullName: FluentGpu.Controls.Virtual.SpanGrid
+- uid: System.Func{System.Int32,System.Int32}
+  commentId: T:System.Func{System.Int32,System.Int32}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, int>
+  nameWithType: Func<int, int>
+  fullName: System.Func<int, int>
+  nameWithType.vb: Func(Of Integer, Integer)
+  fullName.vb: System.Func(Of Integer, Integer)
+  name.vb: Func(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: Grid(int, int, float, float, Func<int, Element>, Func<int, string>, int)
+  nameWithType: Virtual.Grid(int, int, float, float, Func<int, Element>, Func<int, string>, int)
+  fullName: FluentGpu.Controls.Virtual.Grid(int, int, float, float, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>, int)
+  nameWithType.vb: Virtual.Grid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.Grid(Integer, Integer, Single, Single, System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String), Integer)
+  name.vb: Grid(Integer, Integer, Single, Single, Func(Of Integer, Element), Func(Of Integer, String), Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+    name: Grid
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Virtual.Grid(System.Int32,System.Int32,System.Single,System.Single,System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String},System.Int32)
+    name: Grid
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_Grid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.Virtual.HorizontalGrid*
+  commentId: Overload:FluentGpu.Controls.Virtual.HorizontalGrid
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_HorizontalGrid_System_Int32_System_Int32_System_Single_System_Single_System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__System_Int32_
+  name: HorizontalGrid
+  nameWithType: Virtual.HorizontalGrid
+  fullName: FluentGpu.Controls.Virtual.HorizontalGrid
+- uid: FluentGpu.Controls.Virtual.ListBound*
+  commentId: Overload:FluentGpu.Controls.Virtual.ListBound
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_
+  name: ListBound
+  nameWithType: Virtual.ListBound
+  fullName: FluentGpu.Controls.Virtual.ListBound
+- uid: System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+  commentId: T:System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<IReadSignal<int>, Element>
+  nameWithType: Func<IReadSignal<int>, Element>
+  fullName: System.Func<FluentGpu.Signals.IReadSignal<int>, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of IReadSignal(Of Integer), Element)
+  fullName.vb: System.Func(Of FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Dsl.Element)
+  name.vb: Func(Of IReadSignal(Of Integer), Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  commentId: M:FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_
+  name: ListBound(int, float, Func<IReadSignal<int>, Element>, int)
+  nameWithType: Virtual.ListBound(int, float, Func<IReadSignal<int>, Element>, int)
+  fullName: FluentGpu.Controls.Virtual.ListBound(int, float, System.Func<FluentGpu.Signals.IReadSignal<int>, FluentGpu.Dsl.Element>, int)
+  nameWithType.vb: Virtual.ListBound(Integer, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+  fullName.vb: FluentGpu.Controls.Virtual.ListBound(Integer, Single, System.Func(Of FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Dsl.Element), Integer)
+  name.vb: ListBound(Integer, Single, Func(Of IReadSignal(Of Integer), Element), Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+    name: ListBound
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Virtual.ListBound(System.Int32,System.Single,System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element},System.Int32)
+    name: ListBound
+    href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_ListBound_System_Int32_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Scene.GridVirtualLayout
+  commentId: T:FluentGpu.Scene.GridVirtualLayout
+  href: FluentGpu.Scene.GridVirtualLayout.html
+  name: GridVirtualLayout
+  nameWithType: GridVirtualLayout
+  fullName: FluentGpu.Scene.GridVirtualLayout
+- uid: FluentGpu.Controls.Virtual.GridBound*
+  commentId: Overload:FluentGpu.Controls.Virtual.GridBound
+  href: FluentGpu.Controls.Virtual.html#FluentGpu_Controls_Virtual_GridBound_System_Int32_System_Int32_System_Single_System_Single_System_Func_FluentGpu_Signals_IReadSignal_System_Int32__FluentGpu_Dsl_Element__System_Int32_
+  name: GridBound
+  nameWithType: Virtual.GridBound
+  fullName: FluentGpu.Controls.Virtual.GridBound

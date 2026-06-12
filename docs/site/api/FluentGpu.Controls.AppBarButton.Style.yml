@@ -1,0 +1,971 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AppBarButton.Style
+  commentId: T:FluentGpu.Controls.AppBarButton.Style
+  id: AppBarButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AppBarButton.Style.CompactSize
+  - FluentGpu.Controls.AppBarButton.Style.CornerRadius
+  - FluentGpu.Controls.AppBarButton.Style.DisabledFill
+  - FluentGpu.Controls.AppBarButton.Style.DisabledForeground
+  - FluentGpu.Controls.AppBarButton.Style.Gap
+  - FluentGpu.Controls.AppBarButton.Style.HoverFill
+  - FluentGpu.Controls.AppBarButton.Style.HoverForeground
+  - FluentGpu.Controls.AppBarButton.Style.IconHeight
+  - FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+  - FluentGpu.Controls.AppBarButton.Style.MinHeight
+  - FluentGpu.Controls.AppBarButton.Style.Padding
+  - FluentGpu.Controls.AppBarButton.Style.PressedFill
+  - FluentGpu.Controls.AppBarButton.Style.PressedForeground
+  - FluentGpu.Controls.AppBarButton.Style.RestFill
+  - FluentGpu.Controls.AppBarButton.Style.RestForeground
+  - FluentGpu.Controls.AppBarButton.Style.Width
+  langs:
+  - csharp
+  - vb
+  name: AppBarButton.Style
+  nameWithType: AppBarButton.Style
+  fullName: FluentGpu.Controls.AppBarButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    AppBarButton visual style — dimensions and color tokens from WinUI 3 (AppBarButton_themeresources.xaml:
+        Width 68, MinHeight 64, icon 16px, label 12px, ControlCornerRadius 4, inner-border margin 2,6,2,6).
+  example: []
+  syntax:
+    content: 'public sealed record AppBarButton.Style : IEquatable<AppBarButton.Style>'
+    content.vb: Public NotInheritable Class AppBarButton.Style Implements IEquatable(Of AppBarButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.AppBarButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.AppBarButton.Style.Width
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.Width
+  id: Width
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: AppBarButton.Style.Width
+  fullName: FluentGpu.Controls.AppBarButton.Style.Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Width As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.Width*
+- uid: FluentGpu.Controls.AppBarButton.Style.MinHeight
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: AppBarButton.Style.MinHeight
+  fullName: FluentGpu.Controls.AppBarButton.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.MinHeight*
+- uid: FluentGpu.Controls.AppBarButton.Style.CompactSize
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.CompactSize
+  id: CompactSize
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: CompactSize
+  nameWithType: AppBarButton.Style.CompactSize
+  fullName: FluentGpu.Controls.AppBarButton.Style.CompactSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompactSize
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CompactSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CompactSize As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.CompactSize*
+- uid: FluentGpu.Controls.AppBarButton.Style.IconHeight
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.IconHeight
+  id: IconHeight
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: IconHeight
+  nameWithType: AppBarButton.Style.IconHeight
+  fullName: FluentGpu.Controls.AppBarButton.Style.IconHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconHeight
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float IconHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property IconHeight As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.IconHeight*
+- uid: FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+  id: LabelFontSize
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: LabelFontSize
+  nameWithType: AppBarButton.Style.LabelFontSize
+  fullName: FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LabelFontSize
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float LabelFontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property LabelFontSize As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.LabelFontSize*
+- uid: FluentGpu.Controls.AppBarButton.Style.Gap
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.Gap
+  id: Gap
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Gap
+  nameWithType: AppBarButton.Style.Gap
+  fullName: FluentGpu.Controls.AppBarButton.Style.Gap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gap
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Gap { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Gap As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.Gap*
+- uid: FluentGpu.Controls.AppBarButton.Style.CornerRadius
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: AppBarButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.AppBarButton.Style.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.AppBarButton.Style.CornerRadius*
+- uid: FluentGpu.Controls.AppBarButton.Style.Padding
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.Padding
+  id: Padding
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: AppBarButton.Style.Padding
+  fullName: FluentGpu.Controls.AppBarButton.Style.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Controls.AppBarButton.Style.Padding*
+- uid: FluentGpu.Controls.AppBarButton.Style.RestFill
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.RestFill
+  id: RestFill
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: RestFill
+  nameWithType: AppBarButton.Style.RestFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.RestFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RestFill
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF RestFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property RestFill As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.RestFill*
+- uid: FluentGpu.Controls.AppBarButton.Style.RestForeground
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.RestForeground
+  id: RestForeground
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: RestForeground
+  nameWithType: AppBarButton.Style.RestForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.RestForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RestForeground
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF RestForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property RestForeground As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.RestForeground*
+- uid: FluentGpu.Controls.AppBarButton.Style.HoverFill
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.HoverFill
+  id: HoverFill
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverFill
+  nameWithType: AppBarButton.Style.HoverFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.HoverFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverFill
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverFill As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.HoverFill*
+- uid: FluentGpu.Controls.AppBarButton.Style.HoverForeground
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.HoverForeground
+  id: HoverForeground
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverForeground
+  nameWithType: AppBarButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.HoverForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverForeground
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverForeground As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.HoverForeground*
+- uid: FluentGpu.Controls.AppBarButton.Style.PressedFill
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.PressedFill
+  id: PressedFill
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedFill
+  nameWithType: AppBarButton.Style.PressedFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.PressedFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedFill
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedFill As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.PressedFill*
+- uid: FluentGpu.Controls.AppBarButton.Style.PressedForeground
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.PressedForeground
+  id: PressedForeground
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedForeground
+  nameWithType: AppBarButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.PressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedForeground
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedForeground As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.PressedForeground*
+- uid: FluentGpu.Controls.AppBarButton.Style.DisabledFill
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.DisabledFill
+  id: DisabledFill
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledFill
+  nameWithType: AppBarButton.Style.DisabledFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.DisabledFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledFill
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledFill As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.DisabledFill*
+- uid: FluentGpu.Controls.AppBarButton.Style.DisabledForeground
+  commentId: P:FluentGpu.Controls.AppBarButton.Style.DisabledForeground
+  id: DisabledForeground
+  parent: FluentGpu.Controls.AppBarButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledForeground
+  nameWithType: AppBarButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.DisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledForeground
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledForeground As ColorF
+  overload: FluentGpu.Controls.AppBarButton.Style.DisabledForeground*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.AppBarButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.AppBarButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<AppBarButton.Style>
+  nameWithType: IEquatable<AppBarButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.AppBarButton.Style>
+  nameWithType.vb: IEquatable(Of AppBarButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.AppBarButton.Style)
+  name.vb: IEquatable(Of AppBarButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.AppBarButton.Style.Width*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.Width
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_Width
+  name: Width
+  nameWithType: AppBarButton.Style.Width
+  fullName: FluentGpu.Controls.AppBarButton.Style.Width
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.AppBarButton.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.MinHeight
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_MinHeight
+  name: MinHeight
+  nameWithType: AppBarButton.Style.MinHeight
+  fullName: FluentGpu.Controls.AppBarButton.Style.MinHeight
+- uid: FluentGpu.Controls.AppBarButton.Style.CompactSize*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.CompactSize
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_CompactSize
+  name: CompactSize
+  nameWithType: AppBarButton.Style.CompactSize
+  fullName: FluentGpu.Controls.AppBarButton.Style.CompactSize
+- uid: FluentGpu.Controls.AppBarButton.Style.IconHeight*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.IconHeight
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_IconHeight
+  name: IconHeight
+  nameWithType: AppBarButton.Style.IconHeight
+  fullName: FluentGpu.Controls.AppBarButton.Style.IconHeight
+- uid: FluentGpu.Controls.AppBarButton.Style.LabelFontSize*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_LabelFontSize
+  name: LabelFontSize
+  nameWithType: AppBarButton.Style.LabelFontSize
+  fullName: FluentGpu.Controls.AppBarButton.Style.LabelFontSize
+- uid: FluentGpu.Controls.AppBarButton.Style.Gap*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.Gap
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_Gap
+  name: Gap
+  nameWithType: AppBarButton.Style.Gap
+  fullName: FluentGpu.Controls.AppBarButton.Style.Gap
+- uid: FluentGpu.Controls.AppBarButton.Style.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.CornerRadius
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_CornerRadius
+  name: CornerRadius
+  nameWithType: AppBarButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.AppBarButton.Style.CornerRadius
+- uid: FluentGpu.Controls.AppBarButton.Style.Padding*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.Padding
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_Padding
+  name: Padding
+  nameWithType: AppBarButton.Style.Padding
+  fullName: FluentGpu.Controls.AppBarButton.Style.Padding
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.AppBarButton.Style.RestFill*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.RestFill
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_RestFill
+  name: RestFill
+  nameWithType: AppBarButton.Style.RestFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.RestFill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Controls.AppBarButton.Style.RestForeground*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.RestForeground
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_RestForeground
+  name: RestForeground
+  nameWithType: AppBarButton.Style.RestForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.RestForeground
+- uid: FluentGpu.Controls.AppBarButton.Style.HoverFill*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.HoverFill
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_HoverFill
+  name: HoverFill
+  nameWithType: AppBarButton.Style.HoverFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.HoverFill
+- uid: FluentGpu.Controls.AppBarButton.Style.HoverForeground*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.HoverForeground
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_HoverForeground
+  name: HoverForeground
+  nameWithType: AppBarButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.HoverForeground
+- uid: FluentGpu.Controls.AppBarButton.Style.PressedFill*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.PressedFill
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_PressedFill
+  name: PressedFill
+  nameWithType: AppBarButton.Style.PressedFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.PressedFill
+- uid: FluentGpu.Controls.AppBarButton.Style.PressedForeground*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.PressedForeground
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_PressedForeground
+  name: PressedForeground
+  nameWithType: AppBarButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.PressedForeground
+- uid: FluentGpu.Controls.AppBarButton.Style.DisabledFill*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.DisabledFill
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_DisabledFill
+  name: DisabledFill
+  nameWithType: AppBarButton.Style.DisabledFill
+  fullName: FluentGpu.Controls.AppBarButton.Style.DisabledFill
+- uid: FluentGpu.Controls.AppBarButton.Style.DisabledForeground*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Style.DisabledForeground
+  href: FluentGpu.Controls.AppBarButton.Style.html#FluentGpu_Controls_AppBarButton_Style_DisabledForeground
+  name: DisabledForeground
+  nameWithType: AppBarButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.AppBarButton.Style.DisabledForeground

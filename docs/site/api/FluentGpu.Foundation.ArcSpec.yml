@@ -1,0 +1,669 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.ArcSpec
+  commentId: T:FluentGpu.Foundation.ArcSpec
+  id: ArcSpec
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.ArcSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Boolean)
+  - FluentGpu.Foundation.ArcSpec.Color
+  - FluentGpu.Foundation.ArcSpec.IsNone
+  - FluentGpu.Foundation.ArcSpec.RoundCaps
+  - FluentGpu.Foundation.ArcSpec.StartDeg
+  - FluentGpu.Foundation.ArcSpec.SweepDeg
+  - FluentGpu.Foundation.ArcSpec.Thickness
+  langs:
+  - csharp
+  - vb
+  name: ArcSpec
+  nameWithType: ArcSpec
+  fullName: FluentGpu.Foundation.ArcSpec
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ArcSpec
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A circular-arc stroke (WinUI ProgressRing — a trimmed, round-capped ring). The arc is centred in the node's box with
+
+    radius (min(W,H)-Thickness)/2, a <xref href="FluentGpu.Foundation.ArcSpec.Thickness" data-throw-if-not-resolved="false"></xref>-wide stroke, swept from <xref href="FluentGpu.Foundation.ArcSpec.StartDeg" data-throw-if-not-resolved="false"></xref> for
+
+    <xref href="FluentGpu.Foundation.ArcSpec.SweepDeg" data-throw-if-not-resolved="false"></xref> degrees (0° = 12 o'clock, clockwise). The recorder emits a <code>DrawArc</code>; the GPU draws the SDF
+
+    arc with round caps. A full ring is SweepDeg = 360.
+  example: []
+  syntax:
+    content: 'public readonly record struct ArcSpec : IEquatable<ArcSpec>'
+    content.vb: Public Structure ArcSpec Implements IEquatable(Of ArcSpec)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.ArcSpec}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.ArcSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Boolean)
+  commentId: M:FluentGpu.Foundation.ArcSpec.#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Boolean)
+  id: '#ctor(FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Boolean)'
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: ArcSpec(ColorF, float, float, float, bool)
+  nameWithType: ArcSpec.ArcSpec(ColorF, float, float, float, bool)
+  fullName: FluentGpu.Foundation.ArcSpec.ArcSpec(FluentGpu.Foundation.ColorF, float, float, float, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    A circular-arc stroke (WinUI ProgressRing — a trimmed, round-capped ring). The arc is centred in the node's box with
+
+    radius (min(W,H)-Thickness)/2, a <xref href="FluentGpu.Foundation.ArcSpec.Thickness" data-throw-if-not-resolved="false"></xref>-wide stroke, swept from <xref href="FluentGpu.Foundation.ArcSpec.StartDeg" data-throw-if-not-resolved="false"></xref> for
+
+    <xref href="FluentGpu.Foundation.ArcSpec.SweepDeg" data-throw-if-not-resolved="false"></xref> degrees (0° = 12 o'clock, clockwise). The recorder emits a <code>DrawArc</code>; the GPU draws the SDF
+
+    arc with round caps. A full ring is SweepDeg = 360.
+  example: []
+  syntax:
+    content: public ArcSpec(ColorF Color, float Thickness, float StartDeg, float SweepDeg, bool RoundCaps = true)
+    parameters:
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: Thickness
+      type: System.Single
+    - id: StartDeg
+      type: System.Single
+    - id: SweepDeg
+      type: System.Single
+    - id: RoundCaps
+      type: System.Boolean
+    content.vb: Public Sub New(Color As ColorF, Thickness As Single, StartDeg As Single, SweepDeg As Single, RoundCaps As Boolean = True)
+  overload: FluentGpu.Foundation.ArcSpec.#ctor*
+  nameWithType.vb: ArcSpec.New(ColorF, Single, Single, Single, Boolean)
+  fullName.vb: FluentGpu.Foundation.ArcSpec.New(FluentGpu.Foundation.ColorF, Single, Single, Single, Boolean)
+  name.vb: New(ColorF, Single, Single, Single, Boolean)
+- uid: FluentGpu.Foundation.ArcSpec.Color
+  commentId: P:FluentGpu.Foundation.ArcSpec.Color
+  id: Color
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: ArcSpec.Color
+  fullName: FluentGpu.Foundation.ArcSpec.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Foundation.ArcSpec.Color*
+- uid: FluentGpu.Foundation.ArcSpec.Thickness
+  commentId: P:FluentGpu.Foundation.ArcSpec.Thickness
+  id: Thickness
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: Thickness
+  nameWithType: ArcSpec.Thickness
+  fullName: FluentGpu.Foundation.ArcSpec.Thickness
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Thickness
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Thickness { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Thickness As Single
+  overload: FluentGpu.Foundation.ArcSpec.Thickness*
+- uid: FluentGpu.Foundation.ArcSpec.StartDeg
+  commentId: P:FluentGpu.Foundation.ArcSpec.StartDeg
+  id: StartDeg
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: StartDeg
+  nameWithType: ArcSpec.StartDeg
+  fullName: FluentGpu.Foundation.ArcSpec.StartDeg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StartDeg
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float StartDeg { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property StartDeg As Single
+  overload: FluentGpu.Foundation.ArcSpec.StartDeg*
+- uid: FluentGpu.Foundation.ArcSpec.SweepDeg
+  commentId: P:FluentGpu.Foundation.ArcSpec.SweepDeg
+  id: SweepDeg
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: SweepDeg
+  nameWithType: ArcSpec.SweepDeg
+  fullName: FluentGpu.Foundation.ArcSpec.SweepDeg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SweepDeg
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float SweepDeg { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SweepDeg As Single
+  overload: FluentGpu.Foundation.ArcSpec.SweepDeg*
+- uid: FluentGpu.Foundation.ArcSpec.RoundCaps
+  commentId: P:FluentGpu.Foundation.ArcSpec.RoundCaps
+  id: RoundCaps
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: RoundCaps
+  nameWithType: ArcSpec.RoundCaps
+  fullName: FluentGpu.Foundation.ArcSpec.RoundCaps
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RoundCaps
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool RoundCaps { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property RoundCaps As Boolean
+  overload: FluentGpu.Foundation.ArcSpec.RoundCaps*
+- uid: FluentGpu.Foundation.ArcSpec.IsNone
+  commentId: P:FluentGpu.Foundation.ArcSpec.IsNone
+  id: IsNone
+  parent: FluentGpu.Foundation.ArcSpec
+  langs:
+  - csharp
+  - vb
+  name: IsNone
+  nameWithType: ArcSpec.IsNone
+  fullName: FluentGpu.Foundation.ArcSpec.IsNone
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Effects.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsNone
+    path: ../../src/FluentGpu.Foundation/Effects.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsNone { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsNone As Boolean
+  overload: FluentGpu.Foundation.ArcSpec.IsNone*
+references:
+- uid: FluentGpu.Foundation.ArcSpec.Thickness
+  commentId: P:FluentGpu.Foundation.ArcSpec.Thickness
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_Thickness
+  name: Thickness
+  nameWithType: ArcSpec.Thickness
+  fullName: FluentGpu.Foundation.ArcSpec.Thickness
+- uid: FluentGpu.Foundation.ArcSpec.StartDeg
+  commentId: P:FluentGpu.Foundation.ArcSpec.StartDeg
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_StartDeg
+  name: StartDeg
+  nameWithType: ArcSpec.StartDeg
+  fullName: FluentGpu.Foundation.ArcSpec.StartDeg
+- uid: FluentGpu.Foundation.ArcSpec.SweepDeg
+  commentId: P:FluentGpu.Foundation.ArcSpec.SweepDeg
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_SweepDeg
+  name: SweepDeg
+  nameWithType: ArcSpec.SweepDeg
+  fullName: FluentGpu.Foundation.ArcSpec.SweepDeg
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.ArcSpec}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.ArcSpec}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ArcSpec>
+  nameWithType: IEquatable<ArcSpec>
+  fullName: System.IEquatable<FluentGpu.Foundation.ArcSpec>
+  nameWithType.vb: IEquatable(Of ArcSpec)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.ArcSpec)
+  name.vb: IEquatable(Of ArcSpec)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.ArcSpec
+    name: ArcSpec
+    href: FluentGpu.Foundation.ArcSpec.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.ArcSpec
+    name: ArcSpec
+    href: FluentGpu.Foundation.ArcSpec.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.ArcSpec.#ctor*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.#ctor
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec__ctor_FluentGpu_Foundation_ColorF_System_Single_System_Single_System_Single_System_Boolean_
+  name: ArcSpec
+  nameWithType: ArcSpec.ArcSpec
+  fullName: FluentGpu.Foundation.ArcSpec.ArcSpec
+  nameWithType.vb: ArcSpec.New
+  fullName.vb: FluentGpu.Foundation.ArcSpec.New
+  name.vb: New
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.ArcSpec.Color*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.Color
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_Color
+  name: Color
+  nameWithType: ArcSpec.Color
+  fullName: FluentGpu.Foundation.ArcSpec.Color
+- uid: FluentGpu.Foundation.ArcSpec.Thickness*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.Thickness
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_Thickness
+  name: Thickness
+  nameWithType: ArcSpec.Thickness
+  fullName: FluentGpu.Foundation.ArcSpec.Thickness
+- uid: FluentGpu.Foundation.ArcSpec.StartDeg*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.StartDeg
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_StartDeg
+  name: StartDeg
+  nameWithType: ArcSpec.StartDeg
+  fullName: FluentGpu.Foundation.ArcSpec.StartDeg
+- uid: FluentGpu.Foundation.ArcSpec.SweepDeg*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.SweepDeg
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_SweepDeg
+  name: SweepDeg
+  nameWithType: ArcSpec.SweepDeg
+  fullName: FluentGpu.Foundation.ArcSpec.SweepDeg
+- uid: FluentGpu.Foundation.ArcSpec.RoundCaps*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.RoundCaps
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_RoundCaps
+  name: RoundCaps
+  nameWithType: ArcSpec.RoundCaps
+  fullName: FluentGpu.Foundation.ArcSpec.RoundCaps
+- uid: FluentGpu.Foundation.ArcSpec.IsNone*
+  commentId: Overload:FluentGpu.Foundation.ArcSpec.IsNone
+  href: FluentGpu.Foundation.ArcSpec.html#FluentGpu_Foundation_ArcSpec_IsNone
+  name: IsNone
+  nameWithType: ArcSpec.IsNone
+  fullName: FluentGpu.Foundation.ArcSpec.IsNone

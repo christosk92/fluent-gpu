@@ -73,9 +73,24 @@ public static class SwipeControl
 internal sealed class SwipeControlCore : Component
 {
     const float ThresholdPx = 100f;   // c_ThresholdValue (SwipeControl.cpp:21)
+    const float CloseVelocityPxPerS = 31f;   // c_MinimumCloseVelocity (SwipeControl.cpp:22) — the floor speed an inward
+                                             // release must carry to count as a close fling (else it springs back open)
     const float ItemMinWidth = 68f;   // SwipeItemStyle MinWidth (SwipeControl_themeresources.xaml:39)
     const float ItemMinHeight = 40f;  // SwipeItemStyle MinHeight (:41); Width=Auto (:40) — grows with the label
     const float PanSlopPx = 4f;       // the engine drag-box convention (ListViewBaseItem_Partial.cpp:1864-1878)
+    // Fling-distance projection divisor for the open/close SNAP decision. A release of speed v (px/s) coasts an extra
+    // v / FlingProjectK px in the snap-settle window before resting — the resting position the WinUI InteractionTracker
+    // settles a swipe to. Derived from the engine scroller decay (ScrollAnimator.FlingDecayPerS = 0.95/s survival) over
+    // the ControlNormal settle window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T).
+    // A BOUNDED window (not the full infinite-decay scroll coast) is the right model for a page/threshold snap — a slow
+    // drag projects only a little (springs back under the threshold), a fast flick projects past it (opens). ≈ 4.0.
+    static readonly float FlingProjectK = ProjectDivisor(ScrollAnimator.FlingDecayPerS, Motion.ControlNormal / 1000f);
+    static float ProjectDivisor(float decayPerS, float windowS)
+    {
+        float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
+        float frac = 1f - MathF.Exp(-k * windowS);       // fraction of the full coast reached within the window
+        return frac > 1e-4f ? k / frac : k;              // divisor: projectedExtra = v / divisor = v·frac/k
+    }
 
     public override Element Render()
     {
@@ -132,8 +147,9 @@ internal sealed class SwipeControlCore : Component
         void Close()
         {
             if (!isOpen.Peek() && side.Peek() == 0) return;
-            // WinUI Close() flings home with c_MinimumCloseVelocity = 31 (SwipeControl.cpp:67-119) — substituted with
-            // the engine's 167ms FluentPopOpen glide (the sanctioned eased substitution).
+            // WinUI Close() flings home with c_MinimumCloseVelocity = 31 (SwipeControl.cpp:67-119). The close DECISION now
+            // reads the real release velocity against that 31px/s floor (in ReleaseOrTap); the close MOTION is the engine's
+            // FluentPopOpen glide (the eased substitution for the InteractionTracker close fling's on-screen travel).
             isOpen.Value = false;
             thresholdReached.Value = false;
             AnimateContentTo(0f, Motion.ControlFast);
@@ -214,12 +230,28 @@ internal sealed class SwipeControlCore : Component
             var mode = s > 0 ? p.LeftMode : p.RightMode;
             if (acts is not { Count: > 0 }) { Close(); return; }
             float stackW = StackWidth(acts, mode);
+            // REAL release velocity from the arena VelocitySampler (px/s along the swipe axis), projected to the inertia
+            // NaturalRestingPosition the WinUI InteractionTracker would settle at: |offset| + the friction-decay fling
+            // distance the engine's own scroller uses (v / -ln(decay), ScrollAnimator.FlingDecayPerS = 0.95/s). This is
+            // the velocity snap WinUI does on c_ThresholdValue (SwipeControl.cpp:944-961, :1634): a fast flick rests open
+            // even short of 100px, and a release toward home springs closed. Velocity that opposes the open direction
+            // (sign != side) projects nothing — only outward speed counts toward resting open.
+            float vAxis = hooks.PointerVelocity?.Invoke().X ?? 0f;   // horizontal swipe ⇒ X is the swipe axis
             float dist = MathF.Abs(offset.Value);
-            // Opening: rests open when |pan| >= min(stack width, 100) (the inertia resting condition,
-            // SwipeControl.cpp:944-961). Already open: any inward movement closes (:1636-1639).
-            bool restOpen = !isOpen.Peek()
-                ? dist >= MathF.Min(stackW - 1f, ThresholdPx)
-                : dist >= stackW - 1f;
+            float outward = s > 0 ? vAxis : -vAxis;                  // speed in the reveal direction (left side reveals on +X)
+            float projected = dist + (outward > 0f ? outward / FlingProjectK : 0f);
+            // Opening: rests open when the projected resting position >= min(stack width, 100) (the inertia resting
+            // condition, SwipeControl.cpp:944-961). Already open: any inward movement closes (:1636-1639), AND an inward
+            // flick at or past c_MinimumCloseVelocity = 31px/s closes even from the resting extent (the WinUI Close()
+            // adds that velocity to drive the close fling home — SwipeControl.cpp:99-119).
+            bool restOpen;
+            if (!isOpen.Peek())
+                restOpen = projected >= MathF.Min(stackW - 1f, ThresholdPx);
+            else
+            {
+                bool inwardFlick = outward <= -CloseVelocityPxPerS;   // releasing toward home at/above the close-velocity floor
+                restOpen = dist >= stackW - 1f && !inwardFlick;
+            }
             if (!restOpen) { Close(); return; }
             isOpen.Value = true;
             thresholdReached.Value = true;
@@ -389,6 +421,10 @@ internal sealed class SwipeControlCore : Component
             ClipToBounds = true,
             OnPointerDown = PanDown,
             OnDrag = PanMove,
+            // Cross-axis swipe (§7A): inside a vertical list this drag competes axis-locked with the list's Pan — a
+            // horizontal swipe along the row wins (reveals the actions), a vertical drag yields (the list scrolls). The
+            // root box is a row (Direction default 0) ⇒ the dispatcher locks the swipe to the X axis.
+            DragYieldsToPan = true,
             OnClick = ReleaseOrTap,
             // Esc also routes here when focus is inside the control (a revealed item is focusable).
             OnKeyDown = a =>

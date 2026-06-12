@@ -1,0 +1,168 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.IAdvanceSource
+  commentId: T:FluentGpu.Text.IAdvanceSource
+  id: IAdvanceSource
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.IAdvanceSource.Advance(System.Char)
+  - FluentGpu.Text.IAdvanceSource.EllipsisAdvance
+  langs:
+  - csharp
+  - vb
+  name: IAdvanceSource
+  nameWithType: IAdvanceSource
+  fullName: FluentGpu.Text.IAdvanceSource
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IAdvanceSource
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    A per-glyph advance source for the shared wrap/measure math. Implemented as a <code>struct</code> so the generic wrap
+
+    routines below monomorphize and inline the advance lookup (zero allocation, no virtual dispatch). The advance is the
+
+    DIP advance for one UTF-16 code unit (design advance × size/em). The render side (D3D12 <code>GlyphRenderer</code>) and the
+
+    measure side (<code>DirectWriteFontSystem</code>) each supply their own struct over the SAME DirectWrite design advances, so
+
+    measurement and rendering break lines identically.
+  example: []
+  syntax:
+    content: public interface IAdvanceSource
+    content.vb: Public Interface IAdvanceSource
+- uid: FluentGpu.Text.IAdvanceSource.Advance(System.Char)
+  commentId: M:FluentGpu.Text.IAdvanceSource.Advance(System.Char)
+  id: Advance(System.Char)
+  parent: FluentGpu.Text.IAdvanceSource
+  langs:
+  - csharp
+  - vb
+  name: Advance(char)
+  nameWithType: IAdvanceSource.Advance(char)
+  fullName: FluentGpu.Text.IAdvanceSource.Advance(char)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Advance
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: float Advance(char ch)
+    parameters:
+    - id: ch
+      type: System.Char
+    return:
+      type: System.Single
+    content.vb: Function Advance(ch As Char) As Single
+  overload: FluentGpu.Text.IAdvanceSource.Advance*
+  nameWithType.vb: IAdvanceSource.Advance(Char)
+  fullName.vb: FluentGpu.Text.IAdvanceSource.Advance(Char)
+  name.vb: Advance(Char)
+- uid: FluentGpu.Text.IAdvanceSource.EllipsisAdvance
+  commentId: P:FluentGpu.Text.IAdvanceSource.EllipsisAdvance
+  id: EllipsisAdvance
+  parent: FluentGpu.Text.IAdvanceSource
+  langs:
+  - csharp
+  - vb
+  name: EllipsisAdvance
+  nameWithType: IAdvanceSource.EllipsisAdvance
+  fullName: FluentGpu.Text.IAdvanceSource.EllipsisAdvance
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EllipsisAdvance
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: float EllipsisAdvance { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: ReadOnly Property EllipsisAdvance As Single
+  overload: FluentGpu.Text.IAdvanceSource.EllipsisAdvance*
+references:
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Text.IAdvanceSource.Advance*
+  commentId: Overload:FluentGpu.Text.IAdvanceSource.Advance
+  href: FluentGpu.Text.IAdvanceSource.html#FluentGpu_Text_IAdvanceSource_Advance_System_Char_
+  name: Advance
+  nameWithType: IAdvanceSource.Advance
+  fullName: FluentGpu.Text.IAdvanceSource.Advance
+- uid: System.Char
+  commentId: T:System.Char
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.char
+  name: char
+  nameWithType: char
+  fullName: char
+  nameWithType.vb: Char
+  fullName.vb: Char
+  name.vb: Char
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text.IAdvanceSource.EllipsisAdvance*
+  commentId: Overload:FluentGpu.Text.IAdvanceSource.EllipsisAdvance
+  href: FluentGpu.Text.IAdvanceSource.html#FluentGpu_Text_IAdvanceSource_EllipsisAdvance
+  name: EllipsisAdvance
+  nameWithType: IAdvanceSource.EllipsisAdvance
+  fullName: FluentGpu.Text.IAdvanceSource.EllipsisAdvance

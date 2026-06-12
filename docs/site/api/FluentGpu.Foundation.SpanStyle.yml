@@ -1,0 +1,841 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SpanStyle
+  commentId: T:FluentGpu.Foundation.SpanStyle
+  id: SpanStyle
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SpanStyle.#ctor(System.Int32,System.Int32,System.UInt16,System.Single,FluentGpu.Foundation.StringId,FluentGpu.Foundation.ColorF,System.Byte)
+  - FluentGpu.Foundation.SpanStyle.Color
+  - FluentGpu.Foundation.SpanStyle.End
+  - FluentGpu.Foundation.SpanStyle.Flags
+  - FluentGpu.Foundation.SpanStyle.FontFamily
+  - FluentGpu.Foundation.SpanStyle.LinkBit
+  - FluentGpu.Foundation.SpanStyle.SizeDip
+  - FluentGpu.Foundation.SpanStyle.Start
+  - FluentGpu.Foundation.SpanStyle.StrikethroughBit
+  - FluentGpu.Foundation.SpanStyle.UnderlineBit
+  - FluentGpu.Foundation.SpanStyle.Weight
+  langs:
+  - csharp
+  - vb
+  name: SpanStyle
+  nameWithType: SpanStyle
+  fullName: FluentGpu.Foundation.SpanStyle
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanStyle
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The POD shaping overlay for one span of a span run: the UTF-16 char range [<xref href="FluentGpu.Foundation.SpanStyle.Start" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Foundation.SpanStyle.End" data-throw-if-not-resolved="false"></xref>)
+
+    of the CONCATENATED paragraph text plus the style deltas the text seam applies over the base
+
+    <code>TextStyle</code>. Weight 0 / SizeDip 0 / FontFamily empty / Color A==0 = inherit the base. Built by the
+
+    reconciler from <xref href="FluentGpu.Foundation.TextSpan" data-throw-if-not-resolved="false"></xref>s; resolved by both text backends and the glyph renderer through
+
+    <xref href="FluentGpu.Foundation.SpanRunTable.Shared" data-throw-if-not-resolved="false"></xref>, so measure ≡ hit-test ≡ render for span runs too.
+  example: []
+  syntax:
+    content: 'public readonly record struct SpanStyle : IEquatable<SpanStyle>'
+    content.vb: Public Structure SpanStyle Implements IEquatable(Of SpanStyle)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.SpanStyle}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.SpanStyle.#ctor(System.Int32,System.Int32,System.UInt16,System.Single,FluentGpu.Foundation.StringId,FluentGpu.Foundation.ColorF,System.Byte)
+  commentId: M:FluentGpu.Foundation.SpanStyle.#ctor(System.Int32,System.Int32,System.UInt16,System.Single,FluentGpu.Foundation.StringId,FluentGpu.Foundation.ColorF,System.Byte)
+  id: '#ctor(System.Int32,System.Int32,System.UInt16,System.Single,FluentGpu.Foundation.StringId,FluentGpu.Foundation.ColorF,System.Byte)'
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: SpanStyle(int, int, ushort, float, StringId, ColorF, byte)
+  nameWithType: SpanStyle.SpanStyle(int, int, ushort, float, StringId, ColorF, byte)
+  fullName: FluentGpu.Foundation.SpanStyle.SpanStyle(int, int, ushort, float, FluentGpu.Foundation.StringId, FluentGpu.Foundation.ColorF, byte)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The POD shaping overlay for one span of a span run: the UTF-16 char range [<xref href="FluentGpu.Foundation.SpanStyle.Start" data-throw-if-not-resolved="false"></xref>, <xref href="FluentGpu.Foundation.SpanStyle.End" data-throw-if-not-resolved="false"></xref>)
+
+    of the CONCATENATED paragraph text plus the style deltas the text seam applies over the base
+
+    <code>TextStyle</code>. Weight 0 / SizeDip 0 / FontFamily empty / Color A==0 = inherit the base. Built by the
+
+    reconciler from <xref href="FluentGpu.Foundation.TextSpan" data-throw-if-not-resolved="false"></xref>s; resolved by both text backends and the glyph renderer through
+
+    <xref href="FluentGpu.Foundation.SpanRunTable.Shared" data-throw-if-not-resolved="false"></xref>, so measure ≡ hit-test ≡ render for span runs too.
+  example: []
+  syntax:
+    content: public SpanStyle(int Start, int End, ushort Weight, float SizeDip, StringId FontFamily, ColorF Color, byte Flags)
+    parameters:
+    - id: Start
+      type: System.Int32
+    - id: End
+      type: System.Int32
+    - id: Weight
+      type: System.UInt16
+    - id: SizeDip
+      type: System.Single
+    - id: FontFamily
+      type: FluentGpu.Foundation.StringId
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: Flags
+      type: System.Byte
+    content.vb: Public Sub New(Start As Integer, [End] As Integer, Weight As UShort, SizeDip As Single, FontFamily As StringId, Color As ColorF, Flags As Byte)
+  overload: FluentGpu.Foundation.SpanStyle.#ctor*
+  nameWithType.vb: SpanStyle.New(Integer, Integer, UShort, Single, StringId, ColorF, Byte)
+  fullName.vb: FluentGpu.Foundation.SpanStyle.New(Integer, Integer, UShort, Single, FluentGpu.Foundation.StringId, FluentGpu.Foundation.ColorF, Byte)
+  name.vb: New(Integer, Integer, UShort, Single, StringId, ColorF, Byte)
+- uid: FluentGpu.Foundation.SpanStyle.Start
+  commentId: P:FluentGpu.Foundation.SpanStyle.Start
+  id: Start
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: SpanStyle.Start
+  fullName: FluentGpu.Foundation.SpanStyle.Start
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int Start { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Start As Integer
+  overload: FluentGpu.Foundation.SpanStyle.Start*
+- uid: FluentGpu.Foundation.SpanStyle.End
+  commentId: P:FluentGpu.Foundation.SpanStyle.End
+  id: End
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: SpanStyle.End
+  fullName: FluentGpu.Foundation.SpanStyle.End
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int End { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property [End] As Integer
+  overload: FluentGpu.Foundation.SpanStyle.End*
+- uid: FluentGpu.Foundation.SpanStyle.Weight
+  commentId: P:FluentGpu.Foundation.SpanStyle.Weight
+  id: Weight
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: Weight
+  nameWithType: SpanStyle.Weight
+  fullName: FluentGpu.Foundation.SpanStyle.Weight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Weight
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ushort Weight { get; init; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Property Weight As UShort
+  overload: FluentGpu.Foundation.SpanStyle.Weight*
+- uid: FluentGpu.Foundation.SpanStyle.SizeDip
+  commentId: P:FluentGpu.Foundation.SpanStyle.SizeDip
+  id: SizeDip
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: SizeDip
+  nameWithType: SpanStyle.SizeDip
+  fullName: FluentGpu.Foundation.SpanStyle.SizeDip
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeDip
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float SizeDip { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property SizeDip As Single
+  overload: FluentGpu.Foundation.SpanStyle.SizeDip*
+- uid: FluentGpu.Foundation.SpanStyle.FontFamily
+  commentId: P:FluentGpu.Foundation.SpanStyle.FontFamily
+  id: FontFamily
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: FontFamily
+  nameWithType: SpanStyle.FontFamily
+  fullName: FluentGpu.Foundation.SpanStyle.FontFamily
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontFamily
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public StringId FontFamily { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Property FontFamily As StringId
+  overload: FluentGpu.Foundation.SpanStyle.FontFamily*
+- uid: FluentGpu.Foundation.SpanStyle.Color
+  commentId: P:FluentGpu.Foundation.SpanStyle.Color
+  id: Color
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: SpanStyle.Color
+  fullName: FluentGpu.Foundation.SpanStyle.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Foundation.SpanStyle.Color*
+- uid: FluentGpu.Foundation.SpanStyle.Flags
+  commentId: P:FluentGpu.Foundation.SpanStyle.Flags
+  id: Flags
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: Flags
+  nameWithType: SpanStyle.Flags
+  fullName: FluentGpu.Foundation.SpanStyle.Flags
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Flags
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public byte Flags { get; init; }
+    parameters: []
+    return:
+      type: System.Byte
+    content.vb: Public Property Flags As Byte
+  overload: FluentGpu.Foundation.SpanStyle.Flags*
+- uid: FluentGpu.Foundation.SpanStyle.UnderlineBit
+  commentId: F:FluentGpu.Foundation.SpanStyle.UnderlineBit
+  id: UnderlineBit
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: UnderlineBit
+  nameWithType: SpanStyle.UnderlineBit
+  fullName: FluentGpu.Foundation.SpanStyle.UnderlineBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UnderlineBit
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Draw the face-metric underline bar under this span (WinUI TextDecorations.Underline, per wrapped line).
+  example: []
+  syntax:
+    content: public const byte UnderlineBit = 1
+    return:
+      type: System.Byte
+    content.vb: Public Const UnderlineBit As Byte = 1
+- uid: FluentGpu.Foundation.SpanStyle.StrikethroughBit
+  commentId: F:FluentGpu.Foundation.SpanStyle.StrikethroughBit
+  id: StrikethroughBit
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: StrikethroughBit
+  nameWithType: SpanStyle.StrikethroughBit
+  fullName: FluentGpu.Foundation.SpanStyle.StrikethroughBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrikethroughBit
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Draw the face-metric strikethrough bar through this span.
+  example: []
+  syntax:
+    content: public const byte StrikethroughBit = 2
+    return:
+      type: System.Byte
+    content.vb: Public Const StrikethroughBit As Byte = 2
+- uid: FluentGpu.Foundation.SpanStyle.LinkBit
+  commentId: F:FluentGpu.Foundation.SpanStyle.LinkBit
+  id: LinkBit
+  parent: FluentGpu.Foundation.SpanStyle
+  langs:
+  - csharp
+  - vb
+  name: LinkBit
+  nameWithType: SpanStyle.LinkBit
+  fullName: FluentGpu.Foundation.SpanStyle.LinkBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LinkBit
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Hyperlink span: Hand cursor over its laid rects; click fires the element's TextSpan.OnClick
+        (RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)).
+  example: []
+  syntax:
+    content: public const byte LinkBit = 4
+    return:
+      type: System.Byte
+    content.vb: Public Const LinkBit As Byte = 4
+references:
+- uid: FluentGpu.Foundation.SpanStyle.Start
+  commentId: P:FluentGpu.Foundation.SpanStyle.Start
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Start
+  name: Start
+  nameWithType: SpanStyle.Start
+  fullName: FluentGpu.Foundation.SpanStyle.Start
+- uid: FluentGpu.Foundation.SpanStyle.End
+  commentId: P:FluentGpu.Foundation.SpanStyle.End
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_End
+  name: End
+  nameWithType: SpanStyle.End
+  fullName: FluentGpu.Foundation.SpanStyle.End
+- uid: FluentGpu.Foundation.TextSpan
+  commentId: T:FluentGpu.Foundation.TextSpan
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextSpan.html
+  name: TextSpan
+  nameWithType: TextSpan
+  fullName: FluentGpu.Foundation.TextSpan
+- uid: FluentGpu.Foundation.SpanRunTable.Shared
+  commentId: F:FluentGpu.Foundation.SpanRunTable.Shared
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared
+  name: Shared
+  nameWithType: SpanRunTable.Shared
+  fullName: FluentGpu.Foundation.SpanRunTable.Shared
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.SpanStyle}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.SpanStyle}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<SpanStyle>
+  nameWithType: IEquatable<SpanStyle>
+  fullName: System.IEquatable<FluentGpu.Foundation.SpanStyle>
+  nameWithType.vb: IEquatable(Of SpanStyle)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.SpanStyle)
+  name.vb: IEquatable(Of SpanStyle)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.SpanStyle.#ctor*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.#ctor
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle__ctor_System_Int32_System_Int32_System_UInt16_System_Single_FluentGpu_Foundation_StringId_FluentGpu_Foundation_ColorF_System_Byte_
+  name: SpanStyle
+  nameWithType: SpanStyle.SpanStyle
+  fullName: FluentGpu.Foundation.SpanStyle.SpanStyle
+  nameWithType.vb: SpanStyle.New
+  fullName.vb: FluentGpu.Foundation.SpanStyle.New
+  name.vb: New
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: FluentGpu.Foundation.SpanStyle.Start*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.Start
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Start
+  name: Start
+  nameWithType: SpanStyle.Start
+  fullName: FluentGpu.Foundation.SpanStyle.Start
+- uid: FluentGpu.Foundation.SpanStyle.End*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.End
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_End
+  name: End
+  nameWithType: SpanStyle.End
+  fullName: FluentGpu.Foundation.SpanStyle.End
+- uid: FluentGpu.Foundation.SpanStyle.Weight*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.Weight
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Weight
+  name: Weight
+  nameWithType: SpanStyle.Weight
+  fullName: FluentGpu.Foundation.SpanStyle.Weight
+- uid: FluentGpu.Foundation.SpanStyle.SizeDip*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.SizeDip
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_SizeDip
+  name: SizeDip
+  nameWithType: SpanStyle.SizeDip
+  fullName: FluentGpu.Foundation.SpanStyle.SizeDip
+- uid: FluentGpu.Foundation.SpanStyle.FontFamily*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.FontFamily
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_FontFamily
+  name: FontFamily
+  nameWithType: SpanStyle.FontFamily
+  fullName: FluentGpu.Foundation.SpanStyle.FontFamily
+- uid: FluentGpu.Foundation.SpanStyle.Color*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.Color
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Color
+  name: Color
+  nameWithType: SpanStyle.Color
+  fullName: FluentGpu.Foundation.SpanStyle.Color
+- uid: FluentGpu.Foundation.SpanStyle.Flags*
+  commentId: Overload:FluentGpu.Foundation.SpanStyle.Flags
+  href: FluentGpu.Foundation.SpanStyle.html#FluentGpu_Foundation_SpanStyle_Flags
+  name: Flags
+  nameWithType: SpanStyle.Flags
+  fullName: FluentGpu.Foundation.SpanStyle.Flags

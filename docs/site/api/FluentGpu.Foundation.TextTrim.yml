@@ -1,0 +1,168 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TextTrim
+  commentId: T:FluentGpu.Foundation.TextTrim
+  id: TextTrim
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TextTrim.CharacterEllipsis
+  - FluentGpu.Foundation.TextTrim.Clip
+  - FluentGpu.Foundation.TextTrim.None
+  - FluentGpu.Foundation.TextTrim.WordEllipsis
+  langs:
+  - csharp
+  - vb
+  name: TextTrim
+  nameWithType: TextTrim
+  fullName: FluentGpu.Foundation.TextTrim
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextTrim
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: How overflowing text is truncated (mirrors WinUI TextTrimming). Applies to the last visible line.
+  example: []
+  syntax:
+    content: 'public enum TextTrim : byte'
+    content.vb: Public Enum TextTrim As Byte
+- uid: FluentGpu.Foundation.TextTrim.None
+  commentId: F:FluentGpu.Foundation.TextTrim.None
+  id: None
+  parent: FluentGpu.Foundation.TextTrim
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: TextTrim.None
+  fullName: FluentGpu.Foundation.TextTrim.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.TextTrim
+- uid: FluentGpu.Foundation.TextTrim.Clip
+  commentId: F:FluentGpu.Foundation.TextTrim.Clip
+  id: Clip
+  parent: FluentGpu.Foundation.TextTrim
+  langs:
+  - csharp
+  - vb
+  name: Clip
+  nameWithType: TextTrim.Clip
+  fullName: FluentGpu.Foundation.TextTrim.Clip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clip
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Clip = 1
+    return:
+      type: FluentGpu.Foundation.TextTrim
+- uid: FluentGpu.Foundation.TextTrim.CharacterEllipsis
+  commentId: F:FluentGpu.Foundation.TextTrim.CharacterEllipsis
+  id: CharacterEllipsis
+  parent: FluentGpu.Foundation.TextTrim
+  langs:
+  - csharp
+  - vb
+  name: CharacterEllipsis
+  nameWithType: TextTrim.CharacterEllipsis
+  fullName: FluentGpu.Foundation.TextTrim.CharacterEllipsis
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CharacterEllipsis
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: CharacterEllipsis = 2
+    return:
+      type: FluentGpu.Foundation.TextTrim
+- uid: FluentGpu.Foundation.TextTrim.WordEllipsis
+  commentId: F:FluentGpu.Foundation.TextTrim.WordEllipsis
+  id: WordEllipsis
+  parent: FluentGpu.Foundation.TextTrim
+  langs:
+  - csharp
+  - vb
+  name: WordEllipsis
+  nameWithType: TextTrim.WordEllipsis
+  fullName: FluentGpu.Foundation.TextTrim.WordEllipsis
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TextLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WordEllipsis
+    path: ../../src/FluentGpu.Foundation/TextLayout.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: WordEllipsis = 3
+    return:
+      type: FluentGpu.Foundation.TextTrim
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.TextTrim
+  commentId: T:FluentGpu.Foundation.TextTrim
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextTrim.html
+  name: TextTrim
+  nameWithType: TextTrim
+  fullName: FluentGpu.Foundation.TextTrim

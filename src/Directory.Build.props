@@ -17,6 +17,10 @@
     <!-- Keep scaffold builds green; tighten later. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
+
+    <!-- DocFX API reference: emit XML doc files; don't warn on members without doc comments. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
 </Project>

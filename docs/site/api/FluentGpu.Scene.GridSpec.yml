@@ -1,0 +1,452 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.GridSpec
+  commentId: T:FluentGpu.Scene.GridSpec
+  id: GridSpec
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.GridSpec.ColGap
+  - FluentGpu.Scene.GridSpec.Columns
+  - FluentGpu.Scene.GridSpec.MinColWidth
+  - FluentGpu.Scene.GridSpec.RowGap
+  - FluentGpu.Scene.GridSpec.RowHeight
+  langs:
+  - csharp
+  - vb
+  name: GridSpec
+  nameWithType: GridSpec
+  fullName: FluentGpu.Scene.GridSpec
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GridSpec
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 195
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Grid layout spec for a grid container node (sparse side-table, O(grids)). The reconciler writes it from a
+
+    <code>GridEl</code>; the layout engine resolves column tracks at the final width and auto-flows the cells row-major.
+  example: []
+  syntax:
+    content: public struct GridSpec
+    content.vb: Public Structure GridSpec
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.GridSpec.Columns
+  commentId: F:FluentGpu.Scene.GridSpec.Columns
+  id: Columns
+  parent: FluentGpu.Scene.GridSpec
+  langs:
+  - csharp
+  - vb
+  name: Columns
+  nameWithType: GridSpec.Columns
+  fullName: FluentGpu.Scene.GridSpec.Columns
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Columns
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 197
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public TrackSize[] Columns
+    return:
+      type: FluentGpu.Foundation.TrackSize[]
+    content.vb: Public Columns As TrackSize()
+- uid: FluentGpu.Scene.GridSpec.ColGap
+  commentId: F:FluentGpu.Scene.GridSpec.ColGap
+  id: ColGap
+  parent: FluentGpu.Scene.GridSpec
+  langs:
+  - csharp
+  - vb
+  name: ColGap
+  nameWithType: GridSpec.ColGap
+  fullName: FluentGpu.Scene.GridSpec.ColGap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ColGap
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 198
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ColGap
+    return:
+      type: System.Single
+    content.vb: Public ColGap As Single
+- uid: FluentGpu.Scene.GridSpec.RowGap
+  commentId: F:FluentGpu.Scene.GridSpec.RowGap
+  id: RowGap
+  parent: FluentGpu.Scene.GridSpec
+  langs:
+  - csharp
+  - vb
+  name: RowGap
+  nameWithType: GridSpec.RowGap
+  fullName: FluentGpu.Scene.GridSpec.RowGap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RowGap
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 198
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float RowGap
+    return:
+      type: System.Single
+    content.vb: Public RowGap As Single
+- uid: FluentGpu.Scene.GridSpec.RowHeight
+  commentId: F:FluentGpu.Scene.GridSpec.RowHeight
+  id: RowHeight
+  parent: FluentGpu.Scene.GridSpec
+  langs:
+  - csharp
+  - vb
+  name: RowHeight
+  nameWithType: GridSpec.RowHeight
+  fullName: FluentGpu.Scene.GridSpec.RowHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RowHeight
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 199
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float RowHeight
+    return:
+      type: System.Single
+    content.vb: Public RowHeight As Single
+- uid: FluentGpu.Scene.GridSpec.MinColWidth
+  commentId: F:FluentGpu.Scene.GridSpec.MinColWidth
+  id: MinColWidth
+  parent: FluentGpu.Scene.GridSpec
+  langs:
+  - csharp
+  - vb
+  name: MinColWidth
+  nameWithType: GridSpec.MinColWidth
+  fullName: FluentGpu.Scene.GridSpec.MinColWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinColWidth
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 200
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MinColWidth
+    return:
+      type: System.Single
+    content.vb: Public MinColWidth As Single
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.TrackSize[]
+  isExternal: true
+  href: FluentGpu.Foundation.TrackSize.html
+  name: TrackSize[]
+  nameWithType: TrackSize[]
+  fullName: FluentGpu.Foundation.TrackSize[]
+  nameWithType.vb: TrackSize()
+  fullName.vb: FluentGpu.Foundation.TrackSize()
+  name.vb: TrackSize()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.TrackSize
+    name: TrackSize
+    href: FluentGpu.Foundation.TrackSize.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Foundation.TrackSize
+    name: TrackSize
+    href: FluentGpu.Foundation.TrackSize.html
+  - name: (
+  - name: )
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single

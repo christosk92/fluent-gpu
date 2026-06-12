@@ -1,0 +1,193 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RepeatKind
+  commentId: T:FluentGpu.Controls.RepeatKind
+  id: RepeatKind
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RepeatKind.Custom
+  - FluentGpu.Controls.RepeatKind.Grid
+  - FluentGpu.Controls.RepeatKind.Inline
+  - FluentGpu.Controls.RepeatKind.Stack
+  - FluentGpu.Controls.RepeatKind.Wrap
+  langs:
+  - csharp
+  - vb
+  name: RepeatKind
+  nameWithType: RepeatKind
+  fullName: FluentGpu.Controls.RepeatKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatKind
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public enum RepeatKind : byte'
+    content.vb: Public Enum RepeatKind As Byte
+- uid: FluentGpu.Controls.RepeatKind.Stack
+  commentId: F:FluentGpu.Controls.RepeatKind.Stack
+  id: Stack
+  parent: FluentGpu.Controls.RepeatKind
+  langs:
+  - csharp
+  - vb
+  name: Stack
+  nameWithType: RepeatKind.Stack
+  fullName: FluentGpu.Controls.RepeatKind.Stack
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stack
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Stack = 0
+    return:
+      type: FluentGpu.Controls.RepeatKind
+- uid: FluentGpu.Controls.RepeatKind.Grid
+  commentId: F:FluentGpu.Controls.RepeatKind.Grid
+  id: Grid
+  parent: FluentGpu.Controls.RepeatKind
+  langs:
+  - csharp
+  - vb
+  name: Grid
+  nameWithType: RepeatKind.Grid
+  fullName: FluentGpu.Controls.RepeatKind.Grid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grid
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Grid = 1
+    return:
+      type: FluentGpu.Controls.RepeatKind
+- uid: FluentGpu.Controls.RepeatKind.Custom
+  commentId: F:FluentGpu.Controls.RepeatKind.Custom
+  id: Custom
+  parent: FluentGpu.Controls.RepeatKind
+  langs:
+  - csharp
+  - vb
+  name: Custom
+  nameWithType: RepeatKind.Custom
+  fullName: FluentGpu.Controls.RepeatKind.Custom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Custom
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Custom = 2
+    return:
+      type: FluentGpu.Controls.RepeatKind
+- uid: FluentGpu.Controls.RepeatKind.Wrap
+  commentId: F:FluentGpu.Controls.RepeatKind.Wrap
+  id: Wrap
+  parent: FluentGpu.Controls.RepeatKind
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: RepeatKind.Wrap
+  fullName: FluentGpu.Controls.RepeatKind.Wrap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Wrap = 3
+    return:
+      type: FluentGpu.Controls.RepeatKind
+- uid: FluentGpu.Controls.RepeatKind.Inline
+  commentId: F:FluentGpu.Controls.RepeatKind.Inline
+  id: Inline
+  parent: FluentGpu.Controls.RepeatKind
+  langs:
+  - csharp
+  - vb
+  name: Inline
+  nameWithType: RepeatKind.Inline
+  fullName: FluentGpu.Controls.RepeatKind.Inline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Repeater.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inline
+    path: ../../src/FluentGpu.Controls/Repeater.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Inline = 4
+    return:
+      type: FluentGpu.Controls.RepeatKind
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.RepeatKind
+  commentId: T:FluentGpu.Controls.RepeatKind
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RepeatKind.html
+  name: RepeatKind
+  nameWithType: RepeatKind
+  fullName: FluentGpu.Controls.RepeatKind

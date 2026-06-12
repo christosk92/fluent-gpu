@@ -1,0 +1,201 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  id: FlexAlign
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.FlexAlign.Auto
+  - FluentGpu.Foundation.FlexAlign.Center
+  - FluentGpu.Foundation.FlexAlign.End
+  - FluentGpu.Foundation.FlexAlign.Start
+  - FluentGpu.Foundation.FlexAlign.Stretch
+  langs:
+  - csharp
+  - vb
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexAlign
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Cross-axis alignment (flexbox align-items / align-self). <xref href="FluentGpu.Foundation.FlexAlign.Auto" data-throw-if-not-resolved="false"></xref> on a child = inherit the container's align-items.
+  example: []
+  syntax:
+    content: 'public enum FlexAlign : byte'
+    content.vb: Public Enum FlexAlign As Byte
+- uid: FluentGpu.Foundation.FlexAlign.Auto
+  commentId: F:FluentGpu.Foundation.FlexAlign.Auto
+  id: Auto
+  parent: FluentGpu.Foundation.FlexAlign
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: FlexAlign.Auto
+  fullName: FluentGpu.Foundation.FlexAlign.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation.FlexAlign.Start
+  commentId: F:FluentGpu.Foundation.FlexAlign.Start
+  id: Start
+  parent: FluentGpu.Foundation.FlexAlign
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: FlexAlign.Start
+  fullName: FluentGpu.Foundation.FlexAlign.Start
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Start = 1
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation.FlexAlign.Center
+  commentId: F:FluentGpu.Foundation.FlexAlign.Center
+  id: Center
+  parent: FluentGpu.Foundation.FlexAlign
+  langs:
+  - csharp
+  - vb
+  name: Center
+  nameWithType: FlexAlign.Center
+  fullName: FluentGpu.Foundation.FlexAlign.Center
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Center
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Center = 2
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation.FlexAlign.End
+  commentId: F:FluentGpu.Foundation.FlexAlign.End
+  id: End
+  parent: FluentGpu.Foundation.FlexAlign
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: FlexAlign.End
+  fullName: FluentGpu.Foundation.FlexAlign.End
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: End = 3
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation.FlexAlign.Stretch
+  commentId: F:FluentGpu.Foundation.FlexAlign.Stretch
+  id: Stretch
+  parent: FluentGpu.Foundation.FlexAlign
+  langs:
+  - csharp
+  - vb
+  name: Stretch
+  nameWithType: FlexAlign.Stretch
+  fullName: FluentGpu.Foundation.FlexAlign.Stretch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stretch
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Stretch = 4
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+references:
+- uid: FluentGpu.Foundation.FlexAlign.Auto
+  commentId: F:FluentGpu.Foundation.FlexAlign.Auto
+  href: FluentGpu.Foundation.FlexAlign.html#FluentGpu_Foundation_FlexAlign_Auto
+  name: Auto
+  nameWithType: FlexAlign.Auto
+  fullName: FluentGpu.Foundation.FlexAlign.Auto
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign

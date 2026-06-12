@@ -1,0 +1,157 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+  commentId: T:FluentGpu.Controls.TeachingTip.HeroPlacement
+  id: TeachingTip.HeroPlacement
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TeachingTip.HeroPlacement.Auto
+  - FluentGpu.Controls.TeachingTip.HeroPlacement.Bottom
+  - FluentGpu.Controls.TeachingTip.HeroPlacement.Top
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip.HeroPlacement
+  nameWithType: TeachingTip.HeroPlacement
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HeroPlacement
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>TeachingTipHeroContentPlacementMode</code>.
+  example: []
+  syntax:
+    content: 'public enum TeachingTip.HeroPlacement : byte'
+    content.vb: Public Enum TeachingTip.HeroPlacement As Byte
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement.Auto
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroPlacement.Auto
+  id: Auto
+  parent: FluentGpu.Controls.TeachingTip.HeroPlacement
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TeachingTip.HeroPlacement.Auto
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Auto = 0
+    return:
+      type: FluentGpu.Controls.TeachingTip.HeroPlacement
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement.Top
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroPlacement.Top
+  id: Top
+  parent: FluentGpu.Controls.TeachingTip.HeroPlacement
+  langs:
+  - csharp
+  - vb
+  name: Top
+  nameWithType: TeachingTip.HeroPlacement.Top
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement.Top
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Top
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Top = 1
+    return:
+      type: FluentGpu.Controls.TeachingTip.HeroPlacement
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement.Bottom
+  commentId: F:FluentGpu.Controls.TeachingTip.HeroPlacement.Bottom
+  id: Bottom
+  parent: FluentGpu.Controls.TeachingTip.HeroPlacement
+  langs:
+  - csharp
+  - vb
+  name: Bottom
+  nameWithType: TeachingTip.HeroPlacement.Bottom
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement.Bottom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TeachingTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Bottom
+    path: ../../src/FluentGpu.Controls/TeachingTip.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Bottom = 2
+    return:
+      type: FluentGpu.Controls.TeachingTip.HeroPlacement
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+  commentId: T:FluentGpu.Controls.TeachingTip.HeroPlacement
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TeachingTip.html
+  name: TeachingTip.HeroPlacement
+  nameWithType: TeachingTip.HeroPlacement
+  fullName: FluentGpu.Controls.TeachingTip.HeroPlacement
+  spec.csharp:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html
+  spec.vb:
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    href: FluentGpu.Controls.TeachingTip.html
+  - name: .
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: HeroPlacement
+    href: FluentGpu.Controls.TeachingTip.HeroPlacement.html

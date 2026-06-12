@@ -1,0 +1,1018 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Diag
+  commentId: T:FluentGpu.Foundation.Diag
+  id: Diag
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Diag.CompiledIn
+  - FluentGpu.Foundation.Diag.Count(System.String,System.String,System.Int64)
+  - FluentGpu.Foundation.Diag.Dump(System.String)
+  - FluentGpu.Foundation.Diag.Enabled
+  - FluentGpu.Foundation.Diag.EnvFlag(System.String)
+  - FluentGpu.Foundation.Diag.Event(System.String,System.String)
+  - FluentGpu.Foundation.Diag.Reset
+  - FluentGpu.Foundation.Diag.Set(System.String,System.String,System.Object)
+  - FluentGpu.Foundation.Diag.Sink
+  - FluentGpu.Foundation.Diag.Snapshot
+  - FluentGpu.Foundation.Diag.Time(System.String,System.String)
+  langs:
+  - csharp
+  - vb
+  name: Diag
+  nameWithType: Diag
+  fullName: FluentGpu.Foundation.Diag
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Diag
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The standardized, reusable engine-wide diagnostics facility. Every subsystem instruments through it the same way:
+
+    <code>Diag.Count("text.glyph","rasterized")</code>, <code>Diag.Set("d3d12","glyphInstances", n)</code>,
+
+    <code>Diag.Event("rhi","device-lost")</code>, <code>using (Diag.Time("frame","record")) { … }</code>.
+
+
+    COST MODEL: the recording methods are <code>[Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]</code>, so on a Release
+
+    build (with neither symbol defined) the compiler removes the call site AND the argument evaluation entirely — a
+
+    `Diag.Set("text.atlas","nonZero", ExpensiveScan())` costs literally nothing in production. Define
+
+    <code>FLUENTGPU_DIAG</code> to keep diagnostics in a Release build; toggle at runtime with the AppContext switch
+
+    <code>"FluentGpu.Diagnostics"</code> or by setting <xref href="FluentGpu.Foundation.Diag.Enabled" data-throw-if-not-resolved="false"></xref>. Route output by setting <xref href="FluentGpu.Foundation.Diag.Sink" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public static class Diag
+    content.vb: Public Module Diag
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.Diag.CompiledIn
+  commentId: F:FluentGpu.Foundation.Diag.CompiledIn
+  id: CompiledIn
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: CompiledIn
+  nameWithType: Diag.CompiledIn
+  fullName: FluentGpu.Foundation.Diag.CompiledIn
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompiledIn
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public const bool CompiledIn = false
+    return:
+      type: System.Boolean
+    content.vb: Public Const CompiledIn As Boolean = False
+- uid: FluentGpu.Foundation.Diag.Enabled
+  commentId: F:FluentGpu.Foundation.Diag.Enabled
+  id: Enabled
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Enabled
+  nameWithType: Diag.Enabled
+  fullName: FluentGpu.Foundation.Diag.Enabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Enabled
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Runtime gate (only consulted when compiled in). Defaults off unless FG_DIAG is set; AppContext switch overrides.
+  example: []
+  syntax:
+    content: public static bool Enabled
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Enabled As Boolean
+- uid: FluentGpu.Foundation.Diag.Sink
+  commentId: F:FluentGpu.Foundation.Diag.Sink
+  id: Sink
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Sink
+  nameWithType: Diag.Sink
+  fullName: FluentGpu.Foundation.Diag.Sink
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Sink
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Where <xref href="FluentGpu.Foundation.Diag.Event(System.String%2cSystem.String)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Foundation.Diag.Dump(System.String)" data-throw-if-not-resolved="false"></xref> output goes (e.g. Console.WriteLine, the devtools panel, a log).
+  example: []
+  syntax:
+    content: public static Action<string>? Sink
+    return:
+      type: System.Action{System.String}
+    content.vb: Public Shared Sink As Action(Of String)
+- uid: FluentGpu.Foundation.Diag.EnvFlag(System.String)
+  commentId: M:FluentGpu.Foundation.Diag.EnvFlag(System.String)
+  id: EnvFlag(System.String)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: EnvFlag(string)
+  nameWithType: Diag.EnvFlag(string)
+  fullName: FluentGpu.Foundation.Diag.EnvFlag(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EnvFlag
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static bool EnvFlag(string name)
+    parameters:
+    - id: name
+      type: System.String
+    return:
+      type: System.Boolean
+    content.vb: Public Shared Function EnvFlag(name As String) As Boolean
+  overload: FluentGpu.Foundation.Diag.EnvFlag*
+  nameWithType.vb: Diag.EnvFlag(String)
+  fullName.vb: FluentGpu.Foundation.Diag.EnvFlag(String)
+  name.vb: EnvFlag(String)
+- uid: FluentGpu.Foundation.Diag.Count(System.String,System.String,System.Int64)
+  commentId: M:FluentGpu.Foundation.Diag.Count(System.String,System.String,System.Int64)
+  id: Count(System.String,System.String,System.Int64)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Count(string, string, long)
+  nameWithType: Diag.Count(string, string, long)
+  fullName: FluentGpu.Foundation.Diag.Count(string, string, long)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: >-
+      [Conditional("DEBUG")]
+
+      [Conditional("FLUENTGPU_DIAG")]
+
+      public static void Count(string category, string key, long delta = 1)
+    parameters:
+    - id: category
+      type: System.String
+    - id: key
+      type: System.String
+    - id: delta
+      type: System.Int64
+    content.vb: >-
+      <Conditional("DEBUG")>
+
+      <Conditional("FLUENTGPU_DIAG")>
+
+      Public Shared Sub Count(category As String, key As String, delta As Long = 1)
+  overload: FluentGpu.Foundation.Diag.Count*
+  attributes:
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: DEBUG
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: FLUENTGPU_DIAG
+  nameWithType.vb: Diag.Count(String, String, Long)
+  fullName.vb: FluentGpu.Foundation.Diag.Count(String, String, Long)
+  name.vb: Count(String, String, Long)
+- uid: FluentGpu.Foundation.Diag.Set(System.String,System.String,System.Object)
+  commentId: M:FluentGpu.Foundation.Diag.Set(System.String,System.String,System.Object)
+  id: Set(System.String,System.String,System.Object)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Set(string, string, object?)
+  nameWithType: Diag.Set(string, string, object?)
+  fullName: FluentGpu.Foundation.Diag.Set(string, string, object?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Set
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: >-
+      [Conditional("DEBUG")]
+
+      [Conditional("FLUENTGPU_DIAG")]
+
+      public static void Set(string category, string key, object? value)
+    parameters:
+    - id: category
+      type: System.String
+    - id: key
+      type: System.String
+    - id: value
+      type: System.Object
+    content.vb: >-
+      <Conditional("DEBUG")>
+
+      <Conditional("FLUENTGPU_DIAG")>
+
+      Public Shared Sub [Set](category As String, key As String, value As Object)
+  overload: FluentGpu.Foundation.Diag.Set*
+  attributes:
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: DEBUG
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: FLUENTGPU_DIAG
+  nameWithType.vb: Diag.Set(String, String, Object)
+  fullName.vb: FluentGpu.Foundation.Diag.Set(String, String, Object)
+  name.vb: Set(String, String, Object)
+- uid: FluentGpu.Foundation.Diag.Event(System.String,System.String)
+  commentId: M:FluentGpu.Foundation.Diag.Event(System.String,System.String)
+  id: Event(System.String,System.String)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Event(string, string)
+  nameWithType: Diag.Event(string, string)
+  fullName: FluentGpu.Foundation.Diag.Event(string, string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Event
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: >-
+      [Conditional("DEBUG")]
+
+      [Conditional("FLUENTGPU_DIAG")]
+
+      public static void Event(string category, string message)
+    parameters:
+    - id: category
+      type: System.String
+    - id: message
+      type: System.String
+    content.vb: >-
+      <Conditional("DEBUG")>
+
+      <Conditional("FLUENTGPU_DIAG")>
+
+      Public Shared Sub [Event](category As String, message As String)
+  overload: FluentGpu.Foundation.Diag.Event*
+  attributes:
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: DEBUG
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: FLUENTGPU_DIAG
+  nameWithType.vb: Diag.Event(String, String)
+  fullName.vb: FluentGpu.Foundation.Diag.Event(String, String)
+  name.vb: Event(String, String)
+- uid: FluentGpu.Foundation.Diag.Time(System.String,System.String)
+  commentId: M:FluentGpu.Foundation.Diag.Time(System.String,System.String)
+  id: Time(System.String,System.String)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Time(string, string)
+  nameWithType: Diag.Time(string, string)
+  fullName: FluentGpu.Foundation.Diag.Time(string, string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Time
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Scoped timing: <code>using (Diag.Time("layout","run")) { … }</code>. Internals elide on Release (const-false branch).'
+  example: []
+  syntax:
+    content: public static DiagScope Time(string category, string key)
+    parameters:
+    - id: category
+      type: System.String
+    - id: key
+      type: System.String
+    return:
+      type: FluentGpu.Foundation.DiagScope
+    content.vb: Public Shared Function Time(category As String, key As String) As DiagScope
+  overload: FluentGpu.Foundation.Diag.Time*
+  nameWithType.vb: Diag.Time(String, String)
+  fullName.vb: FluentGpu.Foundation.Diag.Time(String, String)
+  name.vb: Time(String, String)
+- uid: FluentGpu.Foundation.Diag.Snapshot
+  commentId: M:FluentGpu.Foundation.Diag.Snapshot
+  id: Snapshot
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Snapshot()
+  nameWithType: Diag.Snapshot()
+  fullName: FluentGpu.Foundation.Diag.Snapshot()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Snapshot
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Aggregate snapshot of all values + counters (for the devtools panel / a dump).
+  example: []
+  syntax:
+    content: public static string Snapshot()
+    return:
+      type: System.String
+    content.vb: Public Shared Function Snapshot() As String
+  overload: FluentGpu.Foundation.Diag.Snapshot*
+- uid: FluentGpu.Foundation.Diag.Dump(System.String)
+  commentId: M:FluentGpu.Foundation.Diag.Dump(System.String)
+  id: Dump(System.String)
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Dump(string?)
+  nameWithType: Diag.Dump(string?)
+  fullName: FluentGpu.Foundation.Diag.Dump(string?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dump
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 88
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: >-
+      [Conditional("DEBUG")]
+
+      [Conditional("FLUENTGPU_DIAG")]
+
+      public static void Dump(string? header = null)
+    parameters:
+    - id: header
+      type: System.String
+    content.vb: >-
+      <Conditional("DEBUG")>
+
+      <Conditional("FLUENTGPU_DIAG")>
+
+      Public Shared Sub Dump(header As String = Nothing)
+  overload: FluentGpu.Foundation.Diag.Dump*
+  attributes:
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: DEBUG
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: FLUENTGPU_DIAG
+  nameWithType.vb: Diag.Dump(String)
+  fullName.vb: FluentGpu.Foundation.Diag.Dump(String)
+  name.vb: Dump(String)
+- uid: FluentGpu.Foundation.Diag.Reset
+  commentId: M:FluentGpu.Foundation.Diag.Reset
+  id: Reset
+  parent: FluentGpu.Foundation.Diag
+  langs:
+  - csharp
+  - vb
+  name: Reset()
+  nameWithType: Diag.Reset()
+  fullName: FluentGpu.Foundation.Diag.Reset()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Diag.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reset
+    path: ../../src/FluentGpu.Foundation/Diag.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: >-
+      [Conditional("DEBUG")]
+
+      [Conditional("FLUENTGPU_DIAG")]
+
+      public static void Reset()
+    content.vb: >-
+      <Conditional("DEBUG")>
+
+      <Conditional("FLUENTGPU_DIAG")>
+
+      Public Shared Sub Reset()
+  overload: FluentGpu.Foundation.Diag.Reset*
+  attributes:
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: DEBUG
+  - type: System.Diagnostics.ConditionalAttribute
+    ctor: System.Diagnostics.ConditionalAttribute.#ctor(System.String)
+    arguments:
+    - type: System.String
+      value: FLUENTGPU_DIAG
+references:
+- uid: FluentGpu.Foundation.Diag.Enabled
+  commentId: F:FluentGpu.Foundation.Diag.Enabled
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Enabled
+  name: Enabled
+  nameWithType: Diag.Enabled
+  fullName: FluentGpu.Foundation.Diag.Enabled
+- uid: FluentGpu.Foundation.Diag.Sink
+  commentId: F:FluentGpu.Foundation.Diag.Sink
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Sink
+  name: Sink
+  nameWithType: Diag.Sink
+  fullName: FluentGpu.Foundation.Diag.Sink
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.Diag.Event(System.String,System.String)
+  commentId: M:FluentGpu.Foundation.Diag.Event(System.String,System.String)
+  isExternal: true
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Event_System_String_System_String_
+  name: Event(string, string)
+  nameWithType: Diag.Event(string, string)
+  fullName: FluentGpu.Foundation.Diag.Event(string, string)
+  nameWithType.vb: Diag.Event(String, String)
+  fullName.vb: FluentGpu.Foundation.Diag.Event(String, String)
+  name.vb: Event(String, String)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.Diag.Event(System.String,System.String)
+    name: Event
+    href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Event_System_String_System_String_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.Diag.Event(System.String,System.String)
+    name: Event
+    href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Event_System_String_System_String_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Foundation.Diag.Dump(System.String)
+  commentId: M:FluentGpu.Foundation.Diag.Dump(System.String)
+  isExternal: true
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Dump_System_String_
+  name: Dump(string)
+  nameWithType: Diag.Dump(string)
+  fullName: FluentGpu.Foundation.Diag.Dump(string)
+  nameWithType.vb: Diag.Dump(String)
+  fullName.vb: FluentGpu.Foundation.Diag.Dump(String)
+  name.vb: Dump(String)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.Diag.Dump(System.String)
+    name: Dump
+    href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Dump_System_String_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.Diag.Dump(System.String)
+    name: Dump
+    href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Dump_System_String_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Action{System.String}
+  commentId: T:System.Action{System.String}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<string>
+  nameWithType: Action<string>
+  fullName: System.Action<string>
+  nameWithType.vb: Action(Of String)
+  fullName.vb: System.Action(Of String)
+  name.vb: Action(Of String)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Foundation.Diag.EnvFlag*
+  commentId: Overload:FluentGpu.Foundation.Diag.EnvFlag
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_EnvFlag_System_String_
+  name: EnvFlag
+  nameWithType: Diag.EnvFlag
+  fullName: FluentGpu.Foundation.Diag.EnvFlag
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.Diag.Count*
+  commentId: Overload:FluentGpu.Foundation.Diag.Count
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Count_System_String_System_String_System_Int64_
+  name: Count
+  nameWithType: Diag.Count
+  fullName: FluentGpu.Foundation.Diag.Count
+- uid: System.Int64
+  commentId: T:System.Int64
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int64
+  name: long
+  nameWithType: long
+  fullName: long
+  nameWithType.vb: Long
+  fullName.vb: Long
+  name.vb: Long
+- uid: FluentGpu.Foundation.Diag.Set*
+  commentId: Overload:FluentGpu.Foundation.Diag.Set
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Set_System_String_System_String_System_Object_
+  name: Set
+  nameWithType: Diag.Set
+  fullName: FluentGpu.Foundation.Diag.Set
+- uid: FluentGpu.Foundation.Diag.Event*
+  commentId: Overload:FluentGpu.Foundation.Diag.Event
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Event_System_String_System_String_
+  name: Event
+  nameWithType: Diag.Event
+  fullName: FluentGpu.Foundation.Diag.Event
+- uid: FluentGpu.Foundation.Diag.Time*
+  commentId: Overload:FluentGpu.Foundation.Diag.Time
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Time_System_String_System_String_
+  name: Time
+  nameWithType: Diag.Time
+  fullName: FluentGpu.Foundation.Diag.Time
+- uid: FluentGpu.Foundation.DiagScope
+  commentId: T:FluentGpu.Foundation.DiagScope
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DiagScope.html
+  name: DiagScope
+  nameWithType: DiagScope
+  fullName: FluentGpu.Foundation.DiagScope
+- uid: FluentGpu.Foundation.Diag.Snapshot*
+  commentId: Overload:FluentGpu.Foundation.Diag.Snapshot
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Snapshot
+  name: Snapshot
+  nameWithType: Diag.Snapshot
+  fullName: FluentGpu.Foundation.Diag.Snapshot
+- uid: FluentGpu.Foundation.Diag.Dump*
+  commentId: Overload:FluentGpu.Foundation.Diag.Dump
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Dump_System_String_
+  name: Dump
+  nameWithType: Diag.Dump
+  fullName: FluentGpu.Foundation.Diag.Dump
+- uid: FluentGpu.Foundation.Diag.Reset*
+  commentId: Overload:FluentGpu.Foundation.Diag.Reset
+  href: FluentGpu.Foundation.Diag.html#FluentGpu_Foundation_Diag_Reset
+  name: Reset
+  nameWithType: Diag.Reset
+  fullName: FluentGpu.Foundation.Diag.Reset

@@ -1,0 +1,881 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.HyperlinkButton.Style
+  commentId: T:FluentGpu.Controls.HyperlinkButton.Style
+  id: HyperlinkButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+  - FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+  - FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+  - FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+  - FluentGpu.Controls.HyperlinkButton.Style.FontSize
+  - FluentGpu.Controls.HyperlinkButton.Style.Foreground
+  - FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+  - FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+  - FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+  - FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+  - FluentGpu.Controls.HyperlinkButton.Style.Padding
+  - FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+  - FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+  langs:
+  - csharp
+  - vb
+  name: HyperlinkButton.Style
+  nameWithType: HyperlinkButton.Style
+  fullName: FluentGpu.Controls.HyperlinkButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record HyperlinkButton.Style : IEquatable<HyperlinkButton.Style>'
+    content.vb: Public NotInheritable Class HyperlinkButton.Style Implements IEquatable(Of HyperlinkButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.HyperlinkButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.HyperlinkButton.Style.FontSize
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: HyperlinkButton.Style.FontSize
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.HyperlinkButton.Style.FontSize*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.Foreground
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: HyperlinkButton.Style.Foreground
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.Foreground*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+  id: ForegroundHover
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: ForegroundHover
+  nameWithType: HyperlinkButton.Style.ForegroundHover
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForegroundHover
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ForegroundHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ForegroundHover As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+  id: ForegroundPressed
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: ForegroundPressed
+  nameWithType: HyperlinkButton.Style.ForegroundPressed
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForegroundPressed
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ForegroundPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ForegroundPressed As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+  id: ForegroundDisabled
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: ForegroundDisabled
+  nameWithType: HyperlinkButton.Style.ForegroundDisabled
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForegroundDisabled
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF ForegroundDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property ForegroundDisabled As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+  id: BackgroundRest
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BackgroundRest
+  nameWithType: HyperlinkButton.Style.BackgroundRest
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackgroundRest
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF BackgroundRest { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property BackgroundRest As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+  id: HoverFill
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverFill
+  nameWithType: HyperlinkButton.Style.HoverFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverFill
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverFill As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.HoverFill*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+  id: PressedFill
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedFill
+  nameWithType: HyperlinkButton.Style.PressedFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedFill
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedFill As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.PressedFill*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+  id: DisabledFill
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledFill
+  nameWithType: HyperlinkButton.Style.DisabledFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledFill
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledFill As ColorF
+  overload: FluentGpu.Controls.HyperlinkButton.Style.DisabledFill*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.Padding
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.Padding
+  id: Padding
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: HyperlinkButton.Style.Padding
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Controls.HyperlinkButton.Style.Padding*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: HyperlinkButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI FocusVisualMargin = −3 (HyperlinkButton_themeresources.xaml:63); the engine draws the ring (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+  id: BrushTransitionMs
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BrushTransitionMs
+  nameWithType: HyperlinkButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BrushTransitionMs
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI ContentPresenter.BackgroundTransition = BrushTransition 83ms (HyperlinkButton_themeresources.xaml:69-71). NaN = snap.
+  example: []
+  syntax:
+    content: public float BrushTransitionMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BrushTransitionMs As Single
+  overload: FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs*
+- uid: FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+  commentId: P:FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+  id: UnderlineVisible
+  parent: FluentGpu.Controls.HyperlinkButton.Style
+  langs:
+  - csharp
+  - vb
+  name: UnderlineVisible
+  nameWithType: HyperlinkButton.Style.UnderlineVisible
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/HyperlinkButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UnderlineVisible
+    path: ../../src/FluentGpu.Controls/HyperlinkButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Text underline opt-in. Default FALSE = the WinUI 3 default (<code>HyperlinkUnderlineVisible</code> = False,
+        Hyperlink_themeresources.xaml:20; underline otherwise only under HighContrast — HyperLinkButton_Partial.cpp:207-212).
+        When true the label sets <code>TextEl.Underline</code> — the E9 production path: the recorder emits the face-metric
+        underline bar (DWrite underline position/thickness cached at measure) in the label's eased foreground.
+        The E8 HighContrast pass switches this on structurally.
+  example: []
+  syntax:
+    content: public bool UnderlineVisible { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property UnderlineVisible As Boolean
+  overload: FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.HyperlinkButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.HyperlinkButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<HyperlinkButton.Style>
+  nameWithType: IEquatable<HyperlinkButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.HyperlinkButton.Style>
+  nameWithType.vb: IEquatable(Of HyperlinkButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.HyperlinkButton.Style)
+  name.vb: IEquatable(Of HyperlinkButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.HyperlinkButton
+    name: HyperlinkButton
+    href: FluentGpu.Controls.HyperlinkButton.html
+  - name: .
+  - uid: FluentGpu.Controls.HyperlinkButton.Style
+    name: Style
+    href: FluentGpu.Controls.HyperlinkButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.HyperlinkButton
+    name: HyperlinkButton
+    href: FluentGpu.Controls.HyperlinkButton.html
+  - name: .
+  - uid: FluentGpu.Controls.HyperlinkButton.Style
+    name: Style
+    href: FluentGpu.Controls.HyperlinkButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.HyperlinkButton.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.FontSize
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_FontSize
+  name: FontSize
+  nameWithType: HyperlinkButton.Style.FontSize
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.FontSize
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.HyperlinkButton.Style.Foreground*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.Foreground
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_Foreground
+  name: Foreground
+  nameWithType: HyperlinkButton.Style.Foreground
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.Foreground
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_ForegroundHover
+  name: ForegroundHover
+  nameWithType: HyperlinkButton.Style.ForegroundHover
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundHover
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_ForegroundPressed
+  name: ForegroundPressed
+  nameWithType: HyperlinkButton.Style.ForegroundPressed
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundPressed
+- uid: FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_ForegroundDisabled
+  name: ForegroundDisabled
+  nameWithType: HyperlinkButton.Style.ForegroundDisabled
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.ForegroundDisabled
+- uid: FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_BackgroundRest
+  name: BackgroundRest
+  nameWithType: HyperlinkButton.Style.BackgroundRest
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.BackgroundRest
+- uid: FluentGpu.Controls.HyperlinkButton.Style.HoverFill*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_HoverFill
+  name: HoverFill
+  nameWithType: HyperlinkButton.Style.HoverFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.HoverFill
+- uid: FluentGpu.Controls.HyperlinkButton.Style.PressedFill*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_PressedFill
+  name: PressedFill
+  nameWithType: HyperlinkButton.Style.PressedFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.PressedFill
+- uid: FluentGpu.Controls.HyperlinkButton.Style.DisabledFill*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_DisabledFill
+  name: DisabledFill
+  nameWithType: HyperlinkButton.Style.DisabledFill
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.DisabledFill
+- uid: FluentGpu.Controls.HyperlinkButton.Style.Padding*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.Padding
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_Padding
+  name: Padding
+  nameWithType: HyperlinkButton.Style.Padding
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.Padding
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: HyperlinkButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.FocusVisualMargin
+- uid: FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_BrushTransitionMs
+  name: BrushTransitionMs
+  nameWithType: HyperlinkButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.BrushTransitionMs
+- uid: FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible*
+  commentId: Overload:FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+  href: FluentGpu.Controls.HyperlinkButton.Style.html#FluentGpu_Controls_HyperlinkButton_Style_UnderlineVisible
+  name: UnderlineVisible
+  nameWithType: HyperlinkButton.Style.UnderlineVisible
+  fullName: FluentGpu.Controls.HyperlinkButton.Style.UnderlineVisible
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean

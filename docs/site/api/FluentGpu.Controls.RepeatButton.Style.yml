@@ -1,0 +1,1342 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RepeatButton.Style
+  commentId: T:FluentGpu.Controls.RepeatButton.Style
+  id: RepeatButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RepeatButton.Style.Background
+  - FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+  - FluentGpu.Controls.RepeatButton.Style.BorderBrush
+  - FluentGpu.Controls.RepeatButton.Style.BorderWidth
+  - FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+  - FluentGpu.Controls.RepeatButton.Style.CornerRadius
+  - FluentGpu.Controls.RepeatButton.Style.DelayMs
+  - FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+  - FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+  - FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+  - FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+  - FluentGpu.Controls.RepeatButton.Style.FontSize
+  - FluentGpu.Controls.RepeatButton.Style.Foreground
+  - FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+  - FluentGpu.Controls.RepeatButton.Style.HoverBackground
+  - FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+  - FluentGpu.Controls.RepeatButton.Style.HoverForeground
+  - FluentGpu.Controls.RepeatButton.Style.IntervalMs
+  - FluentGpu.Controls.RepeatButton.Style.MinHeight
+  - FluentGpu.Controls.RepeatButton.Style.Padding
+  - FluentGpu.Controls.RepeatButton.Style.PressedBackground
+  - FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+  - FluentGpu.Controls.RepeatButton.Style.PressedForeground
+  - FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+  langs:
+  - csharp
+  - vb
+  name: RepeatButton.Style
+  nameWithType: RepeatButton.Style
+  fullName: FluentGpu.Controls.RepeatButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record RepeatButton.Style : IEquatable<RepeatButton.Style>'
+    content.vb: Public NotInheritable Class RepeatButton.Style Implements IEquatable(Of RepeatButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.RepeatButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.RepeatButton.Style.Background
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.Background
+  id: Background
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Background
+  nameWithType: RepeatButton.Style.Background
+  fullName: FluentGpu.Controls.RepeatButton.Style.Background
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Background
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Background { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Background As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.Background*
+- uid: FluentGpu.Controls.RepeatButton.Style.Foreground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: RepeatButton.Style.Foreground
+  fullName: FluentGpu.Controls.RepeatButton.Style.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.Foreground*
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverBackground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.HoverBackground
+  id: HoverBackground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverBackground
+  nameWithType: RepeatButton.Style.HoverBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverBackground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverBackground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.HoverBackground*
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverForeground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.HoverForeground
+  id: HoverForeground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverForeground
+  nameWithType: RepeatButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverForeground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF HoverForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property HoverForeground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.HoverForeground*
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedBackground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.PressedBackground
+  id: PressedBackground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedBackground
+  nameWithType: RepeatButton.Style.PressedBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBackground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedBackground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.PressedBackground*
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedForeground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.PressedForeground
+  id: PressedForeground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedForeground
+  nameWithType: RepeatButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedForeground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF PressedForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property PressedForeground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.PressedForeground*
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+  id: DisabledBackground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledBackground
+  nameWithType: RepeatButton.Style.DisabledBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledBackground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledBackground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledBackground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.DisabledBackground*
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+  id: DisabledForeground
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledForeground
+  nameWithType: RepeatButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledForeground
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledForeground As ColorF
+  overload: FluentGpu.Controls.RepeatButton.Style.DisabledForeground*
+- uid: FluentGpu.Controls.RepeatButton.Style.BorderBrush
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.BorderBrush
+  id: BorderBrush
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderBrush
+  nameWithType: RepeatButton.Style.BorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.BorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderBrush
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? BorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property BorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.RepeatButton.Style.BorderBrush*
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+  id: HoverBorderBrush
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HoverBorderBrush
+  nameWithType: RepeatButton.Style.HoverBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverBorderBrush
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? HoverBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property HoverBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush*
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+  id: PressedBorderBrush
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedBorderBrush
+  nameWithType: RepeatButton.Style.PressedBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBorderBrush
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? PressedBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property PressedBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush*
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+  id: DisabledBorderBrush
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledBorderBrush
+  nameWithType: RepeatButton.Style.DisabledBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledBorderBrush
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? DisabledBorderBrush { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property DisabledBorderBrush As GradientSpec?
+  overload: FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush*
+- uid: FluentGpu.Controls.RepeatButton.Style.BorderWidth
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.BorderWidth
+  id: BorderWidth
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BorderWidth
+  nameWithType: RepeatButton.Style.BorderWidth
+  fullName: FluentGpu.Controls.RepeatButton.Style.BorderWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderWidth
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BorderWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BorderWidth As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.BorderWidth*
+- uid: FluentGpu.Controls.RepeatButton.Style.CornerRadius
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: RepeatButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.RepeatButton.Style.CornerRadius
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float CornerRadius { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CornerRadius As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.CornerRadius*
+- uid: FluentGpu.Controls.RepeatButton.Style.Padding
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.Padding
+  id: Padding
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: RepeatButton.Style.Padding
+  fullName: FluentGpu.Controls.RepeatButton.Style.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Controls.RepeatButton.Style.Padding*
+- uid: FluentGpu.Controls.RepeatButton.Style.FontSize
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: RepeatButton.Style.FontSize
+  fullName: FluentGpu.Controls.RepeatButton.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.FontSize*
+- uid: FluentGpu.Controls.RepeatButton.Style.MinHeight
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: RepeatButton.Style.MinHeight
+  fullName: FluentGpu.Controls.RepeatButton.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.MinHeight*
+- uid: FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+  id: HorizontalContentAlignment
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: HorizontalContentAlignment
+  nameWithType: RepeatButton.Style.HorizontalContentAlignment
+  fullName: FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HorizontalContentAlignment
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI HorizontalContentAlignment equivalent; Control default Center (DependencyProperty.cpp:646-648).
+  example: []
+  syntax:
+    content: public FlexJustify HorizontalContentAlignment { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+    content.vb: Public Property HorizontalContentAlignment As FlexJustify
+  overload: FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment*
+- uid: FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+  id: VerticalContentAlignment
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: VerticalContentAlignment
+  nameWithType: RepeatButton.Style.VerticalContentAlignment
+  fullName: FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VerticalContentAlignment
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI VerticalContentAlignment equivalent; Control default Center (DependencyProperty.cpp:650-652).
+  example: []
+  syntax:
+    content: public FlexAlign VerticalContentAlignment { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property VerticalContentAlignment As FlexAlign
+  overload: FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment*
+- uid: FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: RepeatButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI FocusVisualMargin = −3 (RepeatButton_themeresources.xaml:91); the engine draws the ring (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+  id: BackgroundSizing
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BackgroundSizing
+  nameWithType: RepeatButton.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BackgroundSizing
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI BackgroundSizing = InnerBorderEdge (RepeatButton_themeresources.xaml:80). See
+        <xref href="FluentGpu.Controls.BackgroundSizing" data-throw-if-not-resolved="false"></xref> for the renderer-mapping note.
+  example: []
+  syntax:
+    content: public BackgroundSizing BackgroundSizing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.BackgroundSizing
+    content.vb: Public Property BackgroundSizing As BackgroundSizing
+  overload: FluentGpu.Controls.RepeatButton.Style.BackgroundSizing*
+- uid: FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+  id: BrushTransitionMs
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: BrushTransitionMs
+  nameWithType: RepeatButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BrushTransitionMs
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI ContentPresenter.BackgroundTransition = BrushTransition 83ms (RepeatButton_themeresources.xaml:97-99). NaN = snap.
+  example: []
+  syntax:
+    content: public float BrushTransitionMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BrushTransitionMs As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs*
+- uid: FluentGpu.Controls.RepeatButton.Style.DelayMs
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.DelayMs
+  id: DelayMs
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DelayMs
+  nameWithType: RepeatButton.Style.DelayMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.DelayMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DelayMs
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI RepeatButton <code>Delay</code> (ms before the repeat starts) — NaN = the DP default 500
+        (DependencyProperty.cpp:714-720); must be positive (RepeatButton_Partial.cpp:149-165).
+  example: []
+  syntax:
+    content: public float DelayMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DelayMs As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.DelayMs*
+- uid: FluentGpu.Controls.RepeatButton.Style.IntervalMs
+  commentId: P:FluentGpu.Controls.RepeatButton.Style.IntervalMs
+  id: IntervalMs
+  parent: FluentGpu.Controls.RepeatButton.Style
+  langs:
+  - csharp
+  - vb
+  name: IntervalMs
+  nameWithType: RepeatButton.Style.IntervalMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.IntervalMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RepeatButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IntervalMs
+    path: ../../src/FluentGpu.Controls/RepeatButton.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI RepeatButton <code>Interval</code> (ms between repeats) — NaN = the DP default 33; the ScrollBar
+        template arrows use 50 (RepeatButton_Partial.cpp:167-182 validates positive).
+  example: []
+  syntax:
+    content: public float IntervalMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property IntervalMs As Single
+  overload: FluentGpu.Controls.RepeatButton.Style.IntervalMs*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.RepeatButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.RepeatButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<RepeatButton.Style>
+  nameWithType: IEquatable<RepeatButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.RepeatButton.Style>
+  nameWithType.vb: IEquatable(Of RepeatButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.RepeatButton.Style)
+  name.vb: IEquatable(Of RepeatButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.RepeatButton
+    name: RepeatButton
+    href: FluentGpu.Controls.RepeatButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RepeatButton.Style
+    name: Style
+    href: FluentGpu.Controls.RepeatButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.RepeatButton
+    name: RepeatButton
+    href: FluentGpu.Controls.RepeatButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RepeatButton.Style
+    name: Style
+    href: FluentGpu.Controls.RepeatButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.RepeatButton.Style.Background*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.Background
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_Background
+  name: Background
+  nameWithType: RepeatButton.Style.Background
+  fullName: FluentGpu.Controls.RepeatButton.Style.Background
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.RepeatButton.Style.Foreground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.Foreground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_Foreground
+  name: Foreground
+  nameWithType: RepeatButton.Style.Foreground
+  fullName: FluentGpu.Controls.RepeatButton.Style.Foreground
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverBackground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.HoverBackground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_HoverBackground
+  name: HoverBackground
+  nameWithType: RepeatButton.Style.HoverBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverBackground
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverForeground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.HoverForeground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_HoverForeground
+  name: HoverForeground
+  nameWithType: RepeatButton.Style.HoverForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverForeground
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedBackground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.PressedBackground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_PressedBackground
+  name: PressedBackground
+  nameWithType: RepeatButton.Style.PressedBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedBackground
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedForeground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.PressedForeground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_PressedForeground
+  name: PressedForeground
+  nameWithType: RepeatButton.Style.PressedForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedForeground
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledBackground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_DisabledBackground
+  name: DisabledBackground
+  nameWithType: RepeatButton.Style.DisabledBackground
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledBackground
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledForeground*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_DisabledForeground
+  name: DisabledForeground
+  nameWithType: RepeatButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledForeground
+- uid: FluentGpu.Controls.RepeatButton.Style.BorderBrush*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.BorderBrush
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_BorderBrush
+  name: BorderBrush
+  nameWithType: RepeatButton.Style.BorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.BorderBrush
+- uid: System.Nullable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.Nullable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec?
+  nameWithType: GradientSpec?
+  fullName: FluentGpu.Foundation.GradientSpec?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_HoverBorderBrush
+  name: HoverBorderBrush
+  nameWithType: RepeatButton.Style.HoverBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.HoverBorderBrush
+- uid: FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_PressedBorderBrush
+  name: PressedBorderBrush
+  nameWithType: RepeatButton.Style.PressedBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.PressedBorderBrush
+- uid: FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_DisabledBorderBrush
+  name: DisabledBorderBrush
+  nameWithType: RepeatButton.Style.DisabledBorderBrush
+  fullName: FluentGpu.Controls.RepeatButton.Style.DisabledBorderBrush
+- uid: FluentGpu.Controls.RepeatButton.Style.BorderWidth*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.BorderWidth
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_BorderWidth
+  name: BorderWidth
+  nameWithType: RepeatButton.Style.BorderWidth
+  fullName: FluentGpu.Controls.RepeatButton.Style.BorderWidth
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.RepeatButton.Style.CornerRadius*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.CornerRadius
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_CornerRadius
+  name: CornerRadius
+  nameWithType: RepeatButton.Style.CornerRadius
+  fullName: FluentGpu.Controls.RepeatButton.Style.CornerRadius
+- uid: FluentGpu.Controls.RepeatButton.Style.Padding*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.Padding
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_Padding
+  name: Padding
+  nameWithType: RepeatButton.Style.Padding
+  fullName: FluentGpu.Controls.RepeatButton.Style.Padding
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Controls.RepeatButton.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.FontSize
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_FontSize
+  name: FontSize
+  nameWithType: RepeatButton.Style.FontSize
+  fullName: FluentGpu.Controls.RepeatButton.Style.FontSize
+- uid: FluentGpu.Controls.RepeatButton.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.MinHeight
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_MinHeight
+  name: MinHeight
+  nameWithType: RepeatButton.Style.MinHeight
+  fullName: FluentGpu.Controls.RepeatButton.Style.MinHeight
+- uid: FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_HorizontalContentAlignment
+  name: HorizontalContentAlignment
+  nameWithType: RepeatButton.Style.HorizontalContentAlignment
+  fullName: FluentGpu.Controls.RepeatButton.Style.HorizontalContentAlignment
+- uid: FluentGpu.Foundation.FlexJustify
+  commentId: T:FluentGpu.Foundation.FlexJustify
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexJustify.html
+  name: FlexJustify
+  nameWithType: FlexJustify
+  fullName: FluentGpu.Foundation.FlexJustify
+- uid: FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_VerticalContentAlignment
+  name: VerticalContentAlignment
+  nameWithType: RepeatButton.Style.VerticalContentAlignment
+  fullName: FluentGpu.Controls.RepeatButton.Style.VerticalContentAlignment
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: RepeatButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.RepeatButton.Style.FocusVisualMargin
+- uid: FluentGpu.Controls.BackgroundSizing
+  commentId: T:FluentGpu.Controls.BackgroundSizing
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.BackgroundSizing.html
+  name: BackgroundSizing
+  nameWithType: BackgroundSizing
+  fullName: FluentGpu.Controls.BackgroundSizing
+- uid: FluentGpu.Controls.RepeatButton.Style.BackgroundSizing*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_BackgroundSizing
+  name: BackgroundSizing
+  nameWithType: RepeatButton.Style.BackgroundSizing
+  fullName: FluentGpu.Controls.RepeatButton.Style.BackgroundSizing
+- uid: FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_BrushTransitionMs
+  name: BrushTransitionMs
+  nameWithType: RepeatButton.Style.BrushTransitionMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.BrushTransitionMs
+- uid: FluentGpu.Controls.RepeatButton.Style.DelayMs*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.DelayMs
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_DelayMs
+  name: DelayMs
+  nameWithType: RepeatButton.Style.DelayMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.DelayMs
+- uid: FluentGpu.Controls.RepeatButton.Style.IntervalMs*
+  commentId: Overload:FluentGpu.Controls.RepeatButton.Style.IntervalMs
+  href: FluentGpu.Controls.RepeatButton.Style.html#FluentGpu_Controls_RepeatButton_Style_IntervalMs
+  name: IntervalMs
+  nameWithType: RepeatButton.Style.IntervalMs
+  fullName: FluentGpu.Controls.RepeatButton.Style.IntervalMs

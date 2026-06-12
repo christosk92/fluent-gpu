@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Media and animation | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Media and animation | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/app-authors/media-and-animation.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="media-and-animation">Media and animation</h1>
+
+<p>Two things on this page have the same secret: <strong>they reach pixels without re-rendering your component.</strong> An
+async image swaps its texture in place when the decode lands; an animation hook writes a transform every frame on
+the compositor. Neither re-runs <code>Render()</code>, neither relayouts. That is the whole reason media and motion live
+together here — they are the two big &quot;below the signal&quot; mechanisms, the ones that move pixels while your component
+tree sits perfectly still.</p>
+<p>If you have not read it yet, start with the signals mental model in
+<a href="../../guide/reactivity.md">reactivity</a> and the element/hook reference in
+<a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a>. This page builds on both.</p>
+<p>The runnable source for everything below is the gallery's <strong>Animation</strong> and <strong>Images</strong> pages
+(<code>src/FluentGpu.WindowsApp/AnimationPage.cs</code>, <code>src/FluentGpu.WindowsApp/GalleryPages.cs</code>) — open them alongside
+this doc.</p>
+<hr>
+<h2 id="async-images">Async images</h2>
+<p><code>Ui.Image(...)</code> returns an <code>ImageEl</code>: an async, cached, residency-pinned bitmap. You give it a source (a URL or a
+local path) and a display size; it shows a flat <strong>placeholder tint</strong> until the decode lands, then cross-fades the
+real pixels in. You never touch a decoder, a cache, or a GPU texture.</p>
+<pre><code class="lang-csharp">using static FluentGpu.Dsl.Ui;
+
+// Image(source, width, height, corners = 0, placeholder = null, blurHash = null, transition = null)
+Image(&quot;https://i.scdn.co/image/ab67616d…&quot;, 150f, 150f, 8f, &quot;#273E6C&quot;)
+</code></pre>
+<p>The full factory signature (<code>src/FluentGpu.Dsl/Factories.cs</code>):</p>
+<pre><code class="lang-csharp">public static ImageEl Image(string source, float width, float height, float corners = 0f,
+                            ColorF? placeholder = null, string? blurHash = null, ImageTransition? transition = null)
+</code></pre>
+<p>The placeholder argument also accepts a hex string (<code>&quot;#273E6C&quot;</code>) so a palette table reads cleanly. Corner radius
+is just a number: <strong><code>0</code> is square, half the tile size is a circle</strong> — the same decode feeds any shape.</p>
+<pre><code class="lang-csharp">// One decode, three shapes (the gallery's &quot;Corner-radius variants&quot; card):
+Image(cover, 80f, 80f, 0f,  &quot;#273E6C&quot;);   // square
+Image(cover, 80f, 80f, 12f, &quot;#4F776C&quot;);   // rounded
+Image(cover, 80f, 80f, 40f, &quot;#5C496D&quot;);   // circle (radius = half of 80)
+</code></pre>
+<h3 id="size-variants-and-why-you-request-a-size">Size variants and why you request a size</h3>
+<p>Decode is <strong>constrained to the display size</strong> you ask for — a 3000 px cover never materializes full-res in
+memory; the worker decodes straight to the requested bucket. So request the size you will actually draw (×2 for
+crispness at high DPI is a fine policy), and the cache keys on that logical extent, giving each size its own
+residency slot:</p>
+<pre><code class="lang-csharp">// Gallery &quot;Size variants&quot;: one source URL, three requested sizes → three cache slots.
+Image(cover48,  48f,  48f,  6f, tint);
+Image(cover80,  80f,  80f,  6f, tint);
+Image(cover120, 120f, 120f, 6f, tint);
+</code></pre>
+<h3 id="the-pipeline-behind-the-tile-wic--disk-cache--gpu">The pipeline behind the tile (WIC → disk cache → GPU)</h3>
+<p>When you mount an <code>Image</code>, the engine fetches the bytes over HTTP(S) or from disk, decodes them off the UI thread
+on a worker pool (WIC on Windows, constrained to the bucket size), caches the result, and uploads it to a GPU
+texture — then flips the tile from placeholder to image with a cross-fade. The decode worker pool, the bounded
+request channel with priority-drop backpressure, the LRU residency budget, and the pin-while-visible rule are all
+described in the engine design — see <a href="../../../design/subsystems/media-pipeline.md">the media pipeline subsystem</a>.
+As an app author you only need three facts:</p>
+<ul>
+<li><strong>It is off-thread and cached.</strong> Scrolling a wall of art does not block the UI thread.</li>
+<li><strong>Off-screen art evicts; returning re-requests.</strong> Memory stays bounded; a scroll-back re-fades.</li>
+<li><strong>Bind the row height to your fixed tile size, never to the image's natural size.</strong> Feeding a late-arriving
+<code>NaturalW/NaturalH</code> back into the layout of a virtualized row creates a decode→measure→relayout loop. The decode
+bucket is fixed; keep layout fixed too.</li>
+</ul>
+<h3 id="the-reveal-transition">The reveal transition</h3>
+<p>The placeholder→image cross-fade is the engine's shared motion vocabulary — a duration plus an
+<a href="#springs-and-tweens-the-named-curves"><code>Easing</code></a> curve — so an image reveal animates exactly like every other
+control. Override it per image, or set the app-wide default once at startup
+(<code>src/FluentGpu.Foundation/ImageTransition.cs</code>):</p>
+<pre><code class="lang-csharp">// App-wide default is a ~220ms FluentDecelerate fade. Disable per-image, or pick a custom fade:
+Image(cover, 96f, 96f, 8f, transition: ImageTransition.None);                 // snap in, no fade
+Image(cover, 96f, 96f, 8f, transition: ImageTransition.Fade(120f));           // faster fade
+ImageTransition.Default = ImageTransition.Fade(300f, Easing.FluentDecelerate); // once, at startup
+</code></pre>
+<h3 id="bound-sources-for-recycled-rows-the-imageel-record">Bound sources for recycled rows (the <code>ImageEl</code> record)</h3>
+<p>In a virtualized list the row is built <strong>once per visible slot</strong> and rebound as you scroll. For that you set the
+unified-<code>Prop</code> channels on the record directly instead of calling the <code>Image(...)</code> factory, so the recycled slot
+swaps its art by re-running a thunk — no element rebuild (<code>src/FluentGpu.Dsl/Element.cs</code>,
+<code>src/FluentGpu.WindowsApp/GalleryPages.cs</code>):</p>
+<pre><code class="lang-csharp">// A bound virtual row: Source/Placeholder are thunks that read the row's index signal.
+new ImageEl
+{
+    Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
+    Source = Prop.Of(() =&gt; Cover(idx.Value)),         // re-requests art when idx changes
+    Placeholder = Prop.Of(() =&gt; TileTint(idx.Value)), // tint follows the rebind
+}
+</code></pre>
+<p><code>ImageEl</code> exposes <code>Source</code>, <code>Placeholder</code> (both <code>Prop&lt;T&gt;</code> — a value, a <code>Func&lt;T&gt;</code>, or a signal), <code>Width</code>, <code>Height</code>,
+<code>Corners</code>, <code>BlurHash</code>, and <code>Transition</code>. See <a href="virtualized-lists-and-itemsview.html">virtualized lists &amp; ItemsView</a>
+for the recycler fast path this feeds.</p>
+<h2 id="image-hooks">Image hooks</h2>
+<p><code>Ui.Image(...)</code> paints. The <strong><code>UseImage</code> hook</strong> lets a component <em>observe</em> an image's load state — to show a
+spinner, swap in a broken-art fallback, or read the failure reason — and <strong><code>PrefetchImage</code></strong> warms a decode before
+the art scrolls into view. They are protected methods on <code>Component</code>
+(<code>src/FluentGpu.Hooks/Component.cs</code>, <code>src/FluentGpu.Hooks/RenderContext.cs</code>):</p>
+<pre><code class="lang-csharp">protected ImageBinding UseImage(string src, int decodePx,
+                                ImagePriority priority = ImagePriority.Visible, string? blurHash = null);
+protected void PrefetchImage(string src, int decodePx);
+</code></pre>
+<p><code>UseImage</code> subscribes the component to image-status changes, so a <code>Pending → Ready</code> transition re-renders <strong>just
+this component</strong> (granular re-render, not the whole tree). It returns an <code>ImageBinding</code>
+(<code>src/FluentGpu.Scene/ImageCache.cs</code>):</p>
+<pre><code class="lang-csharp">public readonly record struct ImageBinding(ImageHandle Handle, ImageState State, ImageFailureKind Failure, int Attempts)
+{
+    public bool IsReady   =&gt; State == ImageState.Ready;
+    public bool IsLoading =&gt; State is ImageState.None or ImageState.Pending;
+    public bool IsFailed  =&gt; State == ImageState.Failed;
+}
+</code></pre>
+<p>A spinner-until-ready pattern. Note that <code>UseImage</code> tracks status but does <strong>not</strong> paint — you still draw with
+<code>Ui.Image(...)</code> (or an <code>ImageEl</code>):</p>
+<pre><code class="lang-csharp">sealed class Cover : Component
+{
+    public required string Url;
+    public override Element Render()
+    {
+        var img = UseImage(Url, 160);          // observe load state (re-renders this component on change)
+        if (img.IsFailed)  return BrokenArtTile();
+        if (img.IsLoading) return Spinner();
+        return Image(Url, 160f, 160f, 8f);     // resident → paint the real tile
+    }
+}
+</code></pre>
+<p><code>ImagePriority</code> is the decode urgency the worker pool drains in order — under backpressure the lowest off-screen
+lane is dropped first, never <code>Visible</code> (<code>src/FluentGpu.Scene/ImageCache.cs</code>):</p>
+<pre><code class="lang-csharp">public enum ImagePriority : byte { Visible = 0, Overscan = 1, Prefetch = 2 }
+</code></pre>
+<p>Use <code>PrefetchImage</code> (which requests at <code>Prefetch</code> priority) to fill the cache for art the user is about to reach —
+the next page of a grid, the next track's cover:</p>
+<pre><code class="lang-csharp">PrefetchImage(nextTrackCover, 320);   // warm it now; it's resident before the now-playing view mounts
+</code></pre>
+<hr>
+<h2 id="animation-hooks-are-composited--no-re-render-no-relayout">Animation hooks are composited — no re-render, no relayout</h2>
+<p>This is the load-bearing sentence for motion in FluentGpu. An animation hook <strong>seeds a track on the component's
+own node</strong> and the engine advances it every frame on the compositor, re-recording only <code>LocalTransform</code> /
+<code>Opacity</code> (and the geometry channels below). It <strong>never re-renders your component and never relayouts.</strong> A
+60 fps animation costs zero <code>Render()</code> calls.</p>
+<p>That is the opposite of a <code>setState</code>-per-tick loop, which re-runs <code>Render()</code> + reconcile + a scoped relayout on
+every frame and tanks your frame rate. The <a href="../../guide/pitfalls.md">pitfalls table</a> calls this out directly:
+&quot;Dragging a slider tanks FPS → a <code>setState</code> per pointer-move re-renders the owning component every frame.&quot; The
+fix is always the same — drive the value through a bind or an animation hook, not through component state. There is
+a <a href="#prefer-a-transform-bind-or-a-hook-over-setstate-per-tick">whole section below</a> on choosing between them.</p>
+<p>The animatable channels are the <code>AnimChannel</code> enum (<code>src/FluentGpu.Animation/AnimEngine.cs</code>):</p>
+<pre><code class="lang-csharp">public enum AnimChannel : byte
+{
+    TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity,     // compositor transform/opacity
+    SizeW, SizeH,                                                  // presented size (reveal)
+    StrokeTrimStart, StrokeTrimEnd,                               // stroke draw-on
+    ClipL, ClipT, ClipR, ClipB,                                  // clip-rect reveal (edge sweep)
+    LayoutW, LayoutH,                                            // real layout size (the reflow exception)
+}
+</code></pre>
+<p>The first six write the node's transform/opacity (TransformDirty / PaintDirty — composited). The clip and
+stroke-trim channels reveal pixels without moving layout. Only <code>LayoutW</code>/<code>LayoutH</code> (and <code>SizeMode.Reflow</code> below)
+deliberately touch real layout — see <a href="#geometry-reveals">geometry reveals</a> and
+<a href="#declarative-layout-transitions">declarative layout transitions</a>.</p>
+<h3 id="springs-and-tweens-the-named-curves">Springs and tweens (the named curves)</h3>
+<p>The four scalar hooks all live on the component and take <code>deps</code> that re-seed the track when they change
+(<code>src/FluentGpu.Hooks/RenderContext.cs</code>):</p>
+<pre><code class="lang-csharp">UseSpring(AnimChannel ch, float to, SpringParams spring, params object[] deps);
+UseTransition(AnimChannel ch, float from, float to, float ms, Easing e = Easing.EaseInOut, params object[] deps);
+UseKeyframes(AnimChannel ch, Keyframe[] keys, float ms, bool loop = false, params object[] deps);
+UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func&lt;float&gt; source, float min, float max, params object[] deps);
+</code></pre>
+<p>A <strong>tween</strong> is a fixed-duration eased interpolation; a <strong>spring</strong> is a velocity-carrying physical settle that
+retargets without snapping (interrupt it mid-flight and it keeps its momentum). From the gallery's hooks demo
+(<code>AnimHooksDemo</code> in <code>AnimationPage.cs</code>):</p>
+<pre><code class="lang-csharp">// Mount fade-in (tween): opacity 0→1 over 500ms, the &quot;mount&quot; dep seeds it once.
+UseTransition(AnimChannel.Opacity, 0f, 1f, 500f, Easing.EaseOut, &quot;mount&quot;);
+
+// Looping pulse (keyframes): scale 1 → 1.25 → 1, repeating.
+UseKeyframes(AnimChannel.ScaleX, [new(0f, 1f), new(0.5f, 1.25f), new(1f, 1f)], 1400f, loop: true);
+UseKeyframes(AnimChannel.ScaleY, [new(0f, 1f), new(0.5f, 1.25f), new(1f, 1f)], 1400f, loop: true);
+
+// Spring toggle: scale to 1.2 when `on` flips; the spring carries velocity across interrupts.
+UseSpring(AnimChannel.ScaleX, on ? 1.2f : 1f, SpringParams.FromResponse(0.3f, 0.5f), on);
+</code></pre>
+<p><code>SpringParams.FromResponse(responseSec, dampingRatio)</code> is the friendly iOS/Compose form — <code>response</code> ≈ the settle
+time in seconds, <code>dampingRatio</code> 1 = critical (no overshoot), <code>&lt; 1</code> = bouncy (<code>src/FluentGpu.Animation/AnimEngine.cs</code>).</p>
+<p>A <code>Keyframe</code> is <code>(offset 0..1, value, optional easing)</code>; the named curves are the <code>Easing</code> enum
+(<code>src/FluentGpu.Foundation/Easing.cs</code>):</p>
+<pre><code class="lang-csharp">public enum Easing : byte
+{
+    Linear, EaseIn, EaseOut, EaseInOut, Sine, Quad, Cubic, Expo, Back, Elastic, Bounce,
+    FluentStandard,   // move / reposition  — cubic-bezier(0.8, 0.0, 0.2, 1.0)
+    FluentDecelerate, // entrance / show    — cubic-bezier(0.1, 0.9, 0.2, 1.0)
+    FluentAccelerate, // exit / hide        — cubic-bezier(0.9, 0.1, 1.0, 0.2)
+    FluentPopOpen,    // flyout / menu open — cubic-bezier(0, 0, 0, 1)
+}
+</code></pre>
+<p>The four <code>Fluent*</code> curves are the real WinUI motion vocabulary; prefer them for Fluent-feeling motion. Any cubic
+bezier is also expressible with <code>EasingSpec.CubicBezier(x1, y1, x2, y2)</code> — that is how a WinUI storyboard KeySpline
+ports over verbatim (a <code>Keyframe</code> ctor accepts an <code>EasingSpec</code>):</p>
+<pre><code class="lang-csharp">new Keyframe(1f, 1f, EasingSpec.CubicBezier(0.55f, 0f, 0f, 1f))
+</code></pre>
+<p><code>UseDrivenAnimation</code> is the odd one out: instead of wall-clock time, the track's progress is driven by <strong>any value
+source</strong> — a scroll offset, a playback position, a slider — so a header can fade by scroll position rather than by
+a timer. (The gallery shows the same idea through the lower-level <code>AnimEngine.Drive</code>; see
+<a href="#authored-timelines-with-animengine">authored timelines</a>.)</p>
+<h3 id="motion-sugar-useentrance-usehoverscale-the-useanimatedvalue-caveat">Motion sugar (UseEntrance, UseHoverScale; the UseAnimatedValue caveat)</h3>
+<p>Two reusable Fluent patterns are extension methods on <code>Component</code>
+(<code>src/FluentGpu.Hooks/MotionHooks.cs</code>) — call them inside the component whose rendered root you want to animate:</p>
+<pre><code class="lang-csharp">this.UseEntrance(float offsetPx = 24, object? key = null);   // Fluent show: TranslateY 24→0 + Opacity 0→1, FluentDecelerate
+this.UseHoverScale(bool hovered, float to = 1.02f);          // a card/button lift (spring) on pointer-over
+</code></pre>
+<p><code>UseEntrance</code> reproduces the WinUI implicit show transition; <code>UseHoverScale</code> springs a subtle scale on hover. Both
+honor reduced motion (<code>Motion.ReducedMotion</code>, set by the host from the OS animation setting) — <code>UseEntrance</code>
+no-ops the entrance when the user has reduced motion enabled.</p>
+<pre><code class="lang-csharp">sealed class FadeInCard : Component
+{
+    public override Element Render()
+    {
+        this.UseEntrance();   // the card slides up + fades in on mount
+        return Card(Text(&quot;Hello&quot;));
+    }
+}
+</code></pre>
+<p><strong>The <code>UseAnimatedValue</code> caveat.</strong> There is also a scalar hook that returns an eased <code>0..1</code>-ish value you can lerp
+anything with (<code>src/FluentGpu.Hooks/RenderContext.cs</code>):</p>
+<pre><code class="lang-csharp">public float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut);
+</code></pre>
+<p>The gallery uses it to drive a <strong>color</strong> lerp (something the transform channels can't express), re-rendering on
+each step:</p>
+<pre><code class="lang-csharp">float t = UseAnimatedValue(on ? 1f : 0f, 300f);
+var fill = ColorF.Lerp(ColorF.FromRgba(80, 80, 88), Tok.AccentDefault, t);   // animate a fill via a re-render
+</code></pre>
+<p>But <code>UseAnimatedValue</code> <strong>steps only when the component re-renders for some other reason</strong> — it is not driven by the
+compositor frame. So it is fine for a one-shot color transition tied to a state flip, but <strong>do not reach for it for
+continuous motion</strong> (a spinner, a pulse, anything that must advance every frame). For real motion use
+<code>UseSpring</code>/<code>UseTransition</code>/<code>UseKeyframes</code>, which ride the compositor without a re-render. The reference docs flag
+the same caveat in the <a href="../../guide/components-elements-layout.md#animation-composited--no-re-render-rides-the-compositor-frame">hooks section</a>.</p>
+<hr>
+<h2 id="authored-timelines-with-animengine">Authored timelines with AnimEngine</h2>
+<p>The hooks above seed tracks on <em>your component's</em> node. When you need to animate a node you captured by handle —
+or play several channels of one element, or compose layers — drop to the engine directly via <code>Context.Anim</code>
+(the <code>AnimEngine</code>, <code>src/FluentGpu.Animation/AnimEngine.cs</code>). The pattern: capture a <code>NodeHandle</code> with
+<code>OnRealized</code>, then seed in a <code>UseLayoutEffect</code> (which runs after the first layout, when the node is live):</p>
+<pre><code class="lang-csharp">var dot = UseRef&lt;NodeHandle&gt;(default);
+// …in the element tree:  new BoxEl { OnRealized = h =&gt; dot.Value = h }
+UseLayoutEffect(() =&gt;
+{
+    var anim = Context.Anim;                                       // the engine
+    if (anim is null || dot.Value.IsNull) return;
+    anim.Animate(dot.Value, AnimChannel.TranslateX, 0f, 186f, 1100f, Easing.Bounce);   // eased two-point tween
+}, replay);                                                        // deps re-seed on change
+</code></pre>
+<p>The engine's authoring methods (all take a <code>NodeHandle</code>):</p>
+<pre><code class="lang-csharp">void Animate(NodeHandle node, AnimChannel ch, float from, float to, float durationMs,
+             Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f);
+void Keyframes(NodeHandle node, AnimChannel ch, Keyframe[] keys, float durationMs,
+               bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f);
+void Spring(NodeHandle node, AnimChannel ch, float to, in SpringParams spring,
+            float? initial = null, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f);
+void Drive(NodeHandle node, AnimChannel ch, Keyframe[] keys, int drivenRef, float domainMin, float domainMax,
+           CompositeOp composite = CompositeOp.Replace);
+</code></pre>
+<p><strong>Channels compose.</strong> Transform channels on one node fold into a single <code>LocalTransform</code>
+(translate ∘ rotate ∘ scale), so you can play <code>Rotation</code>, <code>TranslateX</code>, and <code>ScaleX</code> on the same tile at once
+(<code>AnimChannelsPlayground</code> in <code>AnimationPage.cs</code>):</p>
+<pre><code class="lang-csharp">anim.Keyframes(tile, AnimChannel.Rotation,
+    [new(0f, 0f), new(0.5f, 360f, Easing.FluentStandard), new(1f, 0f, Easing.FluentPopOpen)], 900f);
+</code></pre>
+<p><strong>Stagger is an engine primitive</strong>, not a timer — <code>delayMs</code> offsets the seed. The gallery replays one path across
+three dots at 0/110/220 ms, and loops a fourth:</p>
+<pre><code class="lang-csharp">Keyframe[] path = [new(0f, 0f), new(0.45f, 150f, Easing.Back),
+                   new(0.7f, 70f, Easing.EaseOut), new(1f, 150f, Easing.Bounce)];
+anim.Keyframes(dotA, AnimChannel.TranslateX, path, 1400f);
+anim.Keyframes(dotB, AnimChannel.TranslateX, path, 1400f, delayMs: 110f);
+anim.Keyframes(dotC, AnimChannel.TranslateX, path, 1400f, delayMs: 220f);
+anim.Keyframes(pulse, AnimChannel.ScaleX, [new(0f, 1f), new(0.5f, 1.3f), new(1f, 1f)], 1200f, loop: true);
+</code></pre>
+<p><strong>A driven timeline</strong> scrubs by any value source. Register a <code>Func&lt;float&gt;</code> clock and several channels ride it
+(<code>AnimDrivenScrub</code>):</p>
+<pre><code class="lang-csharp">int src = anim.Clocks.Register(() =&gt; t.Value);                // any Func&lt;float&gt; (here a slider signal)
+anim.Drive(dot, AnimChannel.TranslateX, [new(0f, 0f), new(1f, 220f, Easing.Linear)], src, 0f, 1f);
+anim.Drive(dot, AnimChannel.Rotation,   [new(0f, 0f), new(1f, 360f, Easing.Linear)], src, 0f, 1f);
+</code></pre>
+<p><strong>Additive composition</strong> layers tracks on the <em>same</em> channel, exactly like CSS <code>animation-composition: add</code> — a
+slow <code>Replace</code> drift plus a fast additive wobble (<code>AnimAdditive</code>):</p>
+<pre><code class="lang-csharp">anim.Keyframes(dot, AnimChannel.TranslateX,
+    [new(0f, 0f), new(0.5f, 170f, Easing.EaseInOut), new(1f, 0f, Easing.EaseInOut)], 4000f, loop: true);
+anim.Keyframes(dot, AnimChannel.TranslateX,
+    [new(0f, -6f), new(0.5f, 6f, Easing.Sine), new(1f, -6f, Easing.Sine)], 260f, loop: true,
+    composite: CompositeOp.Add);                              // layers, does not replace
+</code></pre>
+<p><code>CompositeOp</code> is <code>{ Replace, Add, Accumulate }</code>. At most one <code>Replace</code> track is live per (node, channel) —
+seeding another <code>Replace</code> on the same channel retargets the existing one rather than stacking two integrators.</p>
+<hr>
+<h2 id="geometry-reveals">Geometry reveals</h2>
+<p>Three channels reveal pixels <strong>without moving layout</strong> — the surface stays exactly where it landed; only the drawn
+extent changes. These are the compositor-only ways to &quot;draw something on.&quot;</p>
+<p><strong>Clip reveal</strong> (<code>ClipL/T/R/B</code>) sweeps one edge of a rounded surface while its corners stay round — the WinUI
+composition-clip look. A settled clip clears its override automatically (<code>AnimClipReveal</code> in <code>AnimationPage.cs</code>):</p>
+<pre><code class="lang-csharp">anim.Animate(card, AnimChannel.ClipR, 0f, width, 450f, Easing.FluentPopOpen);    // reveal left → right
+anim.Animate(card, AnimChannel.ClipT, height, 0f, 450f, Easing.FluentPopOpen);   // reveal bottom → top
+</code></pre>
+<p><strong>Stroke-trim draw-on</strong> (<code>StrokeTrimStart</code>/<code>StrokeTrimEnd</code>) reveals an analytic polyline along its own length —
+this is exactly how the CheckBox checkmark draws itself. Seed it with the hook form on a <code>PolylineStrokeEl</code>
+(<code>AnimDrawOnStroke</code>):</p>
+<pre><code class="lang-csharp">Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
+    [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, EasingSpec.CubicBezier(0.55f, 0f, 0f, 1f))],
+    800f, false, seed);
+return new PolylineStrokeEl { /* P0..P3, PointCount = 4, Thickness = 3f, … */ };
+</code></pre>
+<p><strong>Presented-size reveal</strong> (<code>SizeMode.Reveal</code>) lands layout at the final size <em>immediately</em> — siblings snap into
+place — and eases only the drawn extent. Crisp and compositor-only. This is a declarative
+<a href="#declarative-layout-transitions"><code>LayoutTransition</code></a>, set via <code>BoxEl.Animate</code> (<code>AnimPresentedReveal</code>):</p>
+<pre><code class="lang-csharp">new BoxEl
+{
+    Width = 220f, Height = open ? 120f : 48f,
+    Animate = LayoutTransition.BoundsT(SizeMode.Reveal),   // layout already landed; only pixels ease
+}
+</code></pre>
+<p>Compare that with smooth reflow (<code>SizeMode.Reflow</code>) just below, where the layout <em>itself</em> animates and neighbours
+glide.</p>
+<hr>
+<h2 id="declarative-layout-transitions">Declarative layout transitions</h2>
+<p>You can hand the whole problem to the engine: set <code>Animate = LayoutTransition</code> on a <code>BoxEl</code>, change the
+declaration (a width, a justify, a child count), and the engine <strong>diffs the old laid-out rect against the new one
+and animates the difference</strong> — no imperative seeding, no per-control knowledge. This is the <code>LayoutTransition</code>
+surface (<code>src/FluentGpu.Foundation/LayoutTransition.cs</code>):</p>
+<pre><code class="lang-csharp">public readonly record struct LayoutTransition(
+    TransitionChannels Channels,
+    TransitionDynamics Dynamics = default,         // spring (default) or Tween(ms, easing)
+    SizeMode Size = SizeMode.Auto,
+    EnterExit Enter = default, EnterExit Exit = default,
+    ushort CustomCurveId = 0,
+    TransitionDynamics? ExitDynamics = null,        // asymmetric open/close timings
+    float DelayMs = 0f,                             // stagger
+    SizeAnchor Anchor = SizeAnchor.Leading);
+</code></pre>
+<p><code>TransitionChannels</code> is <code>{ Position, Size, Opacity, Bounds }</code>; <code>TransitionDynamics</code> is either a spring
+(<code>.Spring(response, dampingRatio)</code>, the default) or a tween (<code>.Tween(durationMs, easing)</code>). There are ready-made
+shortcuts: <code>LayoutTransition.Slide</code> (position only), <code>.Fade</code> (opacity only), <code>.BoundsT(size)</code> (position + size),
+and <code>.AutoAll</code>.</p>
+<h3 id="position-flip--slide-between-layout-slots">Position FLIP — slide between layout slots</h3>
+<p>The classic FLIP: the element re-lays-out instantly into its new slot, then the engine plays the residual back so
+it <em>appears</em> to slide. Projection is parent-relative — only the node's own slot change animates, an ancestor
+reflow never re-triggers it (<code>AnimFlipSlide</code> in <code>AnimationPage.cs</code>):</p>
+<pre><code class="lang-csharp">new BoxEl { Animate = LayoutTransition.Slide }                         // spring dynamics (default)
+new BoxEl { Animate = new LayoutTransition(TransitionChannels.Position,
+                          TransitionDynamics.Tween(420f, Easing.FluentStandard)) }   // eased instead
+</code></pre>
+<h3 id="size-modes--reflow-scalecorrect-relayout">Size modes — Reflow, ScaleCorrect, Relayout</h3>
+<p><code>SizeMode</code> chooses how a size change animates (<code>src/FluentGpu.Foundation/LayoutTransition.cs</code>):</p>
+<pre><code class="lang-csharp">public enum SizeMode : byte
+{
+    Reveal,        // lay out at final size immediately; ease a clip window. Crisp, compositor-only (default).
+    ScaleCorrect,  // GPU scale toward 1 (Framer-Motion projection). Chrome only — distorts text/borders mid-flight.
+    Relayout,      // re-solve the subtree each tick so text re-wraps LIVE. Correct, costs scoped layout.
+    Reflow,        // the size change runs through REAL layout each tick; neighbours/siblings reflow smoothly.
+    Auto,
+}
+</code></pre>
+<ul>
+<li><strong><code>Reveal</code></strong> — the <a href="#geometry-reveals">presented-size reveal</a> above. Layout snaps; pixels ease.</li>
+<li><strong><code>ScaleCorrect</code></strong> — a size change becomes a GPU scale that springs toward 1. Cheap, but it distorts text and
+borders mid-flight, so chrome only.</li>
+<li><strong><code>Relayout</code></strong> — re-solves the subtree at the interpolated size every tick, so text re-wraps live as the width
+animates. Correct, costs a scoped layout per frame.</li>
+<li><strong><code>Reflow</code></strong> — the deliberate &quot;smoother than WinUI&quot; mode: the interpolated size participates in <strong>real parent
+layout</strong> each tick (boundary-scoped), so everything below it reflows smoothly and rigidly instead of snapping.
+This is what the gallery's collapsible section cards (and the <code>Expander</code> control) run on:</li>
+</ul>
+<pre><code class="lang-csharp">static readonly LayoutTransition Reflow = new(TransitionChannels.Size,
+    TransitionDynamics.Tween(333f, Easing.FluentPopOpen),                                  // ExpandDown timing
+    Size: SizeMode.Reflow,
+    ExitDynamics: TransitionDynamics.Tween(167f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),  // CollapseUp (faster)
+    Anchor: SizeAnchor.Trailing);                                                          // slide out from under the header
+
+new BoxEl { ClipToBounds = true, Height = open ? float.NaN : 0f, Animate = Reflow, Children = [panel] }
+</code></pre>
+<p><code>ExitDynamics</code> gives an asymmetric open/close timing (WinUI's Expander is 333 ms open / 167 ms collapse);
+<code>SizeAnchor.Trailing</code> keeps the content's bottom edge on the reveal edge so it slides out from under the header.</p>
+<h3 id="enter--exit-terminals-with-stagger">Enter / Exit terminals with stagger</h3>
+<p><code>EnterExit</code> is the presented-space terminal an inserted node animates <em>from</em> (enter) or a removed node animates
+<em>to</em> (exit) — an offset, a scale, an opacity, plus <code>Active = true</code> to engage it. An inserted node plays in from its
+enter terminal; a removed node becomes a brief <strong>exit orphan</strong> that stays alive until its tracks settle (this is
+expected — the <a href="../../guide/pitfalls.md">pitfalls table</a> notes &quot;a removed node lingers briefly … it's reclaimed on
+settle, not a leak&quot;). <code>DelayMs</code> staggers a batch (<code>AnimEnterExit</code> in <code>AnimationPage.cs</code>):</p>
+<pre><code class="lang-csharp">new BoxEl { Animate = new LayoutTransition(
+    TransitionChannels.Position | TransitionChannels.Opacity,
+    TransitionDynamics.Tween(220f, Easing.FluentDecelerate),
+    Enter: new EnterExit(Dy: 18f, Opacity: 0f, Active: true),       // enter from 18px down, transparent
+    Exit:  new EnterExit(Sx: 0.8f, Sy: 0.8f, Opacity: 0f, Active: true),
+    DelayMs: index * 40f) }                                          // per-item stagger
+</code></pre>
+<hr>
+<h2 id="prefer-a-transform-bind-or-a-hook-over-setstate-per-tick">Prefer a transform bind or a hook over setState-per-tick</h2>
+<p>The three update paths from the <a href="../../guide/reactivity.md">reactivity model</a>, cheapest first:</p>
+<ol>
+<li><strong>Bind a prop to a <code>Func</code>/signal</strong> (<code>Transform</code>, <code>Opacity</code>, <code>Fill</code>, <code>Text</code>) — compositor-only: no render, no
+reconcile, no layout. The cheapest possible update.</li>
+<li><strong>Granular re-render</strong> (<code>UseState</code>/<code>UseSignal</code> read in <code>Render()</code>) — the owning component's subtree re-renders +
+a scoped relayout.</li>
+<li><strong>Reactive control flow</strong> (<code>Flow.For</code>/<code>Flow.Show</code>) — a structural reconcile of one boundary.</li>
+</ol>
+<p>For <strong>per-frame motion</strong>, paths 1 and the animation hooks both stay on the compositor; a <code>setState</code> per tick is
+path 2 every frame and is the classic frame-rate killer. The rules of thumb:</p>
+<ul>
+<li><strong>A high-frequency scalar from a drag/scroll/timer</strong> → bind it. A slider scrubber is the canonical case: use
+<code>Slider.Bind(FloatSignal)</code> (compositor bypass), not <code>Slider.Create</code> (re-renders on each move). The
+<a href="../../guide/pitfalls.md">pitfalls table</a> lists this as the slider-tank fix — and the proof is
+<code>FrameStats.Rendered == false</code> while you drag.</li>
+<li><strong>A self-running transition or spring on this component</strong> → <code>UseSpring</code> / <code>UseTransition</code> / <code>UseKeyframes</code>. They
+seed on the host node and advance without a re-render.</li>
+<li><strong>A node you captured by handle, or layered/staggered timelines</strong> → <code>Context.Anim</code> directly
+(<a href="#authored-timelines-with-animengine">above</a>).</li>
+<li><strong>A declarative layout change</strong> (open/close, reorder, resize) → <code>Animate = LayoutTransition</code>
+(<a href="#declarative-layout-transitions">above</a>).</li>
+<li><strong><code>setState</code>-per-tick</strong> → only when the thing you animate genuinely needs a re-render (e.g. a color via
+<code>UseAnimatedValue</code>, or text content) <strong>and</strong> it is low-frequency. Never for continuous motion.</li>
+</ul>
+<p>One channel, one owner: if an animation or a bound <code>Transform</code>/<code>Opacity</code> owns a channel, the reconciler won't also
+write a static value to it (it would fight the animator). The <a href="../../guide/pitfalls.md">pitfalls table</a> calls a
+&quot;snaps back each frame&quot; symptom exactly this — pick one owner per channel.</p>
+<hr>
+<h2 id="engine-internals">Engine internals</h2>
+<p>You do not need any of this to build apps — but when you want to know how the pixels actually move:</p>
+<ul>
+<li><strong><a href="../../../design/subsystems/media-pipeline.md">Media pipeline subsystem</a></strong> — the WIC decode workers, the
+bounded request channel with priority-drop backpressure, the LRU residency manager (pin-before-admit,
+frame-start eviction), the GPU texture pool and <code>CopyBufferToTexture</code> upload, the small-image atlas, and the
+placeholder→cross-fade record path.</li>
+<li><strong><a href="../../../design/subsystems/backdrop-effects-animation.md">Backdrop, effects &amp; animation subsystem</a></strong> — the
+phase-7 <code>AnimTrack</code> engine (the eased and spring integrators, the velocity-carrying retarget, the driven clock),
+the detached-animation slab that keeps an exit animation alive past unmount, connected/shared-element
+transitions, and the three kinds of backdrop.</li>
+<li><strong><a href="../../../design/SPEC-INDEX.md">SPEC-INDEX</a></strong> is the precedence authority for every cross-cutting contract;
+<strong><a href="../../../design/subsystems/README.md">subsystems/README</a></strong> is the ownership map.</li>
+</ul>
+<p>Related app-author pages: <a href="signals-components-and-bindings.html">signals, components &amp; bindings</a>,
+<a href="layout-and-composition.html">layout &amp; composition</a>,
+<a href="controls-cookbook.html">controls cookbook</a>,
+<a href="virtualized-lists-and-itemsview.html">virtualized lists &amp; ItemsView</a>, and
+<a href="../../guide/rendering-and-performance.md">rendering &amp; performance</a>.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

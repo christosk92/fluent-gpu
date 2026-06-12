@@ -1,0 +1,588 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RichTextBlock.Options
+  commentId: T:FluentGpu.Controls.RichTextBlock.Options
+  id: RichTextBlock.Options
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RichTextBlock.Options.#ctor
+  - FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+  - FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+  - FluentGpu.Controls.RichTextBlock.Options.ParagraphGap
+  - FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  langs:
+  - csharp
+  - vb
+  name: RichTextBlock.Options
+  nameWithType: RichTextBlock.Options
+  fullName: FluentGpu.Controls.RichTextBlock.Options
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Options
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Per-block options (WinUI DP equivalents). Defaults match the WinUI control: selection enabled
+        (RichTextBlock.cpp:1730), theme selection brush, the established 560px reading measure + 10px paragraph gap.
+  example: []
+  syntax:
+    content: 'public readonly record struct RichTextBlock.Options : IEquatable<RichTextBlock.Options>'
+    content.vb: Public Structure RichTextBlock.Options Implements IEquatable(Of RichTextBlock.Options)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.RichTextBlock.Options}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.RichTextBlock.Options.#ctor
+  commentId: M:FluentGpu.Controls.RichTextBlock.Options.#ctor
+  id: '#ctor'
+  parent: FluentGpu.Controls.RichTextBlock.Options
+  langs:
+  - csharp
+  - vb
+  name: Options()
+  nameWithType: RichTextBlock.Options.Options()
+  fullName: FluentGpu.Controls.RichTextBlock.Options.Options()
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Options()
+    content.vb: Public Sub New()
+  overload: FluentGpu.Controls.RichTextBlock.Options.#ctor*
+  nameWithType.vb: RichTextBlock.Options.New()
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Options.New()
+  name.vb: New()
+- uid: FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+  commentId: P:FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+  id: IsTextSelectionEnabled
+  parent: FluentGpu.Controls.RichTextBlock.Options
+  langs:
+  - csharp
+  - vb
+  name: IsTextSelectionEnabled
+  nameWithType: RichTextBlock.Options.IsTextSelectionEnabled
+  fullName: FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsTextSelectionEnabled
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>RichTextBlock.IsTextSelectionEnabled</code> — default TRUE (RichTextBlock.cpp:1730).
+  example: []
+  syntax:
+    content: public bool IsTextSelectionEnabled { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsTextSelectionEnabled As Boolean
+  overload: FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled*
+- uid: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  commentId: P:FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  id: SelectionHighlightColor
+  parent: FluentGpu.Controls.RichTextBlock.Options
+  langs:
+  - csharp
+  - vb
+  name: SelectionHighlightColor
+  nameWithType: RichTextBlock.Options.SelectionHighlightColor
+  fullName: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionHighlightColor
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>RichTextBlock.SelectionHighlightColor</code> (api-04). A==0 = the theme accent brush.
+  example: []
+  syntax:
+    content: public ColorF SelectionHighlightColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SelectionHighlightColor As ColorF
+  overload: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor*
+- uid: FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+  commentId: P:FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+  id: MaxWidth
+  parent: FluentGpu.Controls.RichTextBlock.Options
+  langs:
+  - csharp
+  - vb
+  name: MaxWidth
+  nameWithType: RichTextBlock.Options.MaxWidth
+  fullName: FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxWidth
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MaxWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxWidth As Single
+  overload: FluentGpu.Controls.RichTextBlock.Options.MaxWidth*
+- uid: FluentGpu.Controls.RichTextBlock.Options.ParagraphGap
+  commentId: P:FluentGpu.Controls.RichTextBlock.Options.ParagraphGap
+  id: ParagraphGap
+  parent: FluentGpu.Controls.RichTextBlock.Options
+  langs:
+  - csharp
+  - vb
+  name: ParagraphGap
+  nameWithType: RichTextBlock.Options.ParagraphGap
+  fullName: FluentGpu.Controls.RichTextBlock.Options.ParagraphGap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RichTextBlock.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ParagraphGap
+    path: ../../src/FluentGpu.Controls/RichTextBlock.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ParagraphGap { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ParagraphGap As Single
+  overload: FluentGpu.Controls.RichTextBlock.Options.ParagraphGap*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.RichTextBlock.Options}
+  commentId: T:System.IEquatable{FluentGpu.Controls.RichTextBlock.Options}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<RichTextBlock.Options>
+  nameWithType: IEquatable<RichTextBlock.Options>
+  fullName: System.IEquatable<FluentGpu.Controls.RichTextBlock.Options>
+  nameWithType.vb: IEquatable(Of RichTextBlock.Options)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.RichTextBlock.Options)
+  name.vb: IEquatable(Of RichTextBlock.Options)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    href: FluentGpu.Controls.RichTextBlock.html
+  - name: .
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: Options
+    href: FluentGpu.Controls.RichTextBlock.Options.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.RichTextBlock.Options.#ctor*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Options.#ctor
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options__ctor
+  name: Options
+  nameWithType: RichTextBlock.Options.Options
+  fullName: FluentGpu.Controls.RichTextBlock.Options.Options
+  nameWithType.vb: RichTextBlock.Options.New
+  fullName.vb: FluentGpu.Controls.RichTextBlock.Options.New
+  name.vb: New
+- uid: FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options_IsTextSelectionEnabled
+  name: IsTextSelectionEnabled
+  nameWithType: RichTextBlock.Options.IsTextSelectionEnabled
+  fullName: FluentGpu.Controls.RichTextBlock.Options.IsTextSelectionEnabled
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options_SelectionHighlightColor
+  name: SelectionHighlightColor
+  nameWithType: RichTextBlock.Options.SelectionHighlightColor
+  fullName: FluentGpu.Controls.RichTextBlock.Options.SelectionHighlightColor
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.RichTextBlock.Options.MaxWidth*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options_MaxWidth
+  name: MaxWidth
+  nameWithType: RichTextBlock.Options.MaxWidth
+  fullName: FluentGpu.Controls.RichTextBlock.Options.MaxWidth
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.RichTextBlock.Options.ParagraphGap*
+  commentId: Overload:FluentGpu.Controls.RichTextBlock.Options.ParagraphGap
+  href: FluentGpu.Controls.RichTextBlock.Options.html#FluentGpu_Controls_RichTextBlock_Options_ParagraphGap
+  name: ParagraphGap
+  nameWithType: RichTextBlock.Options.ParagraphGap
+  fullName: FluentGpu.Controls.RichTextBlock.Options.ParagraphGap

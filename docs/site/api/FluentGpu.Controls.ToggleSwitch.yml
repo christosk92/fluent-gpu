@@ -1,0 +1,799 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ToggleSwitch
+  commentId: T:FluentGpu.Controls.ToggleSwitch
+  id: ToggleSwitch
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ToggleSwitch.Create(System.Boolean,System.Action,System.String,System.String,System.String,System.Boolean,FluentGpu.Controls.ToggleSwitch.Style,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.ToggleSwitch.DefaultStyle
+  - FluentGpu.Controls.ToggleSwitch.DragThresholdPx
+  - FluentGpu.Controls.ToggleSwitch.PartContentLabel
+  - FluentGpu.Controls.ToggleSwitch.PartHeader
+  - FluentGpu.Controls.ToggleSwitch.PartKnob
+  - FluentGpu.Controls.ToggleSwitch.PartKnobHost
+  - FluentGpu.Controls.ToggleSwitch.PartRoot
+  - FluentGpu.Controls.ToggleSwitch.PartTrack
+  - FluentGpu.Controls.ToggleSwitch.StyleOverride
+  langs:
+  - csharp
+  - vb
+  name: ToggleSwitch
+  nameWithType: ToggleSwitch
+  fullName: FluentGpu.Controls.ToggleSwitch
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleSwitch
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI ToggleSwitch — geometry/colors/motion from the shipped lifted style
+
+    (microsoft-ui-xaml controls\dev\CommonStyles\ToggleSwitch_themeresources.xaml, "the template"):
+
+    a 40×20 pill track (OuterBorder/SwitchKnobBounds, template:507-508) + a knob inside a 20×20 positioning host
+
+    (SwitchKnob grid, template:509) that translates 0→20 on toggle (KnobTranslateTransform To=20, template:445).
+
+    The knob is 12×12 at rest (template:510/515 + Normal storyboard :231-242), grows to 14×14 on hover
+
+    (:268-279), and STRETCHES to 17×14 pinned 3px from the near edge while pressed (size :311-322; the Pressed
+
+    VisualState.Setters pin SwitchKnobOn right / SwitchKnobOff left with a 3px margin, :284-287). All knob size/anchor
+
+    changes tween 83ms ControlFasterAnimationDuration with the ControlFastOutSlowInKeySpline (0,0,0,1)
+
+    (Common_themeresources_any.xaml:602/606 — <xref href="FluentGpu.Foundation.Easing.FluentPopOpen" data-throw-if-not-resolved="false"></xref>); the disabled return is 250ms
+
+    ControlNormalAnimationDuration (:357-368); knob travel is WinUI's RepositionThemeAnimation (:418-439), mapped per
+
+    the repo motion canon to <xref href="FluentGpu.Dsl.Motion.ControlFast" data-throw-if-not-resolved="false"></xref> = 167ms (Dsl/Motion.cs — the PVL reposition timing is
+
+    system data, not in the XAML).
+
+
+    Behavior follows dxaml\xcp\dxaml\lib\ToggleSwitch_Partial.cpp: tap toggles (TapHandler :874-905); DRAG-TO-TOGGLE —
+
+    the knob follows the pointer's horizontal delta clamped to the travel (DragDeltaHandler/MoveDelta :823-841/:579-589,
+
+    SetTranslations clamp :455-457) and on release toggles iff the knob crossed half the travel range (MoveCompleted
+
+    :591-619); pointer loss mid-drag cleans up without toggling (OnPointerCaptureLost :728-746). Space toggles via the
+
+    engine's Space-on-keyup activation → <code>OnClick</code> (HandlesKey = Space/GamepadA only, :1002-1007); arrow/Home/End
+
+    keys toggle directionally (ToggleSwitchKeyProcess.h:52-71 — WinUI acts on KeyUp; the engine routes OnKeyDown, a
+
+    known timing-only deviation). Controlled — the caller owns <code>isOn</code>.
+  example: []
+  syntax:
+    content: public static class ToggleSwitch
+    content.vb: Public Module ToggleSwitch
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ToggleSwitch.DragThresholdPx
+  commentId: F:FluentGpu.Controls.ToggleSwitch.DragThresholdPx
+  id: DragThresholdPx
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: DragThresholdPx
+  nameWithType: ToggleSwitch.DragThresholdPx
+  fullName: FluentGpu.Controls.ToggleSwitch.DragThresholdPx
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragThresholdPx
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Horizontal slop before a press becomes a knob drag — the Win32 drag box (SM_CXDRAG = 4px), the same
+        base threshold <code>Input.DragController</code> uses (ListViewBaseItem_Partial.cpp:1871-1877).
+  example: []
+  syntax:
+    content: public const float DragThresholdPx = 4
+    return:
+      type: System.Single
+    content.vb: Public Const DragThresholdPx As Single = 4
+- uid: FluentGpu.Controls.ToggleSwitch.PartRoot
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: ToggleSwitch.PartRoot
+  fullName: FluentGpu.Controls.ToggleSwitch.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The interactive row (track + side content) — the template's tap/drag surface. Owned: OnClick,
+        OnPointerDown, OnDrag, OnPointerExit, OnHoverMove, OnKeyDown (the tap/drag-to-toggle lifecycle), Role,
+        Children.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.ToggleSwitch.PartTrack
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartTrack
+  id: PartTrack
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartTrack
+  nameWithType: ToggleSwitch.PartTrack
+  fullName: FluentGpu.Controls.ToggleSwitch.PartTrack
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTrack
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The 40×20 pill track (WinUI OuterBorder/SwitchKnobBounds). Owned: Children (the leading spacer IS
+        the knob translation — restyle the pill freely, the spacer+host structure always wins).
+  example: []
+  syntax:
+    content: public const string PartTrack = "Track"
+    return:
+      type: System.String
+    content.vb: Public Const PartTrack As String = "Track"
+- uid: FluentGpu.Controls.ToggleSwitch.PartKnobHost
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartKnobHost
+  id: PartKnobHost
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartKnobHost
+  nameWithType: ToggleSwitch.PartKnobHost
+  fullName: FluentGpu.Controls.ToggleSwitch.PartKnobHost
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartKnobHost
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The 20×20 knob positioning host (WinUI SwitchKnob). Owned: Animate (the 167ms travel reposition),
+        Justify (the pressed near-edge pin), Children.
+  example: []
+  syntax:
+    content: public const string PartKnobHost = "KnobHost"
+    return:
+      type: System.String
+    content.vb: Public Const PartKnobHost As String = "KnobHost"
+- uid: FluentGpu.Controls.ToggleSwitch.PartKnob
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartKnob
+  id: PartKnob
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartKnob
+  nameWithType: ToggleSwitch.PartKnob
+  fullName: FluentGpu.Controls.ToggleSwitch.PartKnob
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartKnob
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The knob itself (WinUI SwitchKnobOn/SwitchKnobOff — one node, both states). Owned: Animate (the
+        83ms hover/press size FLIP), Margin (the pressed 3px edge pin).
+  example: []
+  syntax:
+    content: public const string PartKnob = "Knob"
+    return:
+      type: System.String
+    content.vb: Public Const PartKnob As String = "Knob"
+- uid: FluentGpu.Controls.ToggleSwitch.PartContentLabel
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartContentLabel
+  id: PartContentLabel
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartContentLabel
+  nameWithType: ToggleSwitch.PartContentLabel
+  fullName: FluentGpu.Controls.ToggleSwitch.PartContentLabel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartContentLabel
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The On/OffContent label (WinUI Off/OnContentPresenter) — a <xref href="FluentGpu.Dsl.TextEl" data-throw-if-not-resolved="false"></xref> part
+        (<code>Parts.Set&lt;TextEl&gt;(…)</code>). No owned props.
+  example: []
+  syntax:
+    content: public const string PartContentLabel = "ContentLabel"
+    return:
+      type: System.String
+    content.vb: Public Const PartContentLabel As String = "ContentLabel"
+- uid: FluentGpu.Controls.ToggleSwitch.PartHeader
+  commentId: F:FluentGpu.Controls.ToggleSwitch.PartHeader
+  id: PartHeader
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: PartHeader
+  nameWithType: ToggleSwitch.PartHeader
+  fullName: FluentGpu.Controls.ToggleSwitch.PartHeader
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartHeader
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The header label (WinUI HeaderContentPresenter) — a <xref href="FluentGpu.Dsl.TextEl" data-throw-if-not-resolved="false"></xref> part. No owned props.
+  example: []
+  syntax:
+    content: public const string PartHeader = "Header"
+    return:
+      type: System.String
+    content.vb: Public Const PartHeader As String = "Header"
+- uid: FluentGpu.Controls.ToggleSwitch.StyleOverride
+  commentId: F:FluentGpu.Controls.ToggleSwitch.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: ToggleSwitch.StyleOverride
+  fullName: FluentGpu.Controls.ToggleSwitch.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ToggleSwitch.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.ToggleSwitch.Style
+    content.vb: Public Shared StyleOverride As ToggleSwitch.Style
+- uid: FluentGpu.Controls.ToggleSwitch.DefaultStyle
+  commentId: P:FluentGpu.Controls.ToggleSwitch.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: ToggleSwitch.DefaultStyle
+  fullName: FluentGpu.Controls.ToggleSwitch.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ToggleSwitch.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.ToggleSwitch.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As ToggleSwitch.Style
+  overload: FluentGpu.Controls.ToggleSwitch.DefaultStyle*
+- uid: FluentGpu.Controls.ToggleSwitch.Create(System.Boolean,System.Action,System.String,System.String,System.String,System.Boolean,FluentGpu.Controls.ToggleSwitch.Style,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.ToggleSwitch.Create(System.Boolean,System.Action,System.String,System.String,System.String,System.Boolean,FluentGpu.Controls.ToggleSwitch.Style,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Boolean,System.Action,System.String,System.String,System.String,System.Boolean,FluentGpu.Controls.ToggleSwitch.Style,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: Create(bool, Action, string?, string?, string?, bool, Style?, TemplateParts?)
+  nameWithType: ToggleSwitch.Create(bool, Action, string?, string?, string?, bool, ToggleSwitch.Style?, TemplateParts?)
+  fullName: FluentGpu.Controls.ToggleSwitch.Create(bool, System.Action, string?, string?, string?, bool, FluentGpu.Controls.ToggleSwitch.Style?, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToggleSwitch.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ToggleSwitch.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(bool isOn, Action onToggle, string? header = null, string? onContent = null, string? offContent = null, bool isEnabled = true, ToggleSwitch.Style? style = null, TemplateParts? parts = null)
+    parameters:
+    - id: isOn
+      type: System.Boolean
+    - id: onToggle
+      type: System.Action
+    - id: header
+      type: System.String
+    - id: onContent
+      type: System.String
+    - id: offContent
+      type: System.String
+    - id: isEnabled
+      type: System.Boolean
+    - id: style
+      type: FluentGpu.Controls.ToggleSwitch.Style
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(isOn As Boolean, onToggle As Action, header As String = Nothing, onContent As String = Nothing, offContent As String = Nothing, isEnabled As Boolean = True, style As ToggleSwitch.Style = Nothing, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.ToggleSwitch.Create*
+  nameWithType.vb: ToggleSwitch.Create(Boolean, Action, String, String, String, Boolean, ToggleSwitch.Style, TemplateParts)
+  fullName.vb: FluentGpu.Controls.ToggleSwitch.Create(Boolean, System.Action, String, String, String, Boolean, FluentGpu.Controls.ToggleSwitch.Style, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(Boolean, Action, String, String, String, Boolean, Style, TemplateParts)
+references:
+- uid: FluentGpu.Foundation.Easing.FluentPopOpen
+  commentId: F:FluentGpu.Foundation.Easing.FluentPopOpen
+  href: FluentGpu.Foundation.Easing.html#FluentGpu_Foundation_Easing_FluentPopOpen
+  name: FluentPopOpen
+  nameWithType: Easing.FluentPopOpen
+  fullName: FluentGpu.Foundation.Easing.FluentPopOpen
+- uid: FluentGpu.Dsl.Motion.ControlFast
+  commentId: F:FluentGpu.Dsl.Motion.ControlFast
+  href: FluentGpu.Dsl.Motion.html#FluentGpu_Dsl_Motion_ControlFast
+  name: ControlFast
+  nameWithType: Motion.ControlFast
+  fullName: FluentGpu.Dsl.Motion.ControlFast
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.ToggleSwitch.Style
+  commentId: T:FluentGpu.Controls.ToggleSwitch.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToggleSwitch.html
+  name: ToggleSwitch.Style
+  nameWithType: ToggleSwitch.Style
+  fullName: FluentGpu.Controls.ToggleSwitch.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ToggleSwitch
+    name: ToggleSwitch
+    href: FluentGpu.Controls.ToggleSwitch.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleSwitch.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleSwitch.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ToggleSwitch
+    name: ToggleSwitch
+    href: FluentGpu.Controls.ToggleSwitch.html
+  - name: .
+  - uid: FluentGpu.Controls.ToggleSwitch.Style
+    name: Style
+    href: FluentGpu.Controls.ToggleSwitch.Style.html
+- uid: FluentGpu.Controls.ToggleSwitch.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.ToggleSwitch.DefaultStyle
+  href: FluentGpu.Controls.ToggleSwitch.html#FluentGpu_Controls_ToggleSwitch_DefaultStyle
+  name: DefaultStyle
+  nameWithType: ToggleSwitch.DefaultStyle
+  fullName: FluentGpu.Controls.ToggleSwitch.DefaultStyle
+- uid: FluentGpu.Controls.ToggleSwitch.Create*
+  commentId: Overload:FluentGpu.Controls.ToggleSwitch.Create
+  href: FluentGpu.Controls.ToggleSwitch.html#FluentGpu_Controls_ToggleSwitch_Create_System_Boolean_System_Action_System_String_System_String_System_String_System_Boolean_FluentGpu_Controls_ToggleSwitch_Style_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: ToggleSwitch.Create
+  fullName: FluentGpu.Controls.ToggleSwitch.Create
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element

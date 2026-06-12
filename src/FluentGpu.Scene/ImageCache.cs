@@ -64,6 +64,12 @@ public interface IImageDecoder
     /// <summary>Raise the priority of a queued decode (e.g. a prefetch that just scrolled into view). Idempotent; no-op
     /// once the job has started.</summary>
     void Prioritize(int id, ImagePriority priority) { }
+
+    /// <summary>Census (MemCensus): decodes currently in flight on worker threads. Defaults to 0 for decoders that
+    /// don't track it (e.g. the synchronous test decoder). O(1).</summary>
+    int DiagInflight => 0;
+    /// <summary>Census (MemCensus): live entries in the decoder's cancellation map. Defaults to 0. O(1).</summary>
+    int DiagCanceledPending => 0;
 }
 
 /// <summary>Decode-completion callback: id, success, decoded dims, the failure kind (if any), and the fetch attempt count.</summary>
@@ -108,6 +114,14 @@ public sealed class ImageCache
     private long _clock = 1;
     private int _pumpCompleted;
     private int _totalRequested, _totalReady, _totalFailed, _totalRetried, _totalEvicted;
+    // O(1) maintained mirrors of the former PendingCount / HasActiveCrossfades scans (wake-04): these ran on every
+    // HasActiveWork call every frame. _pendingCount tracks State==Pending entries (a miss creates one; OnDecodeComplete
+    // resolves it; eviction never removes a Pending entry). _maxCrossfadeDeadlineMs is the high-water MAX of
+    // TextureMs+DurationMs over entries with an enabled reveal — HasActiveCrossfades is then exactly (_clockMs < max),
+    // since (∃e: clockMs<deadlineₑ) ⟺ (clockMs < maxₑ deadlineₑ). The max only goes stale if a still-fading entry is
+    // evicted; the evict path recomputes it then (rare — evicting an unpinned mid-fade image), keeping the getter O(1).
+    private int _pendingCount;
+    private float _maxCrossfadeDeadlineMs = float.NegativeInfinity;
     private float _clockMs;   // monotonic ms clock for cross-fade timing (advanced by Tick once per painted frame)
     private const int BlurW = 32, BlurH = 32;
     private readonly byte[] _blurScratch = new byte[BlurW * BlurH * 4];   // reused (UI thread only) for LQIP decode
@@ -136,7 +150,13 @@ public sealed class ImageCache
     public long UsedBytes { get; private set; }
     public int Count => _byId.Count;
     public int ReadyCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Ready) n++; return n; } }
-    public int PendingCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Pending) n++; return n; } }
+    /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
+    public int PendingCount => _pendingCount;
+
+    /// <summary>Census (MemCensus): decodes in flight on the backing decoder's workers (0 for non-tracking decoders). O(1).</summary>
+    public int DecodeInflight => _decoder.DiagInflight;
+    /// <summary>Census (MemCensus): live entries in the backing decoder's cancellation map (0 for non-tracking decoders). O(1).</summary>
+    public int DecodeCanceledPending => _decoder.DiagCanceledPending;
 
     /// <summary>Request (or dedup) a decode of <paramref name="source"/> at a target size; returns a stable handle. On
     /// a cache MISS, an optional <paramref name="blurHash"/> is decoded ONCE into a tiny LQIP texture (uploaded under
@@ -158,6 +178,7 @@ public sealed class ImageCache
         _byKey[key] = id;
         var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, Transition = transition ?? ImageTransition.Default };
         _byId[id] = entry;
+        _pendingCount++;   // a miss always creates a Pending entry; OnDecodeComplete decrements when it resolves
         _totalRequested++;
         Diag.Set("media", "requested", _totalRequested);
         // NB: the decode keeps the requested size; the GPU backend buckets INTERNALLY (pool/atlas) and samples the
@@ -170,6 +191,7 @@ public sealed class ImageCache
         {
             _pixelSink(id, _blurScratch.AsSpan(0, BlurW * BlurH * 4), BlurW, BlurH);
             entry.TextureMs = _clockMs;
+            NoteCrossfadeDeadline(entry);
             Diag.Count("media", "blurhash");
         }
 
@@ -208,15 +230,32 @@ public sealed class ImageCache
         return e.Transition.Progress(_clockMs - e.TextureMs);
     }
 
-    /// <summary>True while any image is still revealing — the host keeps painting so the fade animates to completion.</summary>
-    public bool HasActiveCrossfades
+    /// <summary>True while any image is still revealing — the host keeps painting so the fade animates to completion.
+    /// O(1): equivalent to the former per-frame scan (∃ enabled reveal with clockMs &lt; TextureMs+Dur) because that is
+    /// exactly (_clockMs &lt; max deadline). See <see cref="_maxCrossfadeDeadlineMs"/> (wake-04).</summary>
+    public bool HasActiveCrossfades => _clockMs < _maxCrossfadeDeadlineMs;
+
+    /// <summary>Fold an entry's reveal deadline (TextureMs+Dur) into the high-water max — called wherever TextureMs is
+    /// set. Disabled reveals (Dur==0) and NaN TextureMs don't contribute (mirrors the scan's guards exactly).</summary>
+    private void NoteCrossfadeDeadline(Entry e)
     {
-        get
-        {
-            foreach (var e in _byId.Values)
-                if (!float.IsNaN(e.TextureMs) && e.Transition.Enabled && _clockMs - e.TextureMs < e.Transition.DurationMs) return true;
-            return false;
-        }
+        if (!e.Transition.Enabled || float.IsNaN(e.TextureMs)) return;
+        float deadline = e.TextureMs + e.Transition.DurationMs;
+        if (deadline > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = deadline;
+    }
+
+    /// <summary>Recompute the crossfade-deadline high-water from scratch — used only after evicting an entry that could
+    /// still have been the active contributor (its deadline ≥ _clockMs), so the steady path never scans.</summary>
+    private void RecomputeCrossfadeDeadline()
+    {
+        float max = float.NegativeInfinity;
+        foreach (var e in _byId.Values)
+            if (e.Transition.Enabled && !float.IsNaN(e.TextureMs))
+            {
+                float d = e.TextureMs + e.Transition.DurationMs;
+                if (d > max) max = d;
+            }
+        _maxCrossfadeDeadlineMs = max;
     }
 
     /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.</summary>
@@ -237,10 +276,11 @@ public sealed class ImageCache
     private void OnDecodeComplete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts)
     {
         if (!_byId.TryGetValue(id, out var e)) return;
+        if (e.State == ImageState.Pending) _pendingCount--;   // leaving Pending (Ready/Failed) — mirror the former scan
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
-        if (ok && float.IsNaN(e.TextureMs)) e.TextureMs = _clockMs;   // no LQIP → the reveal fade starts when the full-res lands
+        if (ok && float.IsNaN(e.TextureMs)) { e.TextureMs = _clockMs; NoteCrossfadeDeadline(e); }   // no LQIP → the reveal fade starts when the full-res lands
         e.W = w; e.H = h;
         e.Bytes = ok ? (long)w * h * 4 : 0;
         UsedBytes += e.Bytes;
@@ -267,6 +307,11 @@ public sealed class ImageCache
             UsedBytes -= e2.Bytes;
             _byKey.Remove(e2.Key);
             _byId.Remove(victim);
+            // If the evicted entry could still be the crossfade-deadline high-water (an unpinned image whose fade hasn't
+            // elapsed), recompute the max so HasActiveCrossfades can't report a stale future deadline. Settled entries
+            // (deadline < clock — the overwhelming evict case) skip the recompute, so the steady path stays scan-free.
+            if (e2.Transition.Enabled && !float.IsNaN(e2.TextureMs) && e2.TextureMs + e2.Transition.DurationMs >= _clockMs)
+                RecomputeCrossfadeDeadline();
             _totalEvicted++;
             Diag.Set("media", "evicted", _totalEvicted);
             _evictSink(victim);   // free the GPU texture (the device defers the release behind the frame fence)

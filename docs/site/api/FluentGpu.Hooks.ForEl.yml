@@ -1,0 +1,834 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hooks.ForEl
+  commentId: T:FluentGpu.Hooks.ForEl
+  id: ForEl
+  parent: FluentGpu.Hooks
+  children:
+  - FluentGpu.Hooks.ForEl.#ctor(System.Func{System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String})
+  - FluentGpu.Hooks.ForEl.Count
+  - FluentGpu.Hooks.ForEl.ElementTypeId
+  - FluentGpu.Hooks.ForEl.ItemAt
+  - FluentGpu.Hooks.ForEl.KeyOf
+  langs:
+  - csharp
+  - vb
+  name: ForEl
+  nameWithType: ForEl
+  fullName: FluentGpu.Hooks.ForEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForEl
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Reactive keyed list (the Solid <code>&lt;For&gt;</code>). <xref href="FluentGpu.Hooks.ForEl.Count" data-throw-if-not-resolved="false"></xref> / <xref href="FluentGpu.Hooks.ForEl.ItemAt" data-throw-if-not-resolved="false"></xref> read signals; the
+
+    reconciler runs them inside a boundary effect and re-realizes the children through the existing keyed diff when the
+
+    list changes — rows are created/moved/removed (and their state preserved by key), with no parent re-render.
+  example: []
+  syntax:
+    content: 'public sealed record ForEl : Element, IEquatable<Element>, IEquatable<ForEl>'
+    content.vb: Public NotInheritable Class ForEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of ForEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Hooks.ForEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Hooks.ForEl.#ctor(System.Func{System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String})
+  commentId: M:FluentGpu.Hooks.ForEl.#ctor(System.Func{System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String})
+  id: '#ctor(System.Func{System.Int32},System.Func{System.Int32,FluentGpu.Dsl.Element},System.Func{System.Int32,System.String})'
+  parent: FluentGpu.Hooks.ForEl
+  langs:
+  - csharp
+  - vb
+  name: ForEl(Func<int>, Func<int, Element>, Func<int, string>?)
+  nameWithType: ForEl.ForEl(Func<int>, Func<int, Element>, Func<int, string>?)
+  fullName: FluentGpu.Hooks.ForEl.ForEl(System.Func<int>, System.Func<int, FluentGpu.Dsl.Element>, System.Func<int, string>?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: >-
+    Reactive keyed list (the Solid <code>&lt;For&gt;</code>). <xref href="FluentGpu.Hooks.ForEl.Count" data-throw-if-not-resolved="false"></xref> / <xref href="FluentGpu.Hooks.ForEl.ItemAt" data-throw-if-not-resolved="false"></xref> read signals; the
+
+    reconciler runs them inside a boundary effect and re-realizes the children through the existing keyed diff when the
+
+    list changes — rows are created/moved/removed (and their state preserved by key), with no parent re-render.
+  example: []
+  syntax:
+    content: public ForEl(Func<int> Count, Func<int, Element> ItemAt, Func<int, string>? KeyOf = null)
+    parameters:
+    - id: Count
+      type: System.Func{System.Int32}
+    - id: ItemAt
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    - id: KeyOf
+      type: System.Func{System.Int32,System.String}
+    content.vb: Public Sub New(Count As Func(Of Integer), ItemAt As Func(Of Integer, Element), KeyOf As Func(Of Integer, String) = Nothing)
+  overload: FluentGpu.Hooks.ForEl.#ctor*
+  nameWithType.vb: ForEl.New(Func(Of Integer), Func(Of Integer, Element), Func(Of Integer, String))
+  fullName.vb: FluentGpu.Hooks.ForEl.New(System.Func(Of Integer), System.Func(Of Integer, FluentGpu.Dsl.Element), System.Func(Of Integer, String))
+  name.vb: New(Func(Of Integer), Func(Of Integer, Element), Func(Of Integer, String))
+- uid: FluentGpu.Hooks.ForEl.Count
+  commentId: P:FluentGpu.Hooks.ForEl.Count
+  id: Count
+  parent: FluentGpu.Hooks.ForEl
+  langs:
+  - csharp
+  - vb
+  name: Count
+  nameWithType: ForEl.Count
+  fullName: FluentGpu.Hooks.ForEl.Count
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Count
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public Func<int> Count { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Int32}
+    content.vb: Public Property Count As Func(Of Integer)
+  overload: FluentGpu.Hooks.ForEl.Count*
+- uid: FluentGpu.Hooks.ForEl.ItemAt
+  commentId: P:FluentGpu.Hooks.ForEl.ItemAt
+  id: ItemAt
+  parent: FluentGpu.Hooks.ForEl
+  langs:
+  - csharp
+  - vb
+  name: ItemAt
+  nameWithType: ForEl.ItemAt
+  fullName: FluentGpu.Hooks.ForEl.ItemAt
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemAt
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public Func<int, Element> ItemAt { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    content.vb: Public Property ItemAt As Func(Of Integer, Element)
+  overload: FluentGpu.Hooks.ForEl.ItemAt*
+- uid: FluentGpu.Hooks.ForEl.KeyOf
+  commentId: P:FluentGpu.Hooks.ForEl.KeyOf
+  id: KeyOf
+  parent: FluentGpu.Hooks.ForEl
+  langs:
+  - csharp
+  - vb
+  name: KeyOf
+  nameWithType: ForEl.KeyOf
+  fullName: FluentGpu.Hooks.ForEl.KeyOf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyOf
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public Func<int, string>? KeyOf { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Int32,System.String}
+    content.vb: Public Property KeyOf As Func(Of Integer, String)
+  overload: FluentGpu.Hooks.ForEl.KeyOf*
+- uid: FluentGpu.Hooks.ForEl.ElementTypeId
+  commentId: P:FluentGpu.Hooks.ForEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Hooks.ForEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: ForEl.ElementTypeId
+  fullName: FluentGpu.Hooks.ForEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/ControlFlow.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Hooks/ControlFlow.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Hooks.ForEl.ElementTypeId*
+references:
+- uid: FluentGpu.Hooks.ForEl.Count
+  commentId: P:FluentGpu.Hooks.ForEl.Count
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_Count
+  name: Count
+  nameWithType: ForEl.Count
+  fullName: FluentGpu.Hooks.ForEl.Count
+- uid: FluentGpu.Hooks.ForEl.ItemAt
+  commentId: P:FluentGpu.Hooks.ForEl.ItemAt
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_ItemAt
+  name: ItemAt
+  nameWithType: ForEl.ItemAt
+  fullName: FluentGpu.Hooks.ForEl.ItemAt
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Hooks.ForEl}
+  commentId: T:System.IEquatable{FluentGpu.Hooks.ForEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ForEl>
+  nameWithType: IEquatable<ForEl>
+  fullName: System.IEquatable<FluentGpu.Hooks.ForEl>
+  nameWithType.vb: IEquatable(Of ForEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Hooks.ForEl)
+  name.vb: IEquatable(Of ForEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Hooks.ForEl
+    name: ForEl
+    href: FluentGpu.Hooks.ForEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Hooks.ForEl
+    name: ForEl
+    href: FluentGpu.Hooks.ForEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.ForEl.#ctor*
+  commentId: Overload:FluentGpu.Hooks.ForEl.#ctor
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl__ctor_System_Func_System_Int32__System_Func_System_Int32_FluentGpu_Dsl_Element__System_Func_System_Int32_System_String__
+  name: ForEl
+  nameWithType: ForEl.ForEl
+  fullName: FluentGpu.Hooks.ForEl.ForEl
+  nameWithType.vb: ForEl.New
+  fullName.vb: FluentGpu.Hooks.ForEl.New
+  name.vb: New
+- uid: System.Func{System.Int32}
+  commentId: T:System.Func{System.Int32}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<int>
+  nameWithType: Func<int>
+  fullName: System.Func<int>
+  nameWithType.vb: Func(Of Integer)
+  fullName.vb: System.Func(Of Integer)
+  name.vb: Func(Of Integer)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Func{System.Int32,FluentGpu.Dsl.Element}
+  commentId: T:System.Func{System.Int32,FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, Element>
+  nameWithType: Func<int, Element>
+  fullName: System.Func<int, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of Integer, Element)
+  fullName.vb: System.Func(Of Integer, FluentGpu.Dsl.Element)
+  name.vb: Func(Of Integer, Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.Func{System.Int32,System.String}
+  commentId: T:System.Func{System.Int32,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, string>
+  nameWithType: Func<int, string>
+  fullName: System.Func<int, string>
+  nameWithType.vb: Func(Of Integer, String)
+  fullName.vb: System.Func(Of Integer, String)
+  name.vb: Func(Of Integer, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Hooks.ForEl.Count*
+  commentId: Overload:FluentGpu.Hooks.ForEl.Count
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_Count
+  name: Count
+  nameWithType: ForEl.Count
+  fullName: FluentGpu.Hooks.ForEl.Count
+- uid: FluentGpu.Hooks.ForEl.ItemAt*
+  commentId: Overload:FluentGpu.Hooks.ForEl.ItemAt
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_ItemAt
+  name: ItemAt
+  nameWithType: ForEl.ItemAt
+  fullName: FluentGpu.Hooks.ForEl.ItemAt
+- uid: FluentGpu.Hooks.ForEl.KeyOf*
+  commentId: Overload:FluentGpu.Hooks.ForEl.KeyOf
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_KeyOf
+  name: KeyOf
+  nameWithType: ForEl.KeyOf
+  fullName: FluentGpu.Hooks.ForEl.KeyOf
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Hooks.ForEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Hooks.ForEl.ElementTypeId
+  href: FluentGpu.Hooks.ForEl.html#FluentGpu_Hooks_ForEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: ForEl.ElementTypeId
+  fullName: FluentGpu.Hooks.ForEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort

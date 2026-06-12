@@ -1,0 +1,114 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.NumberBoxValidationMode
+  commentId: T:FluentGpu.Controls.NumberBoxValidationMode
+  id: NumberBoxValidationMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.NumberBoxValidationMode.Disabled
+  - FluentGpu.Controls.NumberBoxValidationMode.InvalidInputOverwritten
+  langs:
+  - csharp
+  - vb
+  name: NumberBoxValidationMode
+  nameWithType: NumberBoxValidationMode
+  fullName: FluentGpu.Controls.NumberBoxValidationMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NumberBoxValidationMode
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'WinUI <code>NumberBoxValidationMode</code>: what happens to invalid / out-of-range input on commit.'
+  example: []
+  syntax:
+    content: 'public enum NumberBoxValidationMode : byte'
+    content.vb: Public Enum NumberBoxValidationMode As Byte
+- uid: FluentGpu.Controls.NumberBoxValidationMode.InvalidInputOverwritten
+  commentId: F:FluentGpu.Controls.NumberBoxValidationMode.InvalidInputOverwritten
+  id: InvalidInputOverwritten
+  parent: FluentGpu.Controls.NumberBoxValidationMode
+  langs:
+  - csharp
+  - vb
+  name: InvalidInputOverwritten
+  nameWithType: NumberBoxValidationMode.InvalidInputOverwritten
+  fullName: FluentGpu.Controls.NumberBoxValidationMode.InvalidInputOverwritten
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InvalidInputOverwritten
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: InvalidInputOverwritten = 0
+    return:
+      type: FluentGpu.Controls.NumberBoxValidationMode
+- uid: FluentGpu.Controls.NumberBoxValidationMode.Disabled
+  commentId: F:FluentGpu.Controls.NumberBoxValidationMode.Disabled
+  id: Disabled
+  parent: FluentGpu.Controls.NumberBoxValidationMode
+  langs:
+  - csharp
+  - vb
+  name: Disabled
+  nameWithType: NumberBoxValidationMode.Disabled
+  fullName: FluentGpu.Controls.NumberBoxValidationMode.Disabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Disabled
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Disabled = 1
+    return:
+      type: FluentGpu.Controls.NumberBoxValidationMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.NumberBoxValidationMode
+  commentId: T:FluentGpu.Controls.NumberBoxValidationMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxValidationMode.html
+  name: NumberBoxValidationMode
+  nameWithType: NumberBoxValidationMode
+  fullName: FluentGpu.Controls.NumberBoxValidationMode

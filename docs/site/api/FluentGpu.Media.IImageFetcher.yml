@@ -1,0 +1,291 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media.IImageFetcher
+  commentId: T:FluentGpu.Media.IImageFetcher
+  id: IImageFetcher
+  parent: FluentGpu.Media
+  children:
+  - FluentGpu.Media.IImageFetcher.FetchAsync(System.String,System.Threading.CancellationToken)
+  langs:
+  - csharp
+  - vb
+  name: IImageFetcher
+  nameWithType: IImageFetcher
+  fullName: FluentGpu.Media.IImageFetcher
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IImageFetcher
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Portable fetch seam (media-pipeline.md §3 "Fetch"): turn a source URI into encoded bytes off the UI thread. Maps
+
+    transport/HTTP-status errors to <xref href="FluentGpu.Scene.ImageFailureKind" data-throw-if-not-resolved="false"></xref> so the scheduler can distinguish transient (network,
+
+    timeout, 5xx → retried) from permanent (404, other 4xx → not retried). Honors the cancellation token (per-attempt
+
+    timeout + shutdown). HTTP(S) + local file by default (<xref href="FluentGpu.Media.DefaultImageFetcher" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public interface IImageFetcher
+    content.vb: Public Interface IImageFetcher
+  derivedClasses:
+  - FluentGpu.Media.DefaultImageFetcher
+- uid: FluentGpu.Media.IImageFetcher.FetchAsync(System.String,System.Threading.CancellationToken)
+  commentId: M:FluentGpu.Media.IImageFetcher.FetchAsync(System.String,System.Threading.CancellationToken)
+  id: FetchAsync(System.String,System.Threading.CancellationToken)
+  parent: FluentGpu.Media.IImageFetcher
+  langs:
+  - csharp
+  - vb
+  name: FetchAsync(string, CancellationToken)
+  nameWithType: IImageFetcher.FetchAsync(string, CancellationToken)
+  fullName: FluentGpu.Media.IImageFetcher.FetchAsync(string, System.Threading.CancellationToken)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/IImageFetcher.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FetchAsync
+    path: ../../src/FluentGpu.Media/IImageFetcher.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: Task<FetchResult> FetchAsync(string source, CancellationToken ct)
+    parameters:
+    - id: source
+      type: System.String
+    - id: ct
+      type: System.Threading.CancellationToken
+    return:
+      type: System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+    content.vb: Function FetchAsync(source As String, ct As CancellationToken) As Task(Of FetchResult)
+  overload: FluentGpu.Media.IImageFetcher.FetchAsync*
+  nameWithType.vb: IImageFetcher.FetchAsync(String, CancellationToken)
+  fullName.vb: FluentGpu.Media.IImageFetcher.FetchAsync(String, System.Threading.CancellationToken)
+  name.vb: FetchAsync(String, CancellationToken)
+references:
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Media.DefaultImageFetcher
+  commentId: T:FluentGpu.Media.DefaultImageFetcher
+  href: FluentGpu.Media.DefaultImageFetcher.html
+  name: DefaultImageFetcher
+  nameWithType: DefaultImageFetcher
+  fullName: FluentGpu.Media.DefaultImageFetcher
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  href: FluentGpu.html
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Media.IImageFetcher.FetchAsync*
+  commentId: Overload:FluentGpu.Media.IImageFetcher.FetchAsync
+  href: FluentGpu.Media.IImageFetcher.html#FluentGpu_Media_IImageFetcher_FetchAsync_System_String_System_Threading_CancellationToken_
+  name: FetchAsync
+  nameWithType: IImageFetcher.FetchAsync
+  fullName: FluentGpu.Media.IImageFetcher.FetchAsync
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Threading.CancellationToken
+  commentId: T:System.Threading.CancellationToken
+  parent: System.Threading
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.threading.cancellationtoken
+  name: CancellationToken
+  nameWithType: CancellationToken
+  fullName: System.Threading.CancellationToken
+- uid: System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+  commentId: T:System.Threading.Tasks.Task{FluentGpu.Media.FetchResult}
+  parent: System.Threading.Tasks
+  definition: System.Threading.Tasks.Task`1
+  href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  name: Task<FetchResult>
+  nameWithType: Task<FetchResult>
+  fullName: System.Threading.Tasks.Task<FluentGpu.Media.FetchResult>
+  nameWithType.vb: Task(Of FetchResult)
+  fullName.vb: System.Threading.Tasks.Task(Of FluentGpu.Media.FetchResult)
+  name.vb: Task(Of FetchResult)
+  spec.csharp:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: <
+  - uid: FluentGpu.Media.FetchResult
+    name: FetchResult
+    href: FluentGpu.Media.FetchResult.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Media.FetchResult
+    name: FetchResult
+    href: FluentGpu.Media.FetchResult.html
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Threading
+  commentId: N:System.Threading
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Threading
+  nameWithType: System.Threading
+  fullName: System.Threading
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+- uid: System.Threading.Tasks.Task`1
+  commentId: T:System.Threading.Tasks.Task`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  name: Task<TResult>
+  nameWithType: Task<TResult>
+  fullName: System.Threading.Tasks.Task<TResult>
+  nameWithType.vb: Task(Of TResult)
+  fullName.vb: System.Threading.Tasks.Task(Of TResult)
+  name.vb: Task(Of TResult)
+  spec.csharp:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Threading.Tasks.Task`1
+    name: Task
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks.task-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Threading.Tasks
+  commentId: N:System.Threading.Tasks
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Threading.Tasks
+  nameWithType: System.Threading.Tasks
+  fullName: System.Threading.Tasks
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  - name: .
+  - uid: System.Threading.Tasks
+    name: Tasks
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Threading
+    name: Threading
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading
+  - name: .
+  - uid: System.Threading.Tasks
+    name: Tasks
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.threading.tasks

@@ -1,0 +1,149 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ProgressBarState
+  commentId: T:FluentGpu.Controls.ProgressBarState
+  id: ProgressBarState
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ProgressBarState.Error
+  - FluentGpu.Controls.ProgressBarState.Normal
+  - FluentGpu.Controls.ProgressBarState.Paused
+  langs:
+  - csharp
+  - vb
+  name: ProgressBarState
+  nameWithType: ProgressBarState
+  fullName: FluentGpu.Controls.ProgressBarState
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProgressBarState
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The drawing state of a <xref href="FluentGpu.Controls.ProgressBar" data-throw-if-not-resolved="false"></xref> — mirrors WinUI's CommonStates (Determinate / Paused /
+        Error and their Indeterminate counterparts), selected from IsIndeterminate + ShowPaused + ShowError.
+  example: []
+  syntax:
+    content: 'public enum ProgressBarState : byte'
+    content.vb: Public Enum ProgressBarState As Byte
+- uid: FluentGpu.Controls.ProgressBarState.Normal
+  commentId: F:FluentGpu.Controls.ProgressBarState.Normal
+  id: Normal
+  parent: FluentGpu.Controls.ProgressBarState
+  langs:
+  - csharp
+  - vb
+  name: Normal
+  nameWithType: ProgressBarState.Normal
+  fullName: FluentGpu.Controls.ProgressBarState.Normal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Normal
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Normal = 0
+    return:
+      type: FluentGpu.Controls.ProgressBarState
+- uid: FluentGpu.Controls.ProgressBarState.Paused
+  commentId: F:FluentGpu.Controls.ProgressBarState.Paused
+  id: Paused
+  parent: FluentGpu.Controls.ProgressBarState
+  langs:
+  - csharp
+  - vb
+  name: Paused
+  nameWithType: ProgressBarState.Paused
+  fullName: FluentGpu.Controls.ProgressBarState.Paused
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Paused
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Paused = 1
+    return:
+      type: FluentGpu.Controls.ProgressBarState
+- uid: FluentGpu.Controls.ProgressBarState.Error
+  commentId: F:FluentGpu.Controls.ProgressBarState.Error
+  id: Error
+  parent: FluentGpu.Controls.ProgressBarState
+  langs:
+  - csharp
+  - vb
+  name: Error
+  nameWithType: ProgressBarState.Error
+  fullName: FluentGpu.Controls.ProgressBarState.Error
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Error
+    path: ../../src/FluentGpu.Controls/ProgressBar.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Error = 2
+    return:
+      type: FluentGpu.Controls.ProgressBarState
+references:
+- uid: FluentGpu.Controls.ProgressBar
+  commentId: T:FluentGpu.Controls.ProgressBar
+  href: FluentGpu.Controls.ProgressBar.html
+  name: ProgressBar
+  nameWithType: ProgressBar
+  fullName: FluentGpu.Controls.ProgressBar
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ProgressBarState
+  commentId: T:FluentGpu.Controls.ProgressBarState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressBarState.html
+  name: ProgressBarState
+  nameWithType: ProgressBarState
+  fullName: FluentGpu.Controls.ProgressBarState

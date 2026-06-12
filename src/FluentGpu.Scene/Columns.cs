@@ -40,6 +40,7 @@ public struct LayoutInput
     public Edges4 Margin;
     public float Width;           // NaN = auto (content)
     public float Height;          // NaN = auto (content)
+    public float AspectRatio;     // width÷height; NaN = off. Derives the missing extent for a fluid leaf (CSS aspect-ratio)
     public float MinW, MinH, MaxW, MaxH;   // NaN = unconstrained
 
     public float FlexGrow;        // share of positive free space (default 0)
@@ -61,6 +62,7 @@ public struct LayoutInput
         Margin = default,
         Width = float.NaN,
         Height = float.NaN,
+        AspectRatio = float.NaN,
         MinW = float.NaN, MinH = float.NaN, MaxW = float.NaN, MaxH = float.NaN,
         FlexGrow = 0f,
         FlexShrink = 0f,
@@ -122,6 +124,7 @@ public struct NodePaint
     /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
     public bool OpacityGroup;
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
+    public byte ImageFit;         // VisualKind.Image: (ImageFit) content-fit mode; 0 = Cover (default). Read by the recorder
     public VisualKind VisualKind;
 
     /// <summary><see cref="TextDecorations"/>: draw the face-metric underline bar.</summary>
@@ -162,12 +165,20 @@ public struct ScrollState
     public float ContentW, ContentH;      // Layout-published full content extent (DIP)
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
+    public float FlingVelocity;           // touch-fling speed along Orientation (px/s, signed in offset space; Input seeds, Animation friction-decays)
+    public byte  ScrollMode;              // 0 = TargetChase (wheel ease toward Target), 1 = Fling (friction-decay inertia from FlingVelocity)
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     public float FadeT;                   // scrollbar indicator opacity 0..1 (eased in on scroll/hover, auto-hides after idle)
     public float ExpandT;                 // WinUI conscious scrollbar expansion 0=thin indicator, 1=full gutter + buttons
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter
+    public bool ScrollMoved;              // a SYNCHRONOUS offset write (touch content-pan / thumb-drag / edge-auto-scroll)
+                                          // moved the offset this frame — a one-frame reveal pulse the ScrollAnimator reads
+                                          // (and clears) so the thin indicator shows during a touch pan even though Offset==Target.
+                                          // Set by Input.SetScrollOffset on a real move; consumed every Tick. Reveals FadeT only —
+                                          // never PointerOver/ExpandT (a content pan is not a lane hover), so the bar idle-hides
+                                          // naturally on the move stopping (the WinUI TouchIndicator shows through a manipulation).
 
     // Virtualization (ItemCount == 0 ⇒ a plain ScrollView, non-virtual).
     public int   ItemCount;
@@ -307,8 +318,46 @@ public struct InteractionInfo
     public const ushort SpanLinksBit = 16384;       // the node's span run carries hyperlink spans (TextSpan.OnClick):
                                                     // hit-testable; the dispatcher resolves Hand over the span's laid
                                                     // rects and fires the span action on click (RichTextBlock.cpp:2995)
+    public const ushort GestureBit = 32768;         // the node declared a UseGesture handler (§13): hit-testable so a
+                                                    // tap/hold/pan over it opens a gesture arena even when the node is
+                                                    // not otherwise clickable; set/cleared by SceneStore.SetGestureHandler
 
     /// <summary>WinUI RepeatButton Delay/Interval (ms) for <see cref="RepeatBit"/> nodes. NaN (or non-positive) = the
     /// WinUI DP defaults (500/33, DependencyProperty.cpp:714-720); ScrollBar template arrows use Interval=50.</summary>
     public float RepeatDelayMs, RepeatIntervalMs;
+}
+
+/// <summary>A node's <c>UseGesture</c> declaration (input-a11y.md §13) — stored sparsely in <see cref="SceneStore"/>
+/// (only subscribing nodes have a row). One handler slot per Phase-3 usable kind (<see cref="GestureType.Tap"/> /
+/// <see cref="GestureType.Hold"/> / <see cref="GestureType.Pan"/>); a component declaring several gestures fills several
+/// slots. The handler is the only GC edge (a mount-time user closure, like every <c>HandlerTable</c> column — foundations
+/// §1: GC at the edge is allowed). Reserved kinds (DoubleTap/RightTap/Drag/Pinch) are accepted by the hook but not yet
+/// routed (Phase-4), so they need no slot here today.</summary>
+public struct GestureSubscription
+{
+    private Action<GestureEventArgs>? _tap, _hold, _pan;
+
+    /// <summary>True while any usable-kind handler is installed (the row is dropped when the last one clears).</summary>
+    public readonly bool HasAny => _tap is not null || _hold is not null || _pan is not null;
+
+    /// <summary>The installed handler for <paramref name="kind"/>, or null (reserved kinds always null this Phase).</summary>
+    public readonly Action<GestureEventArgs>? Handler(GestureType kind) => kind switch
+    {
+        GestureType.Tap => _tap,
+        GestureType.Hold => _hold,
+        GestureType.Pan => _pan,
+        _ => null,   // DoubleTap/RightTap/Drag/Pinch: Phase-4 routing — declared but not wired
+    };
+
+    /// <summary>Set (or clear, null) the handler for a usable kind. Reserved kinds are ignored (no slot).</summary>
+    public void Set(GestureType kind, Action<GestureEventArgs>? handler)
+    {
+        switch (kind)
+        {
+            case GestureType.Tap: _tap = handler; break;
+            case GestureType.Hold: _hold = handler; break;
+            case GestureType.Pan: _pan = handler; break;
+            // DoubleTap/RightTap/Drag/Pinch: accepted by UseGesture for forward-compat, not stored/routed yet.
+        }
+    }
 }

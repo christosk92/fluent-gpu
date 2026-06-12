@@ -1,0 +1,185 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.ImageFit
+  commentId: T:FluentGpu.Foundation.ImageFit
+  id: ImageFit
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.ImageFit.Contain
+  - FluentGpu.Foundation.ImageFit.Cover
+  - FluentGpu.Foundation.ImageFit.Fill
+  - FluentGpu.Foundation.ImageFit.None
+  langs:
+  - csharp
+  - vb
+  name: ImageFit
+  nameWithType: ImageFit
+  fullName: FluentGpu.Foundation.ImageFit
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageFit
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    How an image's pixels map into its (possibly differently-shaped) layout box — the CSS <code>object-fit</code> model,
+        cleaner than WinUI's <code>Stretch</code> because box-sizing is a separate concern (see <code>AspectRatio</code>). Default
+        <xref href="FluentGpu.Foundation.ImageFit.Cover" data-throw-if-not-resolved="false"></xref> (what album art / thumbnails want): never distorts, never letterboxes.
+  example: []
+  syntax:
+    content: 'public enum ImageFit : byte'
+    content.vb: Public Enum ImageFit As Byte
+- uid: FluentGpu.Foundation.ImageFit.Cover
+  commentId: F:FluentGpu.Foundation.ImageFit.Cover
+  id: Cover
+  parent: FluentGpu.Foundation.ImageFit
+  langs:
+  - csharp
+  - vb
+  name: Cover
+  nameWithType: ImageFit.Cover
+  fullName: FluentGpu.Foundation.ImageFit.Cover
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cover
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Scale to fill the box, preserve aspect, crop the overflow (CSS <code>object-fit: cover</code>). The default.'
+  example: []
+  syntax:
+    content: Cover = 0
+    return:
+      type: FluentGpu.Foundation.ImageFit
+- uid: FluentGpu.Foundation.ImageFit.Contain
+  commentId: F:FluentGpu.Foundation.ImageFit.Contain
+  id: Contain
+  parent: FluentGpu.Foundation.ImageFit
+  langs:
+  - csharp
+  - vb
+  name: Contain
+  nameWithType: ImageFit.Contain
+  fullName: FluentGpu.Foundation.ImageFit.Contain
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Contain
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'Scale to fit inside the box, preserve aspect, letterbox the remainder (CSS <code>object-fit: contain</code>).'
+  example: []
+  syntax:
+    content: Contain = 1
+    return:
+      type: FluentGpu.Foundation.ImageFit
+- uid: FluentGpu.Foundation.ImageFit.Fill
+  commentId: F:FluentGpu.Foundation.ImageFit.Fill
+  id: Fill
+  parent: FluentGpu.Foundation.ImageFit
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: ImageFit.Fill
+  fullName: FluentGpu.Foundation.ImageFit.Fill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Stretch the whole texture to the box, ignoring aspect — may distort (WinUI <code>Fill</code>). The escape hatch.
+  example: []
+  syntax:
+    content: Fill = 2
+    return:
+      type: FluentGpu.Foundation.ImageFit
+- uid: FluentGpu.Foundation.ImageFit.None
+  commentId: F:FluentGpu.Foundation.ImageFit.None
+  id: None
+  parent: FluentGpu.Foundation.ImageFit
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ImageFit.None
+  fullName: FluentGpu.Foundation.ImageFit.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTypes.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/LayoutTypes.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Draw at the source's native pixel size (as DIPs), centered, cropped to the box (WinUI <code>None</code>).
+  example: []
+  syntax:
+    content: None = 3
+    return:
+      type: FluentGpu.Foundation.ImageFit
+references:
+- uid: FluentGpu.Foundation.ImageFit.Cover
+  commentId: F:FluentGpu.Foundation.ImageFit.Cover
+  href: FluentGpu.Foundation.ImageFit.html#FluentGpu_Foundation_ImageFit_Cover
+  name: Cover
+  nameWithType: ImageFit.Cover
+  fullName: FluentGpu.Foundation.ImageFit.Cover
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.ImageFit
+  commentId: T:FluentGpu.Foundation.ImageFit
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ImageFit.html
+  name: ImageFit
+  nameWithType: ImageFit
+  fullName: FluentGpu.Foundation.ImageFit

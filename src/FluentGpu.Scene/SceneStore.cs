@@ -39,7 +39,7 @@ public sealed class SceneStore : ISceneBackend
     // Exit-animation orphans: nodes removed from the logical tree but kept LIVE (drawing) until their exit animation
     // settles, then reclaimed. Detached from their parent (so reconcile + layout skip them) and drawn by a separate
     // recorder pass at their FROZEN parent-world origin. Bounded by MaxOrphans (overflow instant-frees the oldest).
-    private struct OrphanEntry { public NodeHandle Node; public float Px, Py; }
+    private struct OrphanEntry { public NodeHandle Node; public float Px, Py; public long EnqueuedTicks; }
     private readonly List<OrphanEntry> _orphans = new();
     private const int MaxOrphans = 64;
 
@@ -113,6 +113,13 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, DragSource> _dragSources = new();
     private readonly Dictionary<int, DropTargetSpec> _dropTargets = new();
 
+    // UseGesture (input-a11y.md §13) declarations: sparse (only nodes that declared a gesture hook have an entry), the
+    // _textEdits/_brushAnims side-table pattern — no per-node array, no resize cost. FluentGpu.Hooks WRITES the
+    // subscription on mount; FluentGpu.Input READS it when the gesture arena resolves a winner on the node (both
+    // reference Scene; neither references the other — this column is the seam). The handler delegates are the only GC
+    // edge (a freshly-captured user closure at mount, like every HandlerTable column — foundations: GC at the edge OK).
+    private readonly Dictionary<int, GestureSubscription> _gestureSubs = new();
+
     public NodeHandle Root { get; set; }
 
     /// <summary>The node currently lifted by an active item-drag (E5 ghost) — set/cleared by
@@ -125,6 +132,13 @@ public sealed class SceneStore : ISceneBackend
     /// text) releases its <c>paint.Text</c> / <c>TextStyle.Family</c> refs so streamed virtual-list text is reclaimed
     /// instead of accumulating for the process lifetime. Wired by the reconciler at composition.</summary>
     public StringTable? Strings { get; set; }
+
+    /// <summary>Optional slot-free notification (node INDEX): invoked by <see cref="FreeSubtree"/> as a node's slot is
+    /// reclaimed, so subsystems that key per-node state by INDEX (rather than gen-checked handle) — the AnimEngine
+    /// layout-transition side-table, the ScrollAnimator conscious-bar timers — can drop the dormant row symmetrically.
+    /// Without it a freed slot's stale spec/state would be inherited by the NEXT node reusing that index. Wired by the
+    /// host; null on backends that don't use the index-keyed side-tables.</summary>
+    public Action<int>? OnFreeIndex { get; set; }
 
     public SceneStore(int capacity = 64)
     {
@@ -162,6 +176,15 @@ public sealed class SceneStore : ISceneBackend
     }
 
     public int LiveCount { get; private set; }
+
+    /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
+    public int Capacity => _gen.Length;
+    /// <summary>Live sticky-position registrations (CSS position:sticky) — O(1) census of the <c>_sticky</c> side-table.</summary>
+    public int StickyCount => _sticky.Count;
+    /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
+    public int ScrollStateCount => _scroll.Count;
+    /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
+    public int BrushAnimCount => _brushAnims.Count;
 
     public bool IsLive(NodeHandle h)
         => h.Raw.Index > 0 && h.Raw.Index < (uint)_high && _gen[h.Raw.Index] == h.Raw.Gen;
@@ -261,7 +284,9 @@ public sealed class SceneStore : ISceneBackend
         _selectionHighlight.Remove(idx);
         _dragSources.Remove(idx);
         _dropTargets.Remove(idx);
+        _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
+        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollAnimator timers)
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -311,7 +336,7 @@ public sealed class SceneStore : ISceneBackend
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
-        _orphans.Add(new OrphanEntry { Node = node, Px = px, Py = py });
+        _orphans.Add(new OrphanEntry { Node = node, Px = px, Py = py, EnqueuedTicks = Stopwatch.GetTimestamp() });
     }
 
     /// <summary>Free a settled exit orphan (the deferred <see cref="FreeSubtree"/> — gen bump → handle dead).</summary>
@@ -336,6 +361,11 @@ public sealed class SceneStore : ISceneBackend
     {
         var e = _orphans[i]; px = e.Px; py = e.Py; return e.Node;
     }
+
+    /// <summary><see cref="Stopwatch.GetTimestamp"/> when the i-th orphan was enqueued — the host's settle-timeout
+    /// backstop force-reclaims an orphan whose exit track wedged (a never-settling animation) so it can't pin the wake
+    /// loop forever.</summary>
+    public long OrphanEnqueuedTicks(int i) => _orphans[i].EnqueuedTicks;
 
     // ── column accessors (re-fetch after any CreateNode that may grow) ─────────────
     public ref LayoutInput Layout(NodeHandle h) => ref _layout[h.Raw.Index];
@@ -580,6 +610,11 @@ public sealed class SceneStore : ISceneBackend
 
     public bool HasDynamicText => _dynamicTextCount > 0;
 
+    /// <summary>Bumped on every dynamic-text registration CHANGE (mount, unmount, kind swap) — a freshly-mounted node
+    /// has no resolved id yet, so the host must force one <see cref="UpdateDynamicText"/> pass even when no displayed
+    /// value moved this frame (the intern-on-change fast path would otherwise skip it).</summary>
+    public int DynamicTextEpoch { get; private set; }
+
     public void SetDynamicText(NodeHandle h, DynamicTextKind kind)
     {
         int idx = (int)h.Raw.Index;
@@ -588,6 +623,7 @@ public sealed class SceneStore : ISceneBackend
         if (old == DynamicTextKind.None && kind != DynamicTextKind.None) _dynamicTextCount++;
         else if (old != DynamicTextKind.None && kind == DynamicTextKind.None) _dynamicTextCount--;
         _dynamicText[idx] = kind;
+        DynamicTextEpoch++;
     }
 
     public void UpdateDynamicText(Func<DynamicTextKind, StringId> resolve)
@@ -625,10 +661,25 @@ public sealed class SceneStore : ISceneBackend
         _layoutDirty.Clear();
     }
 
+    // Frame-scoped transform-motion worklist (mirrors _layoutDirty): the nodes whose transform was written THIS frame
+    // (scroll/fling/drag/FLIP/sticky — every motion writer marks TransformDirty). The recorder reads the bit to gate
+    // glyph baseline snapping (moving text rides sub-pixel with its plate); the host clears the bits right after record,
+    // so a node at rest re-snaps on the very next recorded frame.
+    private readonly List<NodeHandle> _transformWrote = new();
+    /// <summary>True when any node's transform was written this frame (host gate for the one-frame settle repaint).</summary>
+    public bool AnyTransformWrote => _transformWrote.Count > 0;
+    /// <summary>Cleared by the host right after record — clears the per-node TransformDirty bits marked this frame.</summary>
+    public void ClearTransformDirty()
+    {
+        for (int i = 0; i < _transformWrote.Count; i++) { var h = _transformWrote[i]; if (IsLive(h)) _flags[h.Raw.Index] &= ~NodeFlags.TransformDirty; }
+        _transformWrote.Clear();
+    }
+
     public void Mark(NodeHandle h, NodeFlags flags)
     {
         int idx = (int)h.Raw.Index;
         if ((flags & NodeFlags.LayoutDirty) != 0 && (_flags[idx] & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
+        if ((flags & NodeFlags.TransformDirty) != 0 && (_flags[idx] & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         _flags[idx] |= flags;
     }
     public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
@@ -785,6 +836,35 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Cheap per-move gate: any drop target in the scene at all (skips the chain walk for plain reorders).</summary>
     public bool HasDropTargets => _dropTargets.Count > 0;
 
+    // ── UseGesture subscriptions (input-a11y.md §13; the Hooks⇄Input seam) ──────────────────────────────────────
+    /// <summary>Cheap census: any node in the scene declared a <c>UseGesture</c> hook (lets the dispatcher skip the
+    /// gesture-routing probe entirely when no component subscribes — the common case).</summary>
+    public bool HasGestureSubs => _gestureSubs.Count > 0;
+
+    /// <summary>Install / merge one <c>UseGesture</c> handler on a node (input-a11y.md §13). Idempotent per (node, kind):
+    /// the latest handler for a kind replaces the prior one (a re-mount re-asserts the same closure); other kinds on the
+    /// node are preserved (a component may declare Tap AND Pan). Called by <c>FluentGpu.Hooks.UseGesture</c> on mount.</summary>
+    public void SetGestureHandler(NodeHandle h, GestureType kind, Action<GestureEventArgs>? handler)
+    {
+        int idx = LiveIndex(h);
+        ref GestureSubscription s = ref CollectionsMarshal.GetValueRefOrAddDefault(_gestureSubs, idx, out _);
+        s.Set(kind, handler);
+        // Maintain GestureBit so the node hit-tests (a UseGesture-only node is otherwise non-interactive): set while any
+        // handler is installed, cleared when the last one goes (Input opens a gesture arena only over a hit node).
+        if (s.HasAny) _interaction[idx].HandlerMask |= InteractionInfo.GestureBit;
+        else { _interaction[idx].HandlerMask &= unchecked((ushort)~InteractionInfo.GestureBit); _gestureSubs.Remove(idx); }
+    }
+
+    /// <summary>True iff the node declared a <c>UseGesture</c> for <paramref name="kind"/> (the dispatcher enrolls a
+    /// matching arena member only for declared kinds). Stale/dead handles read false.</summary>
+    public bool WantsGesture(NodeHandle h, GestureType kind)
+        => _gestureSubs.TryGetValue(LiveIndexOrZero(h), out var s) && s.Handler(kind) is not null;
+
+    /// <summary>The handler for (node, kind), or null. The dispatcher invokes it when the gesture arena resolves the
+    /// node's matching member as the winner (§7A.2). Stale/dead handles read null.</summary>
+    public Action<GestureEventArgs>? GetGestureHandler(NodeHandle h, GestureType kind)
+        => _gestureSubs.TryGetValue(LiveIndexOrZero(h), out var s) ? s.Handler(kind) : null;
+
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
         => ref CollectionsMarshal.GetValueRefOrAddDefault(_measureCache, (int)h.Raw.Index, out _);
@@ -809,9 +889,13 @@ public sealed class SceneStore : ISceneBackend
 
     private NodeHandle Wrap(int idx) => idx == 0 ? NodeHandle.Null : new NodeHandle(new Handle((uint)idx, _gen[idx]));
 
-    private void Grow()
+    private void Grow() => ResizeColumns(_gen.Length * 2);
+
+    /// <summary>Resize every parallel SoA column to <paramref name="n"/> slots (grow OR shrink). The single place the
+    /// column list lives — <see cref="Grow"/> (×2) and <see cref="TrimExcessCapacity"/> (tail-trim) both route here so
+    /// the set can never drift between them.</summary>
+    private void ResizeColumns(int n)
     {
-        int n = _gen.Length * 2;
         Array.Resize(ref _gen, n); Array.Resize(ref _nextFree, n);
         Array.Resize(ref _parent, n); Array.Resize(ref _firstChild, n); Array.Resize(ref _lastChild, n);
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
@@ -823,6 +907,51 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _focusChanged, n);
         Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
         Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);
+    }
+
+    /// <summary>Conservative slab tail-trim (mem-02): the SoA columns only ever GROW (Gen0 churn at the reconcile edge
+    /// ratchets <see cref="Capacity"/> to the session high-water and never gives it back). Index-stability is sacred —
+    /// live handles MUST keep their indices — so the ONLY legal shrink is cutting the all-free TAIL above the highest
+    /// LIVE index. Find that index H; when the slab is mostly empty tail (capacity &gt; 2·(H+1) and past a floor), shrink
+    /// every column to the next pow2 ≥ H+1 and drop the freelist entries that fall in the trimmed tail. Returns the slot
+    /// count reclaimed (0 = no-op — nothing trimmable, or below the floor). The host calls it on a slow idle cadence;
+    /// allocation at trim time (the transient free-set) is acceptable since it runs only when fully idle.</summary>
+    public int TrimExcessCapacity()
+    {
+        int cap = _gen.Length;
+        const int FloorCap = 256;   // never shrink below this — keeps a sane reusable working set, matches the guard
+        if (cap <= FloorCap) return 0;
+
+        // Free indices below _high are exactly the freelist members; build the set (transient — idle-time only).
+        var free = new HashSet<int>();
+        for (int f = _freeHead; f != 0; f = _nextFree[f]) free.Add(f);
+
+        // Highest LIVE index: scan down from the high-water, skipping freed slots. (Every index in [1,_high) was
+        // allocated at least once, so below-high ⇒ live XOR free; H=0 ⇒ no live nodes at all.)
+        int h = 0;
+        for (int i = _high - 1; i >= 1; i--)
+            if (!free.Contains(i)) { h = i; break; }
+
+        int target = h + 1;                                   // keep slots [0, h] live-addressable
+        // Mostly-empty-tail gate: only worth a realloc when the slab is more than double the live span and past the floor.
+        if (cap <= 2 * target || cap <= FloorCap) return 0;
+
+        int newCap = 1 << (32 - System.Numerics.BitOperations.LeadingZeroCount((uint)Math.Max(1, target - 1)));
+        if (newCap < FloorCap) newCap = FloorCap;
+        if (newCap >= cap) return 0;                          // pow2 rounding swallowed the slack — nothing to give back
+
+        ResizeColumns(newCap);
+        _high = target;                                       // the tail above H is gone; fresh capacity [target,newCap) is reachable via _high++
+
+        // Rebuild the freelist keeping only entries that survive the trim (index < the new _high). Built from the
+        // pre-captured `free` set (NOT by walking the just-resized _nextFree — entries ≥ newCap are now out of bounds).
+        // Freed slots in [target, newCap) become plain fresh capacity (reachable via _high++); slots ≥ newCap are gone.
+        int newHead = 0;
+        foreach (int f in free)
+            if (f < target) { _nextFree[f] = newHead; newHead = f; }
+        _freeHead = newHead;
+
+        return cap - newCap;
     }
 
     // ISceneBackend explicit ref returns already satisfied above.

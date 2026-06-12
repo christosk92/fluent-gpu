@@ -1,0 +1,1348 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Reconciler.TreeReconciler
+  commentId: T:FluentGpu.Reconciler.TreeReconciler
+  id: TreeReconciler
+  parent: FluentGpu.Reconciler
+  children:
+  - FluentGpu.Reconciler.TreeReconciler.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Foundation.StringTable,FluentGpu.Signals.ReactiveRuntime)
+  - FluentGpu.Reconciler.TreeReconciler.Anim
+  - FluentGpu.Reconciler.TreeReconciler.ComponentCount
+  - FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled
+  - FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount
+  - FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+  - FluentGpu.Reconciler.TreeReconciler.Images
+  - FluentGpu.Reconciler.TreeReconciler.LiveComponents
+  - FluentGpu.Reconciler.TreeReconciler.MountRoot(FluentGpu.Hooks.Component)
+  - FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+  - FluentGpu.Reconciler.TreeReconciler.ProviderCount
+  - FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals
+  - FluentGpu.Reconciler.TreeReconciler.ReconcileRoot(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element)
+  - FluentGpu.Reconciler.TreeReconciler.Runtime
+  - FluentGpu.Reconciler.TreeReconciler.SetAmbient(System.Object,FluentGpu.Signals.Signal{System.Object})
+  - FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+  langs:
+  - csharp
+  - vb
+  name: TreeReconciler
+  nameWithType: TreeReconciler
+  fullName: FluentGpu.Reconciler.TreeReconciler
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TreeReconciler
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Patches the retained SceneStore from an immutable Element tree. Signals-first: every component is a reactive
+
+    render-effect (re-renders + reconciles ONLY its own subtree when its state/context changes — granular, never the
+
+    whole app); fine-grained bindings (TransformBind/OpacityBind/…) and reactive control-flow (<xref href="FluentGpu.Hooks.ShowEl" data-throw-if-not-resolved="false"></xref>/
+
+    <xref href="FluentGpu.Hooks.ForEl" data-throw-if-not-resolved="false"></xref>) are effects too. The keyed positional+type diff is retained as the STRUCTURAL engine (used on
+
+    re-render and behind For/Show); a reused component on a parent re-render is a no-op (it is autonomous).
+  example: []
+  syntax:
+    content: public sealed class TreeReconciler
+    content.vb: Public NotInheritable Class TreeReconciler
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled
+  id: ConsumeReconciled
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ConsumeReconciled()
+  nameWithType: TreeReconciler.ConsumeReconciled()
+  fullName: FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ConsumeReconciled
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: True (and reset) if any mount/update/remove happened since the last call — the host's "layout needed" gate.
+  example: []
+  syntax:
+    content: public bool ConsumeReconciled()
+    return:
+      type: System.Boolean
+    content.vb: Public Function ConsumeReconciled() As Boolean
+  overload: FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled*
+- uid: FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount
+  id: ConsumeRenderCount
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ConsumeRenderCount()
+  nameWithType: TreeReconciler.ConsumeRenderCount()
+  fullName: FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ConsumeRenderCount
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Number of component render-effects that ran since the last call (proves granular re-render in tests).
+  example: []
+  syntax:
+    content: public int ConsumeRenderCount()
+    return:
+      type: System.Int32
+    content.vb: Public Function ConsumeRenderCount() As Integer
+  overload: FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount*
+- uid: FluentGpu.Reconciler.TreeReconciler.Runtime
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.Runtime
+  id: Runtime
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: Runtime
+  nameWithType: TreeReconciler.Runtime
+  fullName: FluentGpu.Reconciler.TreeReconciler.Runtime
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Runtime
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: The reactive scheduler — one per host; signals schedule render-effects/bindings here, the host flushes it.
+  example: []
+  syntax:
+    content: public ReactiveRuntime Runtime { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.ReactiveRuntime
+    content.vb: Public ReadOnly Property Runtime As ReactiveRuntime
+  overload: FluentGpu.Reconciler.TreeReconciler.Runtime*
+- uid: FluentGpu.Reconciler.TreeReconciler.LiveComponents
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.LiveComponents
+  id: LiveComponents
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: LiveComponents
+  nameWithType: TreeReconciler.LiveComponents
+  fullName: FluentGpu.Reconciler.TreeReconciler.LiveComponents
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LiveComponents
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Live nested components — the host drains their effects each frame.
+  example: []
+  syntax:
+    content: public List<Component> LiveComponents { get; }
+    parameters: []
+    return:
+      type: System.Collections.Generic.List{FluentGpu.Hooks.Component}
+    content.vb: Public ReadOnly Property LiveComponents As List(Of Component)
+  overload: FluentGpu.Reconciler.TreeReconciler.LiveComponents*
+- uid: FluentGpu.Reconciler.TreeReconciler.ComponentCount
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.ComponentCount
+  id: ComponentCount
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ComponentCount
+  nameWithType: TreeReconciler.ComponentCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.ComponentCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ComponentCount
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Mounted component entries (the <code>_comps</code> anchor map) — O(1) census.
+  example: []
+  syntax:
+    content: public int ComponentCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property ComponentCount As Integer
+  overload: FluentGpu.Reconciler.TreeReconciler.ComponentCount*
+- uid: FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+  id: NodeBindingCount
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: NodeBindingCount
+  nameWithType: TreeReconciler.NodeBindingCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NodeBindingCount
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Nodes carrying reactive bindings / control-flow effects (the <code>_nodeBindings</code> map) — O(1) census.
+  example: []
+  syntax:
+    content: public int NodeBindingCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property NodeBindingCount As Integer
+  overload: FluentGpu.Reconciler.TreeReconciler.NodeBindingCount*
+- uid: FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+  id: VirtualBoundaryCount
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: VirtualBoundaryCount
+  nameWithType: TreeReconciler.VirtualBoundaryCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VirtualBoundaryCount
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Virtual-list viewport boundaries (the <code>_virtuals</code> map) — O(1) census.
+  example: []
+  syntax:
+    content: public int VirtualBoundaryCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property VirtualBoundaryCount As Integer
+  overload: FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount*
+- uid: FluentGpu.Reconciler.TreeReconciler.ProviderCount
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.ProviderCount
+  id: ProviderCount
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ProviderCount
+  nameWithType: TreeReconciler.ProviderCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.ProviderCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProviderCount
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Context-provider value signals (the <code>_providerSig</code> map) — O(1) census.
+  example: []
+  syntax:
+    content: public int ProviderCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property ProviderCount As Integer
+  overload: FluentGpu.Reconciler.TreeReconciler.ProviderCount*
+- uid: FluentGpu.Reconciler.TreeReconciler.Anim
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.Anim
+  id: Anim
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: Anim
+  nameWithType: TreeReconciler.Anim
+  fullName: FluentGpu.Reconciler.TreeReconciler.Anim
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Anim
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Set by the host; injected into each component so animation hooks can seed tracks on their node.
+  example: []
+  syntax:
+    content: public AnimEngine? Anim { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.AnimEngine
+    content.vb: Public Property Anim As AnimEngine
+  overload: FluentGpu.Reconciler.TreeReconciler.Anim*
+- uid: FluentGpu.Reconciler.TreeReconciler.Images
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.Images
+  id: Images
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: Images
+  nameWithType: TreeReconciler.Images
+  fullName: FluentGpu.Reconciler.TreeReconciler.Images
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Images
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).
+  example: []
+  syntax:
+    content: public ImageCache? Images { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.ImageCache
+    content.vb: Public Property Images As ImageCache
+  overload: FluentGpu.Reconciler.TreeReconciler.Images*
+- uid: FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+  commentId: P:FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+  id: ImageEpoch
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ImageEpoch
+  nameWithType: TreeReconciler.ImageEpoch
+  fullName: FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageEpoch
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Set by the host; bumped on any image status change so <code>UseImage</code> consumers re-render granularly.
+  example: []
+  syntax:
+    content: public IReadSignal<int>? ImageEpoch { get; set; }
+    parameters: []
+    return:
+      type: FluentGpu.Signals.IReadSignal{System.Int32}
+    content.vb: Public Property ImageEpoch As IReadSignal(Of Integer)
+  overload: FluentGpu.Reconciler.TreeReconciler.ImageEpoch*
+- uid: FluentGpu.Reconciler.TreeReconciler.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Foundation.StringTable,FluentGpu.Signals.ReactiveRuntime)
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Foundation.StringTable,FluentGpu.Signals.ReactiveRuntime)
+  id: '#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Foundation.StringTable,FluentGpu.Signals.ReactiveRuntime)'
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: TreeReconciler(SceneStore, StringTable, ReactiveRuntime?)
+  nameWithType: TreeReconciler.TreeReconciler(SceneStore, StringTable, ReactiveRuntime?)
+  fullName: FluentGpu.Reconciler.TreeReconciler.TreeReconciler(FluentGpu.Scene.SceneStore, FluentGpu.Foundation.StringTable, FluentGpu.Signals.ReactiveRuntime?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    - id: strings
+      type: FluentGpu.Foundation.StringTable
+    - id: runtime
+      type: FluentGpu.Signals.ReactiveRuntime
+    content.vb: Public Sub New(scene As SceneStore, strings As StringTable, runtime As ReactiveRuntime = Nothing)
+  overload: FluentGpu.Reconciler.TreeReconciler.#ctor*
+  nameWithType.vb: TreeReconciler.New(SceneStore, StringTable, ReactiveRuntime)
+  fullName.vb: FluentGpu.Reconciler.TreeReconciler.New(FluentGpu.Scene.SceneStore, FluentGpu.Foundation.StringTable, FluentGpu.Signals.ReactiveRuntime)
+  name.vb: New(SceneStore, StringTable, ReactiveRuntime)
+- uid: FluentGpu.Reconciler.TreeReconciler.SetAmbient(System.Object,FluentGpu.Signals.Signal{System.Object})
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.SetAmbient(System.Object,FluentGpu.Signals.Signal{System.Object})
+  id: SetAmbient(System.Object,FluentGpu.Signals.Signal{System.Object})
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: SetAmbient(object, Signal<object?>)
+  nameWithType: TreeReconciler.SetAmbient(object, Signal<object?>)
+  fullName: FluentGpu.Reconciler.TreeReconciler.SetAmbient(object, FluentGpu.Signals.Signal<object?>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetAmbient
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Publish an ambient context (e.g. Viewport.Size) as a host-owned signal consumers can read.
+  example: []
+  syntax:
+    content: public void SetAmbient(object channel, Signal<object?> sig)
+    parameters:
+    - id: channel
+      type: System.Object
+    - id: sig
+      type: FluentGpu.Signals.Signal{System.Object}
+    content.vb: Public Sub SetAmbient(channel As Object, sig As Signal(Of Object))
+  overload: FluentGpu.Reconciler.TreeReconciler.SetAmbient*
+  nameWithType.vb: TreeReconciler.SetAmbient(Object, Signal(Of Object))
+  fullName.vb: FluentGpu.Reconciler.TreeReconciler.SetAmbient(Object, FluentGpu.Signals.Signal(Of Object))
+  name.vb: SetAmbient(Object, Signal(Of Object))
+- uid: FluentGpu.Reconciler.TreeReconciler.MountRoot(FluentGpu.Hooks.Component)
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.MountRoot(FluentGpu.Hooks.Component)
+  id: MountRoot(FluentGpu.Hooks.Component)
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: MountRoot(Component)
+  nameWithType: TreeReconciler.MountRoot(Component)
+  fullName: FluentGpu.Reconciler.TreeReconciler.MountRoot(FluentGpu.Hooks.Component)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MountRoot
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Mount a root COMPONENT as a reactive render-effect (the host path): it renders into <code>Scene.Root</code> and
+        re-renders itself (only) when its own state/context changes.
+  example: []
+  syntax:
+    content: public void MountRoot(Component root)
+    parameters:
+    - id: root
+      type: FluentGpu.Hooks.Component
+    content.vb: Public Sub MountRoot(root As Component)
+  overload: FluentGpu.Reconciler.TreeReconciler.MountRoot*
+- uid: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element)
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.ReconcileRoot(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element)
+  id: ReconcileRoot(FluentGpu.Dsl.Element,FluentGpu.Dsl.Element)
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ReconcileRoot(Element, Element?)
+  nameWithType: TreeReconciler.ReconcileRoot(Element, Element?)
+  fullName: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot(FluentGpu.Dsl.Element, FluentGpu.Dsl.Element?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReconcileRoot
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 147
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Imperative full reconcile of an explicit element tree (tests / non-host callers).
+  example: []
+  syntax:
+    content: public void ReconcileRoot(Element newRoot, Element? oldRoot)
+    parameters:
+    - id: newRoot
+      type: FluentGpu.Dsl.Element
+    - id: oldRoot
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Sub ReconcileRoot(newRoot As Element, oldRoot As Element)
+  overload: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot*
+  nameWithType.vb: TreeReconciler.ReconcileRoot(Element, Element)
+  fullName.vb: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot(FluentGpu.Dsl.Element, FluentGpu.Dsl.Element)
+  name.vb: ReconcileRoot(Element, Element)
+- uid: FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals
+  commentId: M:FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals
+  id: ReRealizeVirtuals
+  parent: FluentGpu.Reconciler.TreeReconciler
+  langs:
+  - csharp
+  - vb
+  name: ReRealizeVirtuals()
+  nameWithType: TreeReconciler.ReRealizeVirtuals()
+  fullName: FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/Reconciler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReRealizeVirtuals
+    path: ../../src/FluentGpu.Reconciler/Reconciler.cs
+    startLine: 155
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Re-realize any virtual-list windows flagged <xref href="FluentGpu.Foundation.NodeFlags.VirtualRangeDirty" data-throw-if-not-resolved="false"></xref> (scroll boundary
+        crossing) — granular, no component re-render. Called by the host each frame.
+  example: []
+  syntax:
+    content: public bool ReRealizeVirtuals()
+    return:
+      type: System.Boolean
+    content.vb: Public Function ReRealizeVirtuals() As Boolean
+  overload: FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals*
+references:
+- uid: FluentGpu.Hooks.ShowEl
+  commentId: T:FluentGpu.Hooks.ShowEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ShowEl.html
+  name: ShowEl
+  nameWithType: ShowEl
+  fullName: FluentGpu.Hooks.ShowEl
+- uid: FluentGpu.Hooks.ForEl
+  commentId: T:FluentGpu.Hooks.ForEl
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.ForEl.html
+  name: ForEl
+  nameWithType: ForEl
+  fullName: FluentGpu.Hooks.ForEl
+- uid: FluentGpu.Reconciler
+  commentId: N:FluentGpu.Reconciler
+  href: FluentGpu.html
+  name: FluentGpu.Reconciler
+  nameWithType: FluentGpu.Reconciler
+  fullName: FluentGpu.Reconciler
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ConsumeReconciled
+  name: ConsumeReconciled
+  nameWithType: TreeReconciler.ConsumeReconciled
+  fullName: FluentGpu.Reconciler.TreeReconciler.ConsumeReconciled
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ConsumeRenderCount
+  name: ConsumeRenderCount
+  nameWithType: TreeReconciler.ConsumeRenderCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.ConsumeRenderCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Reconciler.TreeReconciler.Runtime*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.Runtime
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_Runtime
+  name: Runtime
+  nameWithType: TreeReconciler.Runtime
+  fullName: FluentGpu.Reconciler.TreeReconciler.Runtime
+- uid: FluentGpu.Signals.ReactiveRuntime
+  commentId: T:FluentGpu.Signals.ReactiveRuntime
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.ReactiveRuntime.html
+  name: ReactiveRuntime
+  nameWithType: ReactiveRuntime
+  fullName: FluentGpu.Signals.ReactiveRuntime
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: FluentGpu.Reconciler.TreeReconciler.LiveComponents*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.LiveComponents
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_LiveComponents
+  name: LiveComponents
+  nameWithType: TreeReconciler.LiveComponents
+  fullName: FluentGpu.Reconciler.TreeReconciler.LiveComponents
+- uid: System.Collections.Generic.List{FluentGpu.Hooks.Component}
+  commentId: T:System.Collections.Generic.List{FluentGpu.Hooks.Component}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<Component>
+  nameWithType: List<Component>
+  fullName: System.Collections.Generic.List<FluentGpu.Hooks.Component>
+  nameWithType.vb: List(Of Component)
+  fullName.vb: System.Collections.Generic.List(Of FluentGpu.Hooks.Component)
+  name.vb: List(Of Component)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: )
+- uid: System.Collections.Generic.List`1
+  commentId: T:System.Collections.Generic.List`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<T>
+  nameWithType: List<T>
+  fullName: System.Collections.Generic.List<T>
+  nameWithType.vb: List(Of T)
+  fullName.vb: System.Collections.Generic.List(Of T)
+  name.vb: List(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Reconciler.TreeReconciler.ComponentCount*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ComponentCount
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ComponentCount
+  name: ComponentCount
+  nameWithType: TreeReconciler.ComponentCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.ComponentCount
+- uid: FluentGpu.Reconciler.TreeReconciler.NodeBindingCount*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_NodeBindingCount
+  name: NodeBindingCount
+  nameWithType: TreeReconciler.NodeBindingCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.NodeBindingCount
+- uid: FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_VirtualBoundaryCount
+  name: VirtualBoundaryCount
+  nameWithType: TreeReconciler.VirtualBoundaryCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.VirtualBoundaryCount
+- uid: FluentGpu.Reconciler.TreeReconciler.ProviderCount*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ProviderCount
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ProviderCount
+  name: ProviderCount
+  nameWithType: TreeReconciler.ProviderCount
+  fullName: FluentGpu.Reconciler.TreeReconciler.ProviderCount
+- uid: FluentGpu.Reconciler.TreeReconciler.Anim*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.Anim
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_Anim
+  name: Anim
+  nameWithType: TreeReconciler.Anim
+  fullName: FluentGpu.Reconciler.TreeReconciler.Anim
+- uid: FluentGpu.Animation.AnimEngine
+  commentId: T:FluentGpu.Animation.AnimEngine
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimEngine.html
+  name: AnimEngine
+  nameWithType: AnimEngine
+  fullName: FluentGpu.Animation.AnimEngine
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: FluentGpu.Reconciler.TreeReconciler.Images*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.Images
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_Images
+  name: Images
+  nameWithType: TreeReconciler.Images
+  fullName: FluentGpu.Reconciler.TreeReconciler.Images
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCache.html
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Reconciler.TreeReconciler.ImageEpoch*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ImageEpoch
+  name: ImageEpoch
+  nameWithType: TreeReconciler.ImageEpoch
+  fullName: FluentGpu.Reconciler.TreeReconciler.ImageEpoch
+- uid: FluentGpu.Signals.IReadSignal{System.Int32}
+  commentId: T:FluentGpu.Signals.IReadSignal{System.Int32}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<int>
+  nameWithType: IReadSignal<int>
+  fullName: FluentGpu.Signals.IReadSignal<int>
+  nameWithType.vb: IReadSignal(Of Integer)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of Integer)
+  name.vb: IReadSignal(Of Integer)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Reconciler.TreeReconciler.#ctor*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.#ctor
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler__ctor_FluentGpu_Scene_SceneStore_FluentGpu_Foundation_StringTable_FluentGpu_Signals_ReactiveRuntime_
+  name: TreeReconciler
+  nameWithType: TreeReconciler.TreeReconciler
+  fullName: FluentGpu.Reconciler.TreeReconciler.TreeReconciler
+  nameWithType.vb: TreeReconciler.New
+  fullName.vb: FluentGpu.Reconciler.TreeReconciler.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Foundation.StringTable
+  commentId: T:FluentGpu.Foundation.StringTable
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringTable.html
+  name: StringTable
+  nameWithType: StringTable
+  fullName: FluentGpu.Foundation.StringTable
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Reconciler.TreeReconciler.SetAmbient*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.SetAmbient
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_SetAmbient_System_Object_FluentGpu_Signals_Signal_System_Object__
+  name: SetAmbient
+  nameWithType: TreeReconciler.SetAmbient
+  fullName: FluentGpu.Reconciler.TreeReconciler.SetAmbient
+- uid: FluentGpu.Signals.Signal{System.Object}
+  commentId: T:FluentGpu.Signals.Signal{System.Object}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<object>
+  nameWithType: Signal<object>
+  fullName: FluentGpu.Signals.Signal<object>
+  nameWithType.vb: Signal(Of Object)
+  fullName.vb: FluentGpu.Signals.Signal(Of Object)
+  name.vb: Signal(Of Object)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Reconciler.TreeReconciler.MountRoot*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.MountRoot
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_MountRoot_FluentGpu_Hooks_Component_
+  name: MountRoot
+  nameWithType: TreeReconciler.MountRoot
+  fullName: FluentGpu.Reconciler.TreeReconciler.MountRoot
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ReconcileRoot
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ReconcileRoot_FluentGpu_Dsl_Element_FluentGpu_Dsl_Element_
+  name: ReconcileRoot
+  nameWithType: TreeReconciler.ReconcileRoot
+  fullName: FluentGpu.Reconciler.TreeReconciler.ReconcileRoot
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  commentId: F:FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+  href: FluentGpu.Foundation.NodeFlags.html#FluentGpu_Foundation_NodeFlags_VirtualRangeDirty
+  name: VirtualRangeDirty
+  nameWithType: NodeFlags.VirtualRangeDirty
+  fullName: FluentGpu.Foundation.NodeFlags.VirtualRangeDirty
+- uid: FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals*
+  commentId: Overload:FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals
+  href: FluentGpu.Reconciler.TreeReconciler.html#FluentGpu_Reconciler_TreeReconciler_ReRealizeVirtuals
+  name: ReRealizeVirtuals
+  nameWithType: TreeReconciler.ReRealizeVirtuals
+  fullName: FluentGpu.Reconciler.TreeReconciler.ReRealizeVirtuals

@@ -1,0 +1,1355 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ToolTip
+  commentId: T:FluentGpu.Controls.ToolTip
+  id: ToolTip
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  - FluentGpu.Controls.ToolTip.KeyboardPlacementOffset
+  - FluentGpu.Controls.ToolTip.KeyboardShowDelayMs
+  - FluentGpu.Controls.ToolTip.MouseHoverTimeMs
+  - FluentGpu.Controls.ToolTip.MousePlacementOffset
+  - FluentGpu.Controls.ToolTip.MousePlacementVerticalOffset
+  - FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  - FluentGpu.Controls.ToolTip.MouseShowDelayMs
+  - FluentGpu.Controls.ToolTip.OpenOnMount
+  - FluentGpu.Controls.ToolTip.PartBubble
+  - FluentGpu.Controls.ToolTip.Parts
+  - FluentGpu.Controls.ToolTip.Placement
+  - FluentGpu.Controls.ToolTip.Render
+  - FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  - FluentGpu.Controls.ToolTip.ShowDurationMs
+  - FluentGpu.Controls.ToolTip.Target
+  - FluentGpu.Controls.ToolTip.Text
+  - FluentGpu.Controls.ToolTip.Wrap(FluentGpu.Dsl.Element,System.String)
+  langs:
+  - csharp
+  - vb
+  name: ToolTip
+  nameWithType: ToolTip
+  fullName: FluentGpu.Controls.ToolTip
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToolTip
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI <code>ToolTip</code> (framework <code>ToolTip</code> + <code>ToolTipService</code>): wraps a target element and surfaces a small
+
+    text bubble anchored above it (or at the pointer in <xref href="FluentGpu.Controls.ToolTipPlacementMode.Mouse" data-throw-if-not-resolved="false"></xref>). 1:1 with the
+
+    framework's automatic-tooltip behavior:
+
+
+    <ul><li>Hover trigger — pointer-over the target opens the bubble after the initial show delay
+      (<code>SPI_GETMOUSEHOVERTIME</code> 400ms × 2 = 800ms; a re-show within <xref href="FluentGpu.Controls.ToolTip.BetweenShowDelayMs" data-throw-if-not-resolved="false"></xref> = 200ms uses the
+      reshow delay — see <xref href="FluentGpu.Controls.ToolTip.MouseReshowDelayMs" data-throw-if-not-resolved="false"></xref> for why that is 400ms, not the spec'd 600ms). Pointer-leave
+      cancels a PENDING open immediately (ToolTipService_Partial.cpp:1435-1442); an OPEN bubble is kept and closed by
+      the safe-zone monitor instead — see the safe-zone item below.</li><li>Safe zone — an open bubble does NOT close the instant the pointer leaves the target: WinUI keeps it while the
+      pointer is inside owner ∪ tooltip (∪ their convex hull) and a 1s check timer closes it once outside
+      (ToolTipService_Partial.cpp:1433-1453 owner-exit only records the owner; cpp:349-381 OnSafeZoneCheck;
+      cpp:1060-1098 IsToolTipInSafeZone; .h:22 <code>s_safeZoneCheckTimerDuration</code> = 1s). The engine surfaces no global
+      pointer position, so the hull is approximated by the same 1s cadence: leaving owner ∪ bubble arms a
+      <xref href="FluentGpu.Controls.ToolTip.SafeZoneCheckMs" data-throw-if-not-resolved="false"></xref> grace; re-entering either cancels it; the grace elapsing closes the bubble.</li><li>Keyboard trigger — KEYBOARD focus landing inside the target opens the bubble after 800ms (×2, normal AND
+      reshow: ToolTipService_Partial.cpp:1777-1779), exactly WinUI's OnOwnerGotFocus gate
+      (ToolTipService_Partial.cpp:1648-1664: only <code>FocusState::Keyboard</code> shows the tooltip — pointer focus does
+      not). Focus leaving closes it (cpp:1696-1706 OnOwnerLostFocus → OnOwnerLeaveInternal).</li><li>Press dismiss — a pointer press over the target closes an open (or pending) bubble, and it stays closed
+      until the pointer LEAVES and re-enters (classic tooltip behavior; WinUI 3's ToolTipService itself registers no
+      PointerPressed handler — it closes via safe-zone exit monitoring, ToolTipService_Partial.cpp:1437-1453 — but
+      cannot re-open a dismissed owner until a real leave + re-enter either, cpp:725-737 CancelAutomaticToolTip).</li><li>Auto-dismiss — an open bubble closes itself after <xref href="FluentGpu.Controls.ToolTip.ShowDurationMs" data-throw-if-not-resolved="false"></xref> (<code>SPI_GETMESSAGEDURATION</code>
+      default 5s), and the dismissal LATCHES like press dismiss: WinUI's only show trigger is PointerEntered
+      (ToolTipService_Partial.cpp:1395-1418), so in-place hover moves can never re-open a timed-out tooltip — it takes
+      a real leave + re-enter.</li><li>No click trigger — the wrapper adds NO OnClick (ToolTipService registers none,
+      ToolTipService_Partial.cpp:176-220), so a tooltipped element is never a tab stop by itself.</li></ul>
+
+    Chrome matches <code>ToolTip_themeresources.xaml</code>: AcrylicInAppFillColorDefault fill, 1px SurfaceStrokeColorFlyout
+
+    stroke, ControlCornerRadius (4px) corners, the light tooltip elevation (<xref href="FluentGpu.Dsl.Elevation.Tooltip" data-throw-if-not-resolved="false"></xref>), 9,6,9,8
+
+    padding, 12px TextFillColorPrimary text, MaxWidth 320, TextWrapping=Wrap. Open/close are the WinUI
+
+    FadeIn/FadeOutThemeAnimation fades (167ms — <xref href="FluentGpu.Controls.PopupChrome.Raw" data-throw-if-not-resolved="false"></xref> in the overlay host). The bubble does NOT
+
+    trap focus and does NOT light-dismiss on outside click (<xref href="FluentGpu.Controls.DismissBehavior.None" data-throw-if-not-resolved="false"></xref>) — dismissal is owned by
+
+    hover-leave/focus-leave/press + the auto-dismiss timer, exactly like <code>ToolTipService</code>.
+  example: []
+  syntax:
+    content: 'public sealed class ToolTip : Component'
+    content.vb: Public NotInheritable Class ToolTip Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.ToolTip.PartBubble
+  commentId: F:FluentGpu.Controls.ToolTip.PartBubble
+  id: PartBubble
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: PartBubble
+  nameWithType: ToolTip.PartBubble
+  fullName: FluentGpu.Controls.ToolTip.PartBubble
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartBubble
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The text bubble surface (the control-built chrome inside the raw overlay host — acrylic fill, flyout
+        stroke, 4px corners, tooltip elevation, 9,6,9,8 padding). Owned: Children (the <xref href="FluentGpu.Controls.ToolTip.Text" data-throw-if-not-resolved="false"></xref> content) and
+        the hover handlers (safe-zone tracking).
+  example: []
+  syntax:
+    content: public const string PartBubble = "Bubble"
+    return:
+      type: System.String
+    content.vb: Public Const PartBubble As String = "Bubble"
+- uid: FluentGpu.Controls.ToolTip.Target
+  commentId: F:FluentGpu.Controls.ToolTip.Target
+  id: Target
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Target
+  nameWithType: ToolTip.Target
+  fullName: FluentGpu.Controls.ToolTip.Target
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Target
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Element Target
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Target As Element
+- uid: FluentGpu.Controls.ToolTip.Text
+  commentId: F:FluentGpu.Controls.ToolTip.Text
+  id: Text
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: ToolTip.Text
+  fullName: FluentGpu.Controls.ToolTip.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Text
+    return:
+      type: System.String
+    content.vb: Public Text As String
+- uid: FluentGpu.Controls.ToolTip.OpenOnMount
+  commentId: F:FluentGpu.Controls.ToolTip.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: ToolTip.OpenOnMount
+  fullName: FluentGpu.Controls.ToolTip.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.ToolTip.Parts
+  commentId: F:FluentGpu.Controls.ToolTip.Parts
+  id: Parts
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: ToolTip.Parts
+  fullName: FluentGpu.Controls.ToolTip.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.ToolTip.Placement
+  commentId: F:FluentGpu.Controls.ToolTip.Placement
+  id: Placement
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Placement
+  nameWithType: ToolTip.Placement
+  fullName: FluentGpu.Controls.ToolTip.Placement
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Placement
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ToolTip.Placement</code> (Top/Mouse subset). Default <xref href="FluentGpu.Controls.ToolTipPlacementMode.Top" data-throw-if-not-resolved="false"></xref> —
+        the WinUI default (ToolTip_Partial.cpp:1119-1122).
+  example: []
+  syntax:
+    content: public ToolTipPlacementMode Placement
+    return:
+      type: FluentGpu.Controls.ToolTipPlacementMode
+    content.vb: Public Placement As ToolTipPlacementMode
+- uid: FluentGpu.Controls.ToolTip.MouseHoverTimeMs
+  commentId: F:FluentGpu.Controls.ToolTip.MouseHoverTimeMs
+  id: MouseHoverTimeMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: MouseHoverTimeMs
+  nameWithType: ToolTip.MouseHoverTimeMs
+  fullName: FluentGpu.Controls.ToolTip.MouseHoverTimeMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MouseHoverTimeMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: <code>SPI_GETMOUSEHOVERTIME</code> default (DEFAULT_SPI_GETMOUSEHOVERTIME, ToolTipService_Partial.h:18) = 400ms.
+  example: []
+  syntax:
+    content: public const float MouseHoverTimeMs = 400
+    return:
+      type: System.Single
+    content.vb: Public Const MouseHoverTimeMs As Single = 400
+- uid: FluentGpu.Controls.ToolTip.MouseShowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.MouseShowDelayMs
+  id: MouseShowDelayMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: MouseShowDelayMs
+  nameWithType: ToolTip.MouseShowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.MouseShowDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MouseShowDelayMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Mouse initial show delay: hover time × 2 = 800ms (GetInitialShowDelay, Mouse, first show —
+        ToolTipService_Partial.cpp:1774-1775).
+  example: []
+  syntax:
+    content: public const float MouseShowDelayMs = 800
+    return:
+      type: System.Single
+    content.vb: Public Const MouseShowDelayMs As Single = 800
+- uid: FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  id: MouseReshowDelayMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: MouseReshowDelayMs
+  nameWithType: ToolTip.MouseReshowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MouseReshowDelayMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Mouse RE-show delay = 400ms (× 1), NOT the spec-comment's × 1.5 = 600ms: the shipping code is
+        <code>ticks *= static_cast&lt;INT64&gt;(isReshow ? 1.5 : 2)</code> (ToolTipService_Partial.cpp:1775) and the C++
+        <code>static_cast&lt;INT64&gt;(1.5)</code> TRUNCATES to 1 — behavior parity follows the compiled code, not the
+        comment table at cpp:1737-1742.
+  example: []
+  syntax:
+    content: public const float MouseReshowDelayMs = 400
+    return:
+      type: System.Single
+    content.vb: Public Const MouseReshowDelayMs As Single = 400
+- uid: FluentGpu.Controls.ToolTip.KeyboardShowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.KeyboardShowDelayMs
+  id: KeyboardShowDelayMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: KeyboardShowDelayMs
+  nameWithType: ToolTip.KeyboardShowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.KeyboardShowDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyboardShowDelayMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Keyboard show delay: hover time × 2 = 800ms for BOTH normal and reshow
+        (ToolTipService_Partial.cpp:1777-1779 — Keyboard ignores isReshow).
+  example: []
+  syntax:
+    content: public const float KeyboardShowDelayMs = 800
+    return:
+      type: System.Single
+    content.vb: Public Const KeyboardShowDelayMs As Single = 800
+- uid: FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  id: BetweenShowDelayMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: BetweenShowDelayMs
+  nameWithType: ToolTip.BetweenShowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BetweenShowDelayMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    BETWEEN_SHOW_DELAY_MS = 200ms (ToolTipService_Partial.h:17) — a re-open inside this window of the last
+        close uses the reshow delay (cpp:659 <code>GetTickCount() - s_lastToolTipOpenedTime &lt; BETWEEN_SHOW_DELAY_MS</code>).
+  example: []
+  syntax:
+    content: public const float BetweenShowDelayMs = 200
+    return:
+      type: System.Single
+    content.vb: Public Const BetweenShowDelayMs As Single = 200
+- uid: FluentGpu.Controls.ToolTip.ShowDurationMs
+  commentId: F:FluentGpu.Controls.ToolTip.ShowDurationMs
+  id: ShowDurationMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: ShowDurationMs
+  nameWithType: ToolTip.ShowDurationMs
+  fullName: FluentGpu.Controls.ToolTip.ShowDurationMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ShowDurationMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: DEFAULT_SHOW_DURATION_SECONDS = 5s — auto-dismiss after this long open.
+  example: []
+  syntax:
+    content: public const float ShowDurationMs = 5000
+    return:
+      type: System.Single
+    content.vb: Public Const ShowDurationMs As Single = 5000
+- uid: FluentGpu.Controls.ToolTip.MousePlacementVerticalOffset
+  commentId: F:FluentGpu.Controls.ToolTip.MousePlacementVerticalOffset
+  id: MousePlacementVerticalOffset
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: MousePlacementVerticalOffset
+  nameWithType: ToolTip.MousePlacementVerticalOffset
+  fullName: FluentGpu.Controls.ToolTip.MousePlacementVerticalOffset
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MousePlacementVerticalOffset
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Pointer-mode vertical offset below the cursor — ToolTip_Partial.h:56
+        <code>m_mousePlacementVerticalOffset = 11</code> (the brief's "14px" did not survive source verification).
+  example: []
+  syntax:
+    content: public const float MousePlacementVerticalOffset = 11
+    return:
+      type: System.Single
+    content.vb: Public Const MousePlacementVerticalOffset As Single = 11
+- uid: FluentGpu.Controls.ToolTip.MousePlacementOffset
+  commentId: F:FluentGpu.Controls.ToolTip.MousePlacementOffset
+  id: MousePlacementOffset
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: MousePlacementOffset
+  nameWithType: ToolTip.MousePlacementOffset
+  fullName: FluentGpu.Controls.ToolTip.MousePlacementOffset
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MousePlacementOffset
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    <code>DEFAULT_MOUSE_OFFSET</code> = 20 (ToolTip_Partial.h:11): target-mode placement inflates the dock rect
+        by this on BOTH axes for a mouse-opened automatic tooltip before positioning (ToolTip_Partial.cpp:1224-1258
+        <code>InflateRect(&amp;rcDockTo, horizontalOffset, verticalOffset)</code> + :1275).
+  example: []
+  syntax:
+    content: public const float MousePlacementOffset = 20
+    return:
+      type: System.Single
+    content.vb: Public Const MousePlacementOffset As Single = 20
+- uid: FluentGpu.Controls.ToolTip.KeyboardPlacementOffset
+  commentId: F:FluentGpu.Controls.ToolTip.KeyboardPlacementOffset
+  id: KeyboardPlacementOffset
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: KeyboardPlacementOffset
+  nameWithType: ToolTip.KeyboardPlacementOffset
+  fullName: FluentGpu.Controls.ToolTip.KeyboardPlacementOffset
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyboardPlacementOffset
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    <code>DEFAULT_KEYBOARD_OFFSET</code> = 12 (ToolTip_Partial.h:10) — the dock-rect inflation when the tooltip
+        was opened by keyboard focus.
+  example: []
+  syntax:
+    content: public const float KeyboardPlacementOffset = 12
+    return:
+      type: System.Single
+    content.vb: Public Const KeyboardPlacementOffset As Single = 12
+- uid: FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  commentId: F:FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  id: SafeZoneCheckMs
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: SafeZoneCheckMs
+  nameWithType: ToolTip.SafeZoneCheckMs
+  fullName: FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SafeZoneCheckMs
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    <code>s_safeZoneCheckTimerDuration</code> = 1s (ToolTipService_Partial.h:22) — the safe-zone poll cadence;
+        the bubble closes once the pointer has been outside owner ∪ bubble for one full check interval.
+  example: []
+  syntax:
+    content: public const float SafeZoneCheckMs = 1000
+    return:
+      type: System.Single
+    content.vb: Public Const SafeZoneCheckMs As Single = 1000
+- uid: FluentGpu.Controls.ToolTip.Wrap(FluentGpu.Dsl.Element,System.String)
+  commentId: M:FluentGpu.Controls.ToolTip.Wrap(FluentGpu.Dsl.Element,System.String)
+  id: Wrap(FluentGpu.Dsl.Element,System.String)
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Wrap(Element, string)
+  nameWithType: ToolTip.Wrap(Element, string)
+  fullName: FluentGpu.Controls.ToolTip.Wrap(FluentGpu.Dsl.Element, string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Wrap(Element target, string text)
+    parameters:
+    - id: target
+      type: FluentGpu.Dsl.Element
+    - id: text
+      type: System.String
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Wrap(target As Element, text As String) As Element
+  overload: FluentGpu.Controls.ToolTip.Wrap*
+  nameWithType.vb: ToolTip.Wrap(Element, String)
+  fullName.vb: FluentGpu.Controls.ToolTip.Wrap(FluentGpu.Dsl.Element, String)
+  name.vb: Wrap(Element, String)
+- uid: FluentGpu.Controls.ToolTip.Render
+  commentId: M:FluentGpu.Controls.ToolTip.Render
+  id: Render
+  parent: FluentGpu.Controls.ToolTip
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: ToolTip.Render()
+  fullName: FluentGpu.Controls.ToolTip.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ToolTip.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/ToolTip.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.ToolTip.Render*
+references:
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Mouse
+  href: FluentGpu.Controls.ToolTipPlacementMode.html#FluentGpu_Controls_ToolTipPlacementMode_Mouse
+  name: Mouse
+  nameWithType: ToolTipPlacementMode.Mouse
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Mouse
+- uid: FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_BetweenShowDelayMs
+  name: BetweenShowDelayMs
+  nameWithType: ToolTip.BetweenShowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.BetweenShowDelayMs
+- uid: FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  commentId: F:FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_MouseReshowDelayMs
+  name: MouseReshowDelayMs
+  nameWithType: ToolTip.MouseReshowDelayMs
+  fullName: FluentGpu.Controls.ToolTip.MouseReshowDelayMs
+- uid: FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  commentId: F:FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_SafeZoneCheckMs
+  name: SafeZoneCheckMs
+  nameWithType: ToolTip.SafeZoneCheckMs
+  fullName: FluentGpu.Controls.ToolTip.SafeZoneCheckMs
+- uid: FluentGpu.Controls.ToolTip.ShowDurationMs
+  commentId: F:FluentGpu.Controls.ToolTip.ShowDurationMs
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_ShowDurationMs
+  name: ShowDurationMs
+  nameWithType: ToolTip.ShowDurationMs
+  fullName: FluentGpu.Controls.ToolTip.ShowDurationMs
+- uid: FluentGpu.Dsl.Elevation.Tooltip
+  commentId: F:FluentGpu.Dsl.Elevation.Tooltip
+  href: FluentGpu.Dsl.Elevation.html#FluentGpu_Dsl_Elevation_Tooltip
+  name: Tooltip
+  nameWithType: Elevation.Tooltip
+  fullName: FluentGpu.Dsl.Elevation.Tooltip
+- uid: FluentGpu.Controls.PopupChrome.Raw
+  commentId: F:FluentGpu.Controls.PopupChrome.Raw
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Raw
+  name: Raw
+  nameWithType: PopupChrome.Raw
+  fullName: FluentGpu.Controls.PopupChrome.Raw
+- uid: FluentGpu.Controls.DismissBehavior.None
+  commentId: F:FluentGpu.Controls.DismissBehavior.None
+  href: FluentGpu.Controls.DismissBehavior.html#FluentGpu_Controls_DismissBehavior_None
+  name: None
+  nameWithType: DismissBehavior.None
+  fullName: FluentGpu.Controls.DismissBehavior.None
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Controls.ToolTip.Text
+  commentId: F:FluentGpu.Controls.ToolTip.Text
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_Text
+  name: Text
+  nameWithType: ToolTip.Text
+  fullName: FluentGpu.Controls.ToolTip.Text
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Controls.ToolTipPlacementMode.Top
+  commentId: F:FluentGpu.Controls.ToolTipPlacementMode.Top
+  href: FluentGpu.Controls.ToolTipPlacementMode.html#FluentGpu_Controls_ToolTipPlacementMode_Top
+  name: Top
+  nameWithType: ToolTipPlacementMode.Top
+  fullName: FluentGpu.Controls.ToolTipPlacementMode.Top
+- uid: FluentGpu.Controls.ToolTipPlacementMode
+  commentId: T:FluentGpu.Controls.ToolTipPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ToolTipPlacementMode.html
+  name: ToolTipPlacementMode
+  nameWithType: ToolTipPlacementMode
+  fullName: FluentGpu.Controls.ToolTipPlacementMode
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ToolTip.Wrap*
+  commentId: Overload:FluentGpu.Controls.ToolTip.Wrap
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_Wrap_FluentGpu_Dsl_Element_System_String_
+  name: Wrap
+  nameWithType: ToolTip.Wrap
+  fullName: FluentGpu.Controls.ToolTip.Wrap
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.ToolTip.Render*
+  commentId: Overload:FluentGpu.Controls.ToolTip.Render
+  href: FluentGpu.Controls.ToolTip.html#FluentGpu_Controls_ToolTip_Render
+  name: Render
+  nameWithType: ToolTip.Render
+  fullName: FluentGpu.Controls.ToolTip.Render

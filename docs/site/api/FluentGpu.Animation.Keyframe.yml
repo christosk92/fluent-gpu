@@ -1,0 +1,613 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.Keyframe
+  commentId: T:FluentGpu.Animation.Keyframe
+  id: Keyframe
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single)
+  - FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  - FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  - FluentGpu.Animation.Keyframe.Easing
+  - FluentGpu.Animation.Keyframe.Offset
+  - FluentGpu.Animation.Keyframe.Value
+  langs:
+  - csharp
+  - vb
+  name: Keyframe
+  nameWithType: Keyframe
+  fullName: FluentGpu.Animation.Keyframe
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Keyframe
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'One keyframe: a normalized offset (0..1), its value, and the easing of the segment leading INTO it.'
+  example: []
+  syntax:
+    content: 'public readonly record struct Keyframe : IEquatable<Keyframe>'
+    content.vb: Public Structure Keyframe Implements IEquatable(Of Keyframe)
+  implements:
+  - System.IEquatable{FluentGpu.Animation.Keyframe}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Animation.Keyframe.Offset
+  commentId: P:FluentGpu.Animation.Keyframe.Offset
+  id: Offset
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Offset
+  nameWithType: Keyframe.Offset
+  fullName: FluentGpu.Animation.Keyframe.Offset
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Offset
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public float Offset { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Offset As Single
+  overload: FluentGpu.Animation.Keyframe.Offset*
+- uid: FluentGpu.Animation.Keyframe.Value
+  commentId: P:FluentGpu.Animation.Keyframe.Value
+  id: Value
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: Keyframe.Value
+  fullName: FluentGpu.Animation.Keyframe.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public float Value { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Value As Single
+  overload: FluentGpu.Animation.Keyframe.Value*
+- uid: FluentGpu.Animation.Keyframe.Easing
+  commentId: P:FluentGpu.Animation.Keyframe.Easing
+  id: Easing
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Easing
+  nameWithType: Keyframe.Easing
+  fullName: FluentGpu.Animation.Keyframe.Easing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Easing
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public EasingSpec Easing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Property Easing As EasingSpec
+  overload: FluentGpu.Animation.Keyframe.Easing*
+- uid: FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single)
+  commentId: M:FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single)'
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Keyframe(float, float)
+  nameWithType: Keyframe.Keyframe(float, float)
+  fullName: FluentGpu.Animation.Keyframe.Keyframe(float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public Keyframe(float offset, float value)
+    parameters:
+    - id: offset
+      type: System.Single
+    - id: value
+      type: System.Single
+    content.vb: Public Sub New(offset As Single, value As Single)
+  overload: FluentGpu.Animation.Keyframe.#ctor*
+  nameWithType.vb: Keyframe.New(Single, Single)
+  fullName.vb: FluentGpu.Animation.Keyframe.New(Single, Single)
+  name.vb: New(Single, Single)
+- uid: FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.Easing)
+  id: '#ctor(System.Single,System.Single,FluentGpu.Foundation.Easing)'
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Keyframe(float, float, Easing)
+  nameWithType: Keyframe.Keyframe(float, float, Easing)
+  fullName: FluentGpu.Animation.Keyframe.Keyframe(float, float, FluentGpu.Foundation.Easing)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public Keyframe(float offset, float value, Easing easing)
+    parameters:
+    - id: offset
+      type: System.Single
+    - id: value
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    content.vb: Public Sub New(offset As Single, value As Single, easing As Easing)
+  overload: FluentGpu.Animation.Keyframe.#ctor*
+  nameWithType.vb: Keyframe.New(Single, Single, Easing)
+  fullName.vb: FluentGpu.Animation.Keyframe.New(Single, Single, FluentGpu.Foundation.Easing)
+  name.vb: New(Single, Single, Easing)
+- uid: FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  commentId: M:FluentGpu.Animation.Keyframe.#ctor(System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  id: '#ctor(System.Single,System.Single,FluentGpu.Foundation.EasingSpec)'
+  parent: FluentGpu.Animation.Keyframe
+  langs:
+  - csharp
+  - vb
+  name: Keyframe(float, float, EasingSpec)
+  nameWithType: Keyframe.Keyframe(float, float, EasingSpec)
+  fullName: FluentGpu.Animation.Keyframe.Keyframe(float, float, FluentGpu.Foundation.EasingSpec)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public Keyframe(float offset, float value, EasingSpec easing)
+    parameters:
+    - id: offset
+      type: System.Single
+    - id: value
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Sub New(offset As Single, value As Single, easing As EasingSpec)
+  overload: FluentGpu.Animation.Keyframe.#ctor*
+  nameWithType.vb: Keyframe.New(Single, Single, EasingSpec)
+  fullName.vb: FluentGpu.Animation.Keyframe.New(Single, Single, FluentGpu.Foundation.EasingSpec)
+  name.vb: New(Single, Single, EasingSpec)
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.IEquatable{FluentGpu.Animation.Keyframe}
+  commentId: T:System.IEquatable{FluentGpu.Animation.Keyframe}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Keyframe>
+  nameWithType: IEquatable<Keyframe>
+  fullName: System.IEquatable<FluentGpu.Animation.Keyframe>
+  nameWithType.vb: IEquatable(Of Keyframe)
+  fullName.vb: System.IEquatable(Of FluentGpu.Animation.Keyframe)
+  name.vb: IEquatable(Of Keyframe)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Animation.Keyframe.Offset*
+  commentId: Overload:FluentGpu.Animation.Keyframe.Offset
+  href: FluentGpu.Animation.Keyframe.html#FluentGpu_Animation_Keyframe_Offset
+  name: Offset
+  nameWithType: Keyframe.Offset
+  fullName: FluentGpu.Animation.Keyframe.Offset
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Animation.Keyframe.Value*
+  commentId: Overload:FluentGpu.Animation.Keyframe.Value
+  href: FluentGpu.Animation.Keyframe.html#FluentGpu_Animation_Keyframe_Value
+  name: Value
+  nameWithType: Keyframe.Value
+  fullName: FluentGpu.Animation.Keyframe.Value
+- uid: FluentGpu.Animation.Keyframe.Easing*
+  commentId: Overload:FluentGpu.Animation.Keyframe.Easing
+  href: FluentGpu.Animation.Keyframe.html#FluentGpu_Animation_Keyframe_Easing
+  name: Easing
+  nameWithType: Keyframe.Easing
+  fullName: FluentGpu.Animation.Keyframe.Easing
+- uid: FluentGpu.Foundation.EasingSpec
+  commentId: T:FluentGpu.Foundation.EasingSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EasingSpec.html
+  name: EasingSpec
+  nameWithType: EasingSpec
+  fullName: FluentGpu.Foundation.EasingSpec
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Animation.Keyframe.#ctor*
+  commentId: Overload:FluentGpu.Animation.Keyframe.#ctor
+  href: FluentGpu.Animation.Keyframe.html#FluentGpu_Animation_Keyframe__ctor_System_Single_System_Single_
+  name: Keyframe
+  nameWithType: Keyframe.Keyframe
+  fullName: FluentGpu.Animation.Keyframe.Keyframe
+  nameWithType.vb: Keyframe.New
+  fullName.vb: FluentGpu.Animation.Keyframe.New
+  name.vb: New
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing

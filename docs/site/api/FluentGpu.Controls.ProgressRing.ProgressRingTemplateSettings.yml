@@ -1,0 +1,674 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  id: ProgressRing.ProgressRingTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate(System.Single,System.Single)
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(System.Single)
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+  - FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+  langs:
+  - csharp
+  - vb
+  name: ProgressRing.ProgressRingTemplateSettings
+  nameWithType: ProgressRing.ProgressRingTemplateSettings
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProgressRingTemplateSettings
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed geometry for one ProgressRing (the audit's P3 TemplateSettings convention — mirrors WinUI's
+
+    <code>ProgressRingTemplateSettings</code>, recomputed once from the control's size, never inside a per-frame bind).
+
+    <code class="paramref">Sweep</code> is the determinate accent-arc sweep in degrees (value·360). For the indeterminate ring
+
+    it is the fixed visible arc length the rotation loop spins.
+  example: []
+  syntax:
+    content: 'public readonly record struct ProgressRing.ProgressRingTemplateSettings : IEquatable<ProgressRing.ProgressRingTemplateSettings>'
+    content.vb: Public Structure ProgressRing.ProgressRingTemplateSettings Implements IEquatable(Of ProgressRing.ProgressRingTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor(System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ProgressRingTemplateSettings(float, float, float, float)
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ProgressRingTemplateSettings(float, float, float, float)
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ProgressRingTemplateSettings(float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed geometry for one ProgressRing (the audit's P3 TemplateSettings convention — mirrors WinUI's
+
+    <code>ProgressRingTemplateSettings</code>, recomputed once from the control's size, never inside a per-frame bind).
+
+    <code class="paramref">Sweep</code> is the determinate accent-arc sweep in degrees (value·360). For the indeterminate ring
+
+    it is the fixed visible arc length the rotation loop spins.
+  example: []
+  syntax:
+    content: public ProgressRingTemplateSettings(float Size, float Stroke, float StartDeg, float Sweep)
+    parameters:
+    - id: Size
+      type: System.Single
+    - id: Stroke
+      type: System.Single
+    - id: StartDeg
+      type: System.Single
+    - id: Sweep
+      type: System.Single
+    content.vb: Public Sub New(Size As Single, Stroke As Single, StartDeg As Single, Sweep As Single)
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor*
+  nameWithType.vb: ProgressRing.ProgressRingTemplateSettings.New(Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.New(Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single)
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+  commentId: P:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+  id: Size
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Size
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Size { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Size As Single
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size*
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+  commentId: P:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+  id: Stroke
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Stroke
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Stroke
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Stroke
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Stroke { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Stroke As Single
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke*
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+  commentId: P:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+  id: StartDeg
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: StartDeg
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.StartDeg
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StartDeg
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float StartDeg { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property StartDeg As Single
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg*
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+  commentId: P:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+  id: Sweep
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Sweep
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Sweep
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Sweep
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Sweep { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Sweep As Single
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep*
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate(System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate(System.Single,System.Single)
+  id: ForDeterminate(System.Single,System.Single)
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ForDeterminate(float, float)
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ForDeterminate(float, float)
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForDeterminate
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ProgressRing.ProgressRingTemplateSettings ForDeterminate(float size, float value)
+    parameters:
+    - id: size
+      type: System.Single
+    - id: value
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    content.vb: Public Shared Function ForDeterminate(size As Single, value As Single) As ProgressRing.ProgressRingTemplateSettings
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate*
+  nameWithType.vb: ProgressRing.ProgressRingTemplateSettings.ForDeterminate(Single, Single)
+  fullName.vb: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate(Single, Single)
+  name.vb: ForDeterminate(Single, Single)
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(System.Single)
+  commentId: M:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(System.Single)
+  id: ForIndeterminate(System.Single)
+  parent: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: ForIndeterminate(float)
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(float)
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ProgressRing.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ForIndeterminate
+    path: ../../src/FluentGpu.Controls/ProgressRing.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ProgressRing.ProgressRingTemplateSettings ForIndeterminate(float size)
+    parameters:
+    - id: size
+      type: System.Single
+    return:
+      type: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    content.vb: Public Shared Function ForIndeterminate(size As Single) As ProgressRing.ProgressRingTemplateSettings
+  overload: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate*
+  nameWithType.vb: ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(Single)
+  fullName.vb: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate(Single)
+  name.vb: ForIndeterminate(Single)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ProgressRing.ProgressRingTemplateSettings>
+  nameWithType: IEquatable<ProgressRing.ProgressRingTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings>
+  nameWithType.vb: IEquatable(Of ProgressRing.ProgressRingTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings)
+  name.vb: IEquatable(Of ProgressRing.ProgressRingTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.#ctor
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings__ctor_System_Single_System_Single_System_Single_System_Single_
+  name: ProgressRingTemplateSettings
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ProgressRingTemplateSettings
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ProgressRingTemplateSettings
+  nameWithType.vb: ProgressRing.ProgressRingTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_Size
+  name: Size
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Size
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Size
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_Stroke
+  name: Stroke
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Stroke
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Stroke
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_StartDeg
+  name: StartDeg
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.StartDeg
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.StartDeg
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_Sweep
+  name: Sweep
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.Sweep
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.Sweep
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_ForDeterminate_System_Single_System_Single_
+  name: ForDeterminate
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ForDeterminate
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForDeterminate
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  commentId: T:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ProgressRing.html
+  name: ProgressRing.ProgressRingTemplateSettings
+  nameWithType: ProgressRing.ProgressRingTemplateSettings
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    href: FluentGpu.Controls.ProgressRing.html
+  - name: .
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRingTemplateSettings
+    href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html
+- uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate*
+  commentId: Overload:FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate
+  href: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.html#FluentGpu_Controls_ProgressRing_ProgressRingTemplateSettings_ForIndeterminate_System_Single_
+  name: ForIndeterminate
+  nameWithType: ProgressRing.ProgressRingTemplateSettings.ForIndeterminate
+  fullName: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings.ForIndeterminate

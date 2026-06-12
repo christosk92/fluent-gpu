@@ -1,0 +1,449 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  id: IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  - FluentGpu.Pal.IPlatformPopupWindow.Handle
+  - FluentGpu.Pal.IPlatformPopupWindow.Hide
+  - FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  - FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Pal.IPlatformPopupWindow.Show
+  langs:
+  - csharp
+  - vb
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IPlatformPopupWindow
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    A borderless, non-activating top-level popup surface (the PAL seam for WinUI windowed popups / E4 out-of-bounds
+
+    flyouts; later the substrate for E10 tear-out windows). The host owns rendering into it (its own swapchain on
+
+    <xref href="FluentGpu.Pal.IPlatformPopupWindow.Handle" data-throw-if-not-resolved="false"></xref>); the popup never owns engine state. All bounds are physical virtual-screen px.
+  example: []
+  syntax:
+    content: 'public interface IPlatformPopupWindow : IDisposable'
+    content.vb: Public Interface IPlatformPopupWindow Inherits IDisposable
+  derivedClasses:
+  - FluentGpu.Pal.Windows.Win32PopupWindow
+  inheritedMembers:
+  - System.IDisposable.Dispose
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Handle
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.Handle
+  id: Handle
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Handle
+  nameWithType: IPlatformPopupWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Handle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Handle
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 126
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: NativeHandle Handle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NativeHandle
+    content.vb: ReadOnly Property Handle As NativeHandle
+  overload: FluentGpu.Pal.IPlatformPopupWindow.Handle*
+- uid: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  id: BoundsPx
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: BoundsPx
+  nameWithType: IPlatformPopupWindow.BoundsPx
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsPx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Last bounds set via <xref href="FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF%40)" data-throw-if-not-resolved="false"></xref> (physical virtual-screen px).
+  example: []
+  syntax:
+    content: RectF BoundsPx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: ReadOnly Property BoundsPx As RectF
+  overload: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx*
+- uid: FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  id: IsShown
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: IsShown
+  nameWithType: IPlatformPopupWindow.IsShown
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsShown
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Visible (a <xref href="FluentGpu.Pal.IPlatformPopupWindow.Show" data-throw-if-not-resolved="false"></xref> not yet followed by <xref href="FluentGpu.Pal.IPlatformPopupWindow.Hide" data-throw-if-not-resolved="false"></xref>/<xref href="System.IDisposable.Dispose" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: bool IsShown { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: ReadOnly Property IsShown As Boolean
+  overload: FluentGpu.Pal.IPlatformPopupWindow.IsShown*
+- uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  id: SetBoundsPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: SetBoundsPx(in RectF)
+  nameWithType: IPlatformPopupWindow.SetBoundsPx(in RectF)
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetBoundsPx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 135
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Move/size the popup (physical virtual-screen px) WITHOUT activating it.
+  example: []
+  syntax:
+    content: void SetBoundsPx(in RectF px)
+    parameters:
+    - id: px
+      type: FluentGpu.Foundation.RectF
+    content.vb: Sub SetBoundsPx(px As RectF)
+  overload: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx*
+  nameWithType.vb: IPlatformPopupWindow.SetBoundsPx(RectF)
+  fullName.vb: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF)
+  name.vb: SetBoundsPx(RectF)
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Show
+  id: Show
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Show()
+  nameWithType: IPlatformPopupWindow.Show()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Show()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Show
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 138
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Show without activating (Win32 <code>SW_SHOWNOACTIVATE</code>) — focus stays on the owner window.
+  example: []
+  syntax:
+    content: void Show()
+    content.vb: Sub Show()
+  overload: FluentGpu.Pal.IPlatformPopupWindow.Show*
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Hide
+  id: Hide
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  langs:
+  - csharp
+  - vb
+  name: Hide()
+  nameWithType: IPlatformPopupWindow.Hide()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Hide()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hide
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 140
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void Hide()
+    content.vb: Sub Hide()
+  overload: FluentGpu.Pal.IPlatformPopupWindow.Hide*
+references:
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Handle
+  commentId: P:FluentGpu.Pal.IPlatformPopupWindow.Handle
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Handle
+  name: Handle
+  nameWithType: IPlatformPopupWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Handle
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformPopupWindow.html
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Handle*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.Handle
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Handle
+  name: Handle
+  nameWithType: IPlatformPopupWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Handle
+- uid: FluentGpu.Foundation.NativeHandle
+  commentId: T:FluentGpu.Foundation.NativeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandle.html
+  name: NativeHandle
+  nameWithType: NativeHandle
+  fullName: FluentGpu.Foundation.NativeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  name: SetBoundsPx(in RectF)
+  nameWithType: IPlatformPopupWindow.SetBoundsPx(in RectF)
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(in FluentGpu.Foundation.RectF)
+  nameWithType.vb: IPlatformPopupWindow.SetBoundsPx(RectF)
+  fullName.vb: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF)
+  name.vb: SetBoundsPx(RectF)
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_BoundsPx
+  name: BoundsPx
+  nameWithType: IPlatformPopupWindow.BoundsPx
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.BoundsPx
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Show
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  name: Show()
+  nameWithType: IPlatformPopupWindow.Show()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Show()
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+    name: Show
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Show
+    name: Show
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.Hide
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  name: Hide()
+  nameWithType: IPlatformPopupWindow.Hide()
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Hide()
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+    name: Hide
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.Hide
+    name: Hide
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  - name: (
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow.IsShown*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.IsShown
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_IsShown
+  name: IsShown
+  nameWithType: IPlatformPopupWindow.IsShown
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.IsShown
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  name: SetBoundsPx
+  nameWithType: IPlatformPopupWindow.SetBoundsPx
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Show*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.Show
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Show
+  name: Show
+  nameWithType: IPlatformPopupWindow.Show
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Show
+- uid: FluentGpu.Pal.IPlatformPopupWindow.Hide*
+  commentId: Overload:FluentGpu.Pal.IPlatformPopupWindow.Hide
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_Hide
+  name: Hide
+  nameWithType: IPlatformPopupWindow.Hide
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.Hide

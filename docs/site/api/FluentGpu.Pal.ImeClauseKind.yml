@@ -1,0 +1,171 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.ImeClauseKind
+  commentId: T:FluentGpu.Pal.ImeClauseKind
+  id: ImeClauseKind
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.ImeClauseKind.Converted
+  - FluentGpu.Pal.ImeClauseKind.Input
+  - FluentGpu.Pal.ImeClauseKind.TargetConverted
+  - FluentGpu.Pal.ImeClauseKind.TargetNotConverted
+  langs:
+  - csharp
+  - vb
+  name: ImeClauseKind
+  nameWithType: ImeClauseKind
+  fullName: FluentGpu.Pal.ImeClauseKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImeClauseKind
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    How an IME composition clause renders (Imm32 ATTR_* / TSF display attributes): Input = dotted underline
+        (not yet converted), Converted = solid underline, TargetConverted/TargetNotConverted = the clause the candidate
+        window currently targets (thick underline).
+  example: []
+  syntax:
+    content: 'public enum ImeClauseKind : byte'
+    content.vb: Public Enum ImeClauseKind As Byte
+- uid: FluentGpu.Pal.ImeClauseKind.Input
+  commentId: F:FluentGpu.Pal.ImeClauseKind.Input
+  id: Input
+  parent: FluentGpu.Pal.ImeClauseKind
+  langs:
+  - csharp
+  - vb
+  name: Input
+  nameWithType: ImeClauseKind.Input
+  fullName: FluentGpu.Pal.ImeClauseKind.Input
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Input
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Input = 0
+    return:
+      type: FluentGpu.Pal.ImeClauseKind
+- uid: FluentGpu.Pal.ImeClauseKind.Converted
+  commentId: F:FluentGpu.Pal.ImeClauseKind.Converted
+  id: Converted
+  parent: FluentGpu.Pal.ImeClauseKind
+  langs:
+  - csharp
+  - vb
+  name: Converted
+  nameWithType: ImeClauseKind.Converted
+  fullName: FluentGpu.Pal.ImeClauseKind.Converted
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Converted
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Converted = 1
+    return:
+      type: FluentGpu.Pal.ImeClauseKind
+- uid: FluentGpu.Pal.ImeClauseKind.TargetConverted
+  commentId: F:FluentGpu.Pal.ImeClauseKind.TargetConverted
+  id: TargetConverted
+  parent: FluentGpu.Pal.ImeClauseKind
+  langs:
+  - csharp
+  - vb
+  name: TargetConverted
+  nameWithType: ImeClauseKind.TargetConverted
+  fullName: FluentGpu.Pal.ImeClauseKind.TargetConverted
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TargetConverted
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: TargetConverted = 2
+    return:
+      type: FluentGpu.Pal.ImeClauseKind
+- uid: FluentGpu.Pal.ImeClauseKind.TargetNotConverted
+  commentId: F:FluentGpu.Pal.ImeClauseKind.TargetNotConverted
+  id: TargetNotConverted
+  parent: FluentGpu.Pal.ImeClauseKind
+  langs:
+  - csharp
+  - vb
+  name: TargetNotConverted
+  nameWithType: ImeClauseKind.TargetNotConverted
+  fullName: FluentGpu.Pal.ImeClauseKind.TargetNotConverted
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TargetNotConverted
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: TargetNotConverted = 3
+    return:
+      type: FluentGpu.Pal.ImeClauseKind
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.ImeClauseKind
+  commentId: T:FluentGpu.Pal.ImeClauseKind
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.ImeClauseKind.html
+  name: ImeClauseKind
+  nameWithType: ImeClauseKind
+  fullName: FluentGpu.Pal.ImeClauseKind

@@ -1,0 +1,130 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.FillKind
+  commentId: T:FluentGpu.Render.FillKind
+  id: FillKind
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.FillKind.Checker
+  - FluentGpu.Render.FillKind.Solid
+  langs:
+  - csharp
+  - vb
+  name: FillKind
+  nameWithType: FillKind
+  fullName: FluentGpu.Render.FillKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillKind
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: How a <xref href="FluentGpu.Render.FillRoundRectCmd" data-throw-if-not-resolved="false"></xref> fills its interior.
+  example: []
+  syntax:
+    content: public enum FillKind
+    content.vb: Public Enum FillKind
+- uid: FluentGpu.Render.FillKind.Solid
+  commentId: F:FluentGpu.Render.FillKind.Solid
+  id: Solid
+  parent: FluentGpu.Render.FillKind
+  langs:
+  - csharp
+  - vb
+  name: Solid
+  nameWithType: FillKind.Solid
+  fullName: FluentGpu.Render.FillKind.Solid
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Solid
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: Flat <code>Fill</code> color (the default; ColorB/CellPx ignored).
+  example: []
+  syntax:
+    content: Solid = 0
+    return:
+      type: FluentGpu.Render.FillKind
+- uid: FluentGpu.Render.FillKind.Checker
+  commentId: F:FluentGpu.Render.FillKind.Checker
+  id: Checker
+  parent: FluentGpu.Render.FillKind
+  langs:
+  - csharp
+  - vb
+  name: Checker
+  nameWithType: FillKind.Checker
+  fullName: FluentGpu.Render.FillKind.Checker
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Checker
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  summary: >-
+    Alpha-transparency checkerboard (the ColorPicker alpha lane / preview swatch): square cells of
+        <code>CellPx</code> alternating <code>Fill</code> (cells where ⌊x/c⌋+⌊y/c⌋ is even) and <code>ColorB</code> (odd) — exactly WinUI's
+        CreateCheckeredBackgroundAsync pattern ((x/CheckerSize + y/CheckerSize) % 2 == 0 ⇒ blank/transparent, else the
+        checker color; CheckerSize = 4 px — microsoft-ui-xaml controls\dev\ColorPicker\ColorHelpers.cpp:9,384-404; the
+        checker color is the SystemListLowColor resource — ColorPicker.xaml:12). Map Fill=transparent, ColorB=checker
+        for WinUI parity.
+  example: []
+  syntax:
+    content: Checker = 1
+    return:
+      type: FluentGpu.Render.FillKind
+references:
+- uid: FluentGpu.Render.FillRoundRectCmd
+  commentId: T:FluentGpu.Render.FillRoundRectCmd
+  href: FluentGpu.Render.FillRoundRectCmd.html
+  name: FillRoundRectCmd
+  nameWithType: FillRoundRectCmd
+  fullName: FluentGpu.Render.FillRoundRectCmd
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: FluentGpu.Render.FillKind
+  commentId: T:FluentGpu.Render.FillKind
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.FillKind.html
+  name: FillKind
+  nameWithType: FillKind
+  fullName: FluentGpu.Render.FillKind

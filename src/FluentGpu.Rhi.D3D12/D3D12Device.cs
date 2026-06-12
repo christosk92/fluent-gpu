@@ -99,6 +99,20 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     public string BackendNameSuffix { get; private set; } = "";
     public string BackendName => "D3D12" + BackendNameSuffix;
+
+    /// <summary>Tracked live D3D12 resource totals (bytes + count) from <see cref="D3D12MemoryDiagnostics"/> — an O(1)
+    /// read of the running tally for the MemCensus sampler.</summary>
+    public (long bytes, int count) DiagResourceTotals => D3D12MemoryDiagnostics.LiveTotals();
+
+    /// <summary>One-line GPU residency summary (glyph atlas + image texture store) for the MemCensus
+    /// <c>GpuDetail</c> hook. Reads the stores' census accessors; null until the device is initialized. Tiny
+    /// fixed-bucket sums (never per-frame).</summary>
+    public string DiagGpuDetail =>
+        _glyphs is null || _imageTextures is null
+            ? ""
+            : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
+              $" | tex: atlas={_imageTextures.AtlasImageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}";
+
     internal ID3D12Device* Device => _device;
     internal ID3D12GraphicsCommandList* CommandList => _cmdList;
 
@@ -206,6 +220,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Check(_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap), "CreateDescriptorHeap");
         _rtvHeap = heap;
         _rtvSize = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12MemoryDiagnostics.Track(_rtvHeap, "Device.RtvHeap", (ulong)FRAME_COUNT * _rtvSize);
     }
 
     private void InitSwapChain()
@@ -284,7 +299,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
-        WaitForLatency();   // bound queued-frame latency before starting this frame's production
+        // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
+        // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
+        // up to a vblank — the drag-start/live-resize hitch. Self-resetting: one suppressed wait per call.
+        if (_skipLatencyOnce) _skipLatencyOnce = false;
+        else WaitForLatency();   // bound queued-frame latency before starting this frame's production
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         WaitForFrame(_frameIndex);
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
@@ -305,13 +324,16 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameGlyphInstanceCount = 0;
         _frameImageCount = 0;
         _frameImageSkipped = 0;
-        _rectPipe!.BeginFrame();
-        _shadowPipe!.BeginFrame();
-        _arcPipe!.BeginFrame();
-        _polylinePipe!.BeginFrame();
-        _gradPipe!.BeginFrame();
-        _glyphs!.BeginFrame();
-        _imagePipe!.BeginFrame((int)_frameIndex);   // pick this frame's instance buffer (avoids the CPU↔GPU race that flickers during scroll)
+        // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
+        // last USED this index (frame N-2), so writing this bank can never race frame N-1's still-in-flight GPU reads —
+        // the CPU↔GPU tear that flickered on scroll/hover (the image pipe had this; the six geometry pipes were missed).
+        _rectPipe!.BeginFrame((int)_frameIndex);
+        _shadowPipe!.BeginFrame((int)_frameIndex);
+        _arcPipe!.BeginFrame((int)_frameIndex);
+        _polylinePipe!.BeginFrame((int)_frameIndex);
+        _gradPipe!.BeginFrame((int)_frameIndex);
+        _glyphs!.BeginFrame((int)_frameIndex);
+        _imagePipe!.BeginFrame((int)_frameIndex);
         float lw = _w / _frameScale, lh = _h / _frameScale;
 
         if (StreamHasLayer(drawList))
@@ -417,7 +439,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                         int before = _glyphInsts.Count;
                         _glyphs!.LayoutRun(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
-                            g.SpanRunId, g.ForceColor != 0);
+                            g.SpanRunId, g.ForceColor != 0, g.InMotion != 0);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                     }
                     break;
@@ -610,6 +632,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
             Dx = im.Transform.Dx, Dy = im.Transform.Dy,
             Opacity = im.Opacity, CrossFade = im.CrossFade,
             PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
+            // Content-fit sub-rect (ImageFit.Cover etc.) in 0..1 source space; composed with the atlas cell at draw time.
+            UvX = im.UvRect.X, UvY = im.UvRect.Y, UvW = im.UvRect.W, UvH = im.UvRect.H,
         }, im.ImageId));
         _frameImageCount++;
         PushRun(PrimKind.Image);
@@ -715,7 +739,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
                             if (_imageTextures.TryGet(id, out var srv, out var uv))
                             {
                                 var d = inst;
-                                d.UvX = uv.X; d.UvY = uv.Y; d.UvW = uv.W; d.UvH = uv.H;   // resolved sub-rect (atlas cell or whole texture)
+                                // Compose the atlas cell (uv) with the content-fit sub-rect baked on the instance (inst.Uv*,
+                                // 0..1 source space): origin = cell.origin + fit.origin·cell.size, size = cell.size·fit.size.
+                                // Whole-texture images (cell = 0,0,1,1) pass the content-fit rect through unchanged.
+                                d.UvX = uv.X + inst.UvX * uv.W; d.UvY = uv.Y + inst.UvY * uv.H;
+                                d.UvW = uv.W * inst.UvW; d.UvH = uv.H * inst.UvH;
                                 _imagePipe.Draw(_cmdList, srv, in d);
                             }
                             else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
@@ -941,6 +969,10 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (_hasLatencyWaitable) WaitForSingleObject(_frameLatencyWaitable, 1000);
     }
 
+    private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
+
+    public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
+
     private bool CheckTearingSupport()
     {
         IDXGIFactory5* f5;
@@ -992,6 +1024,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ID3D12Resource* readback;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &bd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&readback), "Capture.Readback");
+        D3D12MemoryDiagnostics.Track(readback, "Capture.Readback", total);   // audit gpu mem-01: was a [d3d-mem]/DiagResourceTotals blind spot
 
         ID3D12CommandAllocator* alloc = _allocators[_frameIndex];
         Check(alloc->Reset(), "capture.alloc.Reset");
@@ -1026,6 +1059,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         D3D12_RANGE wrote = default;   // we wrote nothing back
         readback->Unmap(0, &wrote);
+        D3D12MemoryDiagnostics.Release(readback, "Capture.Readback");
         readback->Release();
         return outp;
     }
@@ -1080,7 +1114,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         if (_swapChain != null) _swapChain->Release();
-        if (_rtvHeap != null) _rtvHeap->Release();
+        if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "Device.RtvHeap"); _rtvHeap->Release(); }
         if (_cmdList != null) _cmdList->Release();
         for (uint i = 0; i < FRAME_COUNT; i++)
             if (_allocators[i] != null) _allocators[i]->Release();

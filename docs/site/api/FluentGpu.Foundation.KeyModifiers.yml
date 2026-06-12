@@ -1,0 +1,205 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  id: KeyModifiers
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.KeyModifiers.Alt
+  - FluentGpu.Foundation.KeyModifiers.Ctrl
+  - FluentGpu.Foundation.KeyModifiers.None
+  - FluentGpu.Foundation.KeyModifiers.Shift
+  - FluentGpu.Foundation.KeyModifiers.Win
+  langs:
+  - csharp
+  - vb
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyModifiers
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Keyboard modifier state, captured per input event at the platform pump (Win32 GetKeyState).
+  example: []
+  syntax:
+    content: >-
+      [Flags]
+
+      public enum KeyModifiers : byte
+    content.vb: >-
+      <Flags>
+
+      Public Enum KeyModifiers As Byte
+  attributes:
+  - type: System.FlagsAttribute
+    ctor: System.FlagsAttribute.#ctor
+    arguments: []
+- uid: FluentGpu.Foundation.KeyModifiers.None
+  commentId: F:FluentGpu.Foundation.KeyModifiers.None
+  id: None
+  parent: FluentGpu.Foundation.KeyModifiers
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: KeyModifiers.None
+  fullName: FluentGpu.Foundation.KeyModifiers.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.KeyModifiers.Shift
+  commentId: F:FluentGpu.Foundation.KeyModifiers.Shift
+  id: Shift
+  parent: FluentGpu.Foundation.KeyModifiers
+  langs:
+  - csharp
+  - vb
+  name: Shift
+  nameWithType: KeyModifiers.Shift
+  fullName: FluentGpu.Foundation.KeyModifiers.Shift
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shift
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Shift = 1
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.KeyModifiers.Ctrl
+  commentId: F:FluentGpu.Foundation.KeyModifiers.Ctrl
+  id: Ctrl
+  parent: FluentGpu.Foundation.KeyModifiers
+  langs:
+  - csharp
+  - vb
+  name: Ctrl
+  nameWithType: KeyModifiers.Ctrl
+  fullName: FluentGpu.Foundation.KeyModifiers.Ctrl
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ctrl
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Ctrl = 2
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.KeyModifiers.Alt
+  commentId: F:FluentGpu.Foundation.KeyModifiers.Alt
+  id: Alt
+  parent: FluentGpu.Foundation.KeyModifiers
+  langs:
+  - csharp
+  - vb
+  name: Alt
+  nameWithType: KeyModifiers.Alt
+  fullName: FluentGpu.Foundation.KeyModifiers.Alt
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Alt
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Alt = 4
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+- uid: FluentGpu.Foundation.KeyModifiers.Win
+  commentId: F:FluentGpu.Foundation.KeyModifiers.Win
+  id: Win
+  parent: FluentGpu.Foundation.KeyModifiers
+  langs:
+  - csharp
+  - vb
+  name: Win
+  nameWithType: KeyModifiers.Win
+  fullName: FluentGpu.Foundation.KeyModifiers.Win
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Win
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Win = 8
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers

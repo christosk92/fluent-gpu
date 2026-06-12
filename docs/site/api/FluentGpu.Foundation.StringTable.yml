@@ -1,0 +1,835 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.StringTable
+  commentId: T:FluentGpu.Foundation.StringTable
+  id: StringTable
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.StringTable.#ctor
+  - FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  - FluentGpu.Foundation.StringTable.IdHighWater
+  - FluentGpu.Foundation.StringTable.Intern(System.String)
+  - FluentGpu.Foundation.StringTable.MapCount
+  - FluentGpu.Foundation.StringTable.PendingReclaim
+  - FluentGpu.Foundation.StringTable.PendingReclaimCount
+  - FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  - FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  - FluentGpu.Foundation.StringTable.Tick
+  langs:
+  - csharp
+  - vb
+  name: StringTable
+  nameWithType: StringTable
+  fullName: FluentGpu.Foundation.StringTable
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StringTable
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    String interner with REF-COUNTED reclamation. Lives in Foundation so Render can resolve without depending on Scene.
+
+         <p><b>Seam-safe (threading-render-seam.md §9):</b> the UI thread interns (<xref href="FluentGpu.Foundation.StringTable.Intern(System.String)" data-throw-if-not-resolved="false"></xref>, the single writer) while
+         the render thread resolves (<xref href="FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)" data-throw-if-not-resolved="false"></xref>) the previous frame's ids concurrently. The backing store is therefore
+         <i>chunked</i>: chunks are allocated once and never resized or moved, so a concurrent reader can never observe a torn or
+         reallocated array (a plain <code>List<string></code> would race on its geometric Add-realloc). A release-store of the count
+         publishes each new slot; the reader acquire-loads the count before indexing, so it only ever reads fully-written slots.</p>
+
+         <p><b>Reclamation (virtualization workloads):</b> a 100k-row virtual list streams unique row text through the table —
+         append-only interning is an unbounded leak. Owners (the scene's text columns) pair <xref href="FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)" data-throw-if-not-resolved="false"></xref>;
+         when an id's count hits 0 its map entry is removed (a re-intern of the same content gets a NEW id) and the slot is cleared
+         after a reader quarantine (<xref href="FluentGpu.Foundation.StringTable.Tick" data-throw-if-not-resolved="false"></xref> per frame, far beyond the in-flight frame depth). <b>Ids are never reused</b> —
+         reclaimed ids stay burned, so a stale id can never alias different content (the shaped-run cache keys on ids and ages out in
+         well under the id space). Fully-dead chunks free their backing array. Strings never AddRef'd are simply permanent.</p>
+  example: []
+  syntax:
+    content: public sealed class StringTable
+    content.vb: Public NotInheritable Class StringTable
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.StringTable.#ctor
+  commentId: M:FluentGpu.Foundation.StringTable.#ctor
+  id: '#ctor'
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: StringTable()
+  nameWithType: StringTable.StringTable()
+  fullName: FluentGpu.Foundation.StringTable.StringTable()
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public StringTable()
+    content.vb: Public Sub New()
+  overload: FluentGpu.Foundation.StringTable.#ctor*
+  nameWithType.vb: StringTable.New()
+  fullName.vb: FluentGpu.Foundation.StringTable.New()
+  name.vb: New()
+- uid: FluentGpu.Foundation.StringTable.MapCount
+  commentId: P:FluentGpu.Foundation.StringTable.MapCount
+  id: MapCount
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: MapCount
+  nameWithType: StringTable.MapCount
+  fullName: FluentGpu.Foundation.StringTable.MapCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MapCount
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Live map entries (interned strings currently resolvable by content) — diagnostics/leak checks.
+  example: []
+  syntax:
+    content: public int MapCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property MapCount As Integer
+  overload: FluentGpu.Foundation.StringTable.MapCount*
+- uid: FluentGpu.Foundation.StringTable.PendingReclaim
+  commentId: P:FluentGpu.Foundation.StringTable.PendingReclaim
+  id: PendingReclaim
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: PendingReclaim
+  nameWithType: StringTable.PendingReclaim
+  fullName: FluentGpu.Foundation.StringTable.PendingReclaim
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PendingReclaim
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Releases whose slots await the reader quarantine — diagnostics.
+  example: []
+  syntax:
+    content: public int PendingReclaim { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property PendingReclaim As Integer
+  overload: FluentGpu.Foundation.StringTable.PendingReclaim*
+- uid: FluentGpu.Foundation.StringTable.PendingReclaimCount
+  commentId: P:FluentGpu.Foundation.StringTable.PendingReclaimCount
+  id: PendingReclaimCount
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: PendingReclaimCount
+  nameWithType: StringTable.PendingReclaimCount
+  fullName: FluentGpu.Foundation.StringTable.PendingReclaimCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PendingReclaimCount
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Releases whose slots await the reader quarantine (census alias of <xref href="FluentGpu.Foundation.StringTable.PendingReclaim" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public int PendingReclaimCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property PendingReclaimCount As Integer
+  overload: FluentGpu.Foundation.StringTable.PendingReclaimCount*
+- uid: FluentGpu.Foundation.StringTable.IdHighWater
+  commentId: P:FluentGpu.Foundation.StringTable.IdHighWater
+  id: IdHighWater
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: IdHighWater
+  nameWithType: StringTable.IdHighWater
+  fullName: FluentGpu.Foundation.StringTable.IdHighWater
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IdHighWater
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The monotonic next-id counter (one past the highest minted id) — ids never reuse, so this only grows.
+  example: []
+  syntax:
+    content: public int IdHighWater { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property IdHighWater As Integer
+  overload: FluentGpu.Foundation.StringTable.IdHighWater*
+- uid: FluentGpu.Foundation.StringTable.Intern(System.String)
+  commentId: M:FluentGpu.Foundation.StringTable.Intern(System.String)
+  id: Intern(System.String)
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: Intern(string?)
+  nameWithType: StringTable.Intern(string?)
+  fullName: FluentGpu.Foundation.StringTable.Intern(string?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Intern
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Intern a string to a stable id. UI-thread only (the single writer). A live id is never moved; reclaimed
+        ids are never reused (re-interning previously-released content yields a fresh id).
+  example: []
+  syntax:
+    content: public StringId Intern(string? s)
+    parameters:
+    - id: s
+      type: System.String
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Function Intern(s As String) As StringId
+  overload: FluentGpu.Foundation.StringTable.Intern*
+  nameWithType.vb: StringTable.Intern(String)
+  fullName.vb: FluentGpu.Foundation.StringTable.Intern(String)
+  name.vb: Intern(String)
+- uid: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  id: AddRef(FluentGpu.Foundation.StringId)
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: AddRef(StringId)
+  nameWithType: StringTable.AddRef(StringId)
+  fullName: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AddRef
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 86
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Take an ownership reference on an id (UI thread). Owners are the scene's text columns; pair with <xref href="FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public void AddRef(StringId id)
+    parameters:
+    - id: id
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Sub AddRef(id As StringId)
+  overload: FluentGpu.Foundation.StringTable.AddRef*
+- uid: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  id: Release(FluentGpu.Foundation.StringId)
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: Release(StringId)
+  nameWithType: StringTable.Release(StringId)
+  fullName: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Release
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Drop an ownership reference (UI thread). The LAST release removes the map entry and schedules the slot
+        clear behind the reader quarantine. Releasing a never-AddRef'd (permanent) id is a no-op.
+  example: []
+  syntax:
+    content: public void Release(StringId id)
+    parameters:
+    - id: id
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Sub Release(id As StringId)
+  overload: FluentGpu.Foundation.StringTable.Release*
+- uid: FluentGpu.Foundation.StringTable.Tick
+  commentId: M:FluentGpu.Foundation.StringTable.Tick
+  id: Tick
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: Tick()
+  nameWithType: StringTable.Tick()
+  fullName: FluentGpu.Foundation.StringTable.Tick()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Advance the reclamation clock one frame (host, once per painted frame): clears slots whose quarantine
+        elapsed and frees fully-dead chunks. UI thread.
+  example: []
+  syntax:
+    content: public void Tick()
+    content.vb: Public Sub Tick()
+  overload: FluentGpu.Foundation.StringTable.Tick*
+- uid: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  id: Resolve(FluentGpu.Foundation.StringId)
+  parent: FluentGpu.Foundation.StringTable
+  langs:
+  - csharp
+  - vb
+  name: Resolve(StringId)
+  nameWithType: StringTable.Resolve(StringId)
+  fullName: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/StringTable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Resolve
+    path: ../../src/FluentGpu.Foundation/StringTable.cs
+    startLine: 134
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Resolve an id to its string. Safe to call from the render thread concurrently with <xref href="FluentGpu.Foundation.StringTable.Intern(System.String)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public string Resolve(StringId id)
+    parameters:
+    - id: id
+      type: FluentGpu.Foundation.StringId
+    return:
+      type: System.String
+    content.vb: Public Function Resolve(id As StringId) As String
+  overload: FluentGpu.Foundation.StringTable.Resolve*
+references:
+- uid: FluentGpu.Foundation.StringTable.Intern(System.String)
+  commentId: M:FluentGpu.Foundation.StringTable.Intern(System.String)
+  isExternal: true
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Intern_System_String_
+  name: Intern(string)
+  nameWithType: StringTable.Intern(string)
+  fullName: FluentGpu.Foundation.StringTable.Intern(string)
+  nameWithType.vb: StringTable.Intern(String)
+  fullName.vb: FluentGpu.Foundation.StringTable.Intern(String)
+  name.vb: Intern(String)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.StringTable.Intern(System.String)
+    name: Intern
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Intern_System_String_
+  - name: (
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.StringTable.Intern(System.String)
+    name: Intern
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Intern_System_String_
+  - name: (
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Resolve_FluentGpu_Foundation_StringId_
+  name: Resolve(StringId)
+  nameWithType: StringTable.Resolve(StringId)
+  fullName: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+    name: Resolve
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Resolve_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.StringTable.Resolve(FluentGpu.Foundation.StringId)
+    name: Resolve
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Resolve_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+- uid: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_AddRef_FluentGpu_Foundation_StringId_
+  name: AddRef(StringId)
+  nameWithType: StringTable.AddRef(StringId)
+  fullName: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+    name: AddRef
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_AddRef_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.StringTable.AddRef(FluentGpu.Foundation.StringId)
+    name: AddRef
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_AddRef_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+- uid: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Release_FluentGpu_Foundation_StringId_
+  name: Release(StringId)
+  nameWithType: StringTable.Release(StringId)
+  fullName: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+    name: Release
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Release_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.StringTable.Release(FluentGpu.Foundation.StringId)
+    name: Release
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Release_FluentGpu_Foundation_StringId_
+  - name: (
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    href: FluentGpu.Foundation.StringId.html
+  - name: )
+- uid: FluentGpu.Foundation.StringTable.Tick
+  commentId: M:FluentGpu.Foundation.StringTable.Tick
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Tick
+  name: Tick()
+  nameWithType: StringTable.Tick()
+  fullName: FluentGpu.Foundation.StringTable.Tick()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.StringTable.Tick
+    name: Tick
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Tick
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.StringTable.Tick
+    name: Tick
+    href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Tick
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.StringTable.#ctor*
+  commentId: Overload:FluentGpu.Foundation.StringTable.#ctor
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable__ctor
+  name: StringTable
+  nameWithType: StringTable.StringTable
+  fullName: FluentGpu.Foundation.StringTable.StringTable
+  nameWithType.vb: StringTable.New
+  fullName.vb: FluentGpu.Foundation.StringTable.New
+  name.vb: New
+- uid: FluentGpu.Foundation.StringTable.MapCount*
+  commentId: Overload:FluentGpu.Foundation.StringTable.MapCount
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_MapCount
+  name: MapCount
+  nameWithType: StringTable.MapCount
+  fullName: FluentGpu.Foundation.StringTable.MapCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.StringTable.PendingReclaim*
+  commentId: Overload:FluentGpu.Foundation.StringTable.PendingReclaim
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_PendingReclaim
+  name: PendingReclaim
+  nameWithType: StringTable.PendingReclaim
+  fullName: FluentGpu.Foundation.StringTable.PendingReclaim
+- uid: FluentGpu.Foundation.StringTable.PendingReclaim
+  commentId: P:FluentGpu.Foundation.StringTable.PendingReclaim
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_PendingReclaim
+  name: PendingReclaim
+  nameWithType: StringTable.PendingReclaim
+  fullName: FluentGpu.Foundation.StringTable.PendingReclaim
+- uid: FluentGpu.Foundation.StringTable.PendingReclaimCount*
+  commentId: Overload:FluentGpu.Foundation.StringTable.PendingReclaimCount
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_PendingReclaimCount
+  name: PendingReclaimCount
+  nameWithType: StringTable.PendingReclaimCount
+  fullName: FluentGpu.Foundation.StringTable.PendingReclaimCount
+- uid: FluentGpu.Foundation.StringTable.IdHighWater*
+  commentId: Overload:FluentGpu.Foundation.StringTable.IdHighWater
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_IdHighWater
+  name: IdHighWater
+  nameWithType: StringTable.IdHighWater
+  fullName: FluentGpu.Foundation.StringTable.IdHighWater
+- uid: FluentGpu.Foundation.StringTable.Intern*
+  commentId: Overload:FluentGpu.Foundation.StringTable.Intern
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Intern_System_String_
+  name: Intern
+  nameWithType: StringTable.Intern
+  fullName: FluentGpu.Foundation.StringTable.Intern
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Foundation.StringTable.AddRef*
+  commentId: Overload:FluentGpu.Foundation.StringTable.AddRef
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_AddRef_FluentGpu_Foundation_StringId_
+  name: AddRef
+  nameWithType: StringTable.AddRef
+  fullName: FluentGpu.Foundation.StringTable.AddRef
+- uid: FluentGpu.Foundation.StringTable.Release*
+  commentId: Overload:FluentGpu.Foundation.StringTable.Release
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Release_FluentGpu_Foundation_StringId_
+  name: Release
+  nameWithType: StringTable.Release
+  fullName: FluentGpu.Foundation.StringTable.Release
+- uid: FluentGpu.Foundation.StringTable.Tick*
+  commentId: Overload:FluentGpu.Foundation.StringTable.Tick
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Tick
+  name: Tick
+  nameWithType: StringTable.Tick
+  fullName: FluentGpu.Foundation.StringTable.Tick
+- uid: FluentGpu.Foundation.StringTable.Resolve*
+  commentId: Overload:FluentGpu.Foundation.StringTable.Resolve
+  href: FluentGpu.Foundation.StringTable.html#FluentGpu_Foundation_StringTable_Resolve_FluentGpu_Foundation_StringId_
+  name: Resolve
+  nameWithType: StringTable.Resolve
+  fullName: FluentGpu.Foundation.StringTable.Resolve

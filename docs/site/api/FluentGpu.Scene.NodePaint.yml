@@ -1,0 +1,1430 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.NodePaint
+  commentId: T:FluentGpu.Scene.NodePaint
+  id: NodePaint
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.NodePaint.BorderColor
+  - FluentGpu.Scene.NodePaint.BorderWidth
+  - FluentGpu.Scene.NodePaint.ChildShiftX
+  - FluentGpu.Scene.NodePaint.ChildShiftY
+  - FluentGpu.Scene.NodePaint.ClipRect
+  - FluentGpu.Scene.NodePaint.Corners
+  - FluentGpu.Scene.NodePaint.Default
+  - FluentGpu.Scene.NodePaint.Fill
+  - FluentGpu.Scene.NodePaint.HoverBorderColor
+  - FluentGpu.Scene.NodePaint.HoverFill
+  - FluentGpu.Scene.NodePaint.HoverOpacity
+  - FluentGpu.Scene.NodePaint.ImageFit
+  - FluentGpu.Scene.NodePaint.ImageId
+  - FluentGpu.Scene.NodePaint.LocalTransform
+  - FluentGpu.Scene.NodePaint.Opacity
+  - FluentGpu.Scene.NodePaint.OpacityGroup
+  - FluentGpu.Scene.NodePaint.OriginX
+  - FluentGpu.Scene.NodePaint.OriginY
+  - FluentGpu.Scene.NodePaint.PresentedH
+  - FluentGpu.Scene.NodePaint.PresentedW
+  - FluentGpu.Scene.NodePaint.PressedBorderColor
+  - FluentGpu.Scene.NodePaint.PressedFill
+  - FluentGpu.Scene.NodePaint.PressedOpacity
+  - FluentGpu.Scene.NodePaint.StrikethroughBit
+  - FluentGpu.Scene.NodePaint.StrokeTrimEnd
+  - FluentGpu.Scene.NodePaint.StrokeTrimStart
+  - FluentGpu.Scene.NodePaint.Text
+  - FluentGpu.Scene.NodePaint.TextColor
+  - FluentGpu.Scene.NodePaint.TextDecorations
+  - FluentGpu.Scene.NodePaint.TextDisabledColor
+  - FluentGpu.Scene.NodePaint.TextFocusedColor
+  - FluentGpu.Scene.NodePaint.TextHoverColor
+  - FluentGpu.Scene.NodePaint.TextPressedColor
+  - FluentGpu.Scene.NodePaint.UnderlineBit
+  - FluentGpu.Scene.NodePaint.VisualKind
+  langs:
+  - csharp
+  - vb
+  name: NodePaint
+  nameWithType: NodePaint
+  fullName: FluentGpu.Scene.NodePaint
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NodePaint
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Paint column — one cache line of per-node visual state read by the record phase.
+  example: []
+  syntax:
+    content: public struct NodePaint
+    content.vb: Public Structure NodePaint
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.NodePaint.LocalTransform
+  commentId: F:FluentGpu.Scene.NodePaint.LocalTransform
+  id: LocalTransform
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: LocalTransform
+  nameWithType: NodePaint.LocalTransform
+  fullName: FluentGpu.Scene.NodePaint.LocalTransform
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LocalTransform
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public Affine2D LocalTransform
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public LocalTransform As Affine2D
+- uid: FluentGpu.Scene.NodePaint.Opacity
+  commentId: F:FluentGpu.Scene.NodePaint.Opacity
+  id: Opacity
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: NodePaint.Opacity
+  fullName: FluentGpu.Scene.NodePaint.Opacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float Opacity
+    return:
+      type: System.Single
+    content.vb: Public Opacity As Single
+- uid: FluentGpu.Scene.NodePaint.HoverOpacity
+  commentId: F:FluentGpu.Scene.NodePaint.HoverOpacity
+  id: HoverOpacity
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: HoverOpacity
+  nameWithType: NodePaint.HoverOpacity
+  fullName: FluentGpu.Scene.NodePaint.HoverOpacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverOpacity
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float HoverOpacity
+    return:
+      type: System.Single
+    content.vb: Public HoverOpacity As Single
+- uid: FluentGpu.Scene.NodePaint.PressedOpacity
+  commentId: F:FluentGpu.Scene.NodePaint.PressedOpacity
+  id: PressedOpacity
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: PressedOpacity
+  nameWithType: NodePaint.PressedOpacity
+  fullName: FluentGpu.Scene.NodePaint.PressedOpacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedOpacity
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float PressedOpacity
+    return:
+      type: System.Single
+    content.vb: Public PressedOpacity As Single
+- uid: FluentGpu.Scene.NodePaint.OriginX
+  commentId: F:FluentGpu.Scene.NodePaint.OriginX
+  id: OriginX
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: OriginX
+  nameWithType: NodePaint.OriginX
+  fullName: FluentGpu.Scene.NodePaint.OriginX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OriginX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float OriginX
+    return:
+      type: System.Single
+    content.vb: Public OriginX As Single
+- uid: FluentGpu.Scene.NodePaint.OriginY
+  commentId: F:FluentGpu.Scene.NodePaint.OriginY
+  id: OriginY
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: OriginY
+  nameWithType: NodePaint.OriginY
+  fullName: FluentGpu.Scene.NodePaint.OriginY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OriginY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float OriginY
+    return:
+      type: System.Single
+    content.vb: Public OriginY As Single
+- uid: FluentGpu.Scene.NodePaint.PresentedW
+  commentId: F:FluentGpu.Scene.NodePaint.PresentedW
+  id: PresentedW
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: PresentedW
+  nameWithType: NodePaint.PresentedW
+  fullName: FluentGpu.Scene.NodePaint.PresentedW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PresentedW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float PresentedW
+    return:
+      type: System.Single
+    content.vb: Public PresentedW As Single
+- uid: FluentGpu.Scene.NodePaint.PresentedH
+  commentId: F:FluentGpu.Scene.NodePaint.PresentedH
+  id: PresentedH
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: PresentedH
+  nameWithType: NodePaint.PresentedH
+  fullName: FluentGpu.Scene.NodePaint.PresentedH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PresentedH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float PresentedH
+    return:
+      type: System.Single
+    content.vb: Public PresentedH As Single
+- uid: FluentGpu.Scene.NodePaint.ClipRect
+  commentId: F:FluentGpu.Scene.NodePaint.ClipRect
+  id: ClipRect
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: ClipRect
+  nameWithType: NodePaint.ClipRect
+  fullName: FluentGpu.Scene.NodePaint.ClipRect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClipRect
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 90
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public RectF ClipRect
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public ClipRect As RectF
+- uid: FluentGpu.Scene.NodePaint.ChildShiftX
+  commentId: F:FluentGpu.Scene.NodePaint.ChildShiftX
+  id: ChildShiftX
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: ChildShiftX
+  nameWithType: NodePaint.ChildShiftX
+  fullName: FluentGpu.Scene.NodePaint.ChildShiftX
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChildShiftX
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ChildShiftX
+    return:
+      type: System.Single
+    content.vb: Public ChildShiftX As Single
+- uid: FluentGpu.Scene.NodePaint.ChildShiftY
+  commentId: F:FluentGpu.Scene.NodePaint.ChildShiftY
+  id: ChildShiftY
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: ChildShiftY
+  nameWithType: NodePaint.ChildShiftY
+  fullName: FluentGpu.Scene.NodePaint.ChildShiftY
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChildShiftY
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float ChildShiftY
+    return:
+      type: System.Single
+    content.vb: Public ChildShiftY As Single
+- uid: FluentGpu.Scene.NodePaint.StrokeTrimStart
+  commentId: F:FluentGpu.Scene.NodePaint.StrokeTrimStart
+  id: StrokeTrimStart
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: StrokeTrimStart
+  nameWithType: NodePaint.StrokeTrimStart
+  fullName: FluentGpu.Scene.NodePaint.StrokeTrimStart
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeTrimStart
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float StrokeTrimStart
+    return:
+      type: System.Single
+    content.vb: Public StrokeTrimStart As Single
+- uid: FluentGpu.Scene.NodePaint.StrokeTrimEnd
+  commentId: F:FluentGpu.Scene.NodePaint.StrokeTrimEnd
+  id: StrokeTrimEnd
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: StrokeTrimEnd
+  nameWithType: NodePaint.StrokeTrimEnd
+  fullName: FluentGpu.Scene.NodePaint.StrokeTrimEnd
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeTrimEnd
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float StrokeTrimEnd
+    return:
+      type: System.Single
+    content.vb: Public StrokeTrimEnd As Single
+- uid: FluentGpu.Scene.NodePaint.Fill
+  commentId: F:FluentGpu.Scene.NodePaint.Fill
+  id: Fill
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: NodePaint.Fill
+  fullName: FluentGpu.Scene.NodePaint.Fill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF Fill
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Fill As ColorF
+- uid: FluentGpu.Scene.NodePaint.HoverFill
+  commentId: F:FluentGpu.Scene.NodePaint.HoverFill
+  id: HoverFill
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: HoverFill
+  nameWithType: NodePaint.HoverFill
+  fullName: FluentGpu.Scene.NodePaint.HoverFill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverFill
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF HoverFill
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public HoverFill As ColorF
+- uid: FluentGpu.Scene.NodePaint.PressedFill
+  commentId: F:FluentGpu.Scene.NodePaint.PressedFill
+  id: PressedFill
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: PressedFill
+  nameWithType: NodePaint.PressedFill
+  fullName: FluentGpu.Scene.NodePaint.PressedFill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedFill
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF PressedFill
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public PressedFill As ColorF
+- uid: FluentGpu.Scene.NodePaint.BorderColor
+  commentId: F:FluentGpu.Scene.NodePaint.BorderColor
+  id: BorderColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: BorderColor
+  nameWithType: NodePaint.BorderColor
+  fullName: FluentGpu.Scene.NodePaint.BorderColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF BorderColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public BorderColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.HoverBorderColor
+  commentId: F:FluentGpu.Scene.NodePaint.HoverBorderColor
+  id: HoverBorderColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: HoverBorderColor
+  nameWithType: NodePaint.HoverBorderColor
+  fullName: FluentGpu.Scene.NodePaint.HoverBorderColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HoverBorderColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF HoverBorderColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public HoverBorderColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.PressedBorderColor
+  commentId: F:FluentGpu.Scene.NodePaint.PressedBorderColor
+  id: PressedBorderColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: PressedBorderColor
+  nameWithType: NodePaint.PressedBorderColor
+  fullName: FluentGpu.Scene.NodePaint.PressedBorderColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedBorderColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF PressedBorderColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public PressedBorderColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.BorderWidth
+  commentId: F:FluentGpu.Scene.NodePaint.BorderWidth
+  id: BorderWidth
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: BorderWidth
+  nameWithType: NodePaint.BorderWidth
+  fullName: FluentGpu.Scene.NodePaint.BorderWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderWidth
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float BorderWidth
+    return:
+      type: System.Single
+    content.vb: Public BorderWidth As Single
+- uid: FluentGpu.Scene.NodePaint.Corners
+  commentId: F:FluentGpu.Scene.NodePaint.Corners
+  id: Corners
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: Corners
+  nameWithType: NodePaint.Corners
+  fullName: FluentGpu.Scene.NodePaint.Corners
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Corners
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public CornerRadius4 Corners
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Corners As CornerRadius4
+- uid: FluentGpu.Scene.NodePaint.TextColor
+  commentId: F:FluentGpu.Scene.NodePaint.TextColor
+  id: TextColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextColor
+  nameWithType: NodePaint.TextColor
+  fullName: FluentGpu.Scene.NodePaint.TextColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.TextHoverColor
+  commentId: F:FluentGpu.Scene.NodePaint.TextHoverColor
+  id: TextHoverColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextHoverColor
+  nameWithType: NodePaint.TextHoverColor
+  fullName: FluentGpu.Scene.NodePaint.TextHoverColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextHoverColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 107
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextHoverColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextHoverColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.TextPressedColor
+  commentId: F:FluentGpu.Scene.NodePaint.TextPressedColor
+  id: TextPressedColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextPressedColor
+  nameWithType: NodePaint.TextPressedColor
+  fullName: FluentGpu.Scene.NodePaint.TextPressedColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextPressedColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextPressedColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextPressedColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.TextDisabledColor
+  commentId: F:FluentGpu.Scene.NodePaint.TextDisabledColor
+  id: TextDisabledColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextDisabledColor
+  nameWithType: NodePaint.TextDisabledColor
+  fullName: FluentGpu.Scene.NodePaint.TextDisabledColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextDisabledColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextDisabledColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextDisabledColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.TextFocusedColor
+  commentId: F:FluentGpu.Scene.NodePaint.TextFocusedColor
+  id: TextFocusedColor
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextFocusedColor
+  nameWithType: NodePaint.TextFocusedColor
+  fullName: FluentGpu.Scene.NodePaint.TextFocusedColor
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextFocusedColor
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 110
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextFocusedColor
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextFocusedColor As ColorF
+- uid: FluentGpu.Scene.NodePaint.Text
+  commentId: F:FluentGpu.Scene.NodePaint.Text
+  id: Text
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: NodePaint.Text
+  fullName: FluentGpu.Scene.NodePaint.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public StringId Text
+    return:
+      type: FluentGpu.Foundation.StringId
+    content.vb: Public Text As StringId
+- uid: FluentGpu.Scene.NodePaint.TextDecorations
+  commentId: F:FluentGpu.Scene.NodePaint.TextDecorations
+  id: TextDecorations
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: TextDecorations
+  nameWithType: NodePaint.TextDecorations
+  fullName: FluentGpu.Scene.NodePaint.TextDecorations
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextDecorations
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Text decoration flags for a <xref href="FluentGpu.Scene.VisualKind.Text" data-throw-if-not-resolved="false"></xref> leaf (<xref href="FluentGpu.Scene.NodePaint.UnderlineBit" data-throw-if-not-resolved="false"></xref> |
+        <xref href="FluentGpu.Scene.NodePaint.StrikethroughBit" data-throw-if-not-resolved="false"></xref>; 0 = none). The recorder emits the bars itself — FillRoundRect quads placed by
+        the face metrics cached on <xref href="FluentGpu.Scene.TextMeasureCache" data-throw-if-not-resolved="false"></xref> (no new opcode), colored with the SAME resolved
+        foreground (hover/press ramps + BrushTransition) as the glyph run — matching DWrite, which draws decorations
+        from the face's underline position/thickness rather than glyph geometry. Written by the reconciler from
+        <code>TextEl.Underline</code>/<code>Strikethrough</code> (WinUI <code>TextDecorations</code>; HyperlinkButton underlines only when
+        the HyperlinkUnderlineVisible directive is set or under HighContrast — HyperLinkButton_Partial.cpp:207-212).
+  example: []
+  syntax:
+    content: public byte TextDecorations
+    return:
+      type: System.Byte
+    content.vb: Public TextDecorations As Byte
+- uid: FluentGpu.Scene.NodePaint.OpacityGroup
+  commentId: F:FluentGpu.Scene.NodePaint.OpacityGroup
+  id: OpacityGroup
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: OpacityGroup
+  nameWithType: NodePaint.OpacityGroup
+  fullName: FluentGpu.Scene.NodePaint.OpacityGroup
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpacityGroup
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Flat opacity group opt-in (WinUI Composition LayerVisual semantics): when set and the node's resolved
+        opacity &lt; 1, the recorder wraps the subtree in PushLayer{Opacity}…PopLayer — children render at FULL alpha
+        offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
+        plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).
+  example: []
+  syntax:
+    content: public bool OpacityGroup
+    return:
+      type: System.Boolean
+    content.vb: Public OpacityGroup As Boolean
+- uid: FluentGpu.Scene.NodePaint.ImageId
+  commentId: F:FluentGpu.Scene.NodePaint.ImageId
+  id: ImageId
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: ImageId
+  nameWithType: NodePaint.ImageId
+  fullName: FluentGpu.Scene.NodePaint.ImageId
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageId
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 125
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public int ImageId
+    return:
+      type: System.Int32
+    content.vb: Public ImageId As Integer
+- uid: FluentGpu.Scene.NodePaint.ImageFit
+  commentId: F:FluentGpu.Scene.NodePaint.ImageFit
+  id: ImageFit
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: ImageFit
+  nameWithType: NodePaint.ImageFit
+  fullName: FluentGpu.Scene.NodePaint.ImageFit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageFit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 126
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public byte ImageFit
+    return:
+      type: System.Byte
+    content.vb: Public ImageFit As Byte
+- uid: FluentGpu.Scene.NodePaint.VisualKind
+  commentId: F:FluentGpu.Scene.NodePaint.VisualKind
+  id: VisualKind
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: VisualKind
+  nameWithType: NodePaint.VisualKind
+  fullName: FluentGpu.Scene.NodePaint.VisualKind
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VisualKind
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 127
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public VisualKind VisualKind
+    return:
+      type: FluentGpu.Scene.VisualKind
+    content.vb: Public VisualKind As VisualKind
+- uid: FluentGpu.Scene.NodePaint.UnderlineBit
+  commentId: F:FluentGpu.Scene.NodePaint.UnderlineBit
+  id: UnderlineBit
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: UnderlineBit
+  nameWithType: NodePaint.UnderlineBit
+  fullName: FluentGpu.Scene.NodePaint.UnderlineBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UnderlineBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 130
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: '<xref href="FluentGpu.Scene.NodePaint.TextDecorations" data-throw-if-not-resolved="false"></xref>: draw the face-metric underline bar.'
+  example: []
+  syntax:
+    content: public const byte UnderlineBit = 1
+    return:
+      type: System.Byte
+    content.vb: Public Const UnderlineBit As Byte = 1
+- uid: FluentGpu.Scene.NodePaint.StrikethroughBit
+  commentId: F:FluentGpu.Scene.NodePaint.StrikethroughBit
+  id: StrikethroughBit
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: StrikethroughBit
+  nameWithType: NodePaint.StrikethroughBit
+  fullName: FluentGpu.Scene.NodePaint.StrikethroughBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrikethroughBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 132
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: '<xref href="FluentGpu.Scene.NodePaint.TextDecorations" data-throw-if-not-resolved="false"></xref>: draw the face-metric strikethrough bar.'
+  example: []
+  syntax:
+    content: public const byte StrikethroughBit = 2
+    return:
+      type: System.Byte
+    content.vb: Public Const StrikethroughBit As Byte = 2
+- uid: FluentGpu.Scene.NodePaint.Default
+  commentId: P:FluentGpu.Scene.NodePaint.Default
+  id: Default
+  parent: FluentGpu.Scene.NodePaint
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: NodePaint.Default
+  fullName: FluentGpu.Scene.NodePaint.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 134
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public static NodePaint Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.NodePaint
+    content.vb: Public Shared ReadOnly Property [Default] As NodePaint
+  overload: FluentGpu.Scene.NodePaint.Default*
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Scene.VisualKind.Text
+  commentId: F:FluentGpu.Scene.VisualKind.Text
+  href: FluentGpu.Scene.VisualKind.html#FluentGpu_Scene_VisualKind_Text
+  name: Text
+  nameWithType: VisualKind.Text
+  fullName: FluentGpu.Scene.VisualKind.Text
+- uid: FluentGpu.Scene.NodePaint.UnderlineBit
+  commentId: F:FluentGpu.Scene.NodePaint.UnderlineBit
+  href: FluentGpu.Scene.NodePaint.html#FluentGpu_Scene_NodePaint_UnderlineBit
+  name: UnderlineBit
+  nameWithType: NodePaint.UnderlineBit
+  fullName: FluentGpu.Scene.NodePaint.UnderlineBit
+- uid: FluentGpu.Scene.NodePaint.StrikethroughBit
+  commentId: F:FluentGpu.Scene.NodePaint.StrikethroughBit
+  href: FluentGpu.Scene.NodePaint.html#FluentGpu_Scene_NodePaint_StrikethroughBit
+  name: StrikethroughBit
+  nameWithType: NodePaint.StrikethroughBit
+  fullName: FluentGpu.Scene.NodePaint.StrikethroughBit
+- uid: FluentGpu.Scene.TextMeasureCache
+  commentId: T:FluentGpu.Scene.TextMeasureCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.TextMeasureCache.html
+  name: TextMeasureCache
+  nameWithType: TextMeasureCache
+  fullName: FluentGpu.Scene.TextMeasureCache
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.VisualKind
+  commentId: T:FluentGpu.Scene.VisualKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.VisualKind.html
+  name: VisualKind
+  nameWithType: VisualKind
+  fullName: FluentGpu.Scene.VisualKind
+- uid: FluentGpu.Scene.NodePaint.TextDecorations
+  commentId: F:FluentGpu.Scene.NodePaint.TextDecorations
+  href: FluentGpu.Scene.NodePaint.html#FluentGpu_Scene_NodePaint_TextDecorations
+  name: TextDecorations
+  nameWithType: NodePaint.TextDecorations
+  fullName: FluentGpu.Scene.NodePaint.TextDecorations
+- uid: FluentGpu.Scene.NodePaint.Default*
+  commentId: Overload:FluentGpu.Scene.NodePaint.Default
+  href: FluentGpu.Scene.NodePaint.html#FluentGpu_Scene_NodePaint_Default
+  name: Default
+  nameWithType: NodePaint.Default
+  fullName: FluentGpu.Scene.NodePaint.Default
+- uid: FluentGpu.Scene.NodePaint
+  commentId: T:FluentGpu.Scene.NodePaint
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.NodePaint.html
+  name: NodePaint
+  nameWithType: NodePaint
+  fullName: FluentGpu.Scene.NodePaint

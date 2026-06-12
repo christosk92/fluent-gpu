@@ -1,0 +1,796 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.TextUndoOp
+  commentId: T:FluentGpu.Text.TextUndoOp
+  id: TextUndoOp
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.TextUndoOp.#ctor(System.Int32,System.String,System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Byte)
+  - FluentGpu.Text.TextUndoOp.ActiveAfter
+  - FluentGpu.Text.TextUndoOp.ActiveBefore
+  - FluentGpu.Text.TextUndoOp.AnchorAfter
+  - FluentGpu.Text.TextUndoOp.AnchorBefore
+  - FluentGpu.Text.TextUndoOp.Inserted
+  - FluentGpu.Text.TextUndoOp.KindBackspace
+  - FluentGpu.Text.TextUndoOp.KindDelete
+  - FluentGpu.Text.TextUndoOp.KindOther
+  - FluentGpu.Text.TextUndoOp.KindTyping
+  - FluentGpu.Text.TextUndoOp.Removed
+  - FluentGpu.Text.TextUndoOp.RunKind
+  - FluentGpu.Text.TextUndoOp.Start
+  langs:
+  - csharp
+  - vb
+  name: TextUndoOp
+  nameWithType: TextUndoOp
+  fullName: FluentGpu.Text.TextUndoOp
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextUndoOp
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    One reversible edit against an <xref href="FluentGpu.Text.EditDocument" data-throw-if-not-resolved="false"></xref>: the op replaced <xref href="FluentGpu.Text.TextUndoOp.Removed" data-throw-if-not-resolved="false"></xref> with
+
+    <xref href="FluentGpu.Text.TextUndoOp.Inserted" data-throw-if-not-resolved="false"></xref> at <xref href="FluentGpu.Text.TextUndoOp.Start" data-throw-if-not-resolved="false"></xref>. Undo = remove <code>Inserted.Length</code> at <code>Start</code>, re-insert
+
+    <code>Removed</code>, restore <xref href="FluentGpu.Text.TextUndoOp.AnchorBefore" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Text.TextUndoOp.ActiveBefore" data-throw-if-not-resolved="false"></xref>; redo is the inverse with the
+
+    After pair — so undo/redo restore the EXACT caret/selection the user saw, not a recomputed approximation.
+  example: []
+  syntax:
+    content: public readonly struct TextUndoOp
+    content.vb: Public Structure TextUndoOp
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Text.TextUndoOp.KindOther
+  commentId: F:FluentGpu.Text.TextUndoOp.KindOther
+  id: KindOther
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: KindOther
+  nameWithType: TextUndoOp.KindOther
+  fullName: FluentGpu.Text.TextUndoOp.KindOther
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KindOther
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: 'Run kinds drive coalescing: only same-kind, position-contiguous ops merge (see <xref href="FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp%40%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref>).'
+  example: []
+  syntax:
+    content: public const byte KindOther = 0
+    return:
+      type: System.Byte
+    content.vb: Public Const KindOther As Byte = 0
+- uid: FluentGpu.Text.TextUndoOp.KindTyping
+  commentId: F:FluentGpu.Text.TextUndoOp.KindTyping
+  id: KindTyping
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: KindTyping
+  nameWithType: TextUndoOp.KindTyping
+  fullName: FluentGpu.Text.TextUndoOp.KindTyping
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KindTyping
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: 'Run kinds drive coalescing: only same-kind, position-contiguous ops merge (see <xref href="FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp%40%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref>).'
+  example: []
+  syntax:
+    content: public const byte KindTyping = 1
+    return:
+      type: System.Byte
+    content.vb: Public Const KindTyping As Byte = 1
+- uid: FluentGpu.Text.TextUndoOp.KindBackspace
+  commentId: F:FluentGpu.Text.TextUndoOp.KindBackspace
+  id: KindBackspace
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: KindBackspace
+  nameWithType: TextUndoOp.KindBackspace
+  fullName: FluentGpu.Text.TextUndoOp.KindBackspace
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KindBackspace
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: 'Run kinds drive coalescing: only same-kind, position-contiguous ops merge (see <xref href="FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp%40%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref>).'
+  example: []
+  syntax:
+    content: public const byte KindBackspace = 2
+    return:
+      type: System.Byte
+    content.vb: Public Const KindBackspace As Byte = 2
+- uid: FluentGpu.Text.TextUndoOp.KindDelete
+  commentId: F:FluentGpu.Text.TextUndoOp.KindDelete
+  id: KindDelete
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: KindDelete
+  nameWithType: TextUndoOp.KindDelete
+  fullName: FluentGpu.Text.TextUndoOp.KindDelete
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KindDelete
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: 'Run kinds drive coalescing: only same-kind, position-contiguous ops merge (see <xref href="FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp%40%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref>).'
+  example: []
+  syntax:
+    content: public const byte KindDelete = 3
+    return:
+      type: System.Byte
+    content.vb: Public Const KindDelete As Byte = 3
+- uid: FluentGpu.Text.TextUndoOp.Start
+  commentId: F:FluentGpu.Text.TextUndoOp.Start
+  id: Start
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: TextUndoOp.Start
+  fullName: FluentGpu.Text.TextUndoOp.Start
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly int Start
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Start As Integer
+- uid: FluentGpu.Text.TextUndoOp.Removed
+  commentId: F:FluentGpu.Text.TextUndoOp.Removed
+  id: Removed
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: Removed
+  nameWithType: TextUndoOp.Removed
+  fullName: FluentGpu.Text.TextUndoOp.Removed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Removed
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly string Removed
+    return:
+      type: System.String
+    content.vb: Public ReadOnly Removed As String
+- uid: FluentGpu.Text.TextUndoOp.Inserted
+  commentId: F:FluentGpu.Text.TextUndoOp.Inserted
+  id: Inserted
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: Inserted
+  nameWithType: TextUndoOp.Inserted
+  fullName: FluentGpu.Text.TextUndoOp.Inserted
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inserted
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly string Inserted
+    return:
+      type: System.String
+    content.vb: Public ReadOnly Inserted As String
+- uid: FluentGpu.Text.TextUndoOp.AnchorBefore
+  commentId: F:FluentGpu.Text.TextUndoOp.AnchorBefore
+  id: AnchorBefore
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: AnchorBefore
+  nameWithType: TextUndoOp.AnchorBefore
+  fullName: FluentGpu.Text.TextUndoOp.AnchorBefore
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorBefore
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly int AnchorBefore
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly AnchorBefore As Integer
+- uid: FluentGpu.Text.TextUndoOp.ActiveBefore
+  commentId: F:FluentGpu.Text.TextUndoOp.ActiveBefore
+  id: ActiveBefore
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: ActiveBefore
+  nameWithType: TextUndoOp.ActiveBefore
+  fullName: FluentGpu.Text.TextUndoOp.ActiveBefore
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActiveBefore
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly int ActiveBefore
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly ActiveBefore As Integer
+- uid: FluentGpu.Text.TextUndoOp.AnchorAfter
+  commentId: F:FluentGpu.Text.TextUndoOp.AnchorAfter
+  id: AnchorAfter
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: AnchorAfter
+  nameWithType: TextUndoOp.AnchorAfter
+  fullName: FluentGpu.Text.TextUndoOp.AnchorAfter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorAfter
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly int AnchorAfter
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly AnchorAfter As Integer
+- uid: FluentGpu.Text.TextUndoOp.ActiveAfter
+  commentId: F:FluentGpu.Text.TextUndoOp.ActiveAfter
+  id: ActiveAfter
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: ActiveAfter
+  nameWithType: TextUndoOp.ActiveAfter
+  fullName: FluentGpu.Text.TextUndoOp.ActiveAfter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActiveAfter
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly int ActiveAfter
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly ActiveAfter As Integer
+- uid: FluentGpu.Text.TextUndoOp.RunKind
+  commentId: F:FluentGpu.Text.TextUndoOp.RunKind
+  id: RunKind
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: RunKind
+  nameWithType: TextUndoOp.RunKind
+  fullName: FluentGpu.Text.TextUndoOp.RunKind
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RunKind
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public readonly byte RunKind
+    return:
+      type: System.Byte
+    content.vb: Public ReadOnly RunKind As Byte
+- uid: FluentGpu.Text.TextUndoOp.#ctor(System.Int32,System.String,System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Byte)
+  commentId: M:FluentGpu.Text.TextUndoOp.#ctor(System.Int32,System.String,System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Byte)
+  id: '#ctor(System.Int32,System.String,System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Byte)'
+  parent: FluentGpu.Text.TextUndoOp
+  langs:
+  - csharp
+  - vb
+  name: TextUndoOp(int, string, string, int, int, int, int, byte)
+  nameWithType: TextUndoOp.TextUndoOp(int, string, string, int, int, int, int, byte)
+  fullName: FluentGpu.Text.TextUndoOp.TextUndoOp(int, string, string, int, int, int, int, byte)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextUndoStack.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Text/TextUndoStack.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public TextUndoOp(int start, string removed, string inserted, int anchorBefore, int activeBefore, int anchorAfter, int activeAfter, byte runKind)
+    parameters:
+    - id: start
+      type: System.Int32
+    - id: removed
+      type: System.String
+    - id: inserted
+      type: System.String
+    - id: anchorBefore
+      type: System.Int32
+    - id: activeBefore
+      type: System.Int32
+    - id: anchorAfter
+      type: System.Int32
+    - id: activeAfter
+      type: System.Int32
+    - id: runKind
+      type: System.Byte
+    content.vb: Public Sub New(start As Integer, removed As String, inserted As String, anchorBefore As Integer, activeBefore As Integer, anchorAfter As Integer, activeAfter As Integer, runKind As Byte)
+  overload: FluentGpu.Text.TextUndoOp.#ctor*
+  nameWithType.vb: TextUndoOp.New(Integer, String, String, Integer, Integer, Integer, Integer, Byte)
+  fullName.vb: FluentGpu.Text.TextUndoOp.New(Integer, String, String, Integer, Integer, Integer, Integer, Byte)
+  name.vb: New(Integer, String, String, Integer, Integer, Integer, Integer, Byte)
+references:
+- uid: FluentGpu.Text.EditDocument
+  commentId: T:FluentGpu.Text.EditDocument
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.EditDocument.html
+  name: EditDocument
+  nameWithType: EditDocument
+  fullName: FluentGpu.Text.EditDocument
+- uid: FluentGpu.Text.TextUndoOp.Removed
+  commentId: F:FluentGpu.Text.TextUndoOp.Removed
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp_Removed
+  name: Removed
+  nameWithType: TextUndoOp.Removed
+  fullName: FluentGpu.Text.TextUndoOp.Removed
+- uid: FluentGpu.Text.TextUndoOp.Inserted
+  commentId: F:FluentGpu.Text.TextUndoOp.Inserted
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp_Inserted
+  name: Inserted
+  nameWithType: TextUndoOp.Inserted
+  fullName: FluentGpu.Text.TextUndoOp.Inserted
+- uid: FluentGpu.Text.TextUndoOp.Start
+  commentId: F:FluentGpu.Text.TextUndoOp.Start
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp_Start
+  name: Start
+  nameWithType: TextUndoOp.Start
+  fullName: FluentGpu.Text.TextUndoOp.Start
+- uid: FluentGpu.Text.TextUndoOp.AnchorBefore
+  commentId: F:FluentGpu.Text.TextUndoOp.AnchorBefore
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp_AnchorBefore
+  name: AnchorBefore
+  nameWithType: TextUndoOp.AnchorBefore
+  fullName: FluentGpu.Text.TextUndoOp.AnchorBefore
+- uid: FluentGpu.Text.TextUndoOp.ActiveBefore
+  commentId: F:FluentGpu.Text.TextUndoOp.ActiveBefore
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp_ActiveBefore
+  name: ActiveBefore
+  nameWithType: TextUndoOp.ActiveBefore
+  fullName: FluentGpu.Text.TextUndoOp.ActiveBefore
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp@,System.Boolean)
+  commentId: M:FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp@,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Text.TextUndoStack.html#FluentGpu_Text_TextUndoStack_Push_FluentGpu_Text_TextUndoOp__System_Boolean_
+  name: Push(in TextUndoOp, bool)
+  nameWithType: TextUndoStack.Push(in TextUndoOp, bool)
+  fullName: FluentGpu.Text.TextUndoStack.Push(in FluentGpu.Text.TextUndoOp, bool)
+  nameWithType.vb: TextUndoStack.Push(TextUndoOp, Boolean)
+  fullName.vb: FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp, Boolean)
+  name.vb: Push(TextUndoOp, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp@,System.Boolean)
+    name: Push
+    href: FluentGpu.Text.TextUndoStack.html#FluentGpu_Text_TextUndoStack_Push_FluentGpu_Text_TextUndoOp__System_Boolean_
+  - name: (
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Text.TextUndoOp
+    name: TextUndoOp
+    href: FluentGpu.Text.TextUndoOp.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.TextUndoStack.Push(FluentGpu.Text.TextUndoOp@,System.Boolean)
+    name: Push
+    href: FluentGpu.Text.TextUndoStack.html#FluentGpu_Text_TextUndoStack_Push_FluentGpu_Text_TextUndoOp__System_Boolean_
+  - name: (
+  - uid: FluentGpu.Text.TextUndoOp
+    name: TextUndoOp
+    href: FluentGpu.Text.TextUndoOp.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Text.TextUndoOp.#ctor*
+  commentId: Overload:FluentGpu.Text.TextUndoOp.#ctor
+  href: FluentGpu.Text.TextUndoOp.html#FluentGpu_Text_TextUndoOp__ctor_System_Int32_System_String_System_String_System_Int32_System_Int32_System_Int32_System_Int32_System_Byte_
+  name: TextUndoOp
+  nameWithType: TextUndoOp.TextUndoOp
+  fullName: FluentGpu.Text.TextUndoOp.TextUndoOp
+  nameWithType.vb: TextUndoOp.New
+  fullName.vb: FluentGpu.Text.TextUndoOp.New
+  name.vb: New

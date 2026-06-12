@@ -17,10 +17,15 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static int _resizeCount;
     private static readonly bool LogEnabled = Diag.EnvFlag("FG_D3D_MEM") || Diag.EnvFlag("FG_DIAG");
 
-    public static void Track(ID3D12Resource* resource, string name, ulong bytes)
+    public static void Track(ID3D12Resource* resource, string name, ulong bytes) => TrackPtr((nuint)(void*)resource, name, bytes);
+
+    /// <summary>Track a descriptor heap (audit gpu mem-01: descriptor heaps were a [d3d-mem]/DiagResourceTotals blind
+    /// spot). Same running tally as resources — keyed on the COM pointer, which is unique across all D3D12 objects.</summary>
+    public static void Track(ID3D12DescriptorHeap* heap, string name, ulong bytes) => TrackPtr((nuint)(void*)heap, name, bytes);
+
+    private static void TrackPtr(nuint key, string name, ulong bytes)
     {
-        if (resource == null) return;
-        nuint key = (nuint)(void*)resource;
+        if (key == 0) return;
         lock (Gate)
         {
             if (Live.TryGetValue(key, out var old))
@@ -34,10 +39,14 @@ internal static unsafe class D3D12MemoryDiagnostics
         }
     }
 
-    public static void Release(ID3D12Resource* resource, string fallbackName)
+    public static void Release(ID3D12Resource* resource, string fallbackName) => ReleasePtr((nuint)(void*)resource, fallbackName);
+
+    /// <summary>Release-tracking for a descriptor heap (the Track overload's mirror). Keyed on the COM pointer.</summary>
+    public static void Release(ID3D12DescriptorHeap* heap, string fallbackName) => ReleasePtr((nuint)(void*)heap, fallbackName);
+
+    private static void ReleasePtr(nuint key, string fallbackName)
     {
-        if (resource == null) return;
-        nuint key = (nuint)(void*)resource;
+        if (key == 0) return;
         lock (Gate)
         {
             if (Live.Remove(key, out var entry))
@@ -52,6 +61,13 @@ internal static unsafe class D3D12MemoryDiagnostics
             _releaseCount++;
             Log($"release {fallbackName} bytes=unknown live={Format(_liveBytes)} creates={_createCount} releases={_releaseCount}");
         }
+    }
+
+    /// <summary>Tracked live D3D12 resource totals (bytes + count) — O(1) read of the running tally maintained at
+    /// Track/Release. For the MemCensus sampler (read via <c>D3D12Device.DiagResourceTotals</c>).</summary>
+    internal static (long bytes, int count) LiveTotals()
+    {
+        lock (Gate) return ((long)_liveBytes, Live.Count);
     }
 
     public static void Resize(string target, uint width, uint height)

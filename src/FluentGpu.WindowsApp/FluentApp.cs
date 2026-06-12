@@ -55,6 +55,19 @@ public static class FluentApp
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
 
+        // FG_ALLOC_TYPES=1: bring up the per-type allocation profiler (process-global EventListener; the host drives
+        // its once-per-second report on the frame cadence). Stopped in the finally so headless/short runs don't leak it.
+        bool allocTypes = Diag.EnvFlag("FG_ALLOC_TYPES");
+        if (allocTypes) AllocTypeProfiler.Start();
+
+        // FG_MEM_DIAG=1 GPU residency hooks: surface tracked D3D12 resource totals + a glyph/texture-store summary
+        // (no-op unless the census is also enabled; headless devices leave these null).
+        if (device is D3D12Device gpu)
+        {
+            host.GpuResources = () => gpu.DiagResourceTotals;
+            host.GpuDetail = () => gpu.DiagGpuDetail;
+        }
+
         window.Show();
 
         int n = 0;
@@ -66,9 +79,13 @@ public static class FluentApp
             if (screenshot != null)
                 window.WaitForWork(8);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
             else
-                // Active frames are paced by the swapchain present path; an extra timed wait here skews animation and FPS diagnostics.
-                window.WaitForWork(host.HasActiveWork ? 0 : -1);
+                // Low-rate wake pacing: idle/minimized block until a message (0% CPU); a HUD-only readout throttles to
+                // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
+                // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.)
+                window.WaitForWork(host.RecommendedWaitMs());
         }
+
+        if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (screenshot != null && device is D3D12Device d3d)

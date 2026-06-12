@@ -1,0 +1,1141 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.ScrollEl
+  commentId: T:FluentGpu.Dsl.ScrollEl
+  id: ScrollEl
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.ScrollEl.AlignSelf
+  - FluentGpu.Dsl.ScrollEl.Basis
+  - FluentGpu.Dsl.ScrollEl.Content
+  - FluentGpu.Dsl.ScrollEl.ContentSized
+  - FluentGpu.Dsl.ScrollEl.Corners
+  - FluentGpu.Dsl.ScrollEl.ElementTypeId
+  - FluentGpu.Dsl.ScrollEl.Fill
+  - FluentGpu.Dsl.ScrollEl.Grow
+  - FluentGpu.Dsl.ScrollEl.Height
+  - FluentGpu.Dsl.ScrollEl.Horizontal
+  - FluentGpu.Dsl.ScrollEl.Margin
+  - FluentGpu.Dsl.ScrollEl.MaxHeight
+  - FluentGpu.Dsl.ScrollEl.MaxWidth
+  - FluentGpu.Dsl.ScrollEl.MinHeight
+  - FluentGpu.Dsl.ScrollEl.MinWidth
+  - FluentGpu.Dsl.ScrollEl.Padding
+  - FluentGpu.Dsl.ScrollEl.Shrink
+  - FluentGpu.Dsl.ScrollEl.Width
+  langs:
+  - csharp
+  - vb
+  name: ScrollEl
+  nameWithType: ScrollEl
+  fullName: FluentGpu.Dsl.ScrollEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollEl
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 503
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    A clipping, scrolling viewport over a single (possibly oversized) content child. Scroll is layout-free
+
+    (layout.md §6): layout arranges the content at the content-box origin and publishes <code>ContentSize</code>; the
+
+    <code>-ScrollOffset</code> translation is the content's <code>LocalTransform</code>, written by Input on wheel/drag.
+  example: []
+  syntax:
+    content: 'public sealed record ScrollEl : Element, IEquatable<Element>, IEquatable<ScrollEl>'
+    content.vb: Public NotInheritable Class ScrollEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of ScrollEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Dsl.ScrollEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.ScrollEl.ElementTypeId
+  commentId: P:FluentGpu.Dsl.ScrollEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: ScrollEl.ElementTypeId
+  fullName: FluentGpu.Dsl.ScrollEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 505
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Dsl.ScrollEl.ElementTypeId*
+- uid: FluentGpu.Dsl.ScrollEl.Content
+  commentId: P:FluentGpu.Dsl.ScrollEl.Content
+  id: Content
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Content
+  nameWithType: ScrollEl.Content
+  fullName: FluentGpu.Dsl.ScrollEl.Content
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Content
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 507
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public Element Content { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Property Content As Element
+  overload: FluentGpu.Dsl.ScrollEl.Content*
+- uid: FluentGpu.Dsl.ScrollEl.Horizontal
+  commentId: P:FluentGpu.Dsl.ScrollEl.Horizontal
+  id: Horizontal
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Horizontal
+  nameWithType: ScrollEl.Horizontal
+  fullName: FluentGpu.Dsl.ScrollEl.Horizontal
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Horizontal
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 508
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public bool Horizontal { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Horizontal As Boolean
+  overload: FluentGpu.Dsl.ScrollEl.Horizontal*
+- uid: FluentGpu.Dsl.ScrollEl.ContentSized
+  commentId: P:FluentGpu.Dsl.ScrollEl.ContentSized
+  id: ContentSized
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: ContentSized
+  nameWithType: ScrollEl.ContentSized
+  fullName: FluentGpu.Dsl.ScrollEl.ContentSized
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentSized
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 514
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Measure to content when auto-sized, then clamp by Min/Max. Default false keeps ScrollView a hard viewport
+
+    boundary for app/page/navigation scrolling; popup lists (ComboBox/MenuFlyout/AutoSuggest) opt in so short lists
+
+    size to their rows and tall lists scroll after MaxHeight.
+  example: []
+  syntax:
+    content: public bool ContentSized { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property ContentSized As Boolean
+  overload: FluentGpu.Dsl.ScrollEl.ContentSized*
+- uid: FluentGpu.Dsl.ScrollEl.Width
+  commentId: P:FluentGpu.Dsl.ScrollEl.Width
+  id: Width
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: ScrollEl.Width
+  fullName: FluentGpu.Dsl.ScrollEl.Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 517
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Width As Single
+  overload: FluentGpu.Dsl.ScrollEl.Width*
+- uid: FluentGpu.Dsl.ScrollEl.Height
+  commentId: P:FluentGpu.Dsl.ScrollEl.Height
+  id: Height
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: ScrollEl.Height
+  fullName: FluentGpu.Dsl.ScrollEl.Height
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 518
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Height { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Height As Single
+  overload: FluentGpu.Dsl.ScrollEl.Height*
+- uid: FluentGpu.Dsl.ScrollEl.MinWidth
+  commentId: P:FluentGpu.Dsl.ScrollEl.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: ScrollEl.MinWidth
+  fullName: FluentGpu.Dsl.ScrollEl.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 519
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Dsl.ScrollEl.MinWidth*
+- uid: FluentGpu.Dsl.ScrollEl.MinHeight
+  commentId: P:FluentGpu.Dsl.ScrollEl.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: ScrollEl.MinHeight
+  fullName: FluentGpu.Dsl.ScrollEl.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 520
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Dsl.ScrollEl.MinHeight*
+- uid: FluentGpu.Dsl.ScrollEl.MaxWidth
+  commentId: P:FluentGpu.Dsl.ScrollEl.MaxWidth
+  id: MaxWidth
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: MaxWidth
+  nameWithType: ScrollEl.MaxWidth
+  fullName: FluentGpu.Dsl.ScrollEl.MaxWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxWidth
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 521
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MaxWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxWidth As Single
+  overload: FluentGpu.Dsl.ScrollEl.MaxWidth*
+- uid: FluentGpu.Dsl.ScrollEl.MaxHeight
+  commentId: P:FluentGpu.Dsl.ScrollEl.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: ScrollEl.MaxHeight
+  fullName: FluentGpu.Dsl.ScrollEl.MaxHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 522
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MaxHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxHeight As Single
+  overload: FluentGpu.Dsl.ScrollEl.MaxHeight*
+- uid: FluentGpu.Dsl.ScrollEl.Grow
+  commentId: P:FluentGpu.Dsl.ScrollEl.Grow
+  id: Grow
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Grow
+  nameWithType: ScrollEl.Grow
+  fullName: FluentGpu.Dsl.ScrollEl.Grow
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grow
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 523
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Grow { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Grow As Single
+  overload: FluentGpu.Dsl.ScrollEl.Grow*
+- uid: FluentGpu.Dsl.ScrollEl.Shrink
+  commentId: P:FluentGpu.Dsl.ScrollEl.Shrink
+  id: Shrink
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Shrink
+  nameWithType: ScrollEl.Shrink
+  fullName: FluentGpu.Dsl.ScrollEl.Shrink
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shrink
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 524
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Shrink { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Shrink As Single
+  overload: FluentGpu.Dsl.ScrollEl.Shrink*
+- uid: FluentGpu.Dsl.ScrollEl.Basis
+  commentId: P:FluentGpu.Dsl.ScrollEl.Basis
+  id: Basis
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Basis
+  nameWithType: ScrollEl.Basis
+  fullName: FluentGpu.Dsl.ScrollEl.Basis
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Basis
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 525
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Basis { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Basis As Single
+  overload: FluentGpu.Dsl.ScrollEl.Basis*
+- uid: FluentGpu.Dsl.ScrollEl.AlignSelf
+  commentId: P:FluentGpu.Dsl.ScrollEl.AlignSelf
+  id: AlignSelf
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: AlignSelf
+  nameWithType: ScrollEl.AlignSelf
+  fullName: FluentGpu.Dsl.ScrollEl.AlignSelf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignSelf
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 526
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public FlexAlign AlignSelf { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property AlignSelf As FlexAlign
+  overload: FluentGpu.Dsl.ScrollEl.AlignSelf*
+- uid: FluentGpu.Dsl.ScrollEl.Margin
+  commentId: P:FluentGpu.Dsl.ScrollEl.Margin
+  id: Margin
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Margin
+  nameWithType: ScrollEl.Margin
+  fullName: FluentGpu.Dsl.ScrollEl.Margin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Margin
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 527
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public Edges4 Margin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Margin As Edges4
+  overload: FluentGpu.Dsl.ScrollEl.Margin*
+- uid: FluentGpu.Dsl.ScrollEl.Padding
+  commentId: P:FluentGpu.Dsl.ScrollEl.Padding
+  id: Padding
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: ScrollEl.Padding
+  fullName: FluentGpu.Dsl.ScrollEl.Padding
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 528
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public Edges4 Padding { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Padding As Edges4
+  overload: FluentGpu.Dsl.ScrollEl.Padding*
+- uid: FluentGpu.Dsl.ScrollEl.Fill
+  commentId: P:FluentGpu.Dsl.ScrollEl.Fill
+  id: Fill
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: ScrollEl.Fill
+  fullName: FluentGpu.Dsl.ScrollEl.Fill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 529
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public ColorF Fill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Fill As ColorF
+  overload: FluentGpu.Dsl.ScrollEl.Fill*
+- uid: FluentGpu.Dsl.ScrollEl.Corners
+  commentId: P:FluentGpu.Dsl.ScrollEl.Corners
+  id: Corners
+  parent: FluentGpu.Dsl.ScrollEl
+  langs:
+  - csharp
+  - vb
+  name: Corners
+  nameWithType: ScrollEl.Corners
+  fullName: FluentGpu.Dsl.ScrollEl.Corners
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Corners
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 530
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public CornerRadius4 Corners { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Property Corners As CornerRadius4
+  overload: FluentGpu.Dsl.ScrollEl.Corners*
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Dsl.ScrollEl}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.ScrollEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ScrollEl>
+  nameWithType: IEquatable<ScrollEl>
+  fullName: System.IEquatable<FluentGpu.Dsl.ScrollEl>
+  nameWithType.vb: IEquatable(Of ScrollEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.ScrollEl)
+  name.vb: IEquatable(Of ScrollEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.ScrollEl
+    name: ScrollEl
+    href: FluentGpu.Dsl.ScrollEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.ScrollEl
+    name: ScrollEl
+    href: FluentGpu.Dsl.ScrollEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Dsl.ScrollEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.ElementTypeId
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: ScrollEl.ElementTypeId
+  fullName: FluentGpu.Dsl.ScrollEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Dsl.ScrollEl.Content*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Content
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Content
+  name: Content
+  nameWithType: ScrollEl.Content
+  fullName: FluentGpu.Dsl.ScrollEl.Content
+- uid: FluentGpu.Dsl.ScrollEl.Horizontal*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Horizontal
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Horizontal
+  name: Horizontal
+  nameWithType: ScrollEl.Horizontal
+  fullName: FluentGpu.Dsl.ScrollEl.Horizontal
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.ScrollEl.ContentSized*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.ContentSized
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_ContentSized
+  name: ContentSized
+  nameWithType: ScrollEl.ContentSized
+  fullName: FluentGpu.Dsl.ScrollEl.ContentSized
+- uid: FluentGpu.Dsl.ScrollEl.Width*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Width
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Width
+  name: Width
+  nameWithType: ScrollEl.Width
+  fullName: FluentGpu.Dsl.ScrollEl.Width
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.ScrollEl.Height*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Height
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Height
+  name: Height
+  nameWithType: ScrollEl.Height
+  fullName: FluentGpu.Dsl.ScrollEl.Height
+- uid: FluentGpu.Dsl.ScrollEl.MinWidth*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.MinWidth
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_MinWidth
+  name: MinWidth
+  nameWithType: ScrollEl.MinWidth
+  fullName: FluentGpu.Dsl.ScrollEl.MinWidth
+- uid: FluentGpu.Dsl.ScrollEl.MinHeight*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.MinHeight
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_MinHeight
+  name: MinHeight
+  nameWithType: ScrollEl.MinHeight
+  fullName: FluentGpu.Dsl.ScrollEl.MinHeight
+- uid: FluentGpu.Dsl.ScrollEl.MaxWidth*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.MaxWidth
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_MaxWidth
+  name: MaxWidth
+  nameWithType: ScrollEl.MaxWidth
+  fullName: FluentGpu.Dsl.ScrollEl.MaxWidth
+- uid: FluentGpu.Dsl.ScrollEl.MaxHeight*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.MaxHeight
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_MaxHeight
+  name: MaxHeight
+  nameWithType: ScrollEl.MaxHeight
+  fullName: FluentGpu.Dsl.ScrollEl.MaxHeight
+- uid: FluentGpu.Dsl.ScrollEl.Grow*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Grow
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Grow
+  name: Grow
+  nameWithType: ScrollEl.Grow
+  fullName: FluentGpu.Dsl.ScrollEl.Grow
+- uid: FluentGpu.Dsl.ScrollEl.Shrink*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Shrink
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Shrink
+  name: Shrink
+  nameWithType: ScrollEl.Shrink
+  fullName: FluentGpu.Dsl.ScrollEl.Shrink
+- uid: FluentGpu.Dsl.ScrollEl.Basis*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Basis
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Basis
+  name: Basis
+  nameWithType: ScrollEl.Basis
+  fullName: FluentGpu.Dsl.ScrollEl.Basis
+- uid: FluentGpu.Dsl.ScrollEl.AlignSelf*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.AlignSelf
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_AlignSelf
+  name: AlignSelf
+  nameWithType: ScrollEl.AlignSelf
+  fullName: FluentGpu.Dsl.ScrollEl.AlignSelf
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.ScrollEl.Margin*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Margin
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Margin
+  name: Margin
+  nameWithType: ScrollEl.Margin
+  fullName: FluentGpu.Dsl.ScrollEl.Margin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Dsl.ScrollEl.Padding*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Padding
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Padding
+  name: Padding
+  nameWithType: ScrollEl.Padding
+  fullName: FluentGpu.Dsl.ScrollEl.Padding
+- uid: FluentGpu.Dsl.ScrollEl.Fill*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Fill
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Fill
+  name: Fill
+  nameWithType: ScrollEl.Fill
+  fullName: FluentGpu.Dsl.ScrollEl.Fill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Dsl.ScrollEl.Corners*
+  commentId: Overload:FluentGpu.Dsl.ScrollEl.Corners
+  href: FluentGpu.Dsl.ScrollEl.html#FluentGpu_Dsl_ScrollEl_Corners
+  name: Corners
+  nameWithType: ScrollEl.Corners
+  fullName: FluentGpu.Dsl.ScrollEl.Corners
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4

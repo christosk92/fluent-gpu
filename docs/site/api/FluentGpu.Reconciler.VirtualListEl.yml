@@ -1,0 +1,1897 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Reconciler.VirtualListEl
+  commentId: T:FluentGpu.Reconciler.VirtualListEl
+  id: VirtualListEl
+  parent: FluentGpu.Reconciler
+  children:
+  - FluentGpu.Reconciler.VirtualListEl.AlignSelf
+  - FluentGpu.Reconciler.VirtualListEl.Basis
+  - FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+  - FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+  - FluentGpu.Reconciler.VirtualListEl.Fill
+  - FluentGpu.Reconciler.VirtualListEl.Grow
+  - FluentGpu.Reconciler.VirtualListEl.Height
+  - FluentGpu.Reconciler.VirtualListEl.Horizontal
+  - FluentGpu.Reconciler.VirtualListEl.ItemCount
+  - FluentGpu.Reconciler.VirtualListEl.KeyOf
+  - FluentGpu.Reconciler.VirtualListEl.Layout
+  - FluentGpu.Reconciler.VirtualListEl.Margin
+  - FluentGpu.Reconciler.VirtualListEl.MaxHeight
+  - FluentGpu.Reconciler.VirtualListEl.MaxWidth
+  - FluentGpu.Reconciler.VirtualListEl.MinHeight
+  - FluentGpu.Reconciler.VirtualListEl.MinWidth
+  - FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+  - FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+  - FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+  - FluentGpu.Reconciler.VirtualListEl.OnRealized
+  - FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+  - FluentGpu.Reconciler.VirtualListEl.Overscan
+  - FluentGpu.Reconciler.VirtualListEl.RenderItem
+  - FluentGpu.Reconciler.VirtualListEl.RowBind
+  - FluentGpu.Reconciler.VirtualListEl.Shrink
+  - FluentGpu.Reconciler.VirtualListEl.Width
+  langs:
+  - csharp
+  - vb
+  name: VirtualListEl
+  nameWithType: VirtualListEl
+  fullName: FluentGpu.Reconciler.VirtualListEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VirtualListEl
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    A virtualized collection viewport: ONE retained node + a window of keyed children. Each frame the visible range is
+
+    dirty, the reconciler asks the <xref href="FluentGpu.Reconciler.VirtualListEl.Layout" data-throw-if-not-resolved="false"></xref> for <code>[first,last)</code>, calls <xref href="FluentGpu.Reconciler.VirtualListEl.RenderItem" data-throw-if-not-resolved="false"></xref> for just
+
+    that window, keys each row, and feeds it to the existing keyed-LIS diff — so recycling IS CreateNode/FreeNode over
+
+    the slab free-list (no second pool). Scroll is layout-free (the <code>-ScrollOffset</code> is the content's transform).
+
+
+    <xref href="FluentGpu.Reconciler.VirtualListEl.Layout" data-throw-if-not-resolved="false"></xref> is a pluggable <xref href="FluentGpu.Scene.IVirtualLayout" data-throw-if-not-resolved="false"></xref> (stack / grid / custom — pure, allocation-free).
+
+    E11-L1: the viewport consumes BOTH seam kinds — an <xref href="FluentGpu.Scene.IMeasuredVirtualLayout" data-throw-if-not-resolved="false"></xref> gets the variable-extent
+
+    estimate-then-correct arrange (measured rows + scroll anchoring) through the SAME property; when the layout is
+
+    null, the legacy built-in Fenwick extent-table path runs (kept source/behavior-compatible).
+
+    The user-facing <code>Virtual.List/Grid/Custom/Measured/VariableList/…</code> factories live in FluentGpu.Controls; this
+
+    record is the engine primitive the reconciler diffs directly (ElementTypeId 6). See <code>design/subsystems/virtualization.md</code>.
+  example: []
+  syntax:
+    content: 'public sealed record VirtualListEl : Element, IEquatable<Element>, IEquatable<VirtualListEl>'
+    content.vb: Public NotInheritable Class VirtualListEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of VirtualListEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Reconciler.VirtualListEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: VirtualListEl.ElementTypeId
+  fullName: FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Reconciler.VirtualListEl.ElementTypeId*
+- uid: FluentGpu.Reconciler.VirtualListEl.ItemCount
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.ItemCount
+  id: ItemCount
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: ItemCount
+  nameWithType: VirtualListEl.ItemCount
+  fullName: FluentGpu.Reconciler.VirtualListEl.ItemCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCount
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public int ItemCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property ItemCount As Integer
+  overload: FluentGpu.Reconciler.VirtualListEl.ItemCount*
+- uid: FluentGpu.Reconciler.VirtualListEl.RenderItem
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.RenderItem
+  id: RenderItem
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: RenderItem
+  nameWithType: VirtualListEl.RenderItem
+  fullName: FluentGpu.Reconciler.VirtualListEl.RenderItem
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RenderItem
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public Func<int, Element> RenderItem { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Int32,FluentGpu.Dsl.Element}
+    content.vb: Public Property RenderItem As Func(Of Integer, Element)
+  overload: FluentGpu.Reconciler.VirtualListEl.RenderItem*
+- uid: FluentGpu.Reconciler.VirtualListEl.KeyOf
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.KeyOf
+  id: KeyOf
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: KeyOf
+  nameWithType: VirtualListEl.KeyOf
+  fullName: FluentGpu.Reconciler.VirtualListEl.KeyOf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyOf
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public Func<int, string>? KeyOf { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Int32,System.String}
+    content.vb: Public Property KeyOf As Func(Of Integer, String)
+  overload: FluentGpu.Reconciler.VirtualListEl.KeyOf*
+- uid: FluentGpu.Reconciler.VirtualListEl.RowBind
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.RowBind
+  id: RowBind
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: RowBind
+  nameWithType: VirtualListEl.RowBind
+  fullName: FluentGpu.Reconciler.VirtualListEl.RowBind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RowBind
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Signals-first BOUND row template (the recycler fast path): the template runs ONCE per visible slot
+        with an index SIGNAL; scrolling rebinds a slot by writing its signal, so only the row's reactive binds
+        (TextBind/FillBind/SourceBind/…) re-run — zero element rebuild, zero reconcile, zero keys. When set,
+        <xref href="FluentGpu.Reconciler.VirtualListEl.RenderItem" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Reconciler.VirtualListEl.KeyOf" data-throw-if-not-resolved="false"></xref> are ignored.
+  example: []
+  syntax:
+    content: public Func<IReadSignal<int>, Element>? RowBind { get; init; }
+    parameters: []
+    return:
+      type: System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+    content.vb: Public Property RowBind As Func(Of IReadSignal(Of Integer), Element)
+  overload: FluentGpu.Reconciler.VirtualListEl.RowBind*
+- uid: FluentGpu.Reconciler.VirtualListEl.Layout
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Layout
+  id: Layout
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Layout
+  nameWithType: VirtualListEl.Layout
+  fullName: FluentGpu.Reconciler.VirtualListEl.Layout
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Layout
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public IVirtualLayout? Layout { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.IVirtualLayout
+    content.vb: Public Property Layout As IVirtualLayout
+  overload: FluentGpu.Reconciler.VirtualListEl.Layout*
+- uid: FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+  id: EstimatedExtent
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: EstimatedExtent
+  nameWithType: VirtualListEl.EstimatedExtent
+  fullName: FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: EstimatedExtent
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float EstimatedExtent { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property EstimatedExtent As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.EstimatedExtent*
+- uid: FluentGpu.Reconciler.VirtualListEl.Overscan
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Overscan
+  id: Overscan
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Overscan
+  nameWithType: VirtualListEl.Overscan
+  fullName: FluentGpu.Reconciler.VirtualListEl.Overscan
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Overscan
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public int Overscan { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Overscan As Integer
+  overload: FluentGpu.Reconciler.VirtualListEl.Overscan*
+- uid: FluentGpu.Reconciler.VirtualListEl.Horizontal
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Horizontal
+  id: Horizontal
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Horizontal
+  nameWithType: VirtualListEl.Horizontal
+  fullName: FluentGpu.Reconciler.VirtualListEl.Horizontal
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Horizontal
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public bool Horizontal { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property Horizontal As Boolean
+  overload: FluentGpu.Reconciler.VirtualListEl.Horizontal*
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+  id: OnItemPrepared
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: OnItemPrepared
+  nameWithType: VirtualListEl.OnItemPrepared
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnItemPrepared
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: WinUI <code>ItemsRepeater.ElementPrepared</code> — fired with the item index when it is realized.
+  example: []
+  syntax:
+    content: public Action<int>? OnItemPrepared { get; init; }
+    parameters: []
+    return:
+      type: System.Action{System.Int32}
+    content.vb: Public Property OnItemPrepared As Action(Of Integer)
+  overload: FluentGpu.Reconciler.VirtualListEl.OnItemPrepared*
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+  id: OnItemClearing
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: OnItemClearing
+  nameWithType: VirtualListEl.OnItemClearing
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnItemClearing
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: WinUI <code>ItemsRepeater.ElementClearing</code> — fired with the item index when it leaves the window.
+  example: []
+  syntax:
+    content: public Action<int>? OnItemClearing { get; init; }
+    parameters: []
+    return:
+      type: System.Action{System.Int32}
+    content.vb: Public Property OnItemClearing As Action(Of Integer)
+  overload: FluentGpu.Reconciler.VirtualListEl.OnItemClearing*
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+  id: OnItemIndexChanged
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: OnItemIndexChanged
+  nameWithType: VirtualListEl.OnItemIndexChanged
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnItemIndexChanged
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: WinUI <code>ItemsRepeater.ElementIndexChanged</code> — a persistent bound slot rebound (oldIndex, newIndex).
+  example: []
+  syntax:
+    content: public Action<int, int>? OnItemIndexChanged { get; init; }
+    parameters: []
+    return:
+      type: System.Action{System.Int32,System.Int32}
+    content.vb: Public Property OnItemIndexChanged As Action(Of Integer, Integer)
+  overload: FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged*
+- uid: FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+  id: OnVisibleRange
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: OnVisibleRange
+  nameWithType: VirtualListEl.OnVisibleRange
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnVisibleRange
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Prefetch hook: the realized window changed → (first, last) exclusive. Use to warm images/data just
+        outside the viewport (the plan's <code>UseVisibleRange</code> surface). Fired only when the range actually moved.
+  example: []
+  syntax:
+    content: public Action<int, int>? OnVisibleRange { get; init; }
+    parameters: []
+    return:
+      type: System.Action{System.Int32,System.Int32}
+    content.vb: Public Property OnVisibleRange As Action(Of Integer, Integer)
+  overload: FluentGpu.Reconciler.VirtualListEl.OnVisibleRange*
+- uid: FluentGpu.Reconciler.VirtualListEl.OnRealized
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.OnRealized
+  id: OnRealized
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: OnRealized
+  nameWithType: VirtualListEl.OnRealized
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnRealized
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRealized
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  summary: >-
+    Called once when this viewport is realized into the scene, with its node handle — the escape hatch a
+        composing control (ItemsView) uses to drive <code>ScrollState</code> (StartBringItemIntoView, sticky pinning).
+  example: []
+  syntax:
+    content: public Action<NodeHandle>? OnRealized { get; init; }
+    parameters: []
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public Property OnRealized As Action(Of NodeHandle)
+  overload: FluentGpu.Reconciler.VirtualListEl.OnRealized*
+- uid: FluentGpu.Reconciler.VirtualListEl.Width
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Width
+  id: Width
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: VirtualListEl.Width
+  fullName: FluentGpu.Reconciler.VirtualListEl.Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Width As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.Width*
+- uid: FluentGpu.Reconciler.VirtualListEl.Height
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Height
+  id: Height
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: VirtualListEl.Height
+  fullName: FluentGpu.Reconciler.VirtualListEl.Height
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float Height { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Height As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.Height*
+- uid: FluentGpu.Reconciler.VirtualListEl.MinWidth
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: VirtualListEl.MinWidth
+  fullName: FluentGpu.Reconciler.VirtualListEl.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.MinWidth*
+- uid: FluentGpu.Reconciler.VirtualListEl.MinHeight
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: VirtualListEl.MinHeight
+  fullName: FluentGpu.Reconciler.VirtualListEl.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.MinHeight*
+- uid: FluentGpu.Reconciler.VirtualListEl.MaxWidth
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.MaxWidth
+  id: MaxWidth
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: MaxWidth
+  nameWithType: VirtualListEl.MaxWidth
+  fullName: FluentGpu.Reconciler.VirtualListEl.MaxWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxWidth
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float MaxWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxWidth As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.MaxWidth*
+- uid: FluentGpu.Reconciler.VirtualListEl.MaxHeight
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: VirtualListEl.MaxHeight
+  fullName: FluentGpu.Reconciler.VirtualListEl.MaxHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float MaxHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxHeight As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.MaxHeight*
+- uid: FluentGpu.Reconciler.VirtualListEl.Grow
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Grow
+  id: Grow
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Grow
+  nameWithType: VirtualListEl.Grow
+  fullName: FluentGpu.Reconciler.VirtualListEl.Grow
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grow
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float Grow { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Grow As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.Grow*
+- uid: FluentGpu.Reconciler.VirtualListEl.Shrink
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Shrink
+  id: Shrink
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Shrink
+  nameWithType: VirtualListEl.Shrink
+  fullName: FluentGpu.Reconciler.VirtualListEl.Shrink
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shrink
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float Shrink { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Shrink As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.Shrink*
+- uid: FluentGpu.Reconciler.VirtualListEl.Basis
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Basis
+  id: Basis
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Basis
+  nameWithType: VirtualListEl.Basis
+  fullName: FluentGpu.Reconciler.VirtualListEl.Basis
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Basis
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public float Basis { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Basis As Single
+  overload: FluentGpu.Reconciler.VirtualListEl.Basis*
+- uid: FluentGpu.Reconciler.VirtualListEl.AlignSelf
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.AlignSelf
+  id: AlignSelf
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: AlignSelf
+  nameWithType: VirtualListEl.AlignSelf
+  fullName: FluentGpu.Reconciler.VirtualListEl.AlignSelf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignSelf
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public FlexAlign AlignSelf { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property AlignSelf As FlexAlign
+  overload: FluentGpu.Reconciler.VirtualListEl.AlignSelf*
+- uid: FluentGpu.Reconciler.VirtualListEl.Margin
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Margin
+  id: Margin
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Margin
+  nameWithType: VirtualListEl.Margin
+  fullName: FluentGpu.Reconciler.VirtualListEl.Margin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Margin
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public Edges4 Margin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Margin As Edges4
+  overload: FluentGpu.Reconciler.VirtualListEl.Margin*
+- uid: FluentGpu.Reconciler.VirtualListEl.Fill
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Fill
+  id: Fill
+  parent: FluentGpu.Reconciler.VirtualListEl
+  langs:
+  - csharp
+  - vb
+  name: Fill
+  nameWithType: VirtualListEl.Fill
+  fullName: FluentGpu.Reconciler.VirtualListEl.Fill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Reconciler/VirtualListEl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Fill
+    path: ../../src/FluentGpu.Reconciler/VirtualListEl.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Reconciler
+  namespace: FluentGpu.Reconciler
+  syntax:
+    content: public ColorF Fill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Fill As ColorF
+  overload: FluentGpu.Reconciler.VirtualListEl.Fill*
+references:
+- uid: FluentGpu.Reconciler.VirtualListEl.Layout
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.Layout
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Layout
+  name: Layout
+  nameWithType: VirtualListEl.Layout
+  fullName: FluentGpu.Reconciler.VirtualListEl.Layout
+- uid: FluentGpu.Reconciler.VirtualListEl.RenderItem
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.RenderItem
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_RenderItem
+  name: RenderItem
+  nameWithType: VirtualListEl.RenderItem
+  fullName: FluentGpu.Reconciler.VirtualListEl.RenderItem
+- uid: FluentGpu.Scene.IVirtualLayout
+  commentId: T:FluentGpu.Scene.IVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IVirtualLayout.html
+  name: IVirtualLayout
+  nameWithType: IVirtualLayout
+  fullName: FluentGpu.Scene.IVirtualLayout
+- uid: FluentGpu.Scene.IMeasuredVirtualLayout
+  commentId: T:FluentGpu.Scene.IMeasuredVirtualLayout
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IMeasuredVirtualLayout.html
+  name: IMeasuredVirtualLayout
+  nameWithType: IMeasuredVirtualLayout
+  fullName: FluentGpu.Scene.IMeasuredVirtualLayout
+- uid: FluentGpu.Reconciler
+  commentId: N:FluentGpu.Reconciler
+  href: FluentGpu.html
+  name: FluentGpu.Reconciler
+  nameWithType: FluentGpu.Reconciler
+  fullName: FluentGpu.Reconciler
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Reconciler
+    name: Reconciler
+    href: FluentGpu.Reconciler.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Reconciler.VirtualListEl}
+  commentId: T:System.IEquatable{FluentGpu.Reconciler.VirtualListEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<VirtualListEl>
+  nameWithType: IEquatable<VirtualListEl>
+  fullName: System.IEquatable<FluentGpu.Reconciler.VirtualListEl>
+  nameWithType.vb: IEquatable(Of VirtualListEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Reconciler.VirtualListEl)
+  name.vb: IEquatable(Of VirtualListEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Reconciler.VirtualListEl
+    name: VirtualListEl
+    href: FluentGpu.Reconciler.VirtualListEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Reconciler.VirtualListEl
+    name: VirtualListEl
+    href: FluentGpu.Reconciler.VirtualListEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Reconciler.VirtualListEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: VirtualListEl.ElementTypeId
+  fullName: FluentGpu.Reconciler.VirtualListEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Reconciler.VirtualListEl.ItemCount*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.ItemCount
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_ItemCount
+  name: ItemCount
+  nameWithType: VirtualListEl.ItemCount
+  fullName: FluentGpu.Reconciler.VirtualListEl.ItemCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Reconciler.VirtualListEl.RenderItem*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.RenderItem
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_RenderItem
+  name: RenderItem
+  nameWithType: VirtualListEl.RenderItem
+  fullName: FluentGpu.Reconciler.VirtualListEl.RenderItem
+- uid: System.Func{System.Int32,FluentGpu.Dsl.Element}
+  commentId: T:System.Func{System.Int32,FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, Element>
+  nameWithType: Func<int, Element>
+  fullName: System.Func<int, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of Integer, Element)
+  fullName.vb: System.Func(Of Integer, FluentGpu.Dsl.Element)
+  name.vb: Func(Of Integer, Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.KeyOf*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.KeyOf
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_KeyOf
+  name: KeyOf
+  nameWithType: VirtualListEl.KeyOf
+  fullName: FluentGpu.Reconciler.VirtualListEl.KeyOf
+- uid: System.Func{System.Int32,System.String}
+  commentId: T:System.Func{System.Int32,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, string>
+  nameWithType: Func<int, string>
+  fullName: System.Func<int, string>
+  nameWithType.vb: Func(Of Integer, String)
+  fullName.vb: System.Func(Of Integer, String)
+  name.vb: Func(Of Integer, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.KeyOf
+  commentId: P:FluentGpu.Reconciler.VirtualListEl.KeyOf
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_KeyOf
+  name: KeyOf
+  nameWithType: VirtualListEl.KeyOf
+  fullName: FluentGpu.Reconciler.VirtualListEl.KeyOf
+- uid: FluentGpu.Reconciler.VirtualListEl.RowBind*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.RowBind
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_RowBind
+  name: RowBind
+  nameWithType: VirtualListEl.RowBind
+  fullName: FluentGpu.Reconciler.VirtualListEl.RowBind
+- uid: System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+  commentId: T:System.Func{FluentGpu.Signals.IReadSignal{System.Int32},FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<IReadSignal<int>, Element>
+  nameWithType: Func<IReadSignal<int>, Element>
+  fullName: System.Func<FluentGpu.Signals.IReadSignal<int>, FluentGpu.Dsl.Element>
+  nameWithType.vb: Func(Of IReadSignal(Of Integer), Element)
+  fullName.vb: System.Func(Of FluentGpu.Signals.IReadSignal(Of Integer), FluentGpu.Dsl.Element)
+  name.vb: Func(Of IReadSignal(Of Integer), Element)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.Layout*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Layout
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Layout
+  name: Layout
+  nameWithType: VirtualListEl.Layout
+  fullName: FluentGpu.Reconciler.VirtualListEl.Layout
+- uid: FluentGpu.Reconciler.VirtualListEl.EstimatedExtent*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_EstimatedExtent
+  name: EstimatedExtent
+  nameWithType: VirtualListEl.EstimatedExtent
+  fullName: FluentGpu.Reconciler.VirtualListEl.EstimatedExtent
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Reconciler.VirtualListEl.Overscan*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Overscan
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Overscan
+  name: Overscan
+  nameWithType: VirtualListEl.Overscan
+  fullName: FluentGpu.Reconciler.VirtualListEl.Overscan
+- uid: FluentGpu.Reconciler.VirtualListEl.Horizontal*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Horizontal
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Horizontal
+  name: Horizontal
+  nameWithType: VirtualListEl.Horizontal
+  fullName: FluentGpu.Reconciler.VirtualListEl.Horizontal
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemPrepared*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_OnItemPrepared
+  name: OnItemPrepared
+  nameWithType: VirtualListEl.OnItemPrepared
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemPrepared
+- uid: System.Action{System.Int32}
+  commentId: T:System.Action{System.Int32}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<int>
+  nameWithType: Action<int>
+  fullName: System.Action<int>
+  nameWithType.vb: Action(Of Integer)
+  fullName.vb: System.Action(Of Integer)
+  name.vb: Action(Of Integer)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemClearing*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_OnItemClearing
+  name: OnItemClearing
+  nameWithType: VirtualListEl.OnItemClearing
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemClearing
+- uid: FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_OnItemIndexChanged
+  name: OnItemIndexChanged
+  nameWithType: VirtualListEl.OnItemIndexChanged
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnItemIndexChanged
+- uid: System.Action{System.Int32,System.Int32}
+  commentId: T:System.Action{System.Int32,System.Int32}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<int, int>
+  nameWithType: Action<int, int>
+  fullName: System.Action<int, int>
+  nameWithType.vb: Action(Of Integer, Integer)
+  fullName.vb: System.Action(Of Integer, Integer)
+  name.vb: Action(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.OnVisibleRange*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_OnVisibleRange
+  name: OnVisibleRange
+  nameWithType: VirtualListEl.OnVisibleRange
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnVisibleRange
+- uid: FluentGpu.Reconciler.VirtualListEl.OnRealized*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.OnRealized
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_OnRealized
+  name: OnRealized
+  nameWithType: VirtualListEl.OnRealized
+  fullName: FluentGpu.Reconciler.VirtualListEl.OnRealized
+- uid: System.Action{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Action{FluentGpu.Foundation.NodeHandle}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<NodeHandle>
+  nameWithType: Action<NodeHandle>
+  fullName: System.Action<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: Action(Of NodeHandle)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: Action(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: FluentGpu.Reconciler.VirtualListEl.Width*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Width
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Width
+  name: Width
+  nameWithType: VirtualListEl.Width
+  fullName: FluentGpu.Reconciler.VirtualListEl.Width
+- uid: FluentGpu.Reconciler.VirtualListEl.Height*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Height
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Height
+  name: Height
+  nameWithType: VirtualListEl.Height
+  fullName: FluentGpu.Reconciler.VirtualListEl.Height
+- uid: FluentGpu.Reconciler.VirtualListEl.MinWidth*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.MinWidth
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_MinWidth
+  name: MinWidth
+  nameWithType: VirtualListEl.MinWidth
+  fullName: FluentGpu.Reconciler.VirtualListEl.MinWidth
+- uid: FluentGpu.Reconciler.VirtualListEl.MinHeight*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.MinHeight
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_MinHeight
+  name: MinHeight
+  nameWithType: VirtualListEl.MinHeight
+  fullName: FluentGpu.Reconciler.VirtualListEl.MinHeight
+- uid: FluentGpu.Reconciler.VirtualListEl.MaxWidth*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.MaxWidth
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_MaxWidth
+  name: MaxWidth
+  nameWithType: VirtualListEl.MaxWidth
+  fullName: FluentGpu.Reconciler.VirtualListEl.MaxWidth
+- uid: FluentGpu.Reconciler.VirtualListEl.MaxHeight*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.MaxHeight
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_MaxHeight
+  name: MaxHeight
+  nameWithType: VirtualListEl.MaxHeight
+  fullName: FluentGpu.Reconciler.VirtualListEl.MaxHeight
+- uid: FluentGpu.Reconciler.VirtualListEl.Grow*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Grow
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Grow
+  name: Grow
+  nameWithType: VirtualListEl.Grow
+  fullName: FluentGpu.Reconciler.VirtualListEl.Grow
+- uid: FluentGpu.Reconciler.VirtualListEl.Shrink*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Shrink
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Shrink
+  name: Shrink
+  nameWithType: VirtualListEl.Shrink
+  fullName: FluentGpu.Reconciler.VirtualListEl.Shrink
+- uid: FluentGpu.Reconciler.VirtualListEl.Basis*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Basis
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Basis
+  name: Basis
+  nameWithType: VirtualListEl.Basis
+  fullName: FluentGpu.Reconciler.VirtualListEl.Basis
+- uid: FluentGpu.Reconciler.VirtualListEl.AlignSelf*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.AlignSelf
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_AlignSelf
+  name: AlignSelf
+  nameWithType: VirtualListEl.AlignSelf
+  fullName: FluentGpu.Reconciler.VirtualListEl.AlignSelf
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Reconciler.VirtualListEl.Margin*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Margin
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Margin
+  name: Margin
+  nameWithType: VirtualListEl.Margin
+  fullName: FluentGpu.Reconciler.VirtualListEl.Margin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Reconciler.VirtualListEl.Fill*
+  commentId: Overload:FluentGpu.Reconciler.VirtualListEl.Fill
+  href: FluentGpu.Reconciler.VirtualListEl.html#FluentGpu_Reconciler_VirtualListEl_Fill
+  name: Fill
+  nameWithType: VirtualListEl.Fill
+  fullName: FluentGpu.Reconciler.VirtualListEl.Fill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF

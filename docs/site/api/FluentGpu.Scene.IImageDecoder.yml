@@ -1,0 +1,335 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.IImageDecoder
+  commentId: T:FluentGpu.Scene.IImageDecoder
+  id: IImageDecoder
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  - FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  - FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  - FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  langs:
+  - csharp
+  - vb
+  name: IImageDecoder
+  nameWithType: IImageDecoder
+  fullName: FluentGpu.Scene.IImageDecoder
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IImageDecoder
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    The decode seam: the portable cache asks a leaf to decode a source to a target size, off the UI thread.
+        The Windows leaf is WIC→GPU (needs-pixels); the headless leaf is deterministic. <xref href="FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler%2cFluentGpu.Scene.ImageReadyHandler)" data-throw-if-not-resolved="false"></xref> drains completions
+        onto the UI thread (the +1-frame latency contract: a request is never ready the same frame), invoking
+        <code class="paramref">onPixels</code> with the bucket pixels then <code class="paramref">onComplete</code> with the state transition.
+  example: []
+  syntax:
+    content: public interface IImageDecoder
+    content.vb: Public Interface IImageDecoder
+  derivedClasses:
+  - FluentGpu.Media.DecodeScheduler
+  - FluentGpu.Scene.FakeImageDecoder
+- uid: FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  id: Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Scene.IImageDecoder
+  langs:
+  - csharp
+  - vb
+  name: Begin(int, string, int, int, ImagePriority)
+  nameWithType: IImageDecoder.Begin(int, string, int, int, ImagePriority)
+  fullName: FluentGpu.Scene.IImageDecoder.Begin(int, string, int, int, FluentGpu.Scene.ImagePriority)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Begin
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: void Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: source
+      type: System.String
+    - id: targetW
+      type: System.Int32
+    - id: targetH
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    content.vb: Sub Begin(id As Integer, source As String, targetW As Integer, targetH As Integer, priority As ImagePriority = ImagePriority.Visible)
+  overload: FluentGpu.Scene.IImageDecoder.Begin*
+  nameWithType.vb: IImageDecoder.Begin(Integer, String, Integer, Integer, ImagePriority)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Begin(Integer, String, Integer, Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Begin(Integer, String, Integer, Integer, ImagePriority)
+- uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  id: Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  parent: FluentGpu.Scene.IImageDecoder
+  langs:
+  - csharp
+  - vb
+  name: Pump(ImageCompleteHandler, ImageReadyHandler)
+  nameWithType: IImageDecoder.Pump(ImageCompleteHandler, ImageReadyHandler)
+  fullName: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler, FluentGpu.Scene.ImageReadyHandler)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pump
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Drain finished decodes. <code class="paramref">onPixels</code> gets the bucket pixels (transient span);
+        <code class="paramref">onComplete</code> gets the final state transition incl. <xref href="FluentGpu.Scene.ImageFailureKind" data-throw-if-not-resolved="false"></xref> + attempt count
+        (after any transient retries the decoder performed internally).
+  example: []
+  syntax:
+    content: void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+    parameters:
+    - id: onComplete
+      type: FluentGpu.Scene.ImageCompleteHandler
+    - id: onPixels
+      type: FluentGpu.Scene.ImageReadyHandler
+    content.vb: Sub Pump(onComplete As ImageCompleteHandler, onPixels As ImageReadyHandler)
+  overload: FluentGpu.Scene.IImageDecoder.Pump*
+- uid: FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  id: Cancel(System.Int32)
+  parent: FluentGpu.Scene.IImageDecoder
+  langs:
+  - csharp
+  - vb
+  name: Cancel(int)
+  nameWithType: IImageDecoder.Cancel(int)
+  fullName: FluentGpu.Scene.IImageDecoder.Cancel(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: Cancel an in-flight (or queued) decode — e.g. a virtualized row recycled off-screen. Idempotent.
+  example: []
+  syntax:
+    content: void Cancel(int id)
+    parameters:
+    - id: id
+      type: System.Int32
+    content.vb: Sub Cancel(id As Integer)
+  overload: FluentGpu.Scene.IImageDecoder.Cancel*
+  nameWithType.vb: IImageDecoder.Cancel(Integer)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Cancel(Integer)
+  name.vb: Cancel(Integer)
+- uid: FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  id: Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Scene.IImageDecoder
+  langs:
+  - csharp
+  - vb
+  name: Prioritize(int, ImagePriority)
+  nameWithType: IImageDecoder.Prioritize(int, ImagePriority)
+  fullName: FluentGpu.Scene.IImageDecoder.Prioritize(int, FluentGpu.Scene.ImagePriority)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Prioritize
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Raise the priority of a queued decode (e.g. a prefetch that just scrolled into view). Idempotent; no-op
+        once the job has started.
+  example: []
+  syntax:
+    content: void Prioritize(int id, ImagePriority priority)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    content.vb: Sub Prioritize(id As Integer, priority As ImagePriority)
+  overload: FluentGpu.Scene.IImageDecoder.Prioritize*
+  nameWithType.vb: IImageDecoder.Prioritize(Integer, ImagePriority)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Prioritize(Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Prioritize(Integer, ImagePriority)
+references:
+- uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  parent: FluentGpu.Scene.IImageDecoder
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  name: Pump(ImageCompleteHandler, ImageReadyHandler)
+  nameWithType: IImageDecoder.Pump(ImageCompleteHandler, ImageReadyHandler)
+  fullName: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler, FluentGpu.Scene.ImageReadyHandler)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.IImageDecoder
+  commentId: T:FluentGpu.Scene.IImageDecoder
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IImageDecoder.html
+  name: IImageDecoder
+  nameWithType: IImageDecoder
+  fullName: FluentGpu.Scene.IImageDecoder
+- uid: FluentGpu.Scene.IImageDecoder.Begin*
+  commentId: Overload:FluentGpu.Scene.IImageDecoder.Begin
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Begin
+  nameWithType: IImageDecoder.Begin
+  fullName: FluentGpu.Scene.IImageDecoder.Begin
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImagePriority.html
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Scene.IImageDecoder.Pump*
+  commentId: Overload:FluentGpu.Scene.IImageDecoder.Pump
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  name: Pump
+  nameWithType: IImageDecoder.Pump
+  fullName: FluentGpu.Scene.IImageDecoder.Pump
+- uid: FluentGpu.Scene.ImageCompleteHandler
+  commentId: T:FluentGpu.Scene.ImageCompleteHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCompleteHandler.html
+  name: ImageCompleteHandler
+  nameWithType: ImageCompleteHandler
+  fullName: FluentGpu.Scene.ImageCompleteHandler
+- uid: FluentGpu.Scene.ImageReadyHandler
+  commentId: T:FluentGpu.Scene.ImageReadyHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageReadyHandler.html
+  name: ImageReadyHandler
+  nameWithType: ImageReadyHandler
+  fullName: FluentGpu.Scene.ImageReadyHandler
+- uid: FluentGpu.Scene.IImageDecoder.Cancel*
+  commentId: Overload:FluentGpu.Scene.IImageDecoder.Cancel
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Cancel_System_Int32_
+  name: Cancel
+  nameWithType: IImageDecoder.Cancel
+  fullName: FluentGpu.Scene.IImageDecoder.Cancel
+- uid: FluentGpu.Scene.IImageDecoder.Prioritize*
+  commentId: Overload:FluentGpu.Scene.IImageDecoder.Prioritize
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Prioritize
+  nameWithType: IImageDecoder.Prioritize
+  fullName: FluentGpu.Scene.IImageDecoder.Prioritize

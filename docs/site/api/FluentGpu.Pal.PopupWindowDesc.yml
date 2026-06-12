@@ -1,0 +1,537 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.PopupWindowDesc
+  commentId: T:FluentGpu.Pal.PopupWindowDesc
+  id: PopupWindowDesc
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.PopupWindowDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.RectF)
+  - FluentGpu.Pal.PopupWindowDesc.BoundsPx
+  - FluentGpu.Pal.PopupWindowDesc.Owner
+  langs:
+  - csharp
+  - vb
+  name: PopupWindowDesc
+  nameWithType: PopupWindowDesc
+  fullName: FluentGpu.Pal.PopupWindowDesc
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupWindowDesc
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Creation parameters for a popup window. <code class="paramref">Owner</code> = the owning top-level window (the popup
+        stays above it in z-order and never takes activation); <code class="paramref">BoundsPx</code> = initial bounds in physical
+        virtual-screen px (may be empty — set real bounds via <xref href="FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF%40)" data-throw-if-not-resolved="false"></xref> before Show).
+  example: []
+  syntax:
+    content: 'public readonly record struct PopupWindowDesc : IEquatable<PopupWindowDesc>'
+    content.vb: Public Structure PopupWindowDesc Implements IEquatable(Of PopupWindowDesc)
+  implements:
+  - System.IEquatable{FluentGpu.Pal.PopupWindowDesc}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Pal.PopupWindowDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.RectF)
+  commentId: M:FluentGpu.Pal.PopupWindowDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.RectF)
+  id: '#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.RectF)'
+  parent: FluentGpu.Pal.PopupWindowDesc
+  langs:
+  - csharp
+  - vb
+  name: PopupWindowDesc(NativeHandle, RectF)
+  nameWithType: PopupWindowDesc.PopupWindowDesc(NativeHandle, RectF)
+  fullName: FluentGpu.Pal.PopupWindowDesc.PopupWindowDesc(FluentGpu.Foundation.NativeHandle, FluentGpu.Foundation.RectF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Creation parameters for a popup window. <code class="paramref">Owner</code> = the owning top-level window (the popup
+        stays above it in z-order and never takes activation); <code class="paramref">BoundsPx</code> = initial bounds in physical
+        virtual-screen px (may be empty — set real bounds via <xref href="FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF%40)" data-throw-if-not-resolved="false"></xref> before Show).
+  example: []
+  syntax:
+    content: public PopupWindowDesc(NativeHandle Owner, RectF BoundsPx)
+    parameters:
+    - id: Owner
+      type: FluentGpu.Foundation.NativeHandle
+    - id: BoundsPx
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Sub New(Owner As NativeHandle, BoundsPx As RectF)
+  overload: FluentGpu.Pal.PopupWindowDesc.#ctor*
+  nameWithType.vb: PopupWindowDesc.New(NativeHandle, RectF)
+  fullName.vb: FluentGpu.Pal.PopupWindowDesc.New(FluentGpu.Foundation.NativeHandle, FluentGpu.Foundation.RectF)
+  name.vb: New(NativeHandle, RectF)
+- uid: FluentGpu.Pal.PopupWindowDesc.Owner
+  commentId: P:FluentGpu.Pal.PopupWindowDesc.Owner
+  id: Owner
+  parent: FluentGpu.Pal.PopupWindowDesc
+  langs:
+  - csharp
+  - vb
+  name: Owner
+  nameWithType: PopupWindowDesc.Owner
+  fullName: FluentGpu.Pal.PopupWindowDesc.Owner
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Owner
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public NativeHandle Owner { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NativeHandle
+    content.vb: Public Property Owner As NativeHandle
+  overload: FluentGpu.Pal.PopupWindowDesc.Owner*
+- uid: FluentGpu.Pal.PopupWindowDesc.BoundsPx
+  commentId: P:FluentGpu.Pal.PopupWindowDesc.BoundsPx
+  id: BoundsPx
+  parent: FluentGpu.Pal.PopupWindowDesc
+  langs:
+  - csharp
+  - vb
+  name: BoundsPx
+  nameWithType: PopupWindowDesc.BoundsPx
+  fullName: FluentGpu.Pal.PopupWindowDesc.BoundsPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsPx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: public RectF BoundsPx { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property BoundsPx As RectF
+  overload: FluentGpu.Pal.PopupWindowDesc.BoundsPx*
+references:
+- uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.IPlatformPopupWindow
+  href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  name: SetBoundsPx(in RectF)
+  nameWithType: IPlatformPopupWindow.SetBoundsPx(in RectF)
+  fullName: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(in FluentGpu.Foundation.RectF)
+  nameWithType.vb: IPlatformPopupWindow.SetBoundsPx(RectF)
+  fullName.vb: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF)
+  name.vb: SetBoundsPx(RectF)
+  spec.csharp:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - name: in
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Pal.IPlatformPopupWindow.SetBoundsPx(FluentGpu.Foundation.RectF@)
+    name: SetBoundsPx
+    href: FluentGpu.Pal.IPlatformPopupWindow.html#FluentGpu_Pal_IPlatformPopupWindow_SetBoundsPx_FluentGpu_Foundation_RectF__
+  - name: (
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IEquatable{FluentGpu.Pal.PopupWindowDesc}
+  commentId: T:System.IEquatable{FluentGpu.Pal.PopupWindowDesc}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<PopupWindowDesc>
+  nameWithType: IEquatable<PopupWindowDesc>
+  fullName: System.IEquatable<FluentGpu.Pal.PopupWindowDesc>
+  nameWithType.vb: IEquatable(Of PopupWindowDesc)
+  fullName.vb: System.IEquatable(Of FluentGpu.Pal.PopupWindowDesc)
+  name.vb: IEquatable(Of PopupWindowDesc)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Pal.PopupWindowDesc
+    name: PopupWindowDesc
+    href: FluentGpu.Pal.PopupWindowDesc.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.PopupWindowDesc
+    name: PopupWindowDesc
+    href: FluentGpu.Pal.PopupWindowDesc.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformPopupWindow.html
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Pal.PopupWindowDesc.#ctor*
+  commentId: Overload:FluentGpu.Pal.PopupWindowDesc.#ctor
+  href: FluentGpu.Pal.PopupWindowDesc.html#FluentGpu_Pal_PopupWindowDesc__ctor_FluentGpu_Foundation_NativeHandle_FluentGpu_Foundation_RectF_
+  name: PopupWindowDesc
+  nameWithType: PopupWindowDesc.PopupWindowDesc
+  fullName: FluentGpu.Pal.PopupWindowDesc.PopupWindowDesc
+  nameWithType.vb: PopupWindowDesc.New
+  fullName.vb: FluentGpu.Pal.PopupWindowDesc.New
+  name.vb: New
+- uid: FluentGpu.Foundation.NativeHandle
+  commentId: T:FluentGpu.Foundation.NativeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandle.html
+  name: NativeHandle
+  nameWithType: NativeHandle
+  fullName: FluentGpu.Foundation.NativeHandle
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.PopupWindowDesc.Owner*
+  commentId: Overload:FluentGpu.Pal.PopupWindowDesc.Owner
+  href: FluentGpu.Pal.PopupWindowDesc.html#FluentGpu_Pal_PopupWindowDesc_Owner
+  name: Owner
+  nameWithType: PopupWindowDesc.Owner
+  fullName: FluentGpu.Pal.PopupWindowDesc.Owner
+- uid: FluentGpu.Pal.PopupWindowDesc.BoundsPx*
+  commentId: Overload:FluentGpu.Pal.PopupWindowDesc.BoundsPx
+  href: FluentGpu.Pal.PopupWindowDesc.html#FluentGpu_Pal_PopupWindowDesc_BoundsPx
+  name: BoundsPx
+  nameWithType: PopupWindowDesc.BoundsPx
+  fullName: FluentGpu.Pal.PopupWindowDesc.BoundsPx

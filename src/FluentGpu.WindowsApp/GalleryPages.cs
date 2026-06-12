@@ -905,7 +905,10 @@ sealed class ImagesPage : Component
             Corners = CornerRadius4.All(10),
             Children =
             [
-                Image(Cover(i, 150), 150f, 150f, 8f, AlbumPlaceholders[i % AlbumPlaceholders.Length]),
+                // Responsive art: no fixed extent — it fills the card's (fluid) width and stays square (aspect 1), with the
+                // cover crop (object-fit: cover). Decodes at 300px regardless of the on-screen size. No more overflow when
+                // the cell shrinks below a hard-coded tile size.
+                Image(Cover(i, 150), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f, placeholder: AlbumPlaceholders[i % AlbumPlaceholders.Length]),
                 Text($"Album {AlbumTitles[i % AlbumTitles.Length]}").Strong(),
                 Text(Artists[i % Artists.Length]).Foreground(Grey).FontSize(12f)
             ],
@@ -953,7 +956,10 @@ sealed class ImagesPage : Component
         for (int i = 0; i < cards.Length; i++)
             cards[i] = AlbumCard(i);
 
-        var gallery = UniformGrid(4, 16f, 240f, cards);
+        // Responsive auto-fill grid: the column count reflows with the width (packs as many ≥180px columns as fit) and
+        // rows size to content (NaN row height), so the square art tiles grow/shrink with their cells instead of a
+        // fixed tile overflowing a fixed column count.
+        var gallery = AutoGrid(180f, 16f, float.NaN, cards);
 
         var cornerVariants = new BoxEl
         {
@@ -990,7 +996,7 @@ sealed class ImagesPage : Component
                     .Foreground(Grey),
                 Section(
                     "Album grid",
-                    "A UniformGrid of 8 album cards. Each card stacks the art tile over a strong title and a muted artist line.",
+                    "A responsive grid of 8 album cards: the column count reflows with the width and each art tile fills its cell as a square (object-fit: cover) — resize the window and the tiles scale instead of overflowing.",
                     gallery),
                 Section(
                     "Corner-radius variants",

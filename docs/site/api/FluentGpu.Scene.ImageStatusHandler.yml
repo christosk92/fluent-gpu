@@ -1,0 +1,115 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageStatusHandler
+  commentId: T:FluentGpu.Scene.ImageStatusHandler
+  id: ImageStatusHandler
+  parent: FluentGpu.Scene
+  children: []
+  langs:
+  - csharp
+  - vb
+  name: ImageStatusHandler
+  nameWithType: ImageStatusHandler
+  fullName: FluentGpu.Scene.ImageStatusHandler
+  type: Delegate
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageStatusHandler
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Image lifecycle notification for app observability (e.g. a retry toast, a broken-art fallback, telemetry).
+        Raised on the UI thread during <xref href="FluentGpu.Scene.ImageCache.Pump" data-throw-if-not-resolved="false"></xref>. <code class="paramref">attempts</code> is the fetch attempt count
+        (≥1; &gt;1 means transient retries happened).
+  example: []
+  syntax:
+    content: public delegate void ImageStatusHandler(int id, ImageState state, ImageFailureKind failure, int attempts)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: state
+      type: FluentGpu.Scene.ImageState
+    - id: failure
+      type: FluentGpu.Scene.ImageFailureKind
+    - id: attempts
+      type: System.Int32
+    content.vb: Public Delegate Sub ImageStatusHandler(id As Integer, state As ImageState, failure As ImageFailureKind, attempts As Integer)
+references:
+- uid: FluentGpu.Scene.ImageCache.Pump
+  commentId: M:FluentGpu.Scene.ImageCache.Pump
+  href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  name: Pump()
+  nameWithType: ImageCache.Pump()
+  fullName: FluentGpu.Scene.ImageCache.Pump()
+  spec.csharp:
+  - uid: FluentGpu.Scene.ImageCache.Pump
+    name: Pump
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.ImageCache.Pump
+    name: Pump
+    href: FluentGpu.Scene.ImageCache.html#FluentGpu_Scene_ImageCache_Pump
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Scene.ImageState
+  commentId: T:FluentGpu.Scene.ImageState
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageState.html
+  name: ImageState
+  nameWithType: ImageState
+  fullName: FluentGpu.Scene.ImageState
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System

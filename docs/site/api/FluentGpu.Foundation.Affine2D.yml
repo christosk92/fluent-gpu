@@ -1,0 +1,1048 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  id: Affine2D
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.Affine2D.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  - FluentGpu.Foundation.Affine2D.Dx
+  - FluentGpu.Foundation.Affine2D.Dy
+  - FluentGpu.Foundation.Affine2D.Identity
+  - FluentGpu.Foundation.Affine2D.IsIdentity
+  - FluentGpu.Foundation.Affine2D.M11
+  - FluentGpu.Foundation.Affine2D.M12
+  - FluentGpu.Foundation.Affine2D.M21
+  - FluentGpu.Foundation.Affine2D.M22
+  - FluentGpu.Foundation.Affine2D.Multiply(FluentGpu.Foundation.Affine2D@)
+  - FluentGpu.Foundation.Affine2D.Rotation(System.Single)
+  - FluentGpu.Foundation.Affine2D.Scale(System.Single,System.Single)
+  - FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  - FluentGpu.Foundation.Affine2D.TransformBounds(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Foundation.Affine2D.Translation(System.Single,System.Single)
+  - FluentGpu.Foundation.Affine2D.TryInverseTransform(FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2@)
+  langs:
+  - csharp
+  - vb
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Affine2D
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).
+  example: []
+  syntax:
+    content: 'public readonly record struct Affine2D : IEquatable<Affine2D>'
+    content.vb: Public Structure Affine2D Implements IEquatable(Of Affine2D)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.Affine2D}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.Affine2D.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.Affine2D.#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Affine2D(float, float, float, float, float, float)
+  nameWithType: Affine2D.Affine2D(float, float, float, float, float, float)
+  fullName: FluentGpu.Foundation.Affine2D.Affine2D(float, float, float, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 2x3 affine (local→parent). 2.5D/perspective out of scope (per spec).
+  example: []
+  syntax:
+    content: public Affine2D(float M11, float M12, float M21, float M22, float Dx, float Dy)
+    parameters:
+    - id: M11
+      type: System.Single
+    - id: M12
+      type: System.Single
+    - id: M21
+      type: System.Single
+    - id: M22
+      type: System.Single
+    - id: Dx
+      type: System.Single
+    - id: Dy
+      type: System.Single
+    content.vb: Public Sub New(M11 As Single, M12 As Single, M21 As Single, M22 As Single, Dx As Single, Dy As Single)
+  overload: FluentGpu.Foundation.Affine2D.#ctor*
+  nameWithType.vb: Affine2D.New(Single, Single, Single, Single, Single, Single)
+  fullName.vb: FluentGpu.Foundation.Affine2D.New(Single, Single, Single, Single, Single, Single)
+  name.vb: New(Single, Single, Single, Single, Single, Single)
+- uid: FluentGpu.Foundation.Affine2D.M11
+  commentId: P:FluentGpu.Foundation.Affine2D.M11
+  id: M11
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: M11
+  nameWithType: Affine2D.M11
+  fullName: FluentGpu.Foundation.Affine2D.M11
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: M11
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float M11 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property M11 As Single
+  overload: FluentGpu.Foundation.Affine2D.M11*
+- uid: FluentGpu.Foundation.Affine2D.M12
+  commentId: P:FluentGpu.Foundation.Affine2D.M12
+  id: M12
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: M12
+  nameWithType: Affine2D.M12
+  fullName: FluentGpu.Foundation.Affine2D.M12
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: M12
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float M12 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property M12 As Single
+  overload: FluentGpu.Foundation.Affine2D.M12*
+- uid: FluentGpu.Foundation.Affine2D.M21
+  commentId: P:FluentGpu.Foundation.Affine2D.M21
+  id: M21
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: M21
+  nameWithType: Affine2D.M21
+  fullName: FluentGpu.Foundation.Affine2D.M21
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: M21
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float M21 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property M21 As Single
+  overload: FluentGpu.Foundation.Affine2D.M21*
+- uid: FluentGpu.Foundation.Affine2D.M22
+  commentId: P:FluentGpu.Foundation.Affine2D.M22
+  id: M22
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: M22
+  nameWithType: Affine2D.M22
+  fullName: FluentGpu.Foundation.Affine2D.M22
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: M22
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float M22 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property M22 As Single
+  overload: FluentGpu.Foundation.Affine2D.M22*
+- uid: FluentGpu.Foundation.Affine2D.Dx
+  commentId: P:FluentGpu.Foundation.Affine2D.Dx
+  id: Dx
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Dx
+  nameWithType: Affine2D.Dx
+  fullName: FluentGpu.Foundation.Affine2D.Dx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dx
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Dx { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Dx As Single
+  overload: FluentGpu.Foundation.Affine2D.Dx*
+- uid: FluentGpu.Foundation.Affine2D.Dy
+  commentId: P:FluentGpu.Foundation.Affine2D.Dy
+  id: Dy
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Dy
+  nameWithType: Affine2D.Dy
+  fullName: FluentGpu.Foundation.Affine2D.Dy
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dy
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Dy { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Dy As Single
+  overload: FluentGpu.Foundation.Affine2D.Dy*
+- uid: FluentGpu.Foundation.Affine2D.Identity
+  commentId: P:FluentGpu.Foundation.Affine2D.Identity
+  id: Identity
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Identity
+  nameWithType: Affine2D.Identity
+  fullName: FluentGpu.Foundation.Affine2D.Identity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Identity
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Affine2D Identity { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Shared ReadOnly Property Identity As Affine2D
+  overload: FluentGpu.Foundation.Affine2D.Identity*
+- uid: FluentGpu.Foundation.Affine2D.Translation(System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.Affine2D.Translation(System.Single,System.Single)
+  id: Translation(System.Single,System.Single)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Translation(float, float)
+  nameWithType: Affine2D.Translation(float, float)
+  fullName: FluentGpu.Foundation.Affine2D.Translation(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Translation
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 163
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Affine2D Translation(float dx, float dy)
+    parameters:
+    - id: dx
+      type: System.Single
+    - id: dy
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Shared Function Translation(dx As Single, dy As Single) As Affine2D
+  overload: FluentGpu.Foundation.Affine2D.Translation*
+  nameWithType.vb: Affine2D.Translation(Single, Single)
+  fullName.vb: FluentGpu.Foundation.Affine2D.Translation(Single, Single)
+  name.vb: Translation(Single, Single)
+- uid: FluentGpu.Foundation.Affine2D.Scale(System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.Affine2D.Scale(System.Single,System.Single)
+  id: Scale(System.Single,System.Single)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Scale(float, float)
+  nameWithType: Affine2D.Scale(float, float)
+  fullName: FluentGpu.Foundation.Affine2D.Scale(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scale
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 164
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Affine2D Scale(float sx, float sy)
+    parameters:
+    - id: sx
+      type: System.Single
+    - id: sy
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Shared Function Scale(sx As Single, sy As Single) As Affine2D
+  overload: FluentGpu.Foundation.Affine2D.Scale*
+  nameWithType.vb: Affine2D.Scale(Single, Single)
+  fullName.vb: FluentGpu.Foundation.Affine2D.Scale(Single, Single)
+  name.vb: Scale(Single, Single)
+- uid: FluentGpu.Foundation.Affine2D.Rotation(System.Single)
+  commentId: M:FluentGpu.Foundation.Affine2D.Rotation(System.Single)
+  id: Rotation(System.Single)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Rotation(float)
+  nameWithType: Affine2D.Rotation(float)
+  fullName: FluentGpu.Foundation.Affine2D.Rotation(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rotation
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 165
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static Affine2D Rotation(float radians)
+    parameters:
+    - id: radians
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Shared Function Rotation(radians As Single) As Affine2D
+  overload: FluentGpu.Foundation.Affine2D.Rotation*
+  nameWithType.vb: Affine2D.Rotation(Single)
+  fullName.vb: FluentGpu.Foundation.Affine2D.Rotation(Single)
+  name.vb: Rotation(Single)
+- uid: FluentGpu.Foundation.Affine2D.IsIdentity
+  commentId: P:FluentGpu.Foundation.Affine2D.IsIdentity
+  id: IsIdentity
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: IsIdentity
+  nameWithType: Affine2D.IsIdentity
+  fullName: FluentGpu.Foundation.Affine2D.IsIdentity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsIdentity
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 170
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsIdentity { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsIdentity As Boolean
+  overload: FluentGpu.Foundation.Affine2D.IsIdentity*
+- uid: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  id: Transform(FluentGpu.Foundation.Point2)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Transform(Point2)
+  nameWithType: Affine2D.Transform(Point2)
+  fullName: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 172
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Point2 Transform(Point2 p)
+    parameters:
+    - id: p
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Function Transform(p As Point2) As Point2
+  overload: FluentGpu.Foundation.Affine2D.Transform*
+- uid: FluentGpu.Foundation.Affine2D.TransformBounds(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Foundation.Affine2D.TransformBounds(FluentGpu.Foundation.RectF@)
+  id: TransformBounds(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: TransformBounds(in RectF)
+  nameWithType: Affine2D.TransformBounds(in RectF)
+  fullName: FluentGpu.Foundation.Affine2D.TransformBounds(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TransformBounds
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 175
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: The axis-aligned bounding box of <code class="paramref">r</code> after this transform (device-space clip/cull rect).
+  example: []
+  syntax:
+    content: public RectF TransformBounds(in RectF r)
+    parameters:
+    - id: r
+      type: FluentGpu.Foundation.RectF
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Function TransformBounds(r As RectF) As RectF
+  overload: FluentGpu.Foundation.Affine2D.TransformBounds*
+  nameWithType.vb: Affine2D.TransformBounds(RectF)
+  fullName.vb: FluentGpu.Foundation.Affine2D.TransformBounds(FluentGpu.Foundation.RectF)
+  name.vb: TransformBounds(RectF)
+- uid: FluentGpu.Foundation.Affine2D.Multiply(FluentGpu.Foundation.Affine2D@)
+  commentId: M:FluentGpu.Foundation.Affine2D.Multiply(FluentGpu.Foundation.Affine2D@)
+  id: Multiply(FluentGpu.Foundation.Affine2D@)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: Multiply(in Affine2D)
+  nameWithType: Affine2D.Multiply(in Affine2D)
+  fullName: FluentGpu.Foundation.Affine2D.Multiply(in FluentGpu.Foundation.Affine2D)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Multiply
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 189
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: this ∘ other (apply <code class="paramref">other</code> first, then this).
+  example: []
+  syntax:
+    content: public Affine2D Multiply(in Affine2D o)
+    parameters:
+    - id: o
+      type: FluentGpu.Foundation.Affine2D
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Function Multiply(o As Affine2D) As Affine2D
+  overload: FluentGpu.Foundation.Affine2D.Multiply*
+  nameWithType.vb: Affine2D.Multiply(Affine2D)
+  fullName.vb: FluentGpu.Foundation.Affine2D.Multiply(FluentGpu.Foundation.Affine2D)
+  name.vb: Multiply(Affine2D)
+- uid: FluentGpu.Foundation.Affine2D.TryInverseTransform(FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2@)
+  commentId: M:FluentGpu.Foundation.Affine2D.TryInverseTransform(FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2@)
+  id: TryInverseTransform(FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2@)
+  parent: FluentGpu.Foundation.Affine2D
+  langs:
+  - csharp
+  - vb
+  name: TryInverseTransform(Point2, out Point2)
+  nameWithType: Affine2D.TryInverseTransform(Point2, out Point2)
+  fullName: FluentGpu.Foundation.Affine2D.TryInverseTransform(FluentGpu.Foundation.Point2, out FluentGpu.Foundation.Point2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Geometry.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TryInverseTransform
+    path: ../../src/FluentGpu.Foundation/Geometry.cs
+    startLine: 200
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Inverse-map a DEVICE point back through this transform into the pre-transform frame — the hit-test
+        mirror of <xref href="FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)" data-throw-if-not-resolved="false"></xref> (scale-aware pointer routing into Viewbox/zoomed content). False when the
+        matrix is degenerate (a zero scale renders nothing hit-testable).
+  example: []
+  syntax:
+    content: public bool TryInverseTransform(Point2 p, out Point2 inv)
+    parameters:
+    - id: p
+      type: FluentGpu.Foundation.Point2
+    - id: inv
+      type: FluentGpu.Foundation.Point2
+    return:
+      type: System.Boolean
+    content.vb: Public Function TryInverseTransform(p As Point2, inv As Point2) As Boolean
+  overload: FluentGpu.Foundation.Affine2D.TryInverseTransform*
+  nameWithType.vb: Affine2D.TryInverseTransform(Point2, Point2)
+  fullName.vb: FluentGpu.Foundation.Affine2D.TryInverseTransform(FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2)
+  name.vb: TryInverseTransform(Point2, Point2)
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.Affine2D}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.Affine2D}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Affine2D>
+  nameWithType: IEquatable<Affine2D>
+  fullName: System.IEquatable<FluentGpu.Foundation.Affine2D>
+  nameWithType.vb: IEquatable(Of Affine2D)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.Affine2D)
+  name.vb: IEquatable(Of Affine2D)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.Affine2D
+    name: Affine2D
+    href: FluentGpu.Foundation.Affine2D.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.Affine2D
+    name: Affine2D
+    href: FluentGpu.Foundation.Affine2D.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.Affine2D.#ctor*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.#ctor
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D__ctor_System_Single_System_Single_System_Single_System_Single_System_Single_System_Single_
+  name: Affine2D
+  nameWithType: Affine2D.Affine2D
+  fullName: FluentGpu.Foundation.Affine2D.Affine2D
+  nameWithType.vb: Affine2D.New
+  fullName.vb: FluentGpu.Foundation.Affine2D.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Affine2D.M11*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.M11
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_M11
+  name: M11
+  nameWithType: Affine2D.M11
+  fullName: FluentGpu.Foundation.Affine2D.M11
+- uid: FluentGpu.Foundation.Affine2D.M12*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.M12
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_M12
+  name: M12
+  nameWithType: Affine2D.M12
+  fullName: FluentGpu.Foundation.Affine2D.M12
+- uid: FluentGpu.Foundation.Affine2D.M21*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.M21
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_M21
+  name: M21
+  nameWithType: Affine2D.M21
+  fullName: FluentGpu.Foundation.Affine2D.M21
+- uid: FluentGpu.Foundation.Affine2D.M22*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.M22
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_M22
+  name: M22
+  nameWithType: Affine2D.M22
+  fullName: FluentGpu.Foundation.Affine2D.M22
+- uid: FluentGpu.Foundation.Affine2D.Dx*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Dx
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Dx
+  name: Dx
+  nameWithType: Affine2D.Dx
+  fullName: FluentGpu.Foundation.Affine2D.Dx
+- uid: FluentGpu.Foundation.Affine2D.Dy*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Dy
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Dy
+  name: Dy
+  nameWithType: Affine2D.Dy
+  fullName: FluentGpu.Foundation.Affine2D.Dy
+- uid: FluentGpu.Foundation.Affine2D.Identity*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Identity
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Identity
+  name: Identity
+  nameWithType: Affine2D.Identity
+  fullName: FluentGpu.Foundation.Affine2D.Identity
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation.Affine2D.Translation*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Translation
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Translation_System_Single_System_Single_
+  name: Translation
+  nameWithType: Affine2D.Translation
+  fullName: FluentGpu.Foundation.Affine2D.Translation
+- uid: FluentGpu.Foundation.Affine2D.Scale*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Scale
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Scale_System_Single_System_Single_
+  name: Scale
+  nameWithType: Affine2D.Scale
+  fullName: FluentGpu.Foundation.Affine2D.Scale
+- uid: FluentGpu.Foundation.Affine2D.Rotation*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Rotation
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Rotation_System_Single_
+  name: Rotation
+  nameWithType: Affine2D.Rotation
+  fullName: FluentGpu.Foundation.Affine2D.Rotation
+- uid: FluentGpu.Foundation.Affine2D.IsIdentity*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.IsIdentity
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_IsIdentity
+  name: IsIdentity
+  nameWithType: Affine2D.IsIdentity
+  fullName: FluentGpu.Foundation.Affine2D.IsIdentity
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.Affine2D.Transform*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Transform
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Transform_FluentGpu_Foundation_Point2_
+  name: Transform
+  nameWithType: Affine2D.Transform
+  fullName: FluentGpu.Foundation.Affine2D.Transform
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: FluentGpu.Foundation.Affine2D.TransformBounds*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.TransformBounds
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_TransformBounds_FluentGpu_Foundation_RectF__
+  name: TransformBounds
+  nameWithType: Affine2D.TransformBounds
+  fullName: FluentGpu.Foundation.Affine2D.TransformBounds
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.Affine2D.Multiply*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.Multiply
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Multiply_FluentGpu_Foundation_Affine2D__
+  name: Multiply
+  nameWithType: Affine2D.Multiply
+  fullName: FluentGpu.Foundation.Affine2D.Multiply
+- uid: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  commentId: M:FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Transform_FluentGpu_Foundation_Point2_
+  name: Transform(Point2)
+  nameWithType: Affine2D.Transform(Point2)
+  fullName: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+    name: Transform
+    href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Transform_FluentGpu_Foundation_Point2_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.Affine2D.Transform(FluentGpu.Foundation.Point2)
+    name: Transform
+    href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_Transform_FluentGpu_Foundation_Point2_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: )
+- uid: FluentGpu.Foundation.Affine2D.TryInverseTransform*
+  commentId: Overload:FluentGpu.Foundation.Affine2D.TryInverseTransform
+  href: FluentGpu.Foundation.Affine2D.html#FluentGpu_Foundation_Affine2D_TryInverseTransform_FluentGpu_Foundation_Point2_FluentGpu_Foundation_Point2__
+  name: TryInverseTransform
+  nameWithType: Affine2D.TryInverseTransform
+  fullName: FluentGpu.Foundation.Affine2D.TryInverseTransform

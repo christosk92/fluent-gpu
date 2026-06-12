@@ -1,0 +1,1250 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media.DecodeScheduler
+  commentId: T:FluentGpu.Media.DecodeScheduler
+  id: DecodeScheduler
+  parent: FluentGpu.Media
+  children:
+  - FluentGpu.Media.DecodeScheduler.#ctor(FluentGpu.Media.IImageCodec,FluentGpu.Media.IImageFetcher,FluentGpu.Media.DecodeOptions)
+  - FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  - FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+  - FluentGpu.Media.DecodeScheduler.CanceledPending
+  - FluentGpu.Media.DecodeScheduler.Dispose
+  - FluentGpu.Media.DecodeScheduler.Inflight
+  - FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  - FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  - FluentGpu.Media.DecodeScheduler.QueueDepth
+  - FluentGpu.Media.DecodeScheduler.RequestCount
+  - FluentGpu.Media.DecodeScheduler.WorkerCount
+  langs:
+  - csharp
+  - vb
+  name: DecodeScheduler
+  nameWithType: DecodeScheduler
+  fullName: FluentGpu.Media.DecodeScheduler
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DecodeScheduler
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Off-thread, parallel, non-blocking, PRIORITIZED image decoder (media-pipeline.md §3). Implements the portable
+
+    <xref href="FluentGpu.Scene.IImageDecoder" data-throw-if-not-resolved="false"></xref> seam the <xref href="FluentGpu.Scene.ImageCache" data-throw-if-not-resolved="false"></xref> drives: <xref href="FluentGpu.Media.DecodeScheduler.Begin(System.Int32%2cSystem.String%2cSystem.Int32%2cSystem.Int32%2cFluentGpu.Scene.ImagePriority)" data-throw-if-not-resolved="false"></xref> enqueues into one of three
+
+    priority lanes (Visible &gt; Overscan &gt; Prefetch) — a non-blocking write on the UI thread; a pool of N worker tasks
+
+    drain the highest non-empty lane and fetch+decode CONCURRENTLY; and <xref href="FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler%2cFluentGpu.Scene.ImageReadyHandler)" data-throw-if-not-resolved="false"></xref> drains finished results on the
+
+    UI thread and never waits on a decode. <xref href="FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32%2cFluentGpu.Scene.ImagePriority)" data-throw-if-not-resolved="false"></xref> promotes a queued prefetch that just scrolled into
+
+    view; <xref href="FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)" data-throw-if-not-resolved="false"></xref> drops a queued/in-flight decode whose row recycled. Robustness: per-attempt timeout,
+
+    transient retry with exponential backoff, permanent fail-fast (see <xref href="FluentGpu.Scene.ImageFailureKind" data-throw-if-not-resolved="false"></xref>). Under backpressure
+
+    the lowest off-screen lane is dropped — never Visible. Diagnostics post to the <code>media</code> counter group.
+  example: []
+  syntax:
+    content: 'public sealed class DecodeScheduler : IImageDecoder, IDisposable'
+    content.vb: Public NotInheritable Class DecodeScheduler Implements IImageDecoder, IDisposable
+  inheritance:
+  - System.Object
+  implements:
+  - FluentGpu.Scene.IImageDecoder
+  - System.IDisposable
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Media.DecodeScheduler.WorkerCount
+  commentId: P:FluentGpu.Media.DecodeScheduler.WorkerCount
+  id: WorkerCount
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: WorkerCount
+  nameWithType: DecodeScheduler.WorkerCount
+  fullName: FluentGpu.Media.DecodeScheduler.WorkerCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WorkerCount
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: public int WorkerCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property WorkerCount As Integer
+  overload: FluentGpu.Media.DecodeScheduler.WorkerCount*
+- uid: FluentGpu.Media.DecodeScheduler.Inflight
+  commentId: P:FluentGpu.Media.DecodeScheduler.Inflight
+  id: Inflight
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Inflight
+  nameWithType: DecodeScheduler.Inflight
+  fullName: FluentGpu.Media.DecodeScheduler.Inflight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inflight
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: public int Inflight { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Inflight As Integer
+  overload: FluentGpu.Media.DecodeScheduler.Inflight*
+- uid: FluentGpu.Media.DecodeScheduler.CanceledPending
+  commentId: P:FluentGpu.Media.DecodeScheduler.CanceledPending
+  id: CanceledPending
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: CanceledPending
+  nameWithType: DecodeScheduler.CanceledPending
+  fullName: FluentGpu.Media.DecodeScheduler.CanceledPending
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CanceledPending
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Live entries in the cancellation map — O(1) census. NOTE: this map grows unbounded today (a known
+        issue a later fix stage addresses); this accessor only makes that visible.
+  example: []
+  syntax:
+    content: public int CanceledPending { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property CanceledPending As Integer
+  overload: FluentGpu.Media.DecodeScheduler.CanceledPending*
+- uid: FluentGpu.Media.DecodeScheduler.QueueDepth
+  commentId: P:FluentGpu.Media.DecodeScheduler.QueueDepth
+  id: QueueDepth
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: QueueDepth
+  nameWithType: DecodeScheduler.QueueDepth
+  fullName: FluentGpu.Media.DecodeScheduler.QueueDepth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueueDepth
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Requests enqueued in the priority lanes but not yet claimed by a worker — O(1) census.
+  example: []
+  syntax:
+    content: public int QueueDepth { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property QueueDepth As Integer
+  overload: FluentGpu.Media.DecodeScheduler.QueueDepth*
+- uid: FluentGpu.Media.DecodeScheduler.RequestCount
+  commentId: P:FluentGpu.Media.DecodeScheduler.RequestCount
+  id: RequestCount
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: RequestCount
+  nameWithType: DecodeScheduler.RequestCount
+  fullName: FluentGpu.Media.DecodeScheduler.RequestCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RequestCount
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Pending request descriptors awaiting claim — O(1) census of the <code>_reqs</code> map.
+  example: []
+  syntax:
+    content: public int RequestCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property RequestCount As Integer
+  overload: FluentGpu.Media.DecodeScheduler.RequestCount*
+- uid: FluentGpu.Media.DecodeScheduler.#ctor(FluentGpu.Media.IImageCodec,FluentGpu.Media.IImageFetcher,FluentGpu.Media.DecodeOptions)
+  commentId: M:FluentGpu.Media.DecodeScheduler.#ctor(FluentGpu.Media.IImageCodec,FluentGpu.Media.IImageFetcher,FluentGpu.Media.DecodeOptions)
+  id: '#ctor(FluentGpu.Media.IImageCodec,FluentGpu.Media.IImageFetcher,FluentGpu.Media.DecodeOptions)'
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: DecodeScheduler(IImageCodec, IImageFetcher, DecodeOptions?)
+  nameWithType: DecodeScheduler.DecodeScheduler(IImageCodec, IImageFetcher, DecodeOptions?)
+  fullName: FluentGpu.Media.DecodeScheduler.DecodeScheduler(FluentGpu.Media.IImageCodec, FluentGpu.Media.IImageFetcher, FluentGpu.Media.DecodeOptions?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  syntax:
+    content: public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
+    parameters:
+    - id: codec
+      type: FluentGpu.Media.IImageCodec
+    - id: fetcher
+      type: FluentGpu.Media.IImageFetcher
+    - id: options
+      type: FluentGpu.Media.DecodeOptions
+    content.vb: Public Sub New(codec As IImageCodec, fetcher As IImageFetcher, options As DecodeOptions = Nothing)
+  overload: FluentGpu.Media.DecodeScheduler.#ctor*
+  nameWithType.vb: DecodeScheduler.New(IImageCodec, IImageFetcher, DecodeOptions)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.New(FluentGpu.Media.IImageCodec, FluentGpu.Media.IImageFetcher, FluentGpu.Media.DecodeOptions)
+  name.vb: New(IImageCodec, IImageFetcher, DecodeOptions)
+- uid: FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  id: Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Begin(int, string, int, int, ImagePriority)
+  nameWithType: DecodeScheduler.Begin(int, string, int, int, ImagePriority)
+  fullName: FluentGpu.Media.DecodeScheduler.Begin(int, string, int, int, FluentGpu.Scene.ImagePriority)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Begin
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  example: []
+  syntax:
+    content: public void Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: source
+      type: System.String
+    - id: targetW
+      type: System.Int32
+    - id: targetH
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    content.vb: Public Sub Begin(id As Integer, source As String, targetW As Integer, targetH As Integer, priority As ImagePriority = ImagePriority.Visible)
+  overload: FluentGpu.Media.DecodeScheduler.Begin*
+  implements:
+  - FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: DecodeScheduler.Begin(Integer, String, Integer, Integer, ImagePriority)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Begin(Integer, String, Integer, Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Begin(Integer, String, Integer, Integer, ImagePriority)
+- uid: FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+  id: Cancel(System.Int32)
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Cancel(int)
+  nameWithType: DecodeScheduler.Cancel(int)
+  fullName: FluentGpu.Media.DecodeScheduler.Cancel(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Cancel an in-flight (or queued) decode — e.g. a virtualized row recycled off-screen. Idempotent.
+  example: []
+  syntax:
+    content: public void Cancel(int id)
+    parameters:
+    - id: id
+      type: System.Int32
+    content.vb: Public Sub Cancel(id As Integer)
+  overload: FluentGpu.Media.DecodeScheduler.Cancel*
+  implements:
+  - FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  nameWithType.vb: DecodeScheduler.Cancel(Integer)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Cancel(Integer)
+  name.vb: Cancel(Integer)
+- uid: FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  id: Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Prioritize(int, ImagePriority)
+  nameWithType: DecodeScheduler.Prioritize(int, ImagePriority)
+  fullName: FluentGpu.Media.DecodeScheduler.Prioritize(int, FluentGpu.Scene.ImagePriority)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Prioritize
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Raise the priority of a queued decode (e.g. a prefetch that just scrolled into view). Idempotent; no-op
+        once the job has started.
+  example: []
+  syntax:
+    content: public void Prioritize(int id, ImagePriority priority)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: priority
+      type: FluentGpu.Scene.ImagePriority
+    content.vb: Public Sub Prioritize(id As Integer, priority As ImagePriority)
+  overload: FluentGpu.Media.DecodeScheduler.Prioritize*
+  implements:
+  - FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: DecodeScheduler.Prioritize(Integer, ImagePriority)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Prioritize(Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Prioritize(Integer, ImagePriority)
+- uid: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  id: Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Pump(ImageCompleteHandler, ImageReadyHandler)
+  nameWithType: DecodeScheduler.Pump(ImageCompleteHandler, ImageReadyHandler)
+  fullName: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler, FluentGpu.Scene.ImageReadyHandler)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pump
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: >-
+    Drain finished decodes. <code class="paramref">onPixels</code> gets the bucket pixels (transient span);
+        <code class="paramref">onComplete</code> gets the final state transition incl. <xref href="FluentGpu.Scene.ImageFailureKind" data-throw-if-not-resolved="false"></xref> + attempt count
+        (after any transient retries the decoder performed internally).
+  example: []
+  syntax:
+    content: public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+    parameters:
+    - id: onComplete
+      type: FluentGpu.Scene.ImageCompleteHandler
+    - id: onPixels
+      type: FluentGpu.Scene.ImageReadyHandler
+    content.vb: Public Sub Pump(onComplete As ImageCompleteHandler, onPixels As ImageReadyHandler)
+  overload: FluentGpu.Media.DecodeScheduler.Pump*
+  implements:
+  - FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+- uid: FluentGpu.Media.DecodeScheduler.Dispose
+  commentId: M:FluentGpu.Media.DecodeScheduler.Dispose
+  id: Dispose
+  parent: FluentGpu.Media.DecodeScheduler
+  langs:
+  - csharp
+  - vb
+  name: Dispose()
+  nameWithType: DecodeScheduler.Dispose()
+  fullName: FluentGpu.Media.DecodeScheduler.Dispose()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Media/DecodeScheduler.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispose
+    path: ../../src/FluentGpu.Media/DecodeScheduler.cs
+    startLine: 201
+  assemblies:
+  - FluentGpu.Media
+  namespace: FluentGpu.Media
+  summary: Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+  example: []
+  syntax:
+    content: public void Dispose()
+    content.vb: Public Sub Dispose()
+  overload: FluentGpu.Media.DecodeScheduler.Dispose*
+  implements:
+  - System.IDisposable.Dispose
+references:
+- uid: FluentGpu.Scene.IImageDecoder
+  commentId: T:FluentGpu.Scene.IImageDecoder
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.IImageDecoder.html
+  name: IImageDecoder
+  nameWithType: IImageDecoder
+  fullName: FluentGpu.Scene.IImageDecoder
+- uid: FluentGpu.Scene.ImageCache
+  commentId: T:FluentGpu.Scene.ImageCache
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCache.html
+  name: ImageCache
+  nameWithType: ImageCache
+  fullName: FluentGpu.Scene.ImageCache
+- uid: FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  isExternal: true
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Begin(int, string, int, int, ImagePriority)
+  nameWithType: DecodeScheduler.Begin(int, string, int, int, ImagePriority)
+  fullName: FluentGpu.Media.DecodeScheduler.Begin(int, string, int, int, FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: DecodeScheduler.Begin(Integer, String, Integer, Integer, ImagePriority)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Begin(Integer, String, Integer, Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Begin(Integer, String, Integer, Integer, ImagePriority)
+  spec.csharp:
+  - uid: FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Begin
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Media.DecodeScheduler.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Begin
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+- uid: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  name: Pump(ImageCompleteHandler, ImageReadyHandler)
+  nameWithType: DecodeScheduler.Pump(ImageCompleteHandler, ImageReadyHandler)
+  fullName: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler, FluentGpu.Scene.ImageReadyHandler)
+  spec.csharp:
+  - uid: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Media.DecodeScheduler.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+- uid: FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  isExternal: true
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Prioritize(int, ImagePriority)
+  nameWithType: DecodeScheduler.Prioritize(int, ImagePriority)
+  fullName: FluentGpu.Media.DecodeScheduler.Prioritize(int, FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: DecodeScheduler.Prioritize(Integer, ImagePriority)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Prioritize(Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Prioritize(Integer, ImagePriority)
+  spec.csharp:
+  - uid: FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Prioritize
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Media.DecodeScheduler.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Prioritize
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+- uid: FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+  commentId: M:FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+  isExternal: true
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Cancel_System_Int32_
+  name: Cancel(int)
+  nameWithType: DecodeScheduler.Cancel(int)
+  fullName: FluentGpu.Media.DecodeScheduler.Cancel(int)
+  nameWithType.vb: DecodeScheduler.Cancel(Integer)
+  fullName.vb: FluentGpu.Media.DecodeScheduler.Cancel(Integer)
+  name.vb: Cancel(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+    name: Cancel
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Cancel_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Media.DecodeScheduler.Cancel(System.Int32)
+    name: Cancel
+    href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Cancel_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  href: FluentGpu.html
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Media.DecodeScheduler.WorkerCount*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.WorkerCount
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_WorkerCount
+  name: WorkerCount
+  nameWithType: DecodeScheduler.WorkerCount
+  fullName: FluentGpu.Media.DecodeScheduler.WorkerCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Media.DecodeScheduler.Inflight*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Inflight
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Inflight
+  name: Inflight
+  nameWithType: DecodeScheduler.Inflight
+  fullName: FluentGpu.Media.DecodeScheduler.Inflight
+- uid: FluentGpu.Media.DecodeScheduler.CanceledPending*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.CanceledPending
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_CanceledPending
+  name: CanceledPending
+  nameWithType: DecodeScheduler.CanceledPending
+  fullName: FluentGpu.Media.DecodeScheduler.CanceledPending
+- uid: FluentGpu.Media.DecodeScheduler.QueueDepth*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.QueueDepth
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_QueueDepth
+  name: QueueDepth
+  nameWithType: DecodeScheduler.QueueDepth
+  fullName: FluentGpu.Media.DecodeScheduler.QueueDepth
+- uid: FluentGpu.Media.DecodeScheduler.RequestCount*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.RequestCount
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_RequestCount
+  name: RequestCount
+  nameWithType: DecodeScheduler.RequestCount
+  fullName: FluentGpu.Media.DecodeScheduler.RequestCount
+- uid: FluentGpu.Media.DecodeScheduler.#ctor*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.#ctor
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler__ctor_FluentGpu_Media_IImageCodec_FluentGpu_Media_IImageFetcher_FluentGpu_Media_DecodeOptions_
+  name: DecodeScheduler
+  nameWithType: DecodeScheduler.DecodeScheduler
+  fullName: FluentGpu.Media.DecodeScheduler.DecodeScheduler
+  nameWithType.vb: DecodeScheduler.New
+  fullName.vb: FluentGpu.Media.DecodeScheduler.New
+  name.vb: New
+- uid: FluentGpu.Media.IImageCodec
+  commentId: T:FluentGpu.Media.IImageCodec
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.IImageCodec.html
+  name: IImageCodec
+  nameWithType: IImageCodec
+  fullName: FluentGpu.Media.IImageCodec
+- uid: FluentGpu.Media.IImageFetcher
+  commentId: T:FluentGpu.Media.IImageFetcher
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.IImageFetcher.html
+  name: IImageFetcher
+  nameWithType: IImageFetcher
+  fullName: FluentGpu.Media.IImageFetcher
+- uid: FluentGpu.Media.DecodeOptions
+  commentId: T:FluentGpu.Media.DecodeOptions
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.DecodeOptions.html
+  name: DecodeOptions
+  nameWithType: DecodeOptions
+  fullName: FluentGpu.Media.DecodeOptions
+- uid: FluentGpu.Media.DecodeScheduler.Begin*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Begin
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Begin
+  nameWithType: DecodeScheduler.Begin
+  fullName: FluentGpu.Media.DecodeScheduler.Begin
+- uid: FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Scene.IImageDecoder
+  isExternal: true
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Begin(int, string, int, int, ImagePriority)
+  nameWithType: IImageDecoder.Begin(int, string, int, int, ImagePriority)
+  fullName: FluentGpu.Scene.IImageDecoder.Begin(int, string, int, int, FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: IImageDecoder.Begin(Integer, String, Integer, Integer, ImagePriority)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Begin(Integer, String, Integer, Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Begin(Integer, String, Integer, Integer, ImagePriority)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Begin
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IImageDecoder.Begin(System.Int32,System.String,System.Int32,System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Begin
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Begin_System_Int32_System_String_System_Int32_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImagePriority.html
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority
+- uid: FluentGpu.Media.DecodeScheduler.Cancel*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Cancel
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Cancel_System_Int32_
+  name: Cancel
+  nameWithType: DecodeScheduler.Cancel
+  fullName: FluentGpu.Media.DecodeScheduler.Cancel
+- uid: FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+  parent: FluentGpu.Scene.IImageDecoder
+  isExternal: true
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Cancel_System_Int32_
+  name: Cancel(int)
+  nameWithType: IImageDecoder.Cancel(int)
+  fullName: FluentGpu.Scene.IImageDecoder.Cancel(int)
+  nameWithType.vb: IImageDecoder.Cancel(Integer)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Cancel(Integer)
+  name.vb: Cancel(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+    name: Cancel
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Cancel_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IImageDecoder.Cancel(System.Int32)
+    name: Cancel
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Cancel_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Media.DecodeScheduler.Prioritize*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Prioritize
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Prioritize
+  nameWithType: DecodeScheduler.Prioritize
+  fullName: FluentGpu.Media.DecodeScheduler.Prioritize
+- uid: FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+  parent: FluentGpu.Scene.IImageDecoder
+  isExternal: true
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  name: Prioritize(int, ImagePriority)
+  nameWithType: IImageDecoder.Prioritize(int, ImagePriority)
+  fullName: FluentGpu.Scene.IImageDecoder.Prioritize(int, FluentGpu.Scene.ImagePriority)
+  nameWithType.vb: IImageDecoder.Prioritize(Integer, ImagePriority)
+  fullName.vb: FluentGpu.Scene.IImageDecoder.Prioritize(Integer, FluentGpu.Scene.ImagePriority)
+  name.vb: Prioritize(Integer, ImagePriority)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Prioritize
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IImageDecoder.Prioritize(System.Int32,FluentGpu.Scene.ImagePriority)
+    name: Prioritize
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Prioritize_System_Int32_FluentGpu_Scene_ImagePriority_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    href: FluentGpu.Scene.ImagePriority.html
+  - name: )
+- uid: FluentGpu.Media.DecodeScheduler.Pump*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Pump
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  name: Pump
+  nameWithType: DecodeScheduler.Pump
+  fullName: FluentGpu.Media.DecodeScheduler.Pump
+- uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  commentId: M:FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+  parent: FluentGpu.Scene.IImageDecoder
+  href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  name: Pump(ImageCompleteHandler, ImageReadyHandler)
+  nameWithType: IImageDecoder.Pump(ImageCompleteHandler, ImageReadyHandler)
+  fullName: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler, FluentGpu.Scene.ImageReadyHandler)
+  spec.csharp:
+  - uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Scene.IImageDecoder.Pump(FluentGpu.Scene.ImageCompleteHandler,FluentGpu.Scene.ImageReadyHandler)
+    name: Pump
+    href: FluentGpu.Scene.IImageDecoder.html#FluentGpu_Scene_IImageDecoder_Pump_FluentGpu_Scene_ImageCompleteHandler_FluentGpu_Scene_ImageReadyHandler_
+  - name: (
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    href: FluentGpu.Scene.ImageCompleteHandler.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    href: FluentGpu.Scene.ImageReadyHandler.html
+  - name: )
+- uid: FluentGpu.Scene.ImageCompleteHandler
+  commentId: T:FluentGpu.Scene.ImageCompleteHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageCompleteHandler.html
+  name: ImageCompleteHandler
+  nameWithType: ImageCompleteHandler
+  fullName: FluentGpu.Scene.ImageCompleteHandler
+- uid: FluentGpu.Scene.ImageReadyHandler
+  commentId: T:FluentGpu.Scene.ImageReadyHandler
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageReadyHandler.html
+  name: ImageReadyHandler
+  nameWithType: ImageReadyHandler
+  fullName: FluentGpu.Scene.ImageReadyHandler
+- uid: FluentGpu.Media.DecodeScheduler.Dispose*
+  commentId: Overload:FluentGpu.Media.DecodeScheduler.Dispose
+  href: FluentGpu.Media.DecodeScheduler.html#FluentGpu_Media_DecodeScheduler_Dispose
+  name: Dispose
+  nameWithType: DecodeScheduler.Dispose
+  fullName: FluentGpu.Media.DecodeScheduler.Dispose
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )

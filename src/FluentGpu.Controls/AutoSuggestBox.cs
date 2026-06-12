@@ -94,6 +94,11 @@ public sealed class AutoSuggestBox : Component
     public IReadOnlyList<string> Suggestions = [];
     public string Placeholder = "Search";
     public float Width = 280f;
+    /// <summary>LIVE available width (DIP) — when set, the field renders at <c>min(Width, WidthSignal.Value)</c>
+    /// (<see cref="Width"/> becomes the maximum). Component plain fields freeze at mount, so a search box that must
+    /// give way as its host narrows takes the host's measured slot signal here (the titlebar passes
+    /// <see cref="TitleBar.ContentAvail"/>); the popup surfaces follow the same effective width.</summary>
+    public IReadSignal<float>? WidthSignal;
     public Signal<string>? Text;                       // caller-owned query (two-way), like ComboBox.Text
     public Action<string>? OnTextChanged;              // legacy alias of TextChanged (no reason argument)
     /// <summary>WinUI <c>TextChanged</c> with <c>AutoSuggestBoxTextChangedEventArgs.Reason</c> (debounced 150ms;
@@ -122,14 +127,19 @@ public sealed class AutoSuggestBox : Component
         float debounceMs = TextChangedDebounceMs,
         Action<string, TextChangeReason>? textChanged = null,
         bool updateTextOnSelect = true,
-        TemplateParts? parts = null)
+        TemplateParts? parts = null,
+        IReadSignal<float>? widthSignal = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
-            Suggestions = suggestions, Placeholder = placeholder, Width = width, Text = text,
+            Suggestions = suggestions, Placeholder = placeholder, Width = width, WidthSignal = widthSignal, Text = text,
             OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts,
         });
+
+    // The rendered width: the live signal (clamped by Width as the max) over the frozen mount value. Reading it
+    // inside a Render subscribes THAT component (the field here, the popup body in SuggestionsList) to live resizes.
+    internal float EffectiveWidth => WidthSignal is { } ws ? MathF.Min(Width, ws.Value) : Width;
 
     // Re-filter helper shared by the root (open-decision) and the popup body (render). Case-insensitive substring;
     // empty query → no matches (WinUI: list opens iff query non-empty AND count > 0).
@@ -345,13 +355,19 @@ public sealed class AutoSuggestBox : Component
         // right edge (AutoSuggestBox_themeresources.xaml:242 + :226–230).
         float iconCol = hasIcon ? QueryButtonWidth + QueryButtonLeftMargin + RightButtonMargin : 0f;
 
+        float width = EffectiveWidth;   // subscribe: a live width move re-renders this field at the new size
+        // The inner field's width as a STABLE derived signal: the EditableText is its own mounted component (its
+        // plain Width freezes at ITS mount, and a parent re-render reuses it without re-running the factory), so it
+        // subscribes to this memo and resizes itself when the live width moves.
+        var innerWidth = UseComputed(() => EffectiveWidth - iconCol);
+
         var children = new List<Element>
         {
             Embed.Comp(() =>
             {
                 var e = new EditableText
                 {
-                    Text = query, Width = Width - iconCol, Height = 32f, Placeholder = Placeholder,
+                    Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
                     OnCommit = OnEnter, OnCancel = OnEscape,
                 };
                 _edit = e;
@@ -411,7 +427,7 @@ public sealed class AutoSuggestBox : Component
         var root = new BoxEl
         {
             // WinUI AutoSuggestBox field surface: ControlCornerRadius, 1px ControlStrokeColorDefault, ControlFillColorDefault.
-            Direction = 0, Width = Width, MinHeight = 32f, AlignItems = FlexAlign.Center,
+            Direction = 0, Width = width, MinHeight = 32f, AlignItems = FlexAlign.Center,
             Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
             Role = AutomationRole.ComboBox,
             OnRealized = anchorCapture,
@@ -456,6 +472,7 @@ internal sealed class SuggestionsList : Component
     {
         var q = Query.Value;                           // subscribe → granular re-render of ONLY this popup subtree
         int hi = Highlight.Value;                      // subscribe → re-highlight on arrow nav
+        float width = Owner.EffectiveWidth;            // subscribe → an open popup follows a live field resize
         var matches = AutoSuggestBox.Filter(Owner.Suggestions, q);
 
         // Mirror UpdateSuggestionListVisibility: no matches → close (deferred to an effect so render stays pure and
@@ -464,8 +481,8 @@ internal sealed class SuggestionsList : Component
             return new BoxEl
             {
                 Direction = 1,
-                Width = Owner.Width,
-                MinWidth = Owner.Width,
+                Width = width,
+                MinWidth = width,
                 ClipToBounds = true,
                 Margin = new Edges4(-1, 0, -1, 0),
                 Children =
@@ -515,16 +532,16 @@ internal sealed class SuggestionsList : Component
         var column = new BoxEl
         {
             Direction = 1,
-            Width = Owner.Width,
-            MinWidth = Owner.Width,
+            Width = width,
+            MinWidth = width,
             Margin = new Edges4(-1, 0, -1, 0), Children = rows,
         };
         var list = new ScrollEl
         {
             Content = column,
             ContentSized = true,
-            Width = Owner.Width,
-            MinWidth = Owner.Width,
+            Width = width,
+            MinWidth = width,
             MaxHeight = Owner.MaxHeight,
         };
         if (parts is not null)

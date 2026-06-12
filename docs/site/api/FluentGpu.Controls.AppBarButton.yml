@@ -1,0 +1,705 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AppBarButton
+  commentId: T:FluentGpu.Controls.AppBarButton
+  id: AppBarButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AppBarButton.Create(System.String,System.String,System.Action,System.Boolean,FluentGpu.Controls.AppBarButton.Style,System.Boolean,System.Nullable{FluentGpu.Foundation.KeyAccelerator})
+  - FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  - FluentGpu.Controls.AppBarButton.DefaultStyle
+  - FluentGpu.Controls.AppBarButton.StyleOverride
+  langs:
+  - csharp
+  - vb
+  name: AppBarButton
+  nameWithType: AppBarButton
+  fullName: FluentGpu.Controls.AppBarButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AppBarButton
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI AppBarButton (AppBarButton_themeresources.xaml). Three layout families:
+
+        <ul><li><b>FullSize</b> (default style): a 68-wide (:133 Width=68), 64-min-high (AppBarThemeMinHeight,
+        CommandBar_themeresources.xaml:71) vertical stack — 16px icon (AppBarButtonContentHeight) over a 12px Caption
+        label.</li><li><b>Compact</b> (<code>isCompact: true</code> — the closed CommandBar): the label collapses; icon-only at the 48px
+        compact height (AppBarThemeCompactHeight :72), ContentViewboxCompactMargin 0,12,0,12 (:111).</li><li><b>Overflow</b> (<xref href="FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand%2cSystem.Boolean%2cSystem.Boolean%2cSystem.Action%2cFluentGpu.Controls.AppBarButton.Style)" data-throw-if-not-resolved="false"></xref> — the CommandBar overflow menu): a HORIZONTAL row — optional
+        toggle-check column, optional 16×16 icon at the left (OverflowWithMenuIcons :211-223), the label as a 14px Body run
+        (OverflowTextLabel, padding 0,5,0,8 = AppBarButtonOverflowTextLabelPadding :114; lead margin 12 / 38 with toggles /
+        76 with toggles+icons :192-238), and right-aligned 12px accelerator text (KeyboardAcceleratorTextLabel Margin
+        24,0,12,0 :371).</li></ul>
+
+        State fills are the subtle ramp (AppBarButtonBackground/​PointerOver/​Pressed = SubtleFill Transparent/Secondary/
+        Tertiary); press dims the foreground to TextSecondary. FocusVisualMargin = −3 (:135). A
+        <xref href="FluentGpu.Foundation.KeyAccelerator" data-throw-if-not-resolved="false"></xref> chord invokes the button from anywhere (WinUI KeyboardAccelerator).
+  example: []
+  syntax:
+    content: public static class AppBarButton
+    content.vb: Public Module AppBarButton
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.AppBarButton.StyleOverride
+  commentId: F:FluentGpu.Controls.AppBarButton.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.AppBarButton
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: AppBarButton.StyleOverride
+  fullName: FluentGpu.Controls.AppBarButton.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static AppBarButton.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.AppBarButton.Style
+    content.vb: Public Shared StyleOverride As AppBarButton.Style
+- uid: FluentGpu.Controls.AppBarButton.DefaultStyle
+  commentId: P:FluentGpu.Controls.AppBarButton.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.AppBarButton
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: AppBarButton.DefaultStyle
+  fullName: FluentGpu.Controls.AppBarButton.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static AppBarButton.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.AppBarButton.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As AppBarButton.Style
+  overload: FluentGpu.Controls.AppBarButton.DefaultStyle*
+- uid: FluentGpu.Controls.AppBarButton.Create(System.String,System.String,System.Action,System.Boolean,FluentGpu.Controls.AppBarButton.Style,System.Boolean,System.Nullable{FluentGpu.Foundation.KeyAccelerator})
+  commentId: M:FluentGpu.Controls.AppBarButton.Create(System.String,System.String,System.Action,System.Boolean,FluentGpu.Controls.AppBarButton.Style,System.Boolean,System.Nullable{FluentGpu.Foundation.KeyAccelerator})
+  id: Create(System.String,System.String,System.Action,System.Boolean,FluentGpu.Controls.AppBarButton.Style,System.Boolean,System.Nullable{FluentGpu.Foundation.KeyAccelerator})
+  parent: FluentGpu.Controls.AppBarButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, string, Action, bool, Style?, bool, KeyAccelerator?)
+  nameWithType: AppBarButton.Create(string, string, Action, bool, AppBarButton.Style?, bool, KeyAccelerator?)
+  fullName: FluentGpu.Controls.AppBarButton.Create(string, string, System.Action, bool, FluentGpu.Controls.AppBarButton.Style?, bool, FluentGpu.Foundation.KeyAccelerator?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    FullSize (labeled, 68×64) or Compact (icon-only, 48×48) AppBarButton.
+        <code class="paramref">accelerator</code> wires a real engine keyboard-accelerator chord onto the click.
+  example: []
+  syntax:
+    content: public static BoxEl Create(string glyph, string label, Action onClick, bool enabled = true, AppBarButton.Style? style = null, bool isCompact = false, KeyAccelerator? accelerator = null)
+    parameters:
+    - id: glyph
+      type: System.String
+    - id: label
+      type: System.String
+    - id: onClick
+      type: System.Action
+    - id: enabled
+      type: System.Boolean
+    - id: style
+      type: FluentGpu.Controls.AppBarButton.Style
+    - id: isCompact
+      type: System.Boolean
+    - id: accelerator
+      type: System.Nullable{FluentGpu.Foundation.KeyAccelerator}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(glyph As String, label As String, onClick As Action, enabled As Boolean = True, style As AppBarButton.Style = Nothing, isCompact As Boolean = False, accelerator As KeyAccelerator? = Nothing) As BoxEl
+  overload: FluentGpu.Controls.AppBarButton.Create*
+  nameWithType.vb: AppBarButton.Create(String, String, Action, Boolean, AppBarButton.Style, Boolean, KeyAccelerator?)
+  fullName.vb: FluentGpu.Controls.AppBarButton.Create(String, String, System.Action, Boolean, FluentGpu.Controls.AppBarButton.Style, Boolean, FluentGpu.Foundation.KeyAccelerator?)
+  name.vb: Create(String, String, Action, Boolean, Style, Boolean, KeyAccelerator?)
+- uid: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  commentId: M:FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  id: CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  parent: FluentGpu.Controls.AppBarButton
+  langs:
+  - csharp
+  - vb
+  name: CreateOverflow(AppBarCommand, bool, bool, Action, Style?)
+  nameWithType: AppBarButton.CreateOverflow(AppBarCommand, bool, bool, Action, AppBarButton.Style?)
+  fullName: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand, bool, bool, System.Action, FluentGpu.Controls.AppBarButton.Style?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AppBarButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreateOverflow
+    path: ../../src/FluentGpu.Controls/AppBarButton.cs
+    startLine: 125
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    An Overflow-state AppBarButton row for the CommandBar overflow menu (AppBarButton_themeresources.xaml
+        :192-238 Overflow/OverflowWithToggleButtons/OverflowWithMenuIcons/OverflowWithToggleButtonsAndMenuIcons):
+        [check column when <code class="paramref">hasToggles</code>] [16×16 icon at left when <code class="paramref">hasIcons</code>]
+        label (Body 14, padding 0,5,0,8) … right-aligned accelerator text (Caption 12, margin 24,0,12,0).
+  example: []
+  syntax:
+    content: public static BoxEl CreateOverflow(AppBarCommand cmd, bool hasToggles, bool hasIcons, Action onInvoke, AppBarButton.Style? style = null)
+    parameters:
+    - id: cmd
+      type: FluentGpu.Controls.AppBarCommand
+    - id: hasToggles
+      type: System.Boolean
+    - id: hasIcons
+      type: System.Boolean
+    - id: onInvoke
+      type: System.Action
+    - id: style
+      type: FluentGpu.Controls.AppBarButton.Style
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function CreateOverflow(cmd As AppBarCommand, hasToggles As Boolean, hasIcons As Boolean, onInvoke As Action, style As AppBarButton.Style = Nothing) As BoxEl
+  overload: FluentGpu.Controls.AppBarButton.CreateOverflow*
+  nameWithType.vb: AppBarButton.CreateOverflow(AppBarCommand, Boolean, Boolean, Action, AppBarButton.Style)
+  fullName.vb: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand, Boolean, Boolean, System.Action, FluentGpu.Controls.AppBarButton.Style)
+  name.vb: CreateOverflow(AppBarCommand, Boolean, Boolean, Action, Style)
+references:
+- uid: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  commentId: M:FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+  isExternal: true
+  href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_CreateOverflow_FluentGpu_Controls_AppBarCommand_System_Boolean_System_Boolean_System_Action_FluentGpu_Controls_AppBarButton_Style_
+  name: CreateOverflow(AppBarCommand, bool, bool, Action, Style)
+  nameWithType: AppBarButton.CreateOverflow(AppBarCommand, bool, bool, Action, AppBarButton.Style)
+  fullName: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand, bool, bool, System.Action, FluentGpu.Controls.AppBarButton.Style)
+  nameWithType.vb: AppBarButton.CreateOverflow(AppBarCommand, Boolean, Boolean, Action, AppBarButton.Style)
+  fullName.vb: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand, Boolean, Boolean, System.Action, FluentGpu.Controls.AppBarButton.Style)
+  name.vb: CreateOverflow(AppBarCommand, Boolean, Boolean, Action, Style)
+  spec.csharp:
+  - uid: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+    name: CreateOverflow
+    href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_CreateOverflow_FluentGpu_Controls_AppBarCommand_System_Boolean_System_Boolean_System_Action_FluentGpu_Controls_AppBarButton_Style_
+  - name: (
+  - uid: FluentGpu.Controls.AppBarCommand
+    name: AppBarCommand
+    href: FluentGpu.Controls.AppBarCommand.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.AppBarButton.CreateOverflow(FluentGpu.Controls.AppBarCommand,System.Boolean,System.Boolean,System.Action,FluentGpu.Controls.AppBarButton.Style)
+    name: CreateOverflow
+    href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_CreateOverflow_FluentGpu_Controls_AppBarCommand_System_Boolean_System_Boolean_System_Action_FluentGpu_Controls_AppBarButton_Style_
+  - name: (
+  - uid: FluentGpu.Controls.AppBarCommand
+    name: AppBarCommand
+    href: FluentGpu.Controls.AppBarCommand.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Action
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  - name: )
+- uid: FluentGpu.Foundation.KeyAccelerator
+  commentId: T:FluentGpu.Foundation.KeyAccelerator
+  href: FluentGpu.Foundation.KeyAccelerator.html
+  name: KeyAccelerator
+  nameWithType: KeyAccelerator
+  fullName: FluentGpu.Foundation.KeyAccelerator
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.AppBarButton.Style
+  commentId: T:FluentGpu.Controls.AppBarButton.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarButton.html
+  name: AppBarButton.Style
+  nameWithType: AppBarButton.Style
+  fullName: FluentGpu.Controls.AppBarButton.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    href: FluentGpu.Controls.AppBarButton.html
+  - name: .
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: Style
+    href: FluentGpu.Controls.AppBarButton.Style.html
+- uid: FluentGpu.Controls.AppBarButton.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.DefaultStyle
+  href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_DefaultStyle
+  name: DefaultStyle
+  nameWithType: AppBarButton.DefaultStyle
+  fullName: FluentGpu.Controls.AppBarButton.DefaultStyle
+- uid: FluentGpu.Controls.AppBarButton.Create*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.Create
+  href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_Create_System_String_System_String_System_Action_System_Boolean_FluentGpu_Controls_AppBarButton_Style_System_Boolean_System_Nullable_FluentGpu_Foundation_KeyAccelerator__
+  name: Create
+  nameWithType: AppBarButton.Create
+  fullName: FluentGpu.Controls.AppBarButton.Create
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Nullable{FluentGpu.Foundation.KeyAccelerator}
+  commentId: T:System.Nullable{FluentGpu.Foundation.KeyAccelerator}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.KeyAccelerator.html
+  name: KeyAccelerator?
+  nameWithType: KeyAccelerator?
+  fullName: FluentGpu.Foundation.KeyAccelerator?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.KeyAccelerator
+    name: KeyAccelerator
+    href: FluentGpu.Foundation.KeyAccelerator.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.KeyAccelerator
+    name: KeyAccelerator
+    href: FluentGpu.Foundation.KeyAccelerator.html
+  - name: '?'
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.AppBarButton.CreateOverflow*
+  commentId: Overload:FluentGpu.Controls.AppBarButton.CreateOverflow
+  href: FluentGpu.Controls.AppBarButton.html#FluentGpu_Controls_AppBarButton_CreateOverflow_FluentGpu_Controls_AppBarCommand_System_Boolean_System_Boolean_System_Action_FluentGpu_Controls_AppBarButton_Style_
+  name: CreateOverflow
+  nameWithType: AppBarButton.CreateOverflow
+  fullName: FluentGpu.Controls.AppBarButton.CreateOverflow
+- uid: FluentGpu.Controls.AppBarCommand
+  commentId: T:FluentGpu.Controls.AppBarCommand
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.AppBarCommand.html
+  name: AppBarCommand
+  nameWithType: AppBarCommand
+  fullName: FluentGpu.Controls.AppBarCommand

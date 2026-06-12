@@ -1,0 +1,172 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SplitViewDisplayMode
+  commentId: T:FluentGpu.Controls.SplitViewDisplayMode
+  id: SplitViewDisplayMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SplitViewDisplayMode.CompactInline
+  - FluentGpu.Controls.SplitViewDisplayMode.CompactOverlay
+  - FluentGpu.Controls.SplitViewDisplayMode.Inline
+  - FluentGpu.Controls.SplitViewDisplayMode.Overlay
+  langs:
+  - csharp
+  - vb
+  name: SplitViewDisplayMode
+  nameWithType: SplitViewDisplayMode
+  fullName: FluentGpu.Controls.SplitViewDisplayMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SplitViewDisplayMode
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>SplitViewDisplayMode</code> (XCPTypesAutoGen Modules/Controls/SplitView/SplitView.cs:19-25).
+        Overlay/CompactOverlay float the open pane ABOVE the content (no reflow) and are light-dismissible;
+        Inline/CompactInline reserve layout width for it. Compact modes keep a <code>CompactPaneLength</code> rail visible
+        while closed (the pane is CLIPPED to the rail, never resized — core SplitView.cpp:343-377 template settings).
+  example: []
+  syntax:
+    content: 'public enum SplitViewDisplayMode : byte'
+    content.vb: Public Enum SplitViewDisplayMode As Byte
+- uid: FluentGpu.Controls.SplitViewDisplayMode.Overlay
+  commentId: F:FluentGpu.Controls.SplitViewDisplayMode.Overlay
+  id: Overlay
+  parent: FluentGpu.Controls.SplitViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Overlay
+  nameWithType: SplitViewDisplayMode.Overlay
+  fullName: FluentGpu.Controls.SplitViewDisplayMode.Overlay
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Overlay
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Overlay = 0
+    return:
+      type: FluentGpu.Controls.SplitViewDisplayMode
+- uid: FluentGpu.Controls.SplitViewDisplayMode.Inline
+  commentId: F:FluentGpu.Controls.SplitViewDisplayMode.Inline
+  id: Inline
+  parent: FluentGpu.Controls.SplitViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Inline
+  nameWithType: SplitViewDisplayMode.Inline
+  fullName: FluentGpu.Controls.SplitViewDisplayMode.Inline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Inline
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Inline = 1
+    return:
+      type: FluentGpu.Controls.SplitViewDisplayMode
+- uid: FluentGpu.Controls.SplitViewDisplayMode.CompactOverlay
+  commentId: F:FluentGpu.Controls.SplitViewDisplayMode.CompactOverlay
+  id: CompactOverlay
+  parent: FluentGpu.Controls.SplitViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: CompactOverlay
+  nameWithType: SplitViewDisplayMode.CompactOverlay
+  fullName: FluentGpu.Controls.SplitViewDisplayMode.CompactOverlay
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompactOverlay
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: CompactOverlay = 2
+    return:
+      type: FluentGpu.Controls.SplitViewDisplayMode
+- uid: FluentGpu.Controls.SplitViewDisplayMode.CompactInline
+  commentId: F:FluentGpu.Controls.SplitViewDisplayMode.CompactInline
+  id: CompactInline
+  parent: FluentGpu.Controls.SplitViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: CompactInline
+  nameWithType: SplitViewDisplayMode.CompactInline
+  fullName: FluentGpu.Controls.SplitViewDisplayMode.CompactInline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CompactInline
+    path: ../../src/FluentGpu.Controls/SplitView.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: CompactInline = 3
+    return:
+      type: FluentGpu.Controls.SplitViewDisplayMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.SplitViewDisplayMode
+  commentId: T:FluentGpu.Controls.SplitViewDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SplitViewDisplayMode.html
+  name: SplitViewDisplayMode
+  nameWithType: SplitViewDisplayMode
+  fullName: FluentGpu.Controls.SplitViewDisplayMode

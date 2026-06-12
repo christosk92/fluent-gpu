@@ -1,0 +1,1519 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RadioButton.Style
+  commentId: T:FluentGpu.Controls.RadioButton.Style
+  id: RadioButton.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RadioButton.Style.ContentGap
+  - FluentGpu.Controls.RadioButton.Style.DisabledForeground
+  - FluentGpu.Controls.RadioButton.Style.Dot
+  - FluentGpu.Controls.RadioButton.Style.DotBorder
+  - FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+  - FluentGpu.Controls.RadioButton.Style.DotDisabled
+  - FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+  - FluentGpu.Controls.RadioButton.Style.DotHoverSize
+  - FluentGpu.Controls.RadioButton.Style.DotPressedSize
+  - FluentGpu.Controls.RadioButton.Style.DotSize
+  - FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+  - FluentGpu.Controls.RadioButton.Style.FontSize
+  - FluentGpu.Controls.RadioButton.Style.Foreground
+  - FluentGpu.Controls.RadioButton.Style.MinHeight
+  - FluentGpu.Controls.RadioButton.Style.MinWidth
+  - FluentGpu.Controls.RadioButton.Style.OffBorder
+  - FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+  - FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+  - FluentGpu.Controls.RadioButton.Style.OffFill
+  - FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+  - FluentGpu.Controls.RadioButton.Style.OffHover
+  - FluentGpu.Controls.RadioButton.Style.OffPressed
+  - FluentGpu.Controls.RadioButton.Style.OnBorder
+  - FluentGpu.Controls.RadioButton.Style.OnHover
+  - FluentGpu.Controls.RadioButton.Style.OnPressed
+  - FluentGpu.Controls.RadioButton.Style.OnRing
+  - FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+  - FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+  - FluentGpu.Controls.RadioButton.Style.PressedDotSize
+  - FluentGpu.Controls.RadioButton.Style.RingSize
+  langs:
+  - csharp
+  - vb
+  name: RadioButton.Style
+  nameWithType: RadioButton.Style
+  fullName: FluentGpu.Controls.RadioButton.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record RadioButton.Style : IEquatable<RadioButton.Style>'
+    content.vb: Public NotInheritable Class RadioButton.Style Implements IEquatable(Of RadioButton.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.RadioButton.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.RadioButton.Style.RingSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.RingSize
+  id: RingSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: RingSize
+  nameWithType: RadioButton.Style.RingSize
+  fullName: FluentGpu.Controls.RadioButton.Style.RingSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RingSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float RingSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property RingSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.RingSize*
+- uid: FluentGpu.Controls.RadioButton.Style.DotSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotSize
+  id: DotSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotSize
+  nameWithType: RadioButton.Style.DotSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DotSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DotSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.DotSize*
+- uid: FluentGpu.Controls.RadioButton.Style.DotHoverSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotHoverSize
+  id: DotHoverSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotHoverSize
+  nameWithType: RadioButton.Style.DotHoverSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotHoverSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotHoverSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DotHoverSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DotHoverSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.DotHoverSize*
+- uid: FluentGpu.Controls.RadioButton.Style.DotPressedSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotPressedSize
+  id: DotPressedSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotPressedSize
+  nameWithType: RadioButton.Style.DotPressedSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotPressedSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotPressedSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DotPressedSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DotPressedSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.DotPressedSize*
+- uid: FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+  id: DotDisabledSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotDisabledSize
+  nameWithType: RadioButton.Style.DotDisabledSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotDisabledSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DotDisabledSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DotDisabledSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.DotDisabledSize*
+- uid: FluentGpu.Controls.RadioButton.Style.PressedDotSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.PressedDotSize
+  id: PressedDotSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedDotSize
+  nameWithType: RadioButton.Style.PressedDotSize
+  fullName: FluentGpu.Controls.RadioButton.Style.PressedDotSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedDotSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PressedDotSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PressedDotSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.PressedDotSize*
+- uid: FluentGpu.Controls.RadioButton.Style.FontSize
+  commentId: P:FluentGpu.Controls.RadioButton.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: RadioButton.Style.FontSize
+  fullName: FluentGpu.Controls.RadioButton.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.RadioButton.Style.FontSize*
+- uid: FluentGpu.Controls.RadioButton.Style.MinHeight
+  commentId: P:FluentGpu.Controls.RadioButton.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: RadioButton.Style.MinHeight
+  fullName: FluentGpu.Controls.RadioButton.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.RadioButton.Style.MinHeight*
+- uid: FluentGpu.Controls.RadioButton.Style.MinWidth
+  commentId: P:FluentGpu.Controls.RadioButton.Style.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: RadioButton.Style.MinWidth
+  fullName: FluentGpu.Controls.RadioButton.Style.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Controls.RadioButton.Style.MinWidth*
+- uid: FluentGpu.Controls.RadioButton.Style.ContentGap
+  commentId: P:FluentGpu.Controls.RadioButton.Style.ContentGap
+  id: ContentGap
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: ContentGap
+  nameWithType: RadioButton.Style.ContentGap
+  fullName: FluentGpu.Controls.RadioButton.Style.ContentGap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentGap
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float ContentGap { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ContentGap As Single
+  overload: FluentGpu.Controls.RadioButton.Style.ContentGap*
+- uid: FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: RadioButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI FocusVisualMargin −7,−3,−7,−3 (template:196); the engine draws the ring (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.RadioButton.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.RadioButton.Style.OffFill
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffFill
+  id: OffFill
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffFill
+  nameWithType: RadioButton.Style.OffFill
+  fullName: FluentGpu.Controls.RadioButton.Style.OffFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffFill
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffFill As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffFill*
+- uid: FluentGpu.Controls.RadioButton.Style.OffHover
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffHover
+  id: OffHover
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffHover
+  nameWithType: RadioButton.Style.OffHover
+  fullName: FluentGpu.Controls.RadioButton.Style.OffHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffHover
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffHover As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffHover*
+- uid: FluentGpu.Controls.RadioButton.Style.OffPressed
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffPressed
+  id: OffPressed
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffPressed
+  nameWithType: RadioButton.Style.OffPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OffPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffPressed
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffPressed As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffPressed*
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorder
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffBorder
+  id: OffBorder
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffBorder
+  nameWithType: RadioButton.Style.OffBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffBorder
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffBorder { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffBorder As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffBorder*
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+  id: OffBorderPressed
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffBorderPressed
+  nameWithType: RadioButton.Style.OffBorderPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffBorderPressed
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffBorderPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffBorderPressed As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffBorderPressed*
+- uid: FluentGpu.Controls.RadioButton.Style.OnRing
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OnRing
+  id: OnRing
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnRing
+  nameWithType: RadioButton.Style.OnRing
+  fullName: FluentGpu.Controls.RadioButton.Style.OnRing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRing
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnRing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnRing As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OnRing*
+- uid: FluentGpu.Controls.RadioButton.Style.OnHover
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OnHover
+  id: OnHover
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnHover
+  nameWithType: RadioButton.Style.OnHover
+  fullName: FluentGpu.Controls.RadioButton.Style.OnHover
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnHover
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnHover { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnHover As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OnHover*
+- uid: FluentGpu.Controls.RadioButton.Style.OnPressed
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OnPressed
+  id: OnPressed
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnPressed
+  nameWithType: RadioButton.Style.OnPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OnPressed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnPressed
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnPressed { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnPressed As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OnPressed*
+- uid: FluentGpu.Controls.RadioButton.Style.OnBorder
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OnBorder
+  id: OnBorder
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnBorder
+  nameWithType: RadioButton.Style.OnBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.OnBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnBorder
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnBorder { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnBorder As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OnBorder*
+- uid: FluentGpu.Controls.RadioButton.Style.Dot
+  commentId: P:FluentGpu.Controls.RadioButton.Style.Dot
+  id: Dot
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Dot
+  nameWithType: RadioButton.Style.Dot
+  fullName: FluentGpu.Controls.RadioButton.Style.Dot
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dot
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Dot { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Dot As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.Dot*
+- uid: FluentGpu.Controls.RadioButton.Style.DotBorder
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotBorder
+  id: DotBorder
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotBorder
+  nameWithType: RadioButton.Style.DotBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.DotBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotBorder
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? DotBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property DotBorder As GradientSpec?
+  overload: FluentGpu.Controls.RadioButton.Style.DotBorder*
+- uid: FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+  id: DotBorderDisabled
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotBorderDisabled
+  nameWithType: RadioButton.Style.DotBorderDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotBorderDisabled
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? DotBorderDisabled { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property DotBorderDisabled As GradientSpec?
+  overload: FluentGpu.Controls.RadioButton.Style.DotBorderDisabled*
+- uid: FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+  commentId: P:FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+  id: PressedDotBorder
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: PressedDotBorder
+  nameWithType: RadioButton.Style.PressedDotBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PressedDotBorder
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public GradientSpec? PressedDotBorder { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.GradientSpec}
+    content.vb: Public Property PressedDotBorder As GradientSpec?
+  overload: FluentGpu.Controls.RadioButton.Style.PressedDotBorder*
+- uid: FluentGpu.Controls.RadioButton.Style.Foreground
+  commentId: P:FluentGpu.Controls.RadioButton.Style.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: RadioButton.Style.Foreground
+  fullName: FluentGpu.Controls.RadioButton.Style.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.Foreground*
+- uid: FluentGpu.Controls.RadioButton.Style.DisabledForeground
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DisabledForeground
+  id: DisabledForeground
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DisabledForeground
+  nameWithType: RadioButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.RadioButton.Style.DisabledForeground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisabledForeground
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DisabledForeground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DisabledForeground As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.DisabledForeground*
+- uid: FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+  id: OffFillDisabled
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffFillDisabled
+  nameWithType: RadioButton.Style.OffFillDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffFillDisabled
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffFillDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffFillDisabled As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffFillDisabled*
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+  id: OffBorderDisabled
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OffBorderDisabled
+  nameWithType: RadioButton.Style.OffBorderDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffBorderDisabled
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OffBorderDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OffBorderDisabled As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OffBorderDisabled*
+- uid: FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+  commentId: P:FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+  id: OnRingDisabled
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: OnRingDisabled
+  nameWithType: RadioButton.Style.OnRingDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnRingDisabled
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF OnRingDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property OnRingDisabled As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.OnRingDisabled*
+- uid: FluentGpu.Controls.RadioButton.Style.DotDisabled
+  commentId: P:FluentGpu.Controls.RadioButton.Style.DotDisabled
+  id: DotDisabled
+  parent: FluentGpu.Controls.RadioButton.Style
+  langs:
+  - csharp
+  - vb
+  name: DotDisabled
+  nameWithType: RadioButton.Style.DotDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.DotDisabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RadioButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DotDisabled
+    path: ../../src/FluentGpu.Controls/RadioButton.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF DotDisabled { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property DotDisabled As ColorF
+  overload: FluentGpu.Controls.RadioButton.Style.DotDisabled*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.RadioButton.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.RadioButton.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<RadioButton.Style>
+  nameWithType: IEquatable<RadioButton.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.RadioButton.Style>
+  nameWithType.vb: IEquatable(Of RadioButton.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.RadioButton.Style)
+  name.vb: IEquatable(Of RadioButton.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    href: FluentGpu.Controls.RadioButton.html
+  - name: .
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: Style
+    href: FluentGpu.Controls.RadioButton.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.RadioButton.Style.RingSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.RingSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_RingSize
+  name: RingSize
+  nameWithType: RadioButton.Style.RingSize
+  fullName: FluentGpu.Controls.RadioButton.Style.RingSize
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.RadioButton.Style.DotSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotSize
+  name: DotSize
+  nameWithType: RadioButton.Style.DotSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotSize
+- uid: FluentGpu.Controls.RadioButton.Style.DotHoverSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotHoverSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotHoverSize
+  name: DotHoverSize
+  nameWithType: RadioButton.Style.DotHoverSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotHoverSize
+- uid: FluentGpu.Controls.RadioButton.Style.DotPressedSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotPressedSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotPressedSize
+  name: DotPressedSize
+  nameWithType: RadioButton.Style.DotPressedSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotPressedSize
+- uid: FluentGpu.Controls.RadioButton.Style.DotDisabledSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotDisabledSize
+  name: DotDisabledSize
+  nameWithType: RadioButton.Style.DotDisabledSize
+  fullName: FluentGpu.Controls.RadioButton.Style.DotDisabledSize
+- uid: FluentGpu.Controls.RadioButton.Style.PressedDotSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.PressedDotSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_PressedDotSize
+  name: PressedDotSize
+  nameWithType: RadioButton.Style.PressedDotSize
+  fullName: FluentGpu.Controls.RadioButton.Style.PressedDotSize
+- uid: FluentGpu.Controls.RadioButton.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.FontSize
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_FontSize
+  name: FontSize
+  nameWithType: RadioButton.Style.FontSize
+  fullName: FluentGpu.Controls.RadioButton.Style.FontSize
+- uid: FluentGpu.Controls.RadioButton.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.MinHeight
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_MinHeight
+  name: MinHeight
+  nameWithType: RadioButton.Style.MinHeight
+  fullName: FluentGpu.Controls.RadioButton.Style.MinHeight
+- uid: FluentGpu.Controls.RadioButton.Style.MinWidth*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.MinWidth
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_MinWidth
+  name: MinWidth
+  nameWithType: RadioButton.Style.MinWidth
+  fullName: FluentGpu.Controls.RadioButton.Style.MinWidth
+- uid: FluentGpu.Controls.RadioButton.Style.ContentGap*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.ContentGap
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_ContentGap
+  name: ContentGap
+  nameWithType: RadioButton.Style.ContentGap
+  fullName: FluentGpu.Controls.RadioButton.Style.ContentGap
+- uid: FluentGpu.Controls.RadioButton.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: RadioButton.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.RadioButton.Style.FocusVisualMargin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.RadioButton.Style.OffFill*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffFill
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffFill
+  name: OffFill
+  nameWithType: RadioButton.Style.OffFill
+  fullName: FluentGpu.Controls.RadioButton.Style.OffFill
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Controls.RadioButton.Style.OffHover*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffHover
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffHover
+  name: OffHover
+  nameWithType: RadioButton.Style.OffHover
+  fullName: FluentGpu.Controls.RadioButton.Style.OffHover
+- uid: FluentGpu.Controls.RadioButton.Style.OffPressed*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffPressed
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffPressed
+  name: OffPressed
+  nameWithType: RadioButton.Style.OffPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OffPressed
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorder*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffBorder
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffBorder
+  name: OffBorder
+  nameWithType: RadioButton.Style.OffBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorder
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorderPressed*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffBorderPressed
+  name: OffBorderPressed
+  nameWithType: RadioButton.Style.OffBorderPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorderPressed
+- uid: FluentGpu.Controls.RadioButton.Style.OnRing*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OnRing
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OnRing
+  name: OnRing
+  nameWithType: RadioButton.Style.OnRing
+  fullName: FluentGpu.Controls.RadioButton.Style.OnRing
+- uid: FluentGpu.Controls.RadioButton.Style.OnHover*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OnHover
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OnHover
+  name: OnHover
+  nameWithType: RadioButton.Style.OnHover
+  fullName: FluentGpu.Controls.RadioButton.Style.OnHover
+- uid: FluentGpu.Controls.RadioButton.Style.OnPressed*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OnPressed
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OnPressed
+  name: OnPressed
+  nameWithType: RadioButton.Style.OnPressed
+  fullName: FluentGpu.Controls.RadioButton.Style.OnPressed
+- uid: FluentGpu.Controls.RadioButton.Style.OnBorder*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OnBorder
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OnBorder
+  name: OnBorder
+  nameWithType: RadioButton.Style.OnBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.OnBorder
+- uid: FluentGpu.Controls.RadioButton.Style.Dot*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.Dot
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_Dot
+  name: Dot
+  nameWithType: RadioButton.Style.Dot
+  fullName: FluentGpu.Controls.RadioButton.Style.Dot
+- uid: FluentGpu.Controls.RadioButton.Style.DotBorder*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotBorder
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotBorder
+  name: DotBorder
+  nameWithType: RadioButton.Style.DotBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.DotBorder
+- uid: System.Nullable{FluentGpu.Foundation.GradientSpec}
+  commentId: T:System.Nullable{FluentGpu.Foundation.GradientSpec}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.GradientSpec.html
+  name: GradientSpec?
+  nameWithType: GradientSpec?
+  fullName: FluentGpu.Foundation.GradientSpec?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    href: FluentGpu.Foundation.GradientSpec.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.RadioButton.Style.DotBorderDisabled*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotBorderDisabled
+  name: DotBorderDisabled
+  nameWithType: RadioButton.Style.DotBorderDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.DotBorderDisabled
+- uid: FluentGpu.Controls.RadioButton.Style.PressedDotBorder*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_PressedDotBorder
+  name: PressedDotBorder
+  nameWithType: RadioButton.Style.PressedDotBorder
+  fullName: FluentGpu.Controls.RadioButton.Style.PressedDotBorder
+- uid: FluentGpu.Controls.RadioButton.Style.Foreground*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.Foreground
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_Foreground
+  name: Foreground
+  nameWithType: RadioButton.Style.Foreground
+  fullName: FluentGpu.Controls.RadioButton.Style.Foreground
+- uid: FluentGpu.Controls.RadioButton.Style.DisabledForeground*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DisabledForeground
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DisabledForeground
+  name: DisabledForeground
+  nameWithType: RadioButton.Style.DisabledForeground
+  fullName: FluentGpu.Controls.RadioButton.Style.DisabledForeground
+- uid: FluentGpu.Controls.RadioButton.Style.OffFillDisabled*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffFillDisabled
+  name: OffFillDisabled
+  nameWithType: RadioButton.Style.OffFillDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OffFillDisabled
+- uid: FluentGpu.Controls.RadioButton.Style.OffBorderDisabled*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OffBorderDisabled
+  name: OffBorderDisabled
+  nameWithType: RadioButton.Style.OffBorderDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OffBorderDisabled
+- uid: FluentGpu.Controls.RadioButton.Style.OnRingDisabled*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_OnRingDisabled
+  name: OnRingDisabled
+  nameWithType: RadioButton.Style.OnRingDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.OnRingDisabled
+- uid: FluentGpu.Controls.RadioButton.Style.DotDisabled*
+  commentId: Overload:FluentGpu.Controls.RadioButton.Style.DotDisabled
+  href: FluentGpu.Controls.RadioButton.Style.html#FluentGpu_Controls_RadioButton_Style_DotDisabled
+  name: DotDisabled
+  nameWithType: RadioButton.Style.DotDisabled
+  fullName: FluentGpu.Controls.RadioButton.Style.DotDisabled

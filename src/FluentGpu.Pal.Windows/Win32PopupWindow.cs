@@ -18,19 +18,22 @@ namespace FluentGpu.Pal.Windows;
 /// <item><c>WS_EX_TOOLWINDOW</c>: no taskbar button / Alt-Tab entry.</item>
 /// <item><c>WS_EX_NOREDIRECTIONBITMAP</c>: no GDI redirection surface — the host presents into it with its own
 ///   composition swapchain (same composited-surface model as the main window).</item>
-/// <item>Mouse input over the popup is FORWARDED to the owner <see cref="Win32Window"/>, translated popup-client →
-///   screen → owner-client → owner DIP, so the one InputDispatcher hit-tests the popup subtree at its scene
-///   coordinates (the subtree stays in the single SceneStore; out-of-bounds coords hit-test fine).</item>
+/// <item>Pointer input over the popup (mouse/touch/pen — under the owner's process-wide mouse-in-pointer the retired
+///   WM_MOUSE* never fires here, so the popup runs the WM_POINTER* stream too) is FORWARDED to the owner
+///   <see cref="Win32Window"/>, which re-decodes the shared OS pointer id and maps SCREEN px → owner DIP, so the one
+///   InputDispatcher hit-tests the popup subtree at its scene coordinates (the subtree stays in the single SceneStore;
+///   out-of-bounds coords hit-test fine).</item>
 /// </list>
 /// </summary>
 public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
 {
     private const uint WM_NCCREATE = 0x0081, WM_DESTROY = 0x0002, WM_ERASEBKGND = 0x0014, WM_PAINT = 0x000F,
-                       WM_MOUSEACTIVATE = 0x0021, WM_MOUSEMOVE = 0x0200,
-                       WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202,
-                       WM_RBUTTONDOWN = 0x0204, WM_RBUTTONUP = 0x0205,
-                       WM_MBUTTONDOWN = 0x0207, WM_MBUTTONUP = 0x0208,
-                       WM_MOUSEWHEEL = 0x020A, WM_MOUSEHWHEEL = 0x020E;
+                       WM_MOUSEACTIVATE = 0x0021;
+    // Pointer-input stream (the owner enables mouse-in-pointer process-wide, which is irreversible — Win32Platform.cs:163):
+    // the popup's mouse/touch/pen ALL arrive as WM_POINTER* (the retired WM_MOUSE* client messages never fire here), so
+    // the forwarding path is keyed on these exactly like the owner window. wParam LOW word = pointer id on every message.
+    private const uint WM_POINTERUPDATE = 0x0245, WM_POINTERDOWN = 0x0246, WM_POINTERUP = 0x0247,
+                       WM_POINTERCAPTURECHANGED = 0x024C, WM_POINTERWHEEL = 0x024E, WM_POINTERHWHEEL = 0x024F;
     private const int MA_NOACTIVATE = 3;
     private const uint WS_POPUP = 0x80000000;
     private const uint WS_EX_TOOLWINDOW = 0x00000080, WS_EX_NOACTIVATE = 0x08000000, WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
@@ -38,8 +41,6 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
     private const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
-    // DIP scrolled per wheel notch — must match Win32Window.WheelDipPerNotch so forwarded wheel feels identical.
-    private const float WheelDipPerNotch = 48f;
 
     private const string ClassName = "FluentGpuPopupWindow";
     private static ushort s_atom;
@@ -151,48 +152,36 @@ public sealed unsafe class Win32PopupWindow : IPlatformPopupWindow
                 return true;
             case WM_DESTROY:
                 return true;
-            case WM_MOUSEMOVE:
-                Forward(InputKind.PointerMove, 0, lp, clientCoords: true);
+            // Pointer stream → owner: the owner re-decodes from the shared OS pointer id (kind/pressure/timestamp) and
+            // converts SCREEN px → OWNER DIP, so the single dispatcher hit-tests the popup subtree at its (out-of-window)
+            // scene coordinates. The popup only routes by message type + pointer id; the owner owns the decode + convert.
+            case WM_POINTERUPDATE:
+                if (ResolveOwner() is { } upd) upd.ForwardPopupPointerUpdate(GET_POINTERID_WPARAM(wParam));
                 return true;
-            case WM_LBUTTONDOWN: Forward(InputKind.PointerDown, 0, lp, clientCoords: true); return true;
-            case WM_LBUTTONUP: Forward(InputKind.PointerUp, 0, lp, clientCoords: true); return true;
-            case WM_RBUTTONDOWN: Forward(InputKind.PointerDown, 1, lp, clientCoords: true); return true;
-            case WM_RBUTTONUP: Forward(InputKind.PointerUp, 1, lp, clientCoords: true); return true;
-            case WM_MBUTTONDOWN: Forward(InputKind.PointerDown, 2, lp, clientCoords: true); return true;
-            case WM_MBUTTONUP: Forward(InputKind.PointerUp, 2, lp, clientCoords: true); return true;
-            case WM_MOUSEWHEEL:
-            case WM_MOUSEHWHEEL:
+            case WM_POINTERDOWN:
+                if (ResolveOwner() is { } dn) dn.ForwardPopupPointerDownUp(GET_POINTERID_WPARAM(wParam), down: true);
+                return true;
+            case WM_POINTERUP:
+                if (ResolveOwner() is { } up) up.ForwardPopupPointerDownUp(GET_POINTERID_WPARAM(wParam), down: false);
+                return true;
+            case WM_POINTERCAPTURECHANGED:
+                if (ResolveOwner() is { } cap) cap.ForwardPopupPointerCancel(GET_POINTERID_WPARAM(wParam));
+                return true;
+            case WM_POINTERWHEEL:
+            case WM_POINTERHWHEEL:
             {
-                // Wheel lParam is SCREEN coords (unlike the client-coord button messages).
+                // HIWORD(wParam) = signed notch (×120); lParam = SCREEN px (same as the owner's own wheel path).
                 if (ResolveOwner() is not { } owner) return true;
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
-                float dip = -(notch / 120f) * WheelDipPerNotch;
-                owner.EnqueueExternal(new InputEvent(InputKind.Wheel, ScreenToOwnerDip(owner, (short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)),
-                    0, 0, dip, Win32Window.Mods(), TimestampMs: Win32Window.Now()));
+                owner.ForwardPopupPointerWheel(GET_POINTERID_WPARAM(wParam), lp, notch);
                 return true;
             }
         }
         return false;
     }
 
-    /// <summary>Forward a mouse message to the OWNER window's input queue, translated popup-client → owner-client DIP,
-    /// so the single dispatcher hit-tests the popup subtree at its (possibly out-of-window) scene coordinates.</summary>
-    private void Forward(InputKind kind, int button, long lp, bool clientCoords)
-    {
-        if (ResolveOwner() is not { } owner) return;
-        POINT pt = new() { x = (short)(lp & 0xFFFF), y = (short)((lp >> 16) & 0xFFFF) };
-        if (clientCoords) ClientToScreen(_hwnd, &pt);
-        owner.EnqueueExternal(new InputEvent(kind, ScreenToOwnerDip(owner, pt.x, pt.y), button, 0,
-            Mods: Win32Window.Mods(), TimestampMs: Win32Window.Now()));
-    }
-
-    private static Point2 ScreenToOwnerDip(Win32Window owner, int sx, int sy)
-    {
-        POINT pt = new() { x = sx, y = sy };
-        ScreenToClient(owner.Hwnd, &pt);
-        float s = owner.ScaleInternal <= 0f ? 1f : owner.ScaleInternal;
-        return new Point2(pt.x / s, pt.y / s);
-    }
+    // GET_POINTERID_WPARAM (winuser.h): the pointer id is the LOW word of wParam on every WM_POINTER* message.
+    private static uint GET_POINTERID_WPARAM(WPARAM wParam) => (uint)((nuint)wParam & 0xFFFF);
 
     /// <summary>Resolve the owner <see cref="Win32Window"/> from its HWND's GWLP_USERDATA GCHandle (the same slot the
     /// owner's own WndProc uses) — no extra registry needed.</summary>

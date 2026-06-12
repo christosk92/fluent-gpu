@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class InfoBadge | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class InfoBadge | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI InfoBadge: a small accent (or severity) pill that surfaces a notification count, an icon, or a bare dot. Three display kinds, resolved exactly as WinUI&#39;s InfoBadge::OnDisplayKindPropertiesChanged does: Value (Value &amp;gt;= 0): an 11px count, clamped to a 16-tall pill (single digits stay circular because WinUI&#39;s MeasureOverride squares a badge narrower than it is tall).Icon (Value &amp;lt; 0, glyph supplied): a Segoe Fluent glyph in the same 16-tall pill, scaled by the WinUI IconPresenter Viewbox to the content-box height (8 for the padded Attention/Informational FontIcon styles and the SymbolIcon severities, 14 for an unpadded FontIcon — see ).Dot (neither): a bare 4x4 disc. Background = AccentFillColorDefault (Default), or a SystemFillColor* per ; foreground = TextOnAccentFillColorPrimary. The corner radius is the computed pill (height/2) from .">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_InfoBadge.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.InfoBadge%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.InfoBadge">
+
+
+
+  <h1 id="FluentGpu_Controls_InfoBadge" data-uid="FluentGpu.Controls.InfoBadge" class="text-break">
+Class InfoBadge  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI InfoBadge: a small accent (or severity) pill that surfaces a notification count, an icon, or a bare dot.
+Three display kinds, resolved exactly as WinUI's <code>InfoBadge::OnDisplayKindPropertiesChanged</code> does:</p>
+<ul><li><b>Value</b> (Value &gt;= 0): an 11px count, clamped to a 16-tall pill (single digits stay circular because
+WinUI's MeasureOverride squares a badge narrower than it is tall).</li><li><b>Icon</b> (Value &lt; 0, glyph supplied): a Segoe Fluent glyph in the same 16-tall pill, scaled by the WinUI
+IconPresenter Viewbox to the content-box height (8 for the padded Attention/Informational FontIcon styles and the
+SymbolIcon severities, 14 for an unpadded FontIcon — see <a class="xref" href="FluentGpu.Controls.InfoBadgeTemplateSettings.html">InfoBadgeTemplateSettings</a>).</li><li><b>Dot</b> (neither): a bare 4x4 disc.</li></ul>
+<p>Background = AccentFillColorDefault (Default), or a SystemFillColor* per <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a>; foreground =
+TextOnAccentFillColorPrimary. The corner radius is the computed pill (height/2) from
+<a class="xref" href="FluentGpu.Controls.InfoBadgeTemplateSettings.html">InfoBadgeTemplateSettings</a>.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class InfoBadge</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">InfoBadge</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_GlyphAttention" data-uid="FluentGpu.Controls.InfoBadge.GlyphAttention">
+  GlyphAttention
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L93"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string GlyphAttention = &quot;&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_GlyphCaution" data-uid="FluentGpu.Controls.InfoBadge.GlyphCaution">
+  GlyphCaution
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string GlyphCaution = &quot;&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_GlyphCritical" data-uid="FluentGpu.Controls.InfoBadge.GlyphCritical">
+  GlyphCritical
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string GlyphCritical = &quot;&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_GlyphInformational" data-uid="FluentGpu.Controls.InfoBadge.GlyphInformational">
+  GlyphInformational
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string GlyphInformational = &quot;&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_GlyphSuccess" data-uid="FluentGpu.Controls.InfoBadge.GlyphSuccess">
+  GlyphSuccess
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string GlyphSuccess = &quot;&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_InfoBadge_PartRoot" data-uid="FluentGpu.Controls.InfoBadge.PartRoot">
+  PartRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L85"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The badge pill itself (WinUI RootGrid — the control's only named element). Owned: Children (the
+value text / icon glyph — the display-kind content; the Dot has none). The per-kind geometry and severity
+fill are stock per-render styling a modifier may override.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRoot = &quot;Root&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Count_" data-uid="FluentGpu.Controls.InfoBadge.Count*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Count_System_Int32_FluentGpu_Controls_InfoBadgeSeverity_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Count(System.Int32,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)">
+  Count(int, InfoBadgeSeverity, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L137"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Count(int value, InfoBadgeSeverity severity, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>severity</code> <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Count_" data-uid="FluentGpu.Controls.InfoBadge.Count*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Count_System_Int32_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Count(System.Int32,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)">
+  Count(int, ColorF?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L134"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The Value badge: a notification count. WinUI clamps to a 16-tall pill; single digits stay circular via the
+MinWidth = Height square. Pass <code class="paramref">severity</code> to recolor.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Count(int value, ColorF? color = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>color</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_DefaultGlyph_" data-uid="FluentGpu.Controls.InfoBadge.DefaultGlyph*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_DefaultGlyph_FluentGpu_Controls_InfoBadgeSeverity_" data-uid="FluentGpu.Controls.InfoBadge.DefaultGlyph(FluentGpu.Controls.InfoBadgeSeverity)">
+  DefaultGlyph(InfoBadgeSeverity)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L220"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static string DefaultGlyph(InfoBadgeSeverity severity)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>severity</code> <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Dot_" data-uid="FluentGpu.Controls.InfoBadge.Dot*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Dot_FluentGpu_Controls_InfoBadgeSeverity_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Dot(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)">
+  Dot(InfoBadgeSeverity, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L117"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Severity dot — same geometry as <a class="xref" href="FluentGpu.Controls.InfoBadge.html#FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_">Dot(ColorF?, TemplateParts?)</a> with the severity background.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Dot(InfoBadgeSeverity severity, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>severity</code> <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Dot_" data-uid="FluentGpu.Controls.InfoBadge.Dot*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Dot_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Dot(System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)">
+  Dot(ColorF?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L114"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The bare 4x4 dot. WinUI Dot state (no Value, no Icon): 4x4, corner = 2 (pill at that height).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Dot(ColorF? color = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>color</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Icon_" data-uid="FluentGpu.Controls.InfoBadge.Icon*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Icon_FluentGpu_Controls_InfoBadgeSeverity_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Icon(FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)">
+  Icon(InfoBadgeSeverity, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L187"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Severity icon using WinUI's default per-severity IconSource (Attention 0xEA38, Informational 0xF13F —
+FontIconSource; Success Accept, Caution Important, Critical Cancel — SymbolIconSource), scaled by the per-state
+IconPresenter Viewbox target (8 in every severity style; see <a class="xref" href="FluentGpu.Controls.InfoBadgeTemplateSettings.html">InfoBadgeTemplateSettings</a>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Icon(InfoBadgeSeverity severity, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>severity</code> <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Icon_" data-uid="FluentGpu.Controls.InfoBadge.Icon*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Icon_System_String_FluentGpu_Controls_InfoBadgeSeverity_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Icon(System.String,FluentGpu.Controls.InfoBadgeSeverity,FluentGpu.Dsl.TemplateParts)">
+  Icon(string, InfoBadgeSeverity, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L181"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Icon(string glyph, InfoBadgeSeverity severity, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>glyph</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>severity</code> <a class="xref" href="FluentGpu.Controls.InfoBadgeSeverity.html">InfoBadgeSeverity</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_InfoBadge_Icon_" data-uid="FluentGpu.Controls.InfoBadge.Icon*"></a>
+
+  <h3 id="FluentGpu_Controls_InfoBadge_Icon_System_String_System_Nullable_FluentGpu_Foundation_ColorF__FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.InfoBadge.Icon(System.String,System.Nullable{FluentGpu.Foundation.ColorF},FluentGpu.Dsl.TemplateParts)">
+  Icon(string, ColorF?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/InfoBadge.cs/#L177"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The Icon badge: a Segoe Fluent glyph in the 16-tall pill. A custom glyph is WinUI's FontIconSource →
+the FontIcon state (margin 4,0,4,2, InfoBadge_themeresources.xaml:14/:71) — the IconPresenter Viewbox scales the
+glyph to the content-box height (14 = 16 − 2 for the ad-hoc, no-severity overloads; the Attention/Informational
+severity styles pad the root 0,4,0,2 → 8).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Icon(string glyph, ColorF? color = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>glyph</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>color</code> <a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a>?</dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

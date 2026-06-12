@@ -1,0 +1,112 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.ThemeKind
+  commentId: T:FluentGpu.Dsl.ThemeKind
+  id: ThemeKind
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.ThemeKind.Dark
+  - FluentGpu.Dsl.ThemeKind.Light
+  langs:
+  - csharp
+  - vb
+  name: ThemeKind
+  nameWithType: ThemeKind
+  fullName: FluentGpu.Dsl.ThemeKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThemeKind
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: 'public enum ThemeKind : byte'
+    content.vb: Public Enum ThemeKind As Byte
+- uid: FluentGpu.Dsl.ThemeKind.Light
+  commentId: F:FluentGpu.Dsl.ThemeKind.Light
+  id: Light
+  parent: FluentGpu.Dsl.ThemeKind
+  langs:
+  - csharp
+  - vb
+  name: Light
+  nameWithType: ThemeKind.Light
+  fullName: FluentGpu.Dsl.ThemeKind.Light
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Light
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: Light = 0
+    return:
+      type: FluentGpu.Dsl.ThemeKind
+- uid: FluentGpu.Dsl.ThemeKind.Dark
+  commentId: F:FluentGpu.Dsl.ThemeKind.Dark
+  id: Dark
+  parent: FluentGpu.Dsl.ThemeKind
+  langs:
+  - csharp
+  - vb
+  name: Dark
+  nameWithType: ThemeKind.Dark
+  fullName: FluentGpu.Dsl.ThemeKind.Dark
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Tokens.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dark
+    path: ../../src/FluentGpu.Dsl/Tokens.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: Dark = 1
+    return:
+      type: FluentGpu.Dsl.ThemeKind
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Dsl.ThemeKind
+  commentId: T:FluentGpu.Dsl.ThemeKind
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.ThemeKind.html
+  name: ThemeKind
+  nameWithType: ThemeKind
+  fullName: FluentGpu.Dsl.ThemeKind

@@ -189,6 +189,27 @@ Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout la
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
 
+### Collections — `ItemsView` and its presets
+`ItemsView` is the premiere collection control: any `RepeatLayout` × any `SelectionModel` mode × any `SelectorVisual`
+chrome × built-in drag-reorder, over one virtualized viewport. The former `ListView`/`GridView` controls are FOLDED
+onto it as static presets (the control types no longer exist):
+```csharp
+ItemsView.List(items, selectedIndex)                       // AccentPill selector, Stack(44), Single, 200ms reorder dwell
+ItemsView.List(count, itemTemplate, selectionMode: …, canReorderItems: …, onReorder: …, …)
+ItemsView.Grid(items, columns: 4, tileSize: 96f)           // Check selector, Grid layout, 300ms 2-D reorder dwell
+ItemsView.Grid(count, itemTemplate, columns, tileHeight, selectionMode: …, canReorderItems: …, …)
+ItemsView.Create(count, itemTemplate, layout, selector: SelectorVisual.AccentPill|Check|FullRow|Border|None,
+                 selection: …, partDelta: (i, state) => new PartDelta(Fill: …, Corners: …), …)   // the full surface
+```
+- `SelectorVisual` picks the item chrome (AccentPill = the WinUI ListView accent bar; Check = the GridView corner
+  check; FullRow = a full-bleed superset; Border = the default `ItemContainer` ring; None = app-drawn). A custom
+  `ContainerFactory` overrides the preset.
+- Per-item VARIATION uses `PartDelta` (fill/foreground/opacity/corner/padding/glyph as VALUES, applied during
+  construction — zero extra allocation, shape-stable). This is the legal per-item-customization path; a per-item
+  `TemplateParts` modifier in a recycled scroll path is the banned hazard (see control-fidelity §6).
+- Reorder rides the displacement channel (`ItemDisplacement`/`DisplacementVersion`); displaced siblings glide aside
+  via an animated translate — a capability WinUI's own ItemsView lacks.
+
 ## Theming (`Tok` / `Theme`, `src/FluentGpu.Dsl/Tokens.cs`)
 
 Read semantic tokens; never hard-code colors:

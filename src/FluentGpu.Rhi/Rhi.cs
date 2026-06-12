@@ -30,6 +30,12 @@ public interface IGpuDevice : IDisposable
     /// <summary>The residency manager evicted <paramref name="imageId"/> — release its GPU texture (deferred behind the
     /// frame fence so an in-flight frame can't read freed memory). No-op if not resident.</summary>
     void EvictImage(int imageId) { }
+
+    /// <summary>Suppress the frame-latency throttle wait at the start of the NEXT <see cref="SubmitDrawList"/> (self-
+    /// resetting). The host calls this for a KEEP-ALIVE repaint fired synchronously from inside an OS modal move/size
+    /// loop, where the WndProc thread would otherwise block up to a vblank on the latency waitable — injecting the
+    /// drag-start/live-resize hitch. Default no-op: only a backend with a present-latency throttle (D3D12) honors it.</summary>
+    void SuppressLatencyWaitOnce() { }
 }
 
 public interface ISwapchain : IDisposable

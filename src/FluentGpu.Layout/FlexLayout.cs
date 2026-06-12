@@ -167,6 +167,24 @@ public sealed class FlexLayout
 
         if (!float.IsNaN(li.Width)) w = li.Width;
         if (!float.IsNaN(li.Height)) h = li.Height;
+
+        // Aspect-ratio (CSS aspect-ratio): derive the missing extent for a fluid leaf. Explicit Width+Height both set
+        // wins (aspect ignored). When both are fluid, take the offered width constraint as the box width and derive the
+        // height — the parent's cross-stretch then arranges that same width, and this measured height rides along as the
+        // main size (re-measured against the final cross size in Arrange, so measure↔arrange stay square).
+        float ar = li.AspectRatio;
+        if (!float.IsNaN(ar) && ar > 0f)
+        {
+            bool defW = !float.IsNaN(li.Width), defH = !float.IsNaN(li.Height);
+            if (defW && !defH) h = w / ar;
+            else if (defH && !defW) w = h * ar;
+            else if (!defW && !defH && !float.IsInfinity(availW))
+            {
+                w = MathF.Max(0f, availW - li.Padding.Horizontal);
+                h = w / ar;
+            }
+        }
+
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
 

@@ -1,0 +1,544 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.DragSource
+  commentId: T:FluentGpu.Foundation.DragSource
+  id: DragSource
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.DragSource.#ctor(System.String,System.Func{System.Object})
+  - FluentGpu.Foundation.DragSource.Kind
+  - FluentGpu.Foundation.DragSource.PayloadFactory
+  langs:
+  - csharp
+  - vb
+  name: DragSource
+  nameWithType: DragSource
+  fullName: FluentGpu.Foundation.DragSource
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragSource
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    E5-L2 typed drag SOURCE spec (<code>BoxEl.Draggable</code> — the Flutter Draggable / react-beautiful-dnd model; user
+
+    ruling 2026-06-10: deliberately NOT WinUI's OLE DataPackage/DoDragDrop modal loop): <code class="paramref">Kind</code> is a
+
+    string discriminator so target accept-tests are cast-free; <code class="paramref">PayloadFactory</code> resolves the typed
+
+    payload ONCE when the L1 press promotes past the drag box (never per move). Trimming-safe: plain delegates.
+  example: []
+  syntax:
+    content: 'public sealed record DragSource : IEquatable<DragSource>'
+    content.vb: Public NotInheritable Class DragSource Implements IEquatable(Of DragSource)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.DragSource}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.DragSource.#ctor(System.String,System.Func{System.Object})
+  commentId: M:FluentGpu.Foundation.DragSource.#ctor(System.String,System.Func{System.Object})
+  id: '#ctor(System.String,System.Func{System.Object})'
+  parent: FluentGpu.Foundation.DragSource
+  langs:
+  - csharp
+  - vb
+  name: DragSource(string, Func<object?>)
+  nameWithType: DragSource.DragSource(string, Func<object?>)
+  fullName: FluentGpu.Foundation.DragSource.DragSource(string, System.Func<object?>)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    E5-L2 typed drag SOURCE spec (<code>BoxEl.Draggable</code> — the Flutter Draggable / react-beautiful-dnd model; user
+
+    ruling 2026-06-10: deliberately NOT WinUI's OLE DataPackage/DoDragDrop modal loop): <code class="paramref">Kind</code> is a
+
+    string discriminator so target accept-tests are cast-free; <code class="paramref">PayloadFactory</code> resolves the typed
+
+    payload ONCE when the L1 press promotes past the drag box (never per move). Trimming-safe: plain delegates.
+  example: []
+  syntax:
+    content: public DragSource(string Kind, Func<object?> PayloadFactory)
+    parameters:
+    - id: Kind
+      type: System.String
+    - id: PayloadFactory
+      type: System.Func{System.Object}
+    content.vb: Public Sub New(Kind As String, PayloadFactory As Func(Of Object))
+  overload: FluentGpu.Foundation.DragSource.#ctor*
+  nameWithType.vb: DragSource.New(String, Func(Of Object))
+  fullName.vb: FluentGpu.Foundation.DragSource.New(String, System.Func(Of Object))
+  name.vb: New(String, Func(Of Object))
+- uid: FluentGpu.Foundation.DragSource.Kind
+  commentId: P:FluentGpu.Foundation.DragSource.Kind
+  id: Kind
+  parent: FluentGpu.Foundation.DragSource
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: DragSource.Kind
+  fullName: FluentGpu.Foundation.DragSource.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public string Kind { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Kind As String
+  overload: FluentGpu.Foundation.DragSource.Kind*
+- uid: FluentGpu.Foundation.DragSource.PayloadFactory
+  commentId: P:FluentGpu.Foundation.DragSource.PayloadFactory
+  id: PayloadFactory
+  parent: FluentGpu.Foundation.DragSource
+  langs:
+  - csharp
+  - vb
+  name: PayloadFactory
+  nameWithType: DragSource.PayloadFactory
+  fullName: FluentGpu.Foundation.DragSource.PayloadFactory
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PayloadFactory
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public Func<object?> PayloadFactory { get; init; }
+    parameters: []
+    return:
+      type: System.Func{System.Object}
+    content.vb: Public Property PayloadFactory As Func(Of Object)
+  overload: FluentGpu.Foundation.DragSource.PayloadFactory*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Foundation.DragSource}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.DragSource}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DragSource>
+  nameWithType: IEquatable<DragSource>
+  fullName: System.IEquatable<FluentGpu.Foundation.DragSource>
+  nameWithType.vb: IEquatable(Of DragSource)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.DragSource)
+  name.vb: IEquatable(Of DragSource)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.DragSource
+    name: DragSource
+    href: FluentGpu.Foundation.DragSource.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.DragSource
+    name: DragSource
+    href: FluentGpu.Foundation.DragSource.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Foundation.DragSource.#ctor*
+  commentId: Overload:FluentGpu.Foundation.DragSource.#ctor
+  href: FluentGpu.Foundation.DragSource.html#FluentGpu_Foundation_DragSource__ctor_System_String_System_Func_System_Object__
+  name: DragSource
+  nameWithType: DragSource.DragSource
+  fullName: FluentGpu.Foundation.DragSource.DragSource
+  nameWithType.vb: DragSource.New
+  fullName.vb: FluentGpu.Foundation.DragSource.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Func{System.Object}
+  commentId: T:System.Func{System.Object}
+  parent: System
+  definition: System.Func`1
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<object>
+  nameWithType: Func<object>
+  fullName: System.Func<object>
+  nameWithType.vb: Func(Of Object)
+  fullName.vb: System.Func(Of Object)
+  name.vb: Func(Of Object)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Func`1
+  commentId: T:System.Func`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-1
+  name: Func<TResult>
+  nameWithType: Func<TResult>
+  fullName: System.Func<TResult>
+  nameWithType.vb: Func(Of TResult)
+  fullName.vb: System.Func(Of TResult)
+  name.vb: Func(Of TResult)
+  spec.csharp:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: FluentGpu.Foundation.DragSource.Kind*
+  commentId: Overload:FluentGpu.Foundation.DragSource.Kind
+  href: FluentGpu.Foundation.DragSource.html#FluentGpu_Foundation_DragSource_Kind
+  name: Kind
+  nameWithType: DragSource.Kind
+  fullName: FluentGpu.Foundation.DragSource.Kind
+- uid: FluentGpu.Foundation.DragSource.PayloadFactory*
+  commentId: Overload:FluentGpu.Foundation.DragSource.PayloadFactory
+  href: FluentGpu.Foundation.DragSource.html#FluentGpu_Foundation_DragSource_PayloadFactory
+  name: PayloadFactory
+  nameWithType: DragSource.PayloadFactory
+  fullName: FluentGpu.Foundation.DragSource.PayloadFactory

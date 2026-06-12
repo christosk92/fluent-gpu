@@ -1,0 +1,1846 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ScrollBar
+  commentId: T:FluentGpu.Controls.ScrollBar
+  id: ScrollBar
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  - FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  - FluentGpu.Controls.ScrollBar.ArrowFontSize
+  - FluentGpu.Controls.ScrollBar.ArrowScalePressed
+  - FluentGpu.Controls.ScrollBar.CollapsedThumb
+  - FluentGpu.Controls.ScrollBar.ContractBeginMs
+  - FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.ScrollBar.DefaultStyle
+  - FluentGpu.Controls.ScrollBar.ExpandBeginMs
+  - FluentGpu.Controls.ScrollBar.ExpandMs
+  - FluentGpu.Controls.ScrollBar.ExpandedThumb
+  - FluentGpu.Controls.ScrollBar.FadeMs
+  - FluentGpu.Controls.ScrollBar.LineDeltaPx
+  - FluentGpu.Controls.ScrollBar.MinThumbLength
+  - FluentGpu.Controls.ScrollBar.PanningThumbMargin
+  - FluentGpu.Controls.ScrollBar.PartDecreaseButton
+  - FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  - FluentGpu.Controls.ScrollBar.PartThumb
+  - FluentGpu.Controls.ScrollBar.PartTrack
+  - FluentGpu.Controls.ScrollBar.RailSize
+  - FluentGpu.Controls.ScrollBar.RepeatDelayMs
+  - FluentGpu.Controls.ScrollBar.RepeatIntervalMs
+  - FluentGpu.Controls.ScrollBar.StyleOverride
+  - FluentGpu.Controls.ScrollBar.ThumbInset
+  langs:
+  - csharp
+  - vb
+  name: ScrollBar
+  nameWithType: ScrollBar
+  fullName: FluentGpu.Controls.ScrollBar
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollBar
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>ScrollBar</code>. Two surfaces:
+
+
+    <ul><li><xref href="FluentGpu.Controls.ScrollBar.Create(System.Single%2cSystem.Single%2cSystem.Action%7bSystem.Single%7d%2cSystem.Single%2cFluentGpu.Controls.ScrollBar.Style%2cSystem.Boolean%2cFluentGpu.Dsl.TemplateParts)" data-throw-if-not-resolved="false"></xref> — the legacy thin PANNING-indicator variant (thumb-only, absolute drag), kept
+
+    source/behavior-compatible (VerticalSlice check 48 and the gallery drive it); it mirrors the template's
+
+    VerticalPanningThumb (ScrollBar_themeresources.xaml:714 — Width 2, MinHeight 32, Margin 2,0,2,0, NO
+
+    hover/press states — the touch indicator).</li><li><xref href="FluentGpu.Controls.ScrollBar.Anatomy(System.Single%2cSystem.Single%2cSystem.Action%7bSystem.Single%7d%2cSystem.Single%2cSystem.Boolean%2cFluentGpu.Dsl.TemplateParts%2cSystem.Boolean%2cSystem.Single%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> — the full WinUI mouse scrollbar: 12px rail (ScrollBarSize :180), acrylic track
+
+    (ScrollBarTrackFill = AcrylicInAppFillColorDefaultBrush, :31/:143 both themes), two arrow RepeatButtons
+
+    (vertical glyphs EDDB up / EDDC down, horizontal EDD9 left / EDDA right, FontSize 8 — :387/:344/:301/:258/:186;
+
+    pressed arrow scale 0.875 :187; Interval=50 like every template RepeatButton :681-711), track-click PAGE
+
+    zones (LargeDecrease/LargeIncrease RepeatButtons :704/:710 — first page on press, then 500ms delay + 50ms
+
+    repeat re-evaluated against the live thumb), and the conscious expand/collapse: collapsed 2px
+
+    visible thumb ↔ expanded 6px (the 8px/12px thumb minus the 6px transparent stroke trick —
+
+    ScrollBarVerticalThumbMinWidth 8 :182, ScrollBarThumbStrokeThickness 6 :185, ScrollBarSize 12 :180; both states
+
+    leave the FILL's far edge inset 3px from the lane edge: collapsed rect [4,12] / expanded [0,12], fill inset 3
+
+    per side → [7,9] / [3,9]). Expand begins 400ms after lane hover (ScrollBarExpandBeginTime :188) / collapse
+
+    begins 500ms after leave (ScrollBarContractBeginTime :189), both 167ms with KeySpline 0,0,0,1 (:587/:543 →
+
+    <xref href="FluentGpu.Foundation.Easing.FluentPopOpen" data-throw-if-not-resolved="false"></xref>); track + arrows fade 83ms LINEAR (ScrollBarOpacityChangeDuration :174,
+
+    plain DoubleAnimation :575-584) after the same begin times. While the thumb is DRAGGED a lane exit does NOT
+
+    start the contract dwell (WinUI OnPointerExited skips UpdateVisualState while IsDragging,
+
+    ScrollBar_Partial.cpp:548-561) — the leave replays at the drag's release edge. The arrow CELLS are ALWAYS in
+
+    the grid (rows 0/4, fixed extent = ScrollBarSize :703/:711) — only their OPACITY animates, so the track length
+
+    and thumb geometry never jump on hover. Thumb fill = ControlStrongFillColorDefault with NO hover/press recolor
+
+    (:26-28); arrow button background stays SubtleFillColorTransparent in EVERY state (:14 — the :226-248
+
+    storyboards recolor only the Arrow foreground); disabled = ControlStrongFillColorDisabled (:29) + root opacity
+
+    0.5 (:436) + the mouse thumb itself hidden (ThumbVisual Opacity→0, the VerticalThumbTemplate Disabled
+
+    storyboard :399-406). IsTabStop = false (:206). Vertical by default; <code>horizontal: true</code> mirrors the
+
+    HorizontalRoot anatomy on the X axis (:672-693).</li></ul>
+
+
+    Thumb POSITION is compositor-bound (a <code>TransformBind</code> on the position signal): scrolling moves the thumb the
+
+    same frame with no re-render/relayout and never enters the FLIP pipeline — WinUI's instant Thumb layout. ONLY the
+
+    conscious cross-axis 2px↔6px expand (and the 83ms chrome fades) animate, after the debounced begin times; that
+
+    choreography is stepped by a mounted FrameClock ticker at the engine's 16ms-per-frame convention (the
+
+    <code>UseAnimatedValue</code> precedent), so it is deterministic on the headless FixedFrameTimeSource host.
+
+    The auto-hiding OVERLAY scrollbar on scroll viewports is engine-drawn (SceneRecorder.EmitScrollbar) with its
+
+    timing in <code>Animation.ScrollAnimator</code> — this control is the standalone (always-visible) ScrollBar element.
+  example: []
+  syntax:
+    content: public static class ScrollBar
+    content.vb: Public Module ScrollBar
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ScrollBar.PartThumb
+  commentId: F:FluentGpu.Controls.ScrollBar.PartThumb
+  id: PartThumb
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartThumb
+  nameWithType: ScrollBar.PartThumb
+  fullName: FluentGpu.Controls.ScrollBar.PartThumb
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartThumb
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The draggable thumb (WinUI VerticalThumb/HorizontalThumb). Owned (Anatomy): Key, the main-axis
+        length + the cross-axis Width/HeightBind (the conscious-expand eased cross-axis size — bind-driven geometry,
+        not style), TransformBind (the compositor-bound scroll position). On the legacy panning variant everything
+        is style (drag lives on the rail, no binds).
+  example: []
+  syntax:
+    content: public const string PartThumb = "sb-thumb"
+    return:
+      type: System.String
+    content.vb: Public Const PartThumb As String = "sb-thumb"
+- uid: FluentGpu.Controls.ScrollBar.PartTrack
+  commentId: F:FluentGpu.Controls.ScrollBar.PartTrack
+  id: PartTrack
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartTrack
+  nameWithType: ScrollBar.PartTrack
+  fullName: FluentGpu.Controls.ScrollBar.PartTrack
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartTrack
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The always-mounted acrylic track (WinUI Vertical/HorizontalTrackRect). Owned: Key, the bound Opacity (the
+        83ms chrome fade).
+  example: []
+  syntax:
+    content: public const string PartTrack = "sb-track"
+    return:
+      type: System.String
+    content.vb: Public Const PartTrack As String = "sb-track"
+- uid: FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  commentId: F:FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  id: PartIncreaseButton
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartIncreaseButton
+  nameWithType: ScrollBar.PartIncreaseButton
+  fullName: FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartIncreaseButton
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The TRAILING arrow cell (WinUI VerticalSmallIncrease — glyph EDDC, scrolls down; horizontal
+        HorizontalSmallIncrease — glyph EDDA, scrolls right). Owned: Key, the bound Opacity (the chrome fade),
+        Repeats + RepeatIntervalMs + OnClick (the small-change repeat step), OnHoverMove/OnPointerExit (the
+        conscious hover lane).
+  example: []
+  syntax:
+    content: public const string PartIncreaseButton = "sb-down"
+    return:
+      type: System.String
+    content.vb: Public Const PartIncreaseButton As String = "sb-down"
+- uid: FluentGpu.Controls.ScrollBar.PartDecreaseButton
+  commentId: F:FluentGpu.Controls.ScrollBar.PartDecreaseButton
+  id: PartDecreaseButton
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PartDecreaseButton
+  nameWithType: ScrollBar.PartDecreaseButton
+  fullName: FluentGpu.Controls.ScrollBar.PartDecreaseButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartDecreaseButton
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The LEADING arrow cell (WinUI VerticalSmallDecrease — glyph EDDB, scrolls up; horizontal
+        HorizontalSmallDecrease — glyph EDD9, scrolls left). Owned: same set as
+        <xref href="FluentGpu.Controls.ScrollBar.PartIncreaseButton" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public const string PartDecreaseButton = "sb-up"
+    return:
+      type: System.String
+    content.vb: Public Const PartDecreaseButton As String = "sb-up"
+- uid: FluentGpu.Controls.ScrollBar.RailSize
+  commentId: F:FluentGpu.Controls.ScrollBar.RailSize
+  id: RailSize
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: RailSize
+  nameWithType: ScrollBar.RailSize
+  fullName: FluentGpu.Controls.ScrollBar.RailSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RailSize
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float RailSize = 12
+    return:
+      type: System.Single
+    content.vb: Public Const RailSize As Single = 12
+- uid: FluentGpu.Controls.ScrollBar.CollapsedThumb
+  commentId: F:FluentGpu.Controls.ScrollBar.CollapsedThumb
+  id: CollapsedThumb
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: CollapsedThumb
+  nameWithType: ScrollBar.CollapsedThumb
+  fullName: FluentGpu.Controls.ScrollBar.CollapsedThumb
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CollapsedThumb
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float CollapsedThumb = 2
+    return:
+      type: System.Single
+    content.vb: Public Const CollapsedThumb As Single = 2
+- uid: FluentGpu.Controls.ScrollBar.ExpandedThumb
+  commentId: F:FluentGpu.Controls.ScrollBar.ExpandedThumb
+  id: ExpandedThumb
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ExpandedThumb
+  nameWithType: ScrollBar.ExpandedThumb
+  fullName: FluentGpu.Controls.ScrollBar.ExpandedThumb
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExpandedThumb
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 72
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ExpandedThumb = 6
+    return:
+      type: System.Single
+    content.vb: Public Const ExpandedThumb As Single = 6
+- uid: FluentGpu.Controls.ScrollBar.ThumbInset
+  commentId: F:FluentGpu.Controls.ScrollBar.ThumbInset
+  id: ThumbInset
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ThumbInset
+  nameWithType: ScrollBar.ThumbInset
+  fullName: FluentGpu.Controls.ScrollBar.ThumbInset
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ThumbInset
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ThumbInset = 3
+    return:
+      type: System.Single
+    content.vb: Public Const ThumbInset As Single = 3
+- uid: FluentGpu.Controls.ScrollBar.MinThumbLength
+  commentId: F:FluentGpu.Controls.ScrollBar.MinThumbLength
+  id: MinThumbLength
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: MinThumbLength
+  nameWithType: ScrollBar.MinThumbLength
+  fullName: FluentGpu.Controls.ScrollBar.MinThumbLength
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinThumbLength
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MinThumbLength = 30
+    return:
+      type: System.Single
+    content.vb: Public Const MinThumbLength As Single = 30
+- uid: FluentGpu.Controls.ScrollBar.ExpandBeginMs
+  commentId: F:FluentGpu.Controls.ScrollBar.ExpandBeginMs
+  id: ExpandBeginMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ExpandBeginMs
+  nameWithType: ScrollBar.ExpandBeginMs
+  fullName: FluentGpu.Controls.ScrollBar.ExpandBeginMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExpandBeginMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 75
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ExpandBeginMs = 400
+    return:
+      type: System.Single
+    content.vb: Public Const ExpandBeginMs As Single = 400
+- uid: FluentGpu.Controls.ScrollBar.ContractBeginMs
+  commentId: F:FluentGpu.Controls.ScrollBar.ContractBeginMs
+  id: ContractBeginMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ContractBeginMs
+  nameWithType: ScrollBar.ContractBeginMs
+  fullName: FluentGpu.Controls.ScrollBar.ContractBeginMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContractBeginMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ContractBeginMs = 500
+    return:
+      type: System.Single
+    content.vb: Public Const ContractBeginMs As Single = 500
+- uid: FluentGpu.Controls.ScrollBar.ExpandMs
+  commentId: F:FluentGpu.Controls.ScrollBar.ExpandMs
+  id: ExpandMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ExpandMs
+  nameWithType: ScrollBar.ExpandMs
+  fullName: FluentGpu.Controls.ScrollBar.ExpandMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExpandMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ExpandMs = 167
+    return:
+      type: System.Single
+    content.vb: Public Const ExpandMs As Single = 167
+- uid: FluentGpu.Controls.ScrollBar.FadeMs
+  commentId: F:FluentGpu.Controls.ScrollBar.FadeMs
+  id: FadeMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: FadeMs
+  nameWithType: ScrollBar.FadeMs
+  fullName: FluentGpu.Controls.ScrollBar.FadeMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FadeMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float FadeMs = 83
+    return:
+      type: System.Single
+    content.vb: Public Const FadeMs As Single = 83
+- uid: FluentGpu.Controls.ScrollBar.ArrowFontSize
+  commentId: F:FluentGpu.Controls.ScrollBar.ArrowFontSize
+  id: ArrowFontSize
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ArrowFontSize
+  nameWithType: ScrollBar.ArrowFontSize
+  fullName: FluentGpu.Controls.ScrollBar.ArrowFontSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ArrowFontSize
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ArrowFontSize = 8
+    return:
+      type: System.Single
+    content.vb: Public Const ArrowFontSize As Single = 8
+- uid: FluentGpu.Controls.ScrollBar.ArrowScalePressed
+  commentId: F:FluentGpu.Controls.ScrollBar.ArrowScalePressed
+  id: ArrowScalePressed
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: ArrowScalePressed
+  nameWithType: ScrollBar.ArrowScalePressed
+  fullName: FluentGpu.Controls.ScrollBar.ArrowScalePressed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ArrowScalePressed
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 80
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ArrowScalePressed = 0.875
+    return:
+      type: System.Single
+    content.vb: Public Const ArrowScalePressed As Single = 0.875
+- uid: FluentGpu.Controls.ScrollBar.LineDeltaPx
+  commentId: F:FluentGpu.Controls.ScrollBar.LineDeltaPx
+  id: LineDeltaPx
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: LineDeltaPx
+  nameWithType: ScrollBar.LineDeltaPx
+  fullName: FluentGpu.Controls.ScrollBar.LineDeltaPx
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineDeltaPx
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 81
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float LineDeltaPx = 16
+    return:
+      type: System.Single
+    content.vb: Public Const LineDeltaPx As Single = 16
+- uid: FluentGpu.Controls.ScrollBar.RepeatDelayMs
+  commentId: F:FluentGpu.Controls.ScrollBar.RepeatDelayMs
+  id: RepeatDelayMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: RepeatDelayMs
+  nameWithType: ScrollBar.RepeatDelayMs
+  fullName: FluentGpu.Controls.ScrollBar.RepeatDelayMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatDelayMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float RepeatDelayMs = 500
+    return:
+      type: System.Single
+    content.vb: Public Const RepeatDelayMs As Single = 500
+- uid: FluentGpu.Controls.ScrollBar.RepeatIntervalMs
+  commentId: F:FluentGpu.Controls.ScrollBar.RepeatIntervalMs
+  id: RepeatIntervalMs
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: RepeatIntervalMs
+  nameWithType: ScrollBar.RepeatIntervalMs
+  fullName: FluentGpu.Controls.ScrollBar.RepeatIntervalMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatIntervalMs
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float RepeatIntervalMs = 50
+    return:
+      type: System.Single
+    content.vb: Public Const RepeatIntervalMs As Single = 50
+- uid: FluentGpu.Controls.ScrollBar.PanningThumbMargin
+  commentId: F:FluentGpu.Controls.ScrollBar.PanningThumbMargin
+  id: PanningThumbMargin
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: PanningThumbMargin
+  nameWithType: ScrollBar.PanningThumbMargin
+  fullName: FluentGpu.Controls.ScrollBar.PanningThumbMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PanningThumbMargin
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float PanningThumbMargin = 2
+    return:
+      type: System.Single
+    content.vb: Public Const PanningThumbMargin As Single = 2
+- uid: FluentGpu.Controls.ScrollBar.StyleOverride
+  commentId: F:FluentGpu.Controls.ScrollBar.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: ScrollBar.StyleOverride
+  fullName: FluentGpu.Controls.ScrollBar.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ScrollBar.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.ScrollBar.Style
+    content.vb: Public Shared StyleOverride As ScrollBar.Style
+- uid: FluentGpu.Controls.ScrollBar.DefaultStyle
+  commentId: P:FluentGpu.Controls.ScrollBar.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: ScrollBar.DefaultStyle
+  fullName: FluentGpu.Controls.ScrollBar.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static ScrollBar.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.ScrollBar.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As ScrollBar.Style
+  overload: FluentGpu.Controls.ScrollBar.DefaultStyle*
+- uid: FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Create(float, float, Action<float>, float, Style?, bool, TemplateParts?)
+  nameWithType: ScrollBar.Create(float, float, Action<float>, float, ScrollBar.Style?, bool, TemplateParts?)
+  fullName: FluentGpu.Controls.ScrollBar.Create(float, float, System.Action<float>, float, FluentGpu.Controls.ScrollBar.Style?, bool, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 113
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The legacy thin panning-indicator scrollbar (see the class doc): a draggable thumb on an invisible
+        rail; press/drag maps the pointer to an absolute 0..1 position. Kept source-compatible. Geometry mirrors the
+        template's VerticalPanningThumb: 2px thumb, 32px min length, 2px side margins (ScrollBar_themeresources
+        .xaml:714). <code class="paramref">parts</code> = per-part styling (only <xref href="FluentGpu.Controls.ScrollBar.PartThumb" data-throw-if-not-resolved="false"></xref> exists on this
+        variant).
+  example: []
+  syntax:
+    content: public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200, ScrollBar.Style? style = null, bool disabled = false, TemplateParts? parts = null)
+    parameters:
+    - id: fraction
+      type: System.Single
+    - id: position
+      type: System.Single
+    - id: onScroll
+      type: System.Action{System.Single}
+    - id: height
+      type: System.Single
+    - id: style
+      type: FluentGpu.Controls.ScrollBar.Style
+    - id: disabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(fraction As Single, position As Single, onScroll As Action(Of Single), height As Single = 200, style As ScrollBar.Style = Nothing, disabled As Boolean = False, parts As TemplateParts = Nothing) As BoxEl
+  overload: FluentGpu.Controls.ScrollBar.Create*
+  nameWithType.vb: ScrollBar.Create(Single, Single, Action(Of Single), Single, ScrollBar.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Create(Single, Single, System.Action(Of Single), Single, FluentGpu.Controls.ScrollBar.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(Single, Single, Action(Of Single), Single, Style, Boolean, TemplateParts)
+- uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  id: Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Anatomy(float, float, Action<float>, float, bool, TemplateParts?, bool, float, float)
+  nameWithType: ScrollBar.Anatomy(float, float, Action<float>, float, bool, TemplateParts?, bool, float, float)
+  fullName: FluentGpu.Controls.ScrollBar.Anatomy(float, float, System.Action<float>, float, bool, FluentGpu.Dsl.TemplateParts?, bool, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Anatomy
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 150
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full WinUI mouse-scrollbar anatomy with a FROZEN position (component props freeze at mount — use the
+
+    <xref href="FluentGpu.Controls.ScrollBar.Anatomy(System.Single%2cFluentGpu.Signals.Signal%7bSystem.Single%7d%2cSystem.Action%7bSystem.Single%7d%2cSystem.Single%2cSystem.Boolean%2cFluentGpu.Dsl.TemplateParts%2cSystem.Boolean%2cSystem.Single%2cSystem.Single)" data-throw-if-not-resolved="false"></xref>
+
+    signal overload for a live, app-controlled position).
+  example: []
+  syntax:
+    content: public static Element Anatomy(float fraction, float position, Action<float> onScroll, float length = 200, bool disabled = false, TemplateParts? parts = null, bool horizontal = false, float largeChange01 = NaN, float smallChange01 = NaN)
+    parameters:
+    - id: fraction
+      type: System.Single
+    - id: position
+      type: System.Single
+    - id: onScroll
+      type: System.Action{System.Single}
+    - id: length
+      type: System.Single
+    - id: disabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    - id: horizontal
+      type: System.Boolean
+    - id: largeChange01
+      type: System.Single
+    - id: smallChange01
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Anatomy(fraction As Single, position As Single, onScroll As Action(Of Single), length As Single = 200, disabled As Boolean = False, parts As TemplateParts = Nothing, horizontal As Boolean = False, largeChange01 As Single = NaN, smallChange01 As Single = NaN) As Element
+  overload: FluentGpu.Controls.ScrollBar.Anatomy*
+  nameWithType.vb: ScrollBar.Anatomy(Single, Single, Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Anatomy(Single, Single, System.Action(Of Single), Single, Boolean, FluentGpu.Dsl.TemplateParts, Boolean, Single, Single)
+  name.vb: Anatomy(Single, Single, Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+- uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  id: Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  parent: FluentGpu.Controls.ScrollBar
+  langs:
+  - csharp
+  - vb
+  name: Anatomy(float, Signal<float>, Action<float>, float, bool, TemplateParts?, bool, float, float)
+  nameWithType: ScrollBar.Anatomy(float, Signal<float>, Action<float>, float, bool, TemplateParts?, bool, float, float)
+  fullName: FluentGpu.Controls.ScrollBar.Anatomy(float, FluentGpu.Signals.Signal<float>, System.Action<float>, float, bool, FluentGpu.Dsl.TemplateParts?, bool, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ScrollBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Anatomy
+    path: ../../src/FluentGpu.Controls/ScrollBar.cs
+    startLine: 171
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The full WinUI mouse-scrollbar anatomy (see the class doc for cites). <code class="paramref">fraction</code> =
+
+    viewport/content (thumb proportion); <code class="paramref">position</code> = offset/(content−viewport) in 0..1, read
+
+    through a signal so writes move the thumb compositor-instantly (no re-render); <code class="paramref">onScroll</code>
+
+    receives the new position for every interaction: thumb drag (absolute), track-click paging (one VIEWPORT
+
+    per page — LargeDecrement→IScrollInfo::PageUp = SetVerticalOffset(offset − viewport),
+
+    ScrollViewer_Partial.cpp:3146-3150 / ScrollContentPresenter_Partial.cpp:543-547 — auto-repeating at the
+
+    template's Interval=50 after the 500ms RepeatButton delay, stopping when the thumb reaches the pointer),
+
+    and arrow small-change (one 16px LINE per step — ScrollViewerLineDelta, ScrollViewer_Partial.h:27).
+
+    <code class="paramref">horizontal</code> mirrors the anatomy on the X axis (HorizontalRoot, :672-693).
+
+    <code class="paramref">largeChange01</code>/<code class="paramref">smallChange01</code> override the page/line amounts in 0..1
+
+    position units (NaN = the WinUI-derived defaults above; pass 16/scrollableExtentPx for the exact line when
+
+    the real content extent is known). <code class="paramref">parts</code> = per-part styling keyed by the <code>PartXxx</code>
+
+    consts (see <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract).
+  example: []
+  syntax:
+    content: public static Element Anatomy(float fraction, Signal<float> position, Action<float> onScroll, float length = 200, bool disabled = false, TemplateParts? parts = null, bool horizontal = false, float largeChange01 = NaN, float smallChange01 = NaN)
+    parameters:
+    - id: fraction
+      type: System.Single
+    - id: position
+      type: FluentGpu.Signals.Signal{System.Single}
+    - id: onScroll
+      type: System.Action{System.Single}
+    - id: length
+      type: System.Single
+    - id: disabled
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    - id: horizontal
+      type: System.Boolean
+    - id: largeChange01
+      type: System.Single
+    - id: smallChange01
+      type: System.Single
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Anatomy(fraction As Single, position As Signal(Of Single), onScroll As Action(Of Single), length As Single = 200, disabled As Boolean = False, parts As TemplateParts = Nothing, horizontal As Boolean = False, largeChange01 As Single = NaN, smallChange01 As Single = NaN) As Element
+  overload: FluentGpu.Controls.ScrollBar.Anatomy*
+  nameWithType.vb: ScrollBar.Anatomy(Single, Signal(Of Single), Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Anatomy(Single, FluentGpu.Signals.Signal(Of Single), System.Action(Of Single), Single, Boolean, FluentGpu.Dsl.TemplateParts, Boolean, Single, Single)
+  name.vb: Anatomy(Single, Signal(Of Single), Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+references:
+- uid: FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+  isExternal: true
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Create_System_Single_System_Single_System_Action_System_Single__System_Single_FluentGpu_Controls_ScrollBar_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Create(float, float, Action<float>, float, Style, bool, TemplateParts)
+  nameWithType: ScrollBar.Create(float, float, Action<float>, float, ScrollBar.Style, bool, TemplateParts)
+  fullName: FluentGpu.Controls.ScrollBar.Create(float, float, System.Action<float>, float, FluentGpu.Controls.ScrollBar.Style, bool, FluentGpu.Dsl.TemplateParts)
+  nameWithType.vb: ScrollBar.Create(Single, Single, Action(Of Single), Single, ScrollBar.Style, Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Create(Single, Single, System.Action(Of Single), Single, FluentGpu.Controls.ScrollBar.Style, Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(Single, Single, Action(Of Single), Single, Style, Boolean, TemplateParts)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+    name: Create
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Create_System_Single_System_Single_System_Action_System_Single__System_Single_FluentGpu_Controls_ScrollBar_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ScrollBar.Create(System.Single,System.Single,System.Action{System.Single},System.Single,FluentGpu.Controls.ScrollBar.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)
+    name: Create
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Create_System_Single_System_Single_System_Action_System_Single__System_Single_FluentGpu_Controls_ScrollBar_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: )
+- uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_System_Single_System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  name: Anatomy(float, float, Action<float>, float, bool, TemplateParts, bool, float, float)
+  nameWithType: ScrollBar.Anatomy(float, float, Action<float>, float, bool, TemplateParts, bool, float, float)
+  fullName: FluentGpu.Controls.ScrollBar.Anatomy(float, float, System.Action<float>, float, bool, FluentGpu.Dsl.TemplateParts, bool, float, float)
+  nameWithType.vb: ScrollBar.Anatomy(Single, Single, Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Anatomy(Single, Single, System.Action(Of Single), Single, Boolean, FluentGpu.Dsl.TemplateParts, Boolean, Single, Single)
+  name.vb: Anatomy(Single, Single, Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+    name: Anatomy
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_System_Single_System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,System.Single,System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+    name: Anatomy
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_System_Single_System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Foundation.Easing.FluentPopOpen
+  commentId: F:FluentGpu.Foundation.Easing.FluentPopOpen
+  href: FluentGpu.Foundation.Easing.html#FluentGpu_Foundation_Easing_FluentPopOpen
+  name: FluentPopOpen
+  nameWithType: Easing.FluentPopOpen
+  fullName: FluentGpu.Foundation.Easing.FluentPopOpen
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  commentId: F:FluentGpu.Controls.ScrollBar.PartIncreaseButton
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_PartIncreaseButton
+  name: PartIncreaseButton
+  nameWithType: ScrollBar.PartIncreaseButton
+  fullName: FluentGpu.Controls.ScrollBar.PartIncreaseButton
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ScrollBar.Style
+  commentId: T:FluentGpu.Controls.ScrollBar.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ScrollBar.html
+  name: ScrollBar.Style
+  nameWithType: ScrollBar.Style
+  fullName: FluentGpu.Controls.ScrollBar.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    href: FluentGpu.Controls.ScrollBar.html
+  - name: .
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: Style
+    href: FluentGpu.Controls.ScrollBar.Style.html
+- uid: FluentGpu.Controls.ScrollBar.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.DefaultStyle
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_DefaultStyle
+  name: DefaultStyle
+  nameWithType: ScrollBar.DefaultStyle
+  fullName: FluentGpu.Controls.ScrollBar.DefaultStyle
+- uid: FluentGpu.Controls.ScrollBar.PartThumb
+  commentId: F:FluentGpu.Controls.ScrollBar.PartThumb
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_PartThumb
+  name: PartThumb
+  nameWithType: ScrollBar.PartThumb
+  fullName: FluentGpu.Controls.ScrollBar.PartThumb
+- uid: FluentGpu.Controls.ScrollBar.Create*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Create
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Create_System_Single_System_Single_System_Action_System_Single__System_Single_FluentGpu_Controls_ScrollBar_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: ScrollBar.Create
+  fullName: FluentGpu.Controls.ScrollBar.Create
+- uid: System.Action{System.Single}
+  commentId: T:System.Action{System.Single}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<float>
+  nameWithType: Action<float>
+  fullName: System.Action<float>
+  nameWithType.vb: Action(Of Single)
+  fullName.vb: System.Action(Of Single)
+  name.vb: Action(Of Single)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_FluentGpu_Signals_Signal_System_Single__System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  name: Anatomy(float, Signal<float>, Action<float>, float, bool, TemplateParts, bool, float, float)
+  nameWithType: ScrollBar.Anatomy(float, Signal<float>, Action<float>, float, bool, TemplateParts, bool, float, float)
+  fullName: FluentGpu.Controls.ScrollBar.Anatomy(float, FluentGpu.Signals.Signal<float>, System.Action<float>, float, bool, FluentGpu.Dsl.TemplateParts, bool, float, float)
+  nameWithType.vb: ScrollBar.Anatomy(Single, Signal(Of Single), Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  fullName.vb: FluentGpu.Controls.ScrollBar.Anatomy(Single, FluentGpu.Signals.Signal(Of Single), System.Action(Of Single), Single, Boolean, FluentGpu.Dsl.TemplateParts, Boolean, Single, Single)
+  name.vb: Anatomy(Single, Signal(Of Single), Action(Of Single), Single, Boolean, TemplateParts, Boolean, Single, Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+    name: Anatomy
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_FluentGpu_Signals_Signal_System_Single__System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ScrollBar.Anatomy(System.Single,FluentGpu.Signals.Signal{System.Single},System.Action{System.Single},System.Single,System.Boolean,FluentGpu.Dsl.TemplateParts,System.Boolean,System.Single,System.Single)
+    name: Anatomy
+    href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_FluentGpu_Signals_Signal_System_Single__System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    href: FluentGpu.Dsl.TemplateParts.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Controls.ScrollBar.Anatomy*
+  commentId: Overload:FluentGpu.Controls.ScrollBar.Anatomy
+  href: FluentGpu.Controls.ScrollBar.html#FluentGpu_Controls_ScrollBar_Anatomy_System_Single_System_Single_System_Action_System_Single__System_Single_System_Boolean_FluentGpu_Dsl_TemplateParts_System_Boolean_System_Single_System_Single_
+  name: Anatomy
+  nameWithType: ScrollBar.Anatomy
+  fullName: FluentGpu.Controls.ScrollBar.Anatomy
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Signals.Signal{System.Single}
+  commentId: T:FluentGpu.Signals.Signal{System.Single}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<float>
+  nameWithType: Signal<float>
+  fullName: FluentGpu.Signals.Signal<float>
+  nameWithType.vb: Signal(Of Single)
+  fullName.vb: FluentGpu.Signals.Signal(Of Single)
+  name.vb: Signal(Of Single)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html

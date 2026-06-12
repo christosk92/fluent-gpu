@@ -1,0 +1,600 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.OverlayPlacementInfo
+  commentId: T:FluentGpu.Controls.OverlayPlacementInfo
+  id: OverlayPlacementInfo
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.OverlayPlacementInfo.#ctor(System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  - FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+  - FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+  - FluentGpu.Controls.OverlayPlacementInfo.OpensUp
+  - FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+  - FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+  langs:
+  - csharp
+  - vb
+  name: OverlayPlacementInfo
+  nameWithType: OverlayPlacementInfo
+  fullName: FluentGpu.Controls.OverlayPlacementInfo
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OverlayPlacementInfo
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 118
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Resolved popup placement in popup-local coordinates, updated by <xref href="FluentGpu.Controls.OverlayHost" data-throw-if-not-resolved="false"></xref> after layout.
+  example: []
+  syntax:
+    content: 'public readonly record struct OverlayPlacementInfo : IEquatable<OverlayPlacementInfo>'
+    content.vb: Public Structure OverlayPlacementInfo Implements IEquatable(Of OverlayPlacementInfo)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.OverlayPlacementInfo}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.OverlayPlacementInfo.#ctor(System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  commentId: M:FluentGpu.Controls.OverlayPlacementInfo.#ctor(System.Single,System.Single,System.Single,System.Single,System.Boolean)
+  id: '#ctor(System.Single,System.Single,System.Single,System.Single,System.Boolean)'
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: OverlayPlacementInfo(float, float, float, float, bool)
+  nameWithType: OverlayPlacementInfo.OverlayPlacementInfo(float, float, float, float, bool)
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.OverlayPlacementInfo(float, float, float, float, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 118
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Resolved popup placement in popup-local coordinates, updated by <xref href="FluentGpu.Controls.OverlayHost" data-throw-if-not-resolved="false"></xref> after layout.
+  example: []
+  syntax:
+    content: public OverlayPlacementInfo(float AnchorCenterX, float AnchorCenterY, float PopupWidth, float PopupHeight, bool OpensUp)
+    parameters:
+    - id: AnchorCenterX
+      type: System.Single
+    - id: AnchorCenterY
+      type: System.Single
+    - id: PopupWidth
+      type: System.Single
+    - id: PopupHeight
+      type: System.Single
+    - id: OpensUp
+      type: System.Boolean
+    content.vb: Public Sub New(AnchorCenterX As Single, AnchorCenterY As Single, PopupWidth As Single, PopupHeight As Single, OpensUp As Boolean)
+  overload: FluentGpu.Controls.OverlayPlacementInfo.#ctor*
+  nameWithType.vb: OverlayPlacementInfo.New(Single, Single, Single, Single, Boolean)
+  fullName.vb: FluentGpu.Controls.OverlayPlacementInfo.New(Single, Single, Single, Single, Boolean)
+  name.vb: New(Single, Single, Single, Single, Boolean)
+- uid: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+  commentId: P:FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+  id: AnchorCenterX
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: AnchorCenterX
+  nameWithType: OverlayPlacementInfo.AnchorCenterX
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorCenterX
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 119
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float AnchorCenterX { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AnchorCenterX As Single
+  overload: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX*
+- uid: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+  commentId: P:FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+  id: AnchorCenterY
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: AnchorCenterY
+  nameWithType: OverlayPlacementInfo.AnchorCenterY
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnchorCenterY
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float AnchorCenterY { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property AnchorCenterY As Single
+  overload: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY*
+- uid: FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+  commentId: P:FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+  id: PopupWidth
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: PopupWidth
+  nameWithType: OverlayPlacementInfo.PopupWidth
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupWidth
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupWidth As Single
+  overload: FluentGpu.Controls.OverlayPlacementInfo.PopupWidth*
+- uid: FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+  commentId: P:FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+  id: PopupHeight
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: PopupHeight
+  nameWithType: OverlayPlacementInfo.PopupHeight
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupHeight
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 122
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float PopupHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property PopupHeight As Single
+  overload: FluentGpu.Controls.OverlayPlacementInfo.PopupHeight*
+- uid: FluentGpu.Controls.OverlayPlacementInfo.OpensUp
+  commentId: P:FluentGpu.Controls.OverlayPlacementInfo.OpensUp
+  id: OpensUp
+  parent: FluentGpu.Controls.OverlayPlacementInfo
+  langs:
+  - csharp
+  - vb
+  name: OpensUp
+  nameWithType: OverlayPlacementInfo.OpensUp
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.OpensUp
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpensUp
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 123
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpensUp { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property OpensUp As Boolean
+  overload: FluentGpu.Controls.OverlayPlacementInfo.OpensUp*
+references:
+- uid: FluentGpu.Controls.OverlayHost
+  commentId: T:FluentGpu.Controls.OverlayHost
+  href: FluentGpu.Controls.OverlayHost.html
+  name: OverlayHost
+  nameWithType: OverlayHost
+  fullName: FluentGpu.Controls.OverlayHost
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.OverlayPlacementInfo}
+  commentId: T:System.IEquatable{FluentGpu.Controls.OverlayPlacementInfo}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<OverlayPlacementInfo>
+  nameWithType: IEquatable<OverlayPlacementInfo>
+  fullName: System.IEquatable<FluentGpu.Controls.OverlayPlacementInfo>
+  nameWithType.vb: IEquatable(Of OverlayPlacementInfo)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.OverlayPlacementInfo)
+  name.vb: IEquatable(Of OverlayPlacementInfo)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.OverlayPlacementInfo
+    name: OverlayPlacementInfo
+    href: FluentGpu.Controls.OverlayPlacementInfo.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.OverlayPlacementInfo
+    name: OverlayPlacementInfo
+    href: FluentGpu.Controls.OverlayPlacementInfo.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.OverlayPlacementInfo.#ctor*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.#ctor
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo__ctor_System_Single_System_Single_System_Single_System_Single_System_Boolean_
+  name: OverlayPlacementInfo
+  nameWithType: OverlayPlacementInfo.OverlayPlacementInfo
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.OverlayPlacementInfo
+  nameWithType.vb: OverlayPlacementInfo.New
+  fullName.vb: FluentGpu.Controls.OverlayPlacementInfo.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo_AnchorCenterX
+  name: AnchorCenterX
+  nameWithType: OverlayPlacementInfo.AnchorCenterX
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterX
+- uid: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo_AnchorCenterY
+  name: AnchorCenterY
+  nameWithType: OverlayPlacementInfo.AnchorCenterY
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.AnchorCenterY
+- uid: FluentGpu.Controls.OverlayPlacementInfo.PopupWidth*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo_PopupWidth
+  name: PopupWidth
+  nameWithType: OverlayPlacementInfo.PopupWidth
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.PopupWidth
+- uid: FluentGpu.Controls.OverlayPlacementInfo.PopupHeight*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo_PopupHeight
+  name: PopupHeight
+  nameWithType: OverlayPlacementInfo.PopupHeight
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.PopupHeight
+- uid: FluentGpu.Controls.OverlayPlacementInfo.OpensUp*
+  commentId: Overload:FluentGpu.Controls.OverlayPlacementInfo.OpensUp
+  href: FluentGpu.Controls.OverlayPlacementInfo.html#FluentGpu_Controls_OverlayPlacementInfo_OpensUp
+  name: OpensUp
+  nameWithType: OverlayPlacementInfo.OpensUp
+  fullName: FluentGpu.Controls.OverlayPlacementInfo.OpensUp

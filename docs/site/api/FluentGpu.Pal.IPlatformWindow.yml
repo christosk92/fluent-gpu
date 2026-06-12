@@ -1,0 +1,940 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.IPlatformWindow
+  commentId: T:FluentGpu.Pal.IPlatformWindow
+  id: IPlatformWindow
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+  - FluentGpu.Pal.IPlatformWindow.ClientSizePx
+  - FluentGpu.Pal.IPlatformWindow.CloseWindow
+  - FluentGpu.Pal.IPlatformWindow.Handle
+  - FluentGpu.Pal.IPlatformWindow.IsActive
+  - FluentGpu.Pal.IPlatformWindow.Minimize
+  - FluentGpu.Pal.IPlatformWindow.PaintRequested
+  - FluentGpu.Pal.IPlatformWindow.PumpInto(FluentGpu.Pal.InputEventRing)
+  - FluentGpu.Pal.IPlatformWindow.Scale
+  - FluentGpu.Pal.IPlatformWindow.SetCursor(FluentGpu.Foundation.CursorId)
+  - FluentGpu.Pal.IPlatformWindow.SetTitle(FluentGpu.Foundation.StringId)
+  - FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions(System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion})
+  - FluentGpu.Pal.IPlatformWindow.Show
+  - FluentGpu.Pal.IPlatformWindow.State
+  - FluentGpu.Pal.IPlatformWindow.TextInput
+  - FluentGpu.Pal.IPlatformWindow.ToggleMaximize
+  - FluentGpu.Pal.IPlatformWindow.WaitForWork(System.Int32)
+  langs:
+  - csharp
+  - vb
+  name: IPlatformWindow
+  nameWithType: IPlatformWindow
+  fullName: FluentGpu.Pal.IPlatformWindow
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IPlatformWindow
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 150
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: 'public interface IPlatformWindow : IDisposable'
+    content.vb: Public Interface IPlatformWindow Inherits IDisposable
+  derivedClasses:
+  - FluentGpu.Pal.Windows.Win32Window
+  inheritedMembers:
+  - System.IDisposable.Dispose
+- uid: FluentGpu.Pal.IPlatformWindow.Handle
+  commentId: P:FluentGpu.Pal.IPlatformWindow.Handle
+  id: Handle
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: Handle
+  nameWithType: IPlatformWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformWindow.Handle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Handle
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 152
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: NativeHandle Handle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NativeHandle
+    content.vb: ReadOnly Property Handle As NativeHandle
+  overload: FluentGpu.Pal.IPlatformWindow.Handle*
+- uid: FluentGpu.Pal.IPlatformWindow.ClientSizePx
+  commentId: P:FluentGpu.Pal.IPlatformWindow.ClientSizePx
+  id: ClientSizePx
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: ClientSizePx
+  nameWithType: IPlatformWindow.ClientSizePx
+  fullName: FluentGpu.Pal.IPlatformWindow.ClientSizePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClientSizePx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 153
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Size2 ClientSizePx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: ReadOnly Property ClientSizePx As Size2
+  overload: FluentGpu.Pal.IPlatformWindow.ClientSizePx*
+- uid: FluentGpu.Pal.IPlatformWindow.Scale
+  commentId: P:FluentGpu.Pal.IPlatformWindow.Scale
+  id: Scale
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: Scale
+  nameWithType: IPlatformWindow.Scale
+  fullName: FluentGpu.Pal.IPlatformWindow.Scale
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scale
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 154
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: float Scale { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: ReadOnly Property Scale As Single
+  overload: FluentGpu.Pal.IPlatformWindow.Scale*
+- uid: FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+  commentId: P:FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+  id: ClientOriginPx
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: ClientOriginPx
+  nameWithType: IPlatformWindow.ClientOriginPx
+  fullName: FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClientOriginPx
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 159
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    The screen position of the client area's (0,0), in physical virtual-screen px — the window-DIP →
+        screen-px bridge for popup-window placement and per-monitor work-area queries (Win32 <code>ClientToScreen</code>;
+        headless: settable, default (0,0)).
+  example: []
+  syntax:
+    content: Point2 ClientOriginPx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: ReadOnly Property ClientOriginPx As Point2
+  overload: FluentGpu.Pal.IPlatformWindow.ClientOriginPx*
+- uid: FluentGpu.Pal.IPlatformWindow.PumpInto(FluentGpu.Pal.InputEventRing)
+  commentId: M:FluentGpu.Pal.IPlatformWindow.PumpInto(FluentGpu.Pal.InputEventRing)
+  id: PumpInto(FluentGpu.Pal.InputEventRing)
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: PumpInto(InputEventRing)
+  nameWithType: IPlatformWindow.PumpInto(InputEventRing)
+  fullName: FluentGpu.Pal.IPlatformWindow.PumpInto(FluentGpu.Pal.InputEventRing)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PumpInto
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Drain queued OS input/window events into the ring (once per frame).
+  example: []
+  syntax:
+    content: int PumpInto(InputEventRing ring)
+    parameters:
+    - id: ring
+      type: FluentGpu.Pal.InputEventRing
+    return:
+      type: System.Int32
+    content.vb: Function PumpInto(ring As InputEventRing) As Integer
+  overload: FluentGpu.Pal.IPlatformWindow.PumpInto*
+- uid: FluentGpu.Pal.IPlatformWindow.WaitForWork(System.Int32)
+  commentId: M:FluentGpu.Pal.IPlatformWindow.WaitForWork(System.Int32)
+  id: WaitForWork(System.Int32)
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: WaitForWork(int)
+  nameWithType: IPlatformWindow.WaitForWork(int)
+  fullName: FluentGpu.Pal.IPlatformWindow.WaitForWork(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WaitForWork
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 168
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Block until platform work arrives or <code class="paramref">timeoutMs</code> elapses. Negative timeout means wait indefinitely.
+
+    Real windows use this for event-driven idle; headless implementations may return immediately.
+  example: []
+  syntax:
+    content: void WaitForWork(int timeoutMs)
+    parameters:
+    - id: timeoutMs
+      type: System.Int32
+    content.vb: Sub WaitForWork(timeoutMs As Integer)
+  overload: FluentGpu.Pal.IPlatformWindow.WaitForWork*
+  nameWithType.vb: IPlatformWindow.WaitForWork(Integer)
+  fullName.vb: FluentGpu.Pal.IPlatformWindow.WaitForWork(Integer)
+  name.vb: WaitForWork(Integer)
+- uid: FluentGpu.Pal.IPlatformWindow.PaintRequested
+  commentId: P:FluentGpu.Pal.IPlatformWindow.PaintRequested
+  id: PaintRequested
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: PaintRequested
+  nameWithType: IPlatformWindow.PaintRequested
+  fullName: FluentGpu.Pal.IPlatformWindow.PaintRequested
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PaintRequested
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 175
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
+
+    notably during the modal move/size loop (WM_SIZE/WM_PAINT), which otherwise blocks rendering until mouse-up.
+
+    The host wires this to a pump-free paint so the window stays live during a live resize.
+  example: []
+  syntax:
+    content: Action? PaintRequested { get; set; }
+    parameters: []
+    return:
+      type: System.Action
+    content.vb: Property PaintRequested As Action
+  overload: FluentGpu.Pal.IPlatformWindow.PaintRequested*
+- uid: FluentGpu.Pal.IPlatformWindow.SetCursor(FluentGpu.Foundation.CursorId)
+  commentId: M:FluentGpu.Pal.IPlatformWindow.SetCursor(FluentGpu.Foundation.CursorId)
+  id: SetCursor(FluentGpu.Foundation.CursorId)
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: SetCursor(CursorId)
+  nameWithType: IPlatformWindow.SetCursor(CursorId)
+  fullName: FluentGpu.Pal.IPlatformWindow.SetCursor(FluentGpu.Foundation.CursorId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetCursor
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 177
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void SetCursor(CursorId id)
+    parameters:
+    - id: id
+      type: FluentGpu.Foundation.CursorId
+    content.vb: Sub SetCursor(id As CursorId)
+  overload: FluentGpu.Pal.IPlatformWindow.SetCursor*
+- uid: FluentGpu.Pal.IPlatformWindow.SetTitle(FluentGpu.Foundation.StringId)
+  commentId: M:FluentGpu.Pal.IPlatformWindow.SetTitle(FluentGpu.Foundation.StringId)
+  id: SetTitle(FluentGpu.Foundation.StringId)
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: SetTitle(StringId)
+  nameWithType: IPlatformWindow.SetTitle(StringId)
+  fullName: FluentGpu.Pal.IPlatformWindow.SetTitle(FluentGpu.Foundation.StringId)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetTitle
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 178
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void SetTitle(StringId title)
+    parameters:
+    - id: title
+      type: FluentGpu.Foundation.StringId
+    content.vb: Sub SetTitle(title As StringId)
+  overload: FluentGpu.Pal.IPlatformWindow.SetTitle*
+- uid: FluentGpu.Pal.IPlatformWindow.Show
+  commentId: M:FluentGpu.Pal.IPlatformWindow.Show
+  id: Show
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: Show()
+  nameWithType: IPlatformWindow.Show()
+  fullName: FluentGpu.Pal.IPlatformWindow.Show()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Show
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 179
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void Show()
+    content.vb: Sub Show()
+  overload: FluentGpu.Pal.IPlatformWindow.Show*
+- uid: FluentGpu.Pal.IPlatformWindow.TextInput
+  commentId: P:FluentGpu.Pal.IPlatformWindow.TextInput
+  id: TextInput
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: TextInput
+  nameWithType: IPlatformWindow.TextInput
+  fullName: FluentGpu.Pal.IPlatformWindow.TextInput
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextInput
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 182
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The per-window IME/text-services seam (composition events, candidate-window placement).
+  example: []
+  syntax:
+    content: IPlatformTextInput TextInput { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.IPlatformTextInput
+    content.vb: ReadOnly Property TextInput As IPlatformTextInput
+  overload: FluentGpu.Pal.IPlatformWindow.TextInput*
+- uid: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions(System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion})
+  commentId: M:FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions(System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion})
+  id: SetTitleBarRegions(System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion})
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: SetTitleBarRegions(ReadOnlySpan<TitleBarRegion>)
+  nameWithType: IPlatformWindow.SetTitleBarRegions(ReadOnlySpan<TitleBarRegion>)
+  fullName: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions(System.ReadOnlySpan<FluentGpu.Pal.TitleBarRegion>)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetTitleBarRegions
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 189
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Push the titlebar's drag/caption-button regions (CLIENT DIP; see <xref href="FluentGpu.Pal.TitleBarRegion" data-throw-if-not-resolved="false"></xref>). The
+        engine calls this only when the titlebar relayouts — push-on-change, never per frame (zero-alloc steady path).
+        Anything not covered stays HTCLIENT (the bar's interactive content). An empty span clears all regions.
+  example: []
+  syntax:
+    content: void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions)
+    parameters:
+    - id: regions
+      type: System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion}
+    content.vb: Sub SetTitleBarRegions(regions As ReadOnlySpan(Of TitleBarRegion))
+  overload: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions*
+  nameWithType.vb: IPlatformWindow.SetTitleBarRegions(ReadOnlySpan(Of TitleBarRegion))
+  fullName.vb: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions(System.ReadOnlySpan(Of FluentGpu.Pal.TitleBarRegion))
+  name.vb: SetTitleBarRegions(ReadOnlySpan(Of TitleBarRegion))
+- uid: FluentGpu.Pal.IPlatformWindow.State
+  commentId: P:FluentGpu.Pal.IPlatformWindow.State
+  id: State
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: State
+  nameWithType: IPlatformWindow.State
+  fullName: FluentGpu.Pal.IPlatformWindow.State
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: State
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 193
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Current placement (drives the custom max↔restore glyph). Change is signaled via
+        <xref href="FluentGpu.Pal.InputKind.WindowStateChanged" data-throw-if-not-resolved="false"></xref>; this property is the pull side.
+  example: []
+  syntax:
+    content: WindowState State { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.WindowState
+    content.vb: ReadOnly Property State As WindowState
+  overload: FluentGpu.Pal.IPlatformWindow.State*
+- uid: FluentGpu.Pal.IPlatformWindow.IsActive
+  commentId: P:FluentGpu.Pal.IPlatformWindow.IsActive
+  id: IsActive
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: IsActive
+  nameWithType: IPlatformWindow.IsActive
+  fullName: FluentGpu.Pal.IPlatformWindow.IsActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsActive
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 197
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    True while the window has activation (drives titlebar dimming). Change is signaled via the existing
+        <xref href="FluentGpu.Pal.InputKind.WindowFocus" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Pal.InputKind.WindowBlur" data-throw-if-not-resolved="false"></xref> events; this property is the pull side.
+  example: []
+  syntax:
+    content: bool IsActive { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: ReadOnly Property IsActive As Boolean
+  overload: FluentGpu.Pal.IPlatformWindow.IsActive*
+- uid: FluentGpu.Pal.IPlatformWindow.Minimize
+  commentId: M:FluentGpu.Pal.IPlatformWindow.Minimize
+  id: Minimize
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: Minimize()
+  nameWithType: IPlatformWindow.Minimize()
+  fullName: FluentGpu.Pal.IPlatformWindow.Minimize()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Minimize
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 200
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: 'Engine caption-button commands (Win32: WM_SYSCOMMAND SC_MINIMIZE / SC_MAXIMIZE↔SC_RESTORE / WM_CLOSE).'
+  example: []
+  syntax:
+    content: void Minimize()
+    content.vb: Sub Minimize()
+  overload: FluentGpu.Pal.IPlatformWindow.Minimize*
+- uid: FluentGpu.Pal.IPlatformWindow.ToggleMaximize
+  commentId: M:FluentGpu.Pal.IPlatformWindow.ToggleMaximize
+  id: ToggleMaximize
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: ToggleMaximize()
+  nameWithType: IPlatformWindow.ToggleMaximize()
+  fullName: FluentGpu.Pal.IPlatformWindow.ToggleMaximize()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleMaximize
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 201
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void ToggleMaximize()
+    content.vb: Sub ToggleMaximize()
+  overload: FluentGpu.Pal.IPlatformWindow.ToggleMaximize*
+- uid: FluentGpu.Pal.IPlatformWindow.CloseWindow
+  commentId: M:FluentGpu.Pal.IPlatformWindow.CloseWindow
+  id: CloseWindow
+  parent: FluentGpu.Pal.IPlatformWindow
+  langs:
+  - csharp
+  - vb
+  name: CloseWindow()
+  nameWithType: IPlatformWindow.CloseWindow()
+  fullName: FluentGpu.Pal.IPlatformWindow.CloseWindow()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CloseWindow
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 202
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: void CloseWindow()
+    content.vb: Sub CloseWindow()
+  overload: FluentGpu.Pal.IPlatformWindow.CloseWindow*
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.IPlatformWindow.Handle*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.Handle
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_Handle
+  name: Handle
+  nameWithType: IPlatformWindow.Handle
+  fullName: FluentGpu.Pal.IPlatformWindow.Handle
+- uid: FluentGpu.Foundation.NativeHandle
+  commentId: T:FluentGpu.Foundation.NativeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandle.html
+  name: NativeHandle
+  nameWithType: NativeHandle
+  fullName: FluentGpu.Foundation.NativeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.IPlatformWindow.ClientSizePx*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.ClientSizePx
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_ClientSizePx
+  name: ClientSizePx
+  nameWithType: IPlatformWindow.ClientSizePx
+  fullName: FluentGpu.Pal.IPlatformWindow.ClientSizePx
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Pal.IPlatformWindow.Scale*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.Scale
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_Scale
+  name: Scale
+  nameWithType: IPlatformWindow.Scale
+  fullName: FluentGpu.Pal.IPlatformWindow.Scale
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Pal.IPlatformWindow.ClientOriginPx*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_ClientOriginPx
+  name: ClientOriginPx
+  nameWithType: IPlatformWindow.ClientOriginPx
+  fullName: FluentGpu.Pal.IPlatformWindow.ClientOriginPx
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: FluentGpu.Pal.IPlatformWindow.PumpInto*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.PumpInto
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_PumpInto_FluentGpu_Pal_InputEventRing_
+  name: PumpInto
+  nameWithType: IPlatformWindow.PumpInto
+  fullName: FluentGpu.Pal.IPlatformWindow.PumpInto
+- uid: FluentGpu.Pal.InputEventRing
+  commentId: T:FluentGpu.Pal.InputEventRing
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.InputEventRing.html
+  name: InputEventRing
+  nameWithType: InputEventRing
+  fullName: FluentGpu.Pal.InputEventRing
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Pal.IPlatformWindow.WaitForWork*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.WaitForWork
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_WaitForWork_System_Int32_
+  name: WaitForWork
+  nameWithType: IPlatformWindow.WaitForWork
+  fullName: FluentGpu.Pal.IPlatformWindow.WaitForWork
+- uid: FluentGpu.Pal.IPlatformWindow.PaintRequested*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.PaintRequested
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_PaintRequested
+  name: PaintRequested
+  nameWithType: IPlatformWindow.PaintRequested
+  fullName: FluentGpu.Pal.IPlatformWindow.PaintRequested
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Pal.IPlatformWindow.SetCursor*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.SetCursor
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_SetCursor_FluentGpu_Foundation_CursorId_
+  name: SetCursor
+  nameWithType: IPlatformWindow.SetCursor
+  fullName: FluentGpu.Pal.IPlatformWindow.SetCursor
+- uid: FluentGpu.Foundation.CursorId
+  commentId: T:FluentGpu.Foundation.CursorId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CursorId.html
+  name: CursorId
+  nameWithType: CursorId
+  fullName: FluentGpu.Foundation.CursorId
+- uid: FluentGpu.Pal.IPlatformWindow.SetTitle*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.SetTitle
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_SetTitle_FluentGpu_Foundation_StringId_
+  name: SetTitle
+  nameWithType: IPlatformWindow.SetTitle
+  fullName: FluentGpu.Pal.IPlatformWindow.SetTitle
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Pal.IPlatformWindow.Show*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.Show
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_Show
+  name: Show
+  nameWithType: IPlatformWindow.Show
+  fullName: FluentGpu.Pal.IPlatformWindow.Show
+- uid: FluentGpu.Pal.IPlatformWindow.TextInput*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.TextInput
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_TextInput
+  name: TextInput
+  nameWithType: IPlatformWindow.TextInput
+  fullName: FluentGpu.Pal.IPlatformWindow.TextInput
+- uid: FluentGpu.Pal.IPlatformTextInput
+  commentId: T:FluentGpu.Pal.IPlatformTextInput
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformTextInput.html
+  name: IPlatformTextInput
+  nameWithType: IPlatformTextInput
+  fullName: FluentGpu.Pal.IPlatformTextInput
+- uid: FluentGpu.Pal.TitleBarRegion
+  commentId: T:FluentGpu.Pal.TitleBarRegion
+  href: FluentGpu.Pal.TitleBarRegion.html
+  name: TitleBarRegion
+  nameWithType: TitleBarRegion
+  fullName: FluentGpu.Pal.TitleBarRegion
+- uid: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_SetTitleBarRegions_System_ReadOnlySpan_FluentGpu_Pal_TitleBarRegion__
+  name: SetTitleBarRegions
+  nameWithType: IPlatformWindow.SetTitleBarRegions
+  fullName: FluentGpu.Pal.IPlatformWindow.SetTitleBarRegions
+- uid: System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion}
+  commentId: T:System.ReadOnlySpan{FluentGpu.Pal.TitleBarRegion}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<TitleBarRegion>
+  nameWithType: ReadOnlySpan<TitleBarRegion>
+  fullName: System.ReadOnlySpan<FluentGpu.Pal.TitleBarRegion>
+  nameWithType.vb: ReadOnlySpan(Of TitleBarRegion)
+  fullName.vb: System.ReadOnlySpan(Of FluentGpu.Pal.TitleBarRegion)
+  name.vb: ReadOnlySpan(Of TitleBarRegion)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: FluentGpu.Pal.TitleBarRegion
+    name: TitleBarRegion
+    href: FluentGpu.Pal.TitleBarRegion.html
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Pal.TitleBarRegion
+    name: TitleBarRegion
+    href: FluentGpu.Pal.TitleBarRegion.html
+  - name: )
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Pal.InputKind.WindowStateChanged
+  commentId: F:FluentGpu.Pal.InputKind.WindowStateChanged
+  href: FluentGpu.Pal.InputKind.html#FluentGpu_Pal_InputKind_WindowStateChanged
+  name: WindowStateChanged
+  nameWithType: InputKind.WindowStateChanged
+  fullName: FluentGpu.Pal.InputKind.WindowStateChanged
+- uid: FluentGpu.Pal.IPlatformWindow.State*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.State
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_State
+  name: State
+  nameWithType: IPlatformWindow.State
+  fullName: FluentGpu.Pal.IPlatformWindow.State
+- uid: FluentGpu.Pal.WindowState
+  commentId: T:FluentGpu.Pal.WindowState
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.WindowState.html
+  name: WindowState
+  nameWithType: WindowState
+  fullName: FluentGpu.Pal.WindowState
+- uid: FluentGpu.Pal.InputKind.WindowFocus
+  commentId: F:FluentGpu.Pal.InputKind.WindowFocus
+  href: FluentGpu.Pal.InputKind.html#FluentGpu_Pal_InputKind_WindowFocus
+  name: WindowFocus
+  nameWithType: InputKind.WindowFocus
+  fullName: FluentGpu.Pal.InputKind.WindowFocus
+- uid: FluentGpu.Pal.InputKind.WindowBlur
+  commentId: F:FluentGpu.Pal.InputKind.WindowBlur
+  href: FluentGpu.Pal.InputKind.html#FluentGpu_Pal_InputKind_WindowBlur
+  name: WindowBlur
+  nameWithType: InputKind.WindowBlur
+  fullName: FluentGpu.Pal.InputKind.WindowBlur
+- uid: FluentGpu.Pal.IPlatformWindow.IsActive*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.IsActive
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_IsActive
+  name: IsActive
+  nameWithType: IPlatformWindow.IsActive
+  fullName: FluentGpu.Pal.IPlatformWindow.IsActive
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Pal.IPlatformWindow.Minimize*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.Minimize
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_Minimize
+  name: Minimize
+  nameWithType: IPlatformWindow.Minimize
+  fullName: FluentGpu.Pal.IPlatformWindow.Minimize
+- uid: FluentGpu.Pal.IPlatformWindow.ToggleMaximize*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.ToggleMaximize
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_ToggleMaximize
+  name: ToggleMaximize
+  nameWithType: IPlatformWindow.ToggleMaximize
+  fullName: FluentGpu.Pal.IPlatformWindow.ToggleMaximize
+- uid: FluentGpu.Pal.IPlatformWindow.CloseWindow*
+  commentId: Overload:FluentGpu.Pal.IPlatformWindow.CloseWindow
+  href: FluentGpu.Pal.IPlatformWindow.html#FluentGpu_Pal_IPlatformWindow_CloseWindow
+  name: CloseWindow
+  nameWithType: IPlatformWindow.CloseWindow
+  fullName: FluentGpu.Pal.IPlatformWindow.CloseWindow

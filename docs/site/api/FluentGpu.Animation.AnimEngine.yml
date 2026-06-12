@@ -1,0 +1,1837 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.AnimEngine
+  commentId: T:FluentGpu.Animation.AnimEngine
+  id: AnimEngine
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.AnimEngine.#ctor(FluentGpu.Scene.SceneStore)
+  - FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,FluentGpu.Animation.CompositeOp,System.Single)
+  - FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec,FluentGpu.Animation.CompositeOp,System.Single)
+  - FluentGpu.Animation.AnimEngine.AnimateBounds(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.LayoutTransition@)
+  - FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  - FluentGpu.Animation.AnimEngine.CancelAll(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.AnimEngine.CancelToRest(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  - FluentGpu.Animation.AnimEngine.ClearTransition(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.AnimEngine.Clocks
+  - FluentGpu.Animation.AnimEngine.ConsumeReflowWrites
+  - FluentGpu.Animation.AnimEngine.Drive(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Int32,System.Single,System.Single,FluentGpu.Animation.CompositeOp)
+  - FluentGpu.Animation.AnimEngine.Ease(FluentGpu.Foundation.Easing,System.Single)
+  - FluentGpu.Animation.AnimEngine.HasActive
+  - FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.AnimEngine.IncrementalRoots
+  - FluentGpu.Animation.AnimEngine.Keyframes(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,FluentGpu.Animation.CompositeOp,System.Single)
+  - FluentGpu.Animation.AnimEngine.LoopTrackCount
+  - FluentGpu.Animation.AnimEngine.ReflowRoots
+  - FluentGpu.Animation.AnimEngine.SeedEnter(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  - FluentGpu.Animation.AnimEngine.SeedExit(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  - FluentGpu.Animation.AnimEngine.SetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  - FluentGpu.Animation.AnimEngine.Spring(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams@,System.Nullable{System.Single},FluentGpu.Animation.CompositeOp,System.Single)
+  - FluentGpu.Animation.AnimEngine.Tick(System.Single)
+  - FluentGpu.Animation.AnimEngine.TrackCount
+  - FluentGpu.Animation.AnimEngine.TransitionCount
+  - FluentGpu.Animation.AnimEngine.TryGetTrackValue(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single@)
+  - FluentGpu.Animation.AnimEngine.TryGetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  langs:
+  - csharp
+  - vb
+  name: AnimEngine
+  nameWithType: AnimEngine
+  fullName: FluentGpu.Animation.AnimEngine
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimEngine
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Generic, composition-style animation runtime (phase 7) — the Web-Animations model on a fixed channel set. Tracks are
+
+    eased (multi-keyframe + per-segment easing, time- OR driven-timeline) or springs (ODE with velocity handoff on
+
+    retarget). Per (node,channel) tracks combine by Replace/Add/Accumulate. Each tick composes the surviving channel
+
+    values into NodePaint.LocalTransform (T∘R∘S) + Opacity and marks Transform/PaintDirty — animation NEVER relays out.
+  example: []
+  syntax:
+    content: public sealed class AnimEngine
+    content.vb: Public NotInheritable Class AnimEngine
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Animation.AnimEngine.Clocks
+  commentId: P:FluentGpu.Animation.AnimEngine.Clocks
+  id: Clocks
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Clocks
+  nameWithType: AnimEngine.Clocks
+  fullName: FluentGpu.Animation.AnimEngine.Clocks
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Clocks
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public DrivenClockTable Clocks { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.DrivenClockTable
+    content.vb: Public ReadOnly Property Clocks As DrivenClockTable
+  overload: FluentGpu.Animation.AnimEngine.Clocks*
+- uid: FluentGpu.Animation.AnimEngine.#ctor(FluentGpu.Scene.SceneStore)
+  commentId: M:FluentGpu.Animation.AnimEngine.#ctor(FluentGpu.Scene.SceneStore)
+  id: '#ctor(FluentGpu.Scene.SceneStore)'
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: AnimEngine(SceneStore)
+  nameWithType: AnimEngine.AnimEngine(SceneStore)
+  fullName: FluentGpu.Animation.AnimEngine.AnimEngine(FluentGpu.Scene.SceneStore)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 164
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public AnimEngine(SceneStore scene)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Sub New(scene As SceneStore)
+  overload: FluentGpu.Animation.AnimEngine.#ctor*
+  nameWithType.vb: AnimEngine.New(SceneStore)
+  fullName.vb: FluentGpu.Animation.AnimEngine.New(FluentGpu.Scene.SceneStore)
+  name.vb: New(SceneStore)
+- uid: FluentGpu.Animation.AnimEngine.HasActive
+  commentId: P:FluentGpu.Animation.AnimEngine.HasActive
+  id: HasActive
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: HasActive
+  nameWithType: AnimEngine.HasActive
+  fullName: FluentGpu.Animation.AnimEngine.HasActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasActive
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 165
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public bool HasActive { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property HasActive As Boolean
+  overload: FluentGpu.Animation.AnimEngine.HasActive*
+- uid: FluentGpu.Animation.AnimEngine.TrackCount
+  commentId: P:FluentGpu.Animation.AnimEngine.TrackCount
+  id: TrackCount
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: TrackCount
+  nameWithType: AnimEngine.TrackCount
+  fullName: FluentGpu.Animation.AnimEngine.TrackCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrackCount
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 172
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Active animation tracks (springs + eased/driven), all channels — O(1) census.
+  example: []
+  syntax:
+    content: public int TrackCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property TrackCount As Integer
+  overload: FluentGpu.Animation.AnimEngine.TrackCount*
+- uid: FluentGpu.Animation.AnimEngine.LoopTrackCount
+  commentId: P:FluentGpu.Animation.AnimEngine.LoopTrackCount
+  id: LoopTrackCount
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: LoopTrackCount
+  nameWithType: AnimEngine.LoopTrackCount
+  fullName: FluentGpu.Animation.AnimEngine.LoopTrackCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LoopTrackCount
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 174
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Looping tracks (Loop==true) — O(1) maintained counter, not a scan.
+  example: []
+  syntax:
+    content: public int LoopTrackCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property LoopTrackCount As Integer
+  overload: FluentGpu.Animation.AnimEngine.LoopTrackCount*
+- uid: FluentGpu.Animation.AnimEngine.TransitionCount
+  commentId: P:FluentGpu.Animation.AnimEngine.TransitionCount
+  id: TransitionCount
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: TransitionCount
+  nameWithType: AnimEngine.TransitionCount
+  fullName: FluentGpu.Animation.AnimEngine.TransitionCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TransitionCount
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Live per-node layout-transition specs (the <code>_transitions</code> side-table) — O(1) census.
+  example: []
+  syntax:
+    content: public int TransitionCount { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property TransitionCount As Integer
+  overload: FluentGpu.Animation.AnimEngine.TransitionCount*
+- uid: FluentGpu.Animation.AnimEngine.TryGetTrackValue(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single@)
+  commentId: M:FluentGpu.Animation.AnimEngine.TryGetTrackValue(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single@)
+  id: TryGetTrackValue(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: TryGetTrackValue(NodeHandle, AnimChannel, out float)
+  nameWithType: AnimEngine.TryGetTrackValue(NodeHandle, AnimChannel, out float)
+  fullName: FluentGpu.Animation.AnimEngine.TryGetTrackValue(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, out float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TryGetTrackValue
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 191
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    The LIVE value of an in-flight track on <code class="paramref">node</code>+<code class="paramref">channel</code> — so an
+        interrupting eased tween can start FROM where the animation currently is instead of a recomputed endpoint
+        (WinUI AnimatedIcon queues/blends transitions, AnimatedIcon.cpp:235-267 — a mid-flight chevron reversal must
+        not snap). False = no live track (caller uses its resting value).
+  example: []
+  syntax:
+    content: public bool TryGetTrackValue(NodeHandle node, AnimChannel channel, out float value)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: value
+      type: System.Single
+    return:
+      type: System.Boolean
+    content.vb: Public Function TryGetTrackValue(node As NodeHandle, channel As AnimChannel, value As Single) As Boolean
+  overload: FluentGpu.Animation.AnimEngine.TryGetTrackValue*
+  nameWithType.vb: AnimEngine.TryGetTrackValue(NodeHandle, AnimChannel, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.TryGetTrackValue(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, Single)
+  name.vb: TryGetTrackValue(NodeHandle, AnimChannel, Single)
+- uid: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,FluentGpu.Animation.CompositeOp,System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,FluentGpu.Animation.CompositeOp,System.Single)
+  id: Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.Easing,FluentGpu.Animation.CompositeOp,System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Animate(NodeHandle, AnimChannel, float, float, float, Easing, CompositeOp, float)
+  nameWithType: AnimEngine.Animate(NodeHandle, AnimChannel, float, float, float, Easing, CompositeOp, float)
+  fullName: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, float, float, float, FluentGpu.Foundation.Easing, FluentGpu.Animation.CompositeOp, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Animate
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 205
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Eased two-point tween (retargets any live track on the same node+channel).
+  example: []
+  syntax:
+    content: public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, CompositeOp composite = CompositeOp.Replace, float delayMs = 0)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: from
+      type: System.Single
+    - id: to
+      type: System.Single
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    - id: composite
+      type: FluentGpu.Animation.CompositeOp
+    - id: delayMs
+      type: System.Single
+    content.vb: Public Sub Animate(node As NodeHandle, channel As AnimChannel, from As Single, [to] As Single, durationMs As Single, easing As Easing = Easing.EaseInOut, composite As CompositeOp = CompositeOp.Replace, delayMs As Single = 0)
+  overload: FluentGpu.Animation.AnimEngine.Animate*
+  nameWithType.vb: AnimEngine.Animate(NodeHandle, AnimChannel, Single, Single, Single, Easing, CompositeOp, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, Single, Single, Single, FluentGpu.Foundation.Easing, FluentGpu.Animation.CompositeOp, Single)
+  name.vb: Animate(NodeHandle, AnimChannel, Single, Single, Single, Easing, CompositeOp, Single)
+- uid: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec,FluentGpu.Animation.CompositeOp,System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec,FluentGpu.Animation.CompositeOp,System.Single)
+  id: Animate(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec,FluentGpu.Animation.CompositeOp,System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Animate(NodeHandle, AnimChannel, float, float, float, EasingSpec, CompositeOp, float)
+  nameWithType: AnimEngine.Animate(NodeHandle, AnimChannel, float, float, float, EasingSpec, CompositeOp, float)
+  fullName: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, float, float, float, FluentGpu.Foundation.EasingSpec, FluentGpu.Animation.CompositeOp, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Animate
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 209
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public void Animate(NodeHandle node, AnimChannel channel, float from, float to, float durationMs, EasingSpec easing, CompositeOp composite = CompositeOp.Replace, float delayMs = 0)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: from
+      type: System.Single
+    - id: to
+      type: System.Single
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.EasingSpec
+    - id: composite
+      type: FluentGpu.Animation.CompositeOp
+    - id: delayMs
+      type: System.Single
+    content.vb: Public Sub Animate(node As NodeHandle, channel As AnimChannel, from As Single, [to] As Single, durationMs As Single, easing As EasingSpec, composite As CompositeOp = CompositeOp.Replace, delayMs As Single = 0)
+  overload: FluentGpu.Animation.AnimEngine.Animate*
+  nameWithType.vb: AnimEngine.Animate(NodeHandle, AnimChannel, Single, Single, Single, EasingSpec, CompositeOp, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Animate(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, Single, Single, Single, FluentGpu.Foundation.EasingSpec, FluentGpu.Animation.CompositeOp, Single)
+  name.vb: Animate(NodeHandle, AnimChannel, Single, Single, Single, EasingSpec, CompositeOp, Single)
+- uid: FluentGpu.Animation.AnimEngine.Keyframes(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,FluentGpu.Animation.CompositeOp,System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Keyframes(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,FluentGpu.Animation.CompositeOp,System.Single)
+  id: Keyframes(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Single,System.Boolean,FluentGpu.Animation.CompositeOp,System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Keyframes(NodeHandle, AnimChannel, Keyframe[], float, bool, CompositeOp, float)
+  nameWithType: AnimEngine.Keyframes(NodeHandle, AnimChannel, Keyframe[], float, bool, CompositeOp, float)
+  fullName: FluentGpu.Animation.AnimEngine.Keyframes(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe[], float, bool, FluentGpu.Animation.CompositeOp, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Keyframes
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 214
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Multi-keyframe eased track (@keyframes). Offsets must be ascending in 0..1.
+  example: []
+  syntax:
+    content: public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: keys
+      type: FluentGpu.Animation.Keyframe[]
+    - id: durationMs
+      type: System.Single
+    - id: loop
+      type: System.Boolean
+    - id: composite
+      type: FluentGpu.Animation.CompositeOp
+    - id: delayMs
+      type: System.Single
+    content.vb: Public Sub Keyframes(node As NodeHandle, channel As AnimChannel, keys As Keyframe(), durationMs As Single, [loop] As Boolean = False, composite As CompositeOp = CompositeOp.Replace, delayMs As Single = 0)
+  overload: FluentGpu.Animation.AnimEngine.Keyframes*
+  nameWithType.vb: AnimEngine.Keyframes(NodeHandle, AnimChannel, Keyframe(), Single, Boolean, CompositeOp, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Keyframes(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe(), Single, Boolean, FluentGpu.Animation.CompositeOp, Single)
+  name.vb: Keyframes(NodeHandle, AnimChannel, Keyframe(), Single, Boolean, CompositeOp, Single)
+- uid: FluentGpu.Animation.AnimEngine.Drive(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Int32,System.Single,System.Single,FluentGpu.Animation.CompositeOp)
+  commentId: M:FluentGpu.Animation.AnimEngine.Drive(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Int32,System.Single,System.Single,FluentGpu.Animation.CompositeOp)
+  id: Drive(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,FluentGpu.Animation.Keyframe[],System.Int32,System.Single,System.Single,FluentGpu.Animation.CompositeOp)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Drive(NodeHandle, AnimChannel, Keyframe[], int, float, float, CompositeOp)
+  nameWithType: AnimEngine.Drive(NodeHandle, AnimChannel, Keyframe[], int, float, float, CompositeOp)
+  fullName: FluentGpu.Animation.AnimEngine.Drive(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe[], int, float, float, FluentGpu.Animation.CompositeOp)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Drive
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 227
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'Scroll/value-driven track: progress comes from a DrivenClock source mapped through [domainMin,domainMax].'
+  example: []
+  syntax:
+    content: public void Drive(NodeHandle node, AnimChannel channel, Keyframe[] keys, int drivenRef, float domainMin, float domainMax, CompositeOp composite = CompositeOp.Replace)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: keys
+      type: FluentGpu.Animation.Keyframe[]
+    - id: drivenRef
+      type: System.Int32
+    - id: domainMin
+      type: System.Single
+    - id: domainMax
+      type: System.Single
+    - id: composite
+      type: FluentGpu.Animation.CompositeOp
+    content.vb: Public Sub Drive(node As NodeHandle, channel As AnimChannel, keys As Keyframe(), drivenRef As Integer, domainMin As Single, domainMax As Single, composite As CompositeOp = CompositeOp.Replace)
+  overload: FluentGpu.Animation.AnimEngine.Drive*
+  nameWithType.vb: AnimEngine.Drive(NodeHandle, AnimChannel, Keyframe(), Integer, Single, Single, CompositeOp)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Drive(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, FluentGpu.Animation.Keyframe(), Integer, Single, Single, FluentGpu.Animation.CompositeOp)
+  name.vb: Drive(NodeHandle, AnimChannel, Keyframe(), Integer, Single, Single, CompositeOp)
+- uid: FluentGpu.Animation.AnimEngine.Spring(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams@,System.Nullable{System.Single},FluentGpu.Animation.CompositeOp,System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Spring(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams@,System.Nullable{System.Single},FluentGpu.Animation.CompositeOp,System.Single)
+  id: Spring(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel,System.Single,FluentGpu.Animation.SpringParams@,System.Nullable{System.Single},FluentGpu.Animation.CompositeOp,System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Spring(NodeHandle, AnimChannel, float, in SpringParams, float?, CompositeOp, float)
+  nameWithType: AnimEngine.Spring(NodeHandle, AnimChannel, float, in SpringParams, float?, CompositeOp, float)
+  fullName: FluentGpu.Animation.AnimEngine.Spring(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, float, in FluentGpu.Animation.SpringParams, float?, FluentGpu.Animation.CompositeOp, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spring
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 237
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Spring toward <code class="paramref">to</code>. If a spring already runs on this node+channel, it RETARGETS — keeping
+        position + velocity (no snap), the iOS/Compose velocity-handoff.
+  example: []
+  syntax:
+    content: public void Spring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring, float? initial = null, CompositeOp composite = CompositeOp.Replace, float delayMs = 0)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    - id: to
+      type: System.Single
+    - id: spring
+      type: FluentGpu.Animation.SpringParams
+    - id: initial
+      type: System.Nullable{System.Single}
+    - id: composite
+      type: FluentGpu.Animation.CompositeOp
+    - id: delayMs
+      type: System.Single
+    content.vb: Public Sub Spring(node As NodeHandle, channel As AnimChannel, [to] As Single, spring As SpringParams, initial As Single? = Nothing, composite As CompositeOp = CompositeOp.Replace, delayMs As Single = 0)
+  overload: FluentGpu.Animation.AnimEngine.Spring*
+  nameWithType.vb: AnimEngine.Spring(NodeHandle, AnimChannel, Single, SpringParams, Single?, CompositeOp, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Spring(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel, Single, FluentGpu.Animation.SpringParams, Single?, FluentGpu.Animation.CompositeOp, Single)
+  name.vb: Spring(NodeHandle, AnimChannel, Single, SpringParams, Single?, CompositeOp, Single)
+- uid: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  commentId: M:FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  id: Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Cancel(NodeHandle, AnimChannel)
+  nameWithType: AnimEngine.Cancel(NodeHandle, AnimChannel)
+  fullName: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 279
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public void Cancel(NodeHandle node, AnimChannel channel)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    content.vb: Public Sub Cancel(node As NodeHandle, channel As AnimChannel)
+  overload: FluentGpu.Animation.AnimEngine.Cancel*
+- uid: FluentGpu.Animation.AnimEngine.CancelToRest(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  commentId: M:FluentGpu.Animation.AnimEngine.CancelToRest(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  id: CancelToRest(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: CancelToRest(NodeHandle, AnimChannel)
+  nameWithType: AnimEngine.CancelToRest(NodeHandle, AnimChannel)
+  fullName: FluentGpu.Animation.AnimEngine.CancelToRest(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CancelToRest
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 289
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Cancel + reset the channel's paint to its settle-time resting sentinel — symmetric with the settle
+        path (StrokeTrim/PresentedW/H → NaN, Clip → Infinite). A bare <xref href="FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle%2cFluentGpu.Animation.AnimChannel)" data-throw-if-not-resolved="false"></xref> only drops the track,
+        freezing the last interpolated value in paint with no spec fallback (a deactivated ProgressRing froze a
+        partial arc). Channels without a rest sentinel (transform/opacity/layout) behave exactly like Cancel —
+        their resting value is the reconciler's static re-assert.
+  example: []
+  syntax:
+    content: public void CancelToRest(NodeHandle node, AnimChannel channel)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: channel
+      type: FluentGpu.Animation.AnimChannel
+    content.vb: Public Sub CancelToRest(node As NodeHandle, channel As AnimChannel)
+  overload: FluentGpu.Animation.AnimEngine.CancelToRest*
+- uid: FluentGpu.Animation.AnimEngine.CancelAll(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.AnimEngine.CancelAll(FluentGpu.Foundation.NodeHandle)
+  id: CancelAll(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: CancelAll(NodeHandle)
+  nameWithType: AnimEngine.CancelAll(NodeHandle)
+  fullName: FluentGpu.Animation.AnimEngine.CancelAll(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CancelAll
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 305
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public void CancelAll(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub CancelAll(node As NodeHandle)
+  overload: FluentGpu.Animation.AnimEngine.CancelAll*
+- uid: FluentGpu.Animation.AnimEngine.SetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  commentId: M:FluentGpu.Animation.AnimEngine.SetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  id: SetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: SetTransition(NodeHandle, in LayoutTransition)
+  nameWithType: AnimEngine.SetTransition(NodeHandle, in LayoutTransition)
+  fullName: FluentGpu.Animation.AnimEngine.SetTransition(FluentGpu.Foundation.NodeHandle, in FluentGpu.Foundation.LayoutTransition)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetTransition
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 312
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Attach (or replace) a node's layout-transition spec. Called by the reconciler from BoxEl.Animate.
+  example: []
+  syntax:
+    content: public void SetTransition(NodeHandle node, in LayoutTransition t)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: t
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Sub SetTransition(node As NodeHandle, t As LayoutTransition)
+  overload: FluentGpu.Animation.AnimEngine.SetTransition*
+  nameWithType.vb: AnimEngine.SetTransition(NodeHandle, LayoutTransition)
+  fullName.vb: FluentGpu.Animation.AnimEngine.SetTransition(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.LayoutTransition)
+  name.vb: SetTransition(NodeHandle, LayoutTransition)
+- uid: FluentGpu.Animation.AnimEngine.TryGetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  commentId: M:FluentGpu.Animation.AnimEngine.TryGetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  id: TryGetTransition(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.LayoutTransition@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: TryGetTransition(NodeHandle, out LayoutTransition)
+  nameWithType: AnimEngine.TryGetTransition(NodeHandle, out LayoutTransition)
+  fullName: FluentGpu.Animation.AnimEngine.TryGetTransition(FluentGpu.Foundation.NodeHandle, out FluentGpu.Foundation.LayoutTransition)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TryGetTransition
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 314
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Read a node's layout-transition spec (set by the reconciler this commit).
+  example: []
+  syntax:
+    content: public bool TryGetTransition(NodeHandle node, out LayoutTransition t)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: t
+      type: FluentGpu.Foundation.LayoutTransition
+    return:
+      type: System.Boolean
+    content.vb: Public Function TryGetTransition(node As NodeHandle, t As LayoutTransition) As Boolean
+  overload: FluentGpu.Animation.AnimEngine.TryGetTransition*
+  nameWithType.vb: AnimEngine.TryGetTransition(NodeHandle, LayoutTransition)
+  fullName.vb: FluentGpu.Animation.AnimEngine.TryGetTransition(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.LayoutTransition)
+  name.vb: TryGetTransition(NodeHandle, LayoutTransition)
+- uid: FluentGpu.Animation.AnimEngine.ClearTransition(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.AnimEngine.ClearTransition(FluentGpu.Foundation.NodeHandle)
+  id: ClearTransition(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: ClearTransition(NodeHandle)
+  nameWithType: AnimEngine.ClearTransition(NodeHandle)
+  fullName: FluentGpu.Animation.AnimEngine.ClearTransition(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ClearTransition
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 316
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Drop a node's layout-transition spec (the element stopped declaring Animate, or the slot was freed).
+  example: []
+  syntax:
+    content: public void ClearTransition(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub ClearTransition(node As NodeHandle)
+  overload: FluentGpu.Animation.AnimEngine.ClearTransition*
+- uid: FluentGpu.Animation.AnimEngine.AnimateBounds(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.LayoutTransition@)
+  commentId: M:FluentGpu.Animation.AnimEngine.AnimateBounds(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.LayoutTransition@)
+  id: AnimateBounds(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.RectF@,FluentGpu.Foundation.LayoutTransition@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)
+  nameWithType: AnimEngine.AnimateBounds(NodeHandle, in RectF, in RectF, in LayoutTransition)
+  fullName: FluentGpu.Animation.AnimEngine.AnimateBounds(FluentGpu.Foundation.NodeHandle, in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.RectF, in FluentGpu.Foundation.LayoutTransition)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AnimateBounds
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 323
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    FLIP the node from its captured presented rect to its new laid-out rect, seeding/retargeting the channels
+        the spec requests. Position is velocity-continuous: a running spring keeps its velocity and shifts its offset by the
+        layout delta (no jump on interruption); a fresh spring starts offset by the full delta and settles to 0. The host
+        calls this once per commit for every BoundsAnimated node that moved; Tick then advances it every frame.
+  example: []
+  syntax:
+    content: public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: fromAbs
+      type: FluentGpu.Foundation.RectF
+    - id: toAbs
+      type: FluentGpu.Foundation.RectF
+    - id: spec
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Sub AnimateBounds(node As NodeHandle, fromAbs As RectF, toAbs As RectF, spec As LayoutTransition)
+  overload: FluentGpu.Animation.AnimEngine.AnimateBounds*
+  nameWithType.vb: AnimEngine.AnimateBounds(NodeHandle, RectF, RectF, LayoutTransition)
+  fullName.vb: FluentGpu.Animation.AnimEngine.AnimateBounds(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.RectF, FluentGpu.Foundation.RectF, FluentGpu.Foundation.LayoutTransition)
+  name.vb: AnimateBounds(NodeHandle, RectF, RectF, LayoutTransition)
+- uid: FluentGpu.Animation.AnimEngine.ReflowRoots
+  commentId: P:FluentGpu.Animation.AnimEngine.ReflowRoots
+  id: ReflowRoots
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: ReflowRoots
+  nameWithType: AnimEngine.ReflowRoots
+  fullName: FluentGpu.Animation.AnimEngine.ReflowRoots
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReflowRoots
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 396
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Nodes whose REFLOW size advanced this tick — the host re-solves their boundary scope, then refreshes
+        the Trailing child-shift from the fresh bounds. Cleared by the host after it consumes them.
+  example: []
+  syntax:
+    content: public List<NodeHandle> ReflowRoots { get; }
+    parameters: []
+    return:
+      type: System.Collections.Generic.List{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public ReadOnly Property ReflowRoots As List(Of NodeHandle)
+  overload: FluentGpu.Animation.AnimEngine.ReflowRoots*
+- uid: FluentGpu.Animation.AnimEngine.ConsumeReflowWrites
+  commentId: M:FluentGpu.Animation.AnimEngine.ConsumeReflowWrites
+  id: ConsumeReflowWrites
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: ConsumeReflowWrites()
+  nameWithType: AnimEngine.ConsumeReflowWrites()
+  fullName: FluentGpu.Animation.AnimEngine.ConsumeReflowWrites()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ConsumeReflowWrites
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 401
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    True if any reflow track wrote LayoutInput this tick (interp advance or settle restore) — the host
+        runs a boundary-scoped re-solve before record. Self-clearing.
+  example: []
+  syntax:
+    content: public bool ConsumeReflowWrites()
+    return:
+      type: System.Boolean
+    content.vb: Public Function ConsumeReflowWrites() As Boolean
+  overload: FluentGpu.Animation.AnimEngine.ConsumeReflowWrites*
+- uid: FluentGpu.Animation.AnimEngine.IncrementalRoots
+  commentId: P:FluentGpu.Animation.AnimEngine.IncrementalRoots
+  id: IncrementalRoots
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: IncrementalRoots
+  nameWithType: AnimEngine.IncrementalRoots
+  fullName: FluentGpu.Animation.AnimEngine.IncrementalRoots
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IncrementalRoots
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 405
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Nodes whose presented SIZE changed this tick under SizeMode.Relayout — the host re-solves just these
+        subtrees (scoped layout) so their text re-wraps live. Cleared by the host after it consumes them.
+  example: []
+  syntax:
+    content: public List<NodeHandle> IncrementalRoots { get; }
+    parameters: []
+    return:
+      type: System.Collections.Generic.List{FluentGpu.Foundation.NodeHandle}
+    content.vb: Public ReadOnly Property IncrementalRoots As List(Of NodeHandle)
+  overload: FluentGpu.Animation.AnimEngine.IncrementalRoots*
+- uid: FluentGpu.Animation.AnimEngine.SeedEnter(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  commentId: M:FluentGpu.Animation.AnimEngine.SeedEnter(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  id: SeedEnter(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: SeedEnter(NodeHandle, in EnterExit, in LayoutTransition)
+  nameWithType: AnimEngine.SeedEnter(NodeHandle, in EnterExit, in LayoutTransition)
+  fullName: FluentGpu.Animation.AnimEngine.SeedEnter(FluentGpu.Foundation.NodeHandle, in FluentGpu.Foundation.EnterExit, in FluentGpu.Foundation.LayoutTransition)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SeedEnter
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 431
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: An inserted node animates FROM the enter terminal (offset/scale/opacity) TO identity.
+  example: []
+  syntax:
+    content: public void SeedEnter(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: e
+      type: FluentGpu.Foundation.EnterExit
+    - id: spec
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Sub SeedEnter(node As NodeHandle, e As EnterExit, spec As LayoutTransition)
+  overload: FluentGpu.Animation.AnimEngine.SeedEnter*
+  nameWithType.vb: AnimEngine.SeedEnter(NodeHandle, EnterExit, LayoutTransition)
+  fullName.vb: FluentGpu.Animation.AnimEngine.SeedEnter(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.EnterExit, FluentGpu.Foundation.LayoutTransition)
+  name.vb: SeedEnter(NodeHandle, EnterExit, LayoutTransition)
+- uid: FluentGpu.Animation.AnimEngine.SeedExit(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  commentId: M:FluentGpu.Animation.AnimEngine.SeedExit(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  id: SeedExit(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.EnterExit@,FluentGpu.Foundation.LayoutTransition@)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: SeedExit(NodeHandle, in EnterExit, in LayoutTransition)
+  nameWithType: AnimEngine.SeedExit(NodeHandle, in EnterExit, in LayoutTransition)
+  fullName: FluentGpu.Animation.AnimEngine.SeedExit(FluentGpu.Foundation.NodeHandle, in FluentGpu.Foundation.EnterExit, in FluentGpu.Foundation.LayoutTransition)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SeedExit
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 443
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    A removed node (now an Exiting orphan) animates FROM its current state TO the exit terminal; when all its
+        tracks settle (<xref href="FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)" data-throw-if-not-resolved="false"></xref> == false) the host reclaims it.
+  example: []
+  syntax:
+    content: public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    - id: e
+      type: FluentGpu.Foundation.EnterExit
+    - id: spec
+      type: FluentGpu.Foundation.LayoutTransition
+    content.vb: Public Sub SeedExit(node As NodeHandle, e As EnterExit, spec As LayoutTransition)
+  overload: FluentGpu.Animation.AnimEngine.SeedExit*
+  nameWithType.vb: AnimEngine.SeedExit(NodeHandle, EnterExit, LayoutTransition)
+  fullName.vb: FluentGpu.Animation.AnimEngine.SeedExit(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.EnterExit, FluentGpu.Foundation.LayoutTransition)
+  name.vb: SeedExit(NodeHandle, EnterExit, LayoutTransition)
+- uid: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  id: HasTracks(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: HasTracks(NodeHandle)
+  nameWithType: AnimEngine.HasTracks(NodeHandle)
+  fullName: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasTracks
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 462
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: True while any track targets this node (used by the host to detect a settled exit orphan).
+  example: []
+  syntax:
+    content: public bool HasTracks(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    return:
+      type: System.Boolean
+    content.vb: Public Function HasTracks(node As NodeHandle) As Boolean
+  overload: FluentGpu.Animation.AnimEngine.HasTracks*
+- uid: FluentGpu.Animation.AnimEngine.Tick(System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Tick(System.Single)
+  id: Tick(System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Tick(float)
+  nameWithType: AnimEngine.Tick(float)
+  fullName: FluentGpu.Animation.AnimEngine.Tick(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 519
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public void Tick(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    content.vb: Public Sub Tick(dtMs As Single)
+  overload: FluentGpu.Animation.AnimEngine.Tick*
+  nameWithType.vb: AnimEngine.Tick(Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Tick(Single)
+  name.vb: Tick(Single)
+- uid: FluentGpu.Animation.AnimEngine.Ease(FluentGpu.Foundation.Easing,System.Single)
+  commentId: M:FluentGpu.Animation.AnimEngine.Ease(FluentGpu.Foundation.Easing,System.Single)
+  id: Ease(FluentGpu.Foundation.Easing,System.Single)
+  parent: FluentGpu.Animation.AnimEngine
+  langs:
+  - csharp
+  - vb
+  name: Ease(Easing, float)
+  nameWithType: AnimEngine.Ease(Easing, float)
+  fullName: FluentGpu.Animation.AnimEngine.Ease(FluentGpu.Foundation.Easing, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/AnimEngine.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ease
+    path: ../../src/FluentGpu.Animation/AnimEngine.cs
+    startLine: 722
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Evaluate an easing curve (kept for source compatibility; the implementation lives in Foundation).
+  example: []
+  syntax:
+    content: public static float Ease(Easing e, float t)
+    parameters:
+    - id: e
+      type: FluentGpu.Foundation.Easing
+    - id: t
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Public Shared Function Ease(e As Easing, t As Single) As Single
+  overload: FluentGpu.Animation.AnimEngine.Ease*
+  nameWithType.vb: AnimEngine.Ease(Easing, Single)
+  fullName.vb: FluentGpu.Animation.AnimEngine.Ease(FluentGpu.Foundation.Easing, Single)
+  name.vb: Ease(Easing, Single)
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Animation.AnimEngine.Clocks*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Clocks
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Clocks
+  name: Clocks
+  nameWithType: AnimEngine.Clocks
+  fullName: FluentGpu.Animation.AnimEngine.Clocks
+- uid: FluentGpu.Animation.DrivenClockTable
+  commentId: T:FluentGpu.Animation.DrivenClockTable
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.DrivenClockTable.html
+  name: DrivenClockTable
+  nameWithType: DrivenClockTable
+  fullName: FluentGpu.Animation.DrivenClockTable
+- uid: FluentGpu.Animation.AnimEngine.#ctor*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.#ctor
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine__ctor_FluentGpu_Scene_SceneStore_
+  name: AnimEngine
+  nameWithType: AnimEngine.AnimEngine
+  fullName: FluentGpu.Animation.AnimEngine.AnimEngine
+  nameWithType.vb: AnimEngine.New
+  fullName.vb: FluentGpu.Animation.AnimEngine.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Animation.AnimEngine.HasActive*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.HasActive
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_HasActive
+  name: HasActive
+  nameWithType: AnimEngine.HasActive
+  fullName: FluentGpu.Animation.AnimEngine.HasActive
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Animation.AnimEngine.TrackCount*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.TrackCount
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_TrackCount
+  name: TrackCount
+  nameWithType: AnimEngine.TrackCount
+  fullName: FluentGpu.Animation.AnimEngine.TrackCount
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Animation.AnimEngine.LoopTrackCount*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.LoopTrackCount
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_LoopTrackCount
+  name: LoopTrackCount
+  nameWithType: AnimEngine.LoopTrackCount
+  fullName: FluentGpu.Animation.AnimEngine.LoopTrackCount
+- uid: FluentGpu.Animation.AnimEngine.TransitionCount*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.TransitionCount
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_TransitionCount
+  name: TransitionCount
+  nameWithType: AnimEngine.TransitionCount
+  fullName: FluentGpu.Animation.AnimEngine.TransitionCount
+- uid: FluentGpu.Animation.AnimEngine.TryGetTrackValue*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.TryGetTrackValue
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_TryGetTrackValue_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_System_Single__
+  name: TryGetTrackValue
+  nameWithType: AnimEngine.TryGetTrackValue
+  fullName: FluentGpu.Animation.AnimEngine.TryGetTrackValue
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Animation.AnimChannel
+  commentId: T:FluentGpu.Animation.AnimChannel
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.AnimChannel.html
+  name: AnimChannel
+  nameWithType: AnimChannel
+  fullName: FluentGpu.Animation.AnimChannel
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Animation.AnimEngine.Animate*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Animate
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Animate_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_System_Single_System_Single_System_Single_FluentGpu_Foundation_Easing_FluentGpu_Animation_CompositeOp_System_Single_
+  name: Animate
+  nameWithType: AnimEngine.Animate
+  fullName: FluentGpu.Animation.AnimEngine.Animate
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Animation.CompositeOp
+  commentId: T:FluentGpu.Animation.CompositeOp
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.CompositeOp.html
+  name: CompositeOp
+  nameWithType: CompositeOp
+  fullName: FluentGpu.Animation.CompositeOp
+- uid: FluentGpu.Foundation.EasingSpec
+  commentId: T:FluentGpu.Foundation.EasingSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EasingSpec.html
+  name: EasingSpec
+  nameWithType: EasingSpec
+  fullName: FluentGpu.Foundation.EasingSpec
+- uid: FluentGpu.Animation.AnimEngine.Keyframes*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Keyframes
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Keyframes_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_FluentGpu_Animation_Keyframe___System_Single_System_Boolean_FluentGpu_Animation_CompositeOp_System_Single_
+  name: Keyframes
+  nameWithType: AnimEngine.Keyframes
+  fullName: FluentGpu.Animation.AnimEngine.Keyframes
+- uid: FluentGpu.Animation.Keyframe[]
+  isExternal: true
+  href: FluentGpu.Animation.Keyframe.html
+  name: Keyframe[]
+  nameWithType: Keyframe[]
+  fullName: FluentGpu.Animation.Keyframe[]
+  nameWithType.vb: Keyframe()
+  fullName.vb: FluentGpu.Animation.Keyframe()
+  name.vb: Keyframe()
+  spec.csharp:
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    href: FluentGpu.Animation.Keyframe.html
+  - name: (
+  - name: )
+- uid: FluentGpu.Animation.AnimEngine.Drive*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Drive
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Drive_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_FluentGpu_Animation_Keyframe___System_Int32_System_Single_System_Single_FluentGpu_Animation_CompositeOp_
+  name: Drive
+  nameWithType: AnimEngine.Drive
+  fullName: FluentGpu.Animation.AnimEngine.Drive
+- uid: FluentGpu.Animation.AnimEngine.Spring*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Spring
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Spring_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_System_Single_FluentGpu_Animation_SpringParams__System_Nullable_System_Single__FluentGpu_Animation_CompositeOp_System_Single_
+  name: Spring
+  nameWithType: AnimEngine.Spring
+  fullName: FluentGpu.Animation.AnimEngine.Spring
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.SpringParams.html
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+- uid: System.Nullable{System.Single}
+  commentId: T:System.Nullable{System.Single}
+  parent: System
+  definition: System.Nullable`1
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float?
+  nameWithType: float?
+  fullName: float?
+  nameWithType.vb: Single?
+  fullName.vb: Single?
+  name.vb: Single?
+  spec.csharp:
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+  spec.vb:
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Animation.AnimEngine.Cancel*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Cancel
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Cancel_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_
+  name: Cancel
+  nameWithType: AnimEngine.Cancel
+  fullName: FluentGpu.Animation.AnimEngine.Cancel
+- uid: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  commentId: M:FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Cancel_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_
+  name: Cancel(NodeHandle, AnimChannel)
+  nameWithType: AnimEngine.Cancel(NodeHandle, AnimChannel)
+  fullName: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle, FluentGpu.Animation.AnimChannel)
+  spec.csharp:
+  - uid: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+    name: Cancel
+    href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Cancel_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Animation.AnimEngine.Cancel(FluentGpu.Foundation.NodeHandle,FluentGpu.Animation.AnimChannel)
+    name: Cancel
+    href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Cancel_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    href: FluentGpu.Animation.AnimChannel.html
+  - name: )
+- uid: FluentGpu.Animation.AnimEngine.CancelToRest*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.CancelToRest
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_CancelToRest_FluentGpu_Foundation_NodeHandle_FluentGpu_Animation_AnimChannel_
+  name: CancelToRest
+  nameWithType: AnimEngine.CancelToRest
+  fullName: FluentGpu.Animation.AnimEngine.CancelToRest
+- uid: FluentGpu.Animation.AnimEngine.CancelAll*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.CancelAll
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_CancelAll_FluentGpu_Foundation_NodeHandle_
+  name: CancelAll
+  nameWithType: AnimEngine.CancelAll
+  fullName: FluentGpu.Animation.AnimEngine.CancelAll
+- uid: FluentGpu.Animation.AnimEngine.SetTransition*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.SetTransition
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_SetTransition_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_LayoutTransition__
+  name: SetTransition
+  nameWithType: AnimEngine.SetTransition
+  fullName: FluentGpu.Animation.AnimEngine.SetTransition
+- uid: FluentGpu.Foundation.LayoutTransition
+  commentId: T:FluentGpu.Foundation.LayoutTransition
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LayoutTransition.html
+  name: LayoutTransition
+  nameWithType: LayoutTransition
+  fullName: FluentGpu.Foundation.LayoutTransition
+- uid: FluentGpu.Animation.AnimEngine.TryGetTransition*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.TryGetTransition
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_TryGetTransition_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_LayoutTransition__
+  name: TryGetTransition
+  nameWithType: AnimEngine.TryGetTransition
+  fullName: FluentGpu.Animation.AnimEngine.TryGetTransition
+- uid: FluentGpu.Animation.AnimEngine.ClearTransition*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.ClearTransition
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_ClearTransition_FluentGpu_Foundation_NodeHandle_
+  name: ClearTransition
+  nameWithType: AnimEngine.ClearTransition
+  fullName: FluentGpu.Animation.AnimEngine.ClearTransition
+- uid: FluentGpu.Animation.AnimEngine.AnimateBounds*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.AnimateBounds
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_AnimateBounds_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_RectF__FluentGpu_Foundation_RectF__FluentGpu_Foundation_LayoutTransition__
+  name: AnimateBounds
+  nameWithType: AnimEngine.AnimateBounds
+  fullName: FluentGpu.Animation.AnimEngine.AnimateBounds
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Animation.AnimEngine.ReflowRoots*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.ReflowRoots
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_ReflowRoots
+  name: ReflowRoots
+  nameWithType: AnimEngine.ReflowRoots
+  fullName: FluentGpu.Animation.AnimEngine.ReflowRoots
+- uid: System.Collections.Generic.List{FluentGpu.Foundation.NodeHandle}
+  commentId: T:System.Collections.Generic.List{FluentGpu.Foundation.NodeHandle}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.List`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<NodeHandle>
+  nameWithType: List<NodeHandle>
+  fullName: System.Collections.Generic.List<FluentGpu.Foundation.NodeHandle>
+  nameWithType.vb: List(Of NodeHandle)
+  fullName.vb: System.Collections.Generic.List(Of FluentGpu.Foundation.NodeHandle)
+  name.vb: List(Of NodeHandle)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: System.Collections.Generic.List`1
+  commentId: T:System.Collections.Generic.List`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  name: List<T>
+  nameWithType: List<T>
+  fullName: System.Collections.Generic.List<T>
+  nameWithType.vb: List(Of T)
+  fullName.vb: System.Collections.Generic.List(Of T)
+  name.vb: List(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.List`1
+    name: List
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.list-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Animation.AnimEngine.ConsumeReflowWrites*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.ConsumeReflowWrites
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_ConsumeReflowWrites
+  name: ConsumeReflowWrites
+  nameWithType: AnimEngine.ConsumeReflowWrites
+  fullName: FluentGpu.Animation.AnimEngine.ConsumeReflowWrites
+- uid: FluentGpu.Animation.AnimEngine.IncrementalRoots*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.IncrementalRoots
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_IncrementalRoots
+  name: IncrementalRoots
+  nameWithType: AnimEngine.IncrementalRoots
+  fullName: FluentGpu.Animation.AnimEngine.IncrementalRoots
+- uid: FluentGpu.Animation.AnimEngine.SeedEnter*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.SeedEnter
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_SeedEnter_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_EnterExit__FluentGpu_Foundation_LayoutTransition__
+  name: SeedEnter
+  nameWithType: AnimEngine.SeedEnter
+  fullName: FluentGpu.Animation.AnimEngine.SeedEnter
+- uid: FluentGpu.Foundation.EnterExit
+  commentId: T:FluentGpu.Foundation.EnterExit
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EnterExit.html
+  name: EnterExit
+  nameWithType: EnterExit
+  fullName: FluentGpu.Foundation.EnterExit
+- uid: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_HasTracks_FluentGpu_Foundation_NodeHandle_
+  name: HasTracks(NodeHandle)
+  nameWithType: AnimEngine.HasTracks(NodeHandle)
+  fullName: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+  spec.csharp:
+  - uid: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+    name: HasTracks
+    href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_HasTracks_FluentGpu_Foundation_NodeHandle_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Animation.AnimEngine.HasTracks(FluentGpu.Foundation.NodeHandle)
+    name: HasTracks
+    href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_HasTracks_FluentGpu_Foundation_NodeHandle_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: FluentGpu.Animation.AnimEngine.SeedExit*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.SeedExit
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_SeedExit_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_EnterExit__FluentGpu_Foundation_LayoutTransition__
+  name: SeedExit
+  nameWithType: AnimEngine.SeedExit
+  fullName: FluentGpu.Animation.AnimEngine.SeedExit
+- uid: FluentGpu.Animation.AnimEngine.HasTracks*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.HasTracks
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_HasTracks_FluentGpu_Foundation_NodeHandle_
+  name: HasTracks
+  nameWithType: AnimEngine.HasTracks
+  fullName: FluentGpu.Animation.AnimEngine.HasTracks
+- uid: FluentGpu.Animation.AnimEngine.Tick*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Tick
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Tick_System_Single_
+  name: Tick
+  nameWithType: AnimEngine.Tick
+  fullName: FluentGpu.Animation.AnimEngine.Tick
+- uid: FluentGpu.Animation.AnimEngine.Ease*
+  commentId: Overload:FluentGpu.Animation.AnimEngine.Ease
+  href: FluentGpu.Animation.AnimEngine.html#FluentGpu_Animation_AnimEngine_Ease_FluentGpu_Foundation_Easing_System_Single_
+  name: Ease
+  nameWithType: AnimEngine.Ease
+  fullName: FluentGpu.Animation.AnimEngine.Ease

@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class SpanTextEl | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class SpanTextEl | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI TextBlock.Inlines/RichTextBlock paragraph model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the base style here; a span with OnClick is a HYPERLINK — the engine resolves the Hand cursor over its laid rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand)); accent foreground + underline are the CALLER&#39;s styling (HyperlinkForeground, generic.xaml:1120-1122). No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Dsl_SpanTextEl.md&amp;value=---%0Auid%3A%20FluentGpu.Dsl.SpanTextEl%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Dsl.SpanTextEl">
+
+
+
+  <h1 id="FluentGpu_Dsl_SpanTextEl" data-uid="FluentGpu.Dsl.SpanTextEl" class="text-break">
+Class SpanTextEl  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L418"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Dsl.html">Dsl</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Dsl.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <code>TextBlock.Inlines</code>/RichTextBlock paragraph
+model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+base style here; a span with <code>OnClick</code> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed record SpanTextEl : Element, IEquatable&lt;Element&gt;, IEquatable&lt;SpanTextEl&gt;</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></div>
+      <div><span class="xref">SpanTextEl</span></div>
+    </dd>
+  </dl>
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iequatable-1">IEquatable</a>&lt;<a class="xref" href="FluentGpu.Dsl.Element.html">Element</a>&gt;</div>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iequatable-1">IEquatable</a>&lt;<a class="xref" href="FluentGpu.Dsl.SpanTextEl.html">SpanTextEl</a>&gt;</div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key">Element.Key</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl__ctor_" data-uid="FluentGpu.Dsl.SpanTextEl.#ctor*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl__ctor_FluentGpu_Foundation_TextSpan___" data-uid="FluentGpu.Dsl.SpanTextEl.#ctor(FluentGpu.Foundation.TextSpan[])">
+  SpanTextEl(TextSpan[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L418"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <code>TextBlock.Inlines</code>/RichTextBlock paragraph
+model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+base style here; a span with <code>OnClick</code> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public SpanTextEl(TextSpan[] Spans)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>Spans</code> <a class="xref" href="FluentGpu.Foundation.TextSpan.html">TextSpan</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_AlignSelf_" data-uid="FluentGpu.Dsl.SpanTextEl.AlignSelf*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_AlignSelf" data-uid="FluentGpu.Dsl.SpanTextEl.AlignSelf">
+  AlignSelf
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L457"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public FlexAlign AlignSelf { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.FlexAlign.html">FlexAlign</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Basis_" data-uid="FluentGpu.Dsl.SpanTextEl.Basis*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Basis" data-uid="FluentGpu.Dsl.SpanTextEl.Basis">
+  Basis
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L456"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Basis { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_CharSpacing_" data-uid="FluentGpu.Dsl.SpanTextEl.CharSpacing*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_CharSpacing" data-uid="FluentGpu.Dsl.SpanTextEl.CharSpacing">
+  CharSpacing
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L429"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float CharSpacing { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Color_" data-uid="FluentGpu.Dsl.SpanTextEl.Color*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Color" data-uid="FluentGpu.Dsl.SpanTextEl.Color">
+  Color
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L427"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Defaults to the live theme's <code>TextFillColorPrimary</code> (the TextEl default), resolved at construction.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ColorF Color { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_ElementTypeId_" data-uid="FluentGpu.Dsl.SpanTextEl.ElementTypeId*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_ElementTypeId" data-uid="FluentGpu.Dsl.SpanTextEl.ElementTypeId">
+  ElementTypeId
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L420"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override ushort ElementTypeId { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint16">ushort</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_FontFamily_" data-uid="FluentGpu.Dsl.SpanTextEl.FontFamily*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_FontFamily" data-uid="FluentGpu.Dsl.SpanTextEl.FontFamily">
+  FontFamily
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L428"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string? FontFamily { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Grow_" data-uid="FluentGpu.Dsl.SpanTextEl.Grow*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Grow" data-uid="FluentGpu.Dsl.SpanTextEl.Grow">
+  Grow
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L454"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Grow { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Height_" data-uid="FluentGpu.Dsl.SpanTextEl.Height*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Height" data-uid="FluentGpu.Dsl.SpanTextEl.Height">
+  Height
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L449"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Height { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_IsTextSelectionEnabled_" data-uid="FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_IsTextSelectionEnabled" data-uid="FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled">
+  IsTextSelectionEnabled
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L442"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Read-only selection (rtb-02): drag selects across the whole paragraph flow, Ctrl+C copies. OPT-IN here
+(like WinUI TextBlock, TextBlock.cpp:583); the RichTextBlock control turns it on by default
+(IsTextSelectionEnabled=TRUE by default on CRichTextBlock, RichTextBlock.cpp:1730).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsTextSelectionEnabled { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_LineBounds_" data-uid="FluentGpu.Dsl.SpanTextEl.LineBounds*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_LineBounds" data-uid="FluentGpu.Dsl.SpanTextEl.LineBounds">
+  LineBounds
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L432"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextLineBounds LineBounds { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.TextLineBounds.html">TextLineBounds</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_LineHeight_" data-uid="FluentGpu.Dsl.SpanTextEl.LineHeight*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_LineHeight" data-uid="FluentGpu.Dsl.SpanTextEl.LineHeight">
+  LineHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L430"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float LineHeight { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_LineStacking_" data-uid="FluentGpu.Dsl.SpanTextEl.LineStacking*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_LineStacking" data-uid="FluentGpu.Dsl.SpanTextEl.LineStacking">
+  LineStacking
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L431"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public LineStacking LineStacking { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.LineStacking.html">LineStacking</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Margin_" data-uid="FluentGpu.Dsl.SpanTextEl.Margin*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Margin" data-uid="FluentGpu.Dsl.SpanTextEl.Margin">
+  Margin
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L458"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Edges4 Margin { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.Edges4.html">Edges4</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_MaxHeight_" data-uid="FluentGpu.Dsl.SpanTextEl.MaxHeight*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_MaxHeight" data-uid="FluentGpu.Dsl.SpanTextEl.MaxHeight">
+  MaxHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L453"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float MaxHeight { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_MaxLines_" data-uid="FluentGpu.Dsl.SpanTextEl.MaxLines*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_MaxLines" data-uid="FluentGpu.Dsl.SpanTextEl.MaxLines">
+  MaxLines
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L437"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int MaxLines { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_MaxWidth_" data-uid="FluentGpu.Dsl.SpanTextEl.MaxWidth*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_MaxWidth" data-uid="FluentGpu.Dsl.SpanTextEl.MaxWidth">
+  MaxWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L452"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float MaxWidth { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_MinHeight_" data-uid="FluentGpu.Dsl.SpanTextEl.MinHeight*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_MinHeight" data-uid="FluentGpu.Dsl.SpanTextEl.MinHeight">
+  MinHeight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L451"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float MinHeight { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_MinWidth_" data-uid="FluentGpu.Dsl.SpanTextEl.MinWidth*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_MinWidth" data-uid="FluentGpu.Dsl.SpanTextEl.MinWidth">
+  MinWidth
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L450"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float MinWidth { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_SelectionHighlightColor_" data-uid="FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_SelectionHighlightColor" data-uid="FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor">
+  SelectionHighlightColor
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L445"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Per-control selection highlight (api-04). A==0 = the engine/theme accent brush
+(TextSelectionManager.cpp:52-56).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ColorF SelectionHighlightColor { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.ColorF.html">ColorF</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Shrink_" data-uid="FluentGpu.Dsl.SpanTextEl.Shrink*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Shrink" data-uid="FluentGpu.Dsl.SpanTextEl.Shrink">
+  Shrink
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L455"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Shrink { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Size_" data-uid="FluentGpu.Dsl.SpanTextEl.Size*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Size" data-uid="FluentGpu.Dsl.SpanTextEl.Size">
+  Size
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L423"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Size { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Spans_" data-uid="FluentGpu.Dsl.SpanTextEl.Spans*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Spans" data-uid="FluentGpu.Dsl.SpanTextEl.Spans">
+  Spans
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L418"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextSpan[] Spans { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.TextSpan.html">TextSpan</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Trim_" data-uid="FluentGpu.Dsl.SpanTextEl.Trim*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Trim" data-uid="FluentGpu.Dsl.SpanTextEl.Trim">
+  Trim
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L436"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextTrim Trim { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.TextTrim.html">TextTrim</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Weight_" data-uid="FluentGpu.Dsl.SpanTextEl.Weight*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Weight" data-uid="FluentGpu.Dsl.SpanTextEl.Weight">
+  Weight
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L425"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Base numeric font weight (0 = Normal 400); spans override per range.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ushort Weight { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint16">ushort</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Width_" data-uid="FluentGpu.Dsl.SpanTextEl.Width*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Width" data-uid="FluentGpu.Dsl.SpanTextEl.Width">
+  Width
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L448"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Width { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Dsl_SpanTextEl_Wrap_" data-uid="FluentGpu.Dsl.SpanTextEl.Wrap*"></a>
+
+  <h3 id="FluentGpu_Dsl_SpanTextEl_Wrap" data-uid="FluentGpu.Dsl.SpanTextEl.Wrap">
+  Wrap
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Dsl/Element.cs/#L435"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Paragraphs WRAP by default — the WinUI BaseRichTextBlockStyle sets TextWrapping=Wrap
+(generic.xaml:13286-13295); pass NoWrap explicitly for a single-line run of spans.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public TextWrap Wrap { get; init; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Foundation.TextWrap.html">TextWrap</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

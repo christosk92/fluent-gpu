@@ -1,0 +1,61 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi.D3D12
+  commentId: N:FluentGpu.Rhi.D3D12
+  id: FluentGpu.Rhi.D3D12
+  children:
+  - FluentGpu.Rhi.D3D12.D3D12Device
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Rhi.D3D12
+  nameWithType: FluentGpu.Rhi.D3D12
+  fullName: FluentGpu.Rhi.D3D12
+  type: Namespace
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+references:
+- uid: FluentGpu.Rhi.D3D12.D3D12Device
+  commentId: T:FluentGpu.Rhi.D3D12.D3D12Device
+  parent: FluentGpu.Rhi.D3D12
+  href: FluentGpu.Rhi.D3D12.D3D12Device.html
+  name: D3D12Device
+  nameWithType: D3D12Device
+  fullName: FluentGpu.Rhi.D3D12.D3D12Device
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  commentId: T:FluentGpu.Rhi.D3D12.D3D12Swapchain
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html
+  name: D3D12Swapchain
+  nameWithType: D3D12Swapchain
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain
+- uid: FluentGpu.Rhi.D3D12
+  commentId: N:FluentGpu.Rhi.D3D12
+  href: FluentGpu.html
+  name: FluentGpu.Rhi.D3D12
+  nameWithType: FluentGpu.Rhi.D3D12
+  fullName: FluentGpu.Rhi.D3D12
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  - name: .
+  - uid: FluentGpu.Rhi.D3D12
+    name: D3D12
+    href: FluentGpu.Rhi.D3D12.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  - name: .
+  - uid: FluentGpu.Rhi.D3D12
+    name: D3D12
+    href: FluentGpu.Rhi.D3D12.html

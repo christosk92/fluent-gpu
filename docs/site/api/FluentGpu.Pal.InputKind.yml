@@ -1,0 +1,361 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.InputKind
+  commentId: T:FluentGpu.Pal.InputKind
+  id: InputKind
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.InputKind.Char
+  - FluentGpu.Pal.InputKind.Key
+  - FluentGpu.Pal.InputKind.KeyUp
+  - FluentGpu.Pal.InputKind.PointerCancel
+  - FluentGpu.Pal.InputKind.PointerDown
+  - FluentGpu.Pal.InputKind.PointerMove
+  - FluentGpu.Pal.InputKind.PointerUp
+  - FluentGpu.Pal.InputKind.Wheel
+  - FluentGpu.Pal.InputKind.WindowBlur
+  - FluentGpu.Pal.InputKind.WindowFocus
+  - FluentGpu.Pal.InputKind.WindowStateChanged
+  langs:
+  - csharp
+  - vb
+  name: InputKind
+  nameWithType: InputKind
+  fullName: FluentGpu.Pal.InputKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InputKind
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: 'public enum InputKind : byte'
+    content.vb: Public Enum InputKind As Byte
+- uid: FluentGpu.Pal.InputKind.PointerMove
+  commentId: F:FluentGpu.Pal.InputKind.PointerMove
+  id: PointerMove
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: PointerMove
+  nameWithType: InputKind.PointerMove
+  fullName: FluentGpu.Pal.InputKind.PointerMove
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerMove
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: PointerMove = 1
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.PointerDown
+  commentId: F:FluentGpu.Pal.InputKind.PointerDown
+  id: PointerDown
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: PointerDown
+  nameWithType: InputKind.PointerDown
+  fullName: FluentGpu.Pal.InputKind.PointerDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerDown
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: PointerDown = 2
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.PointerUp
+  commentId: F:FluentGpu.Pal.InputKind.PointerUp
+  id: PointerUp
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: PointerUp
+  nameWithType: InputKind.PointerUp
+  fullName: FluentGpu.Pal.InputKind.PointerUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerUp
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: PointerUp = 3
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.Key
+  commentId: F:FluentGpu.Pal.InputKind.Key
+  id: Key
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: Key
+  nameWithType: InputKind.Key
+  fullName: FluentGpu.Pal.InputKind.Key
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Key
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Key = 4
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.Wheel
+  commentId: F:FluentGpu.Pal.InputKind.Wheel
+  id: Wheel
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: Wheel
+  nameWithType: InputKind.Wheel
+  fullName: FluentGpu.Pal.InputKind.Wheel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wheel
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Wheel = 5
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.Char
+  commentId: F:FluentGpu.Pal.InputKind.Char
+  id: Char
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: Char
+  nameWithType: InputKind.Char
+  fullName: FluentGpu.Pal.InputKind.Char
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Char
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: Char = 6
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.KeyUp
+  commentId: F:FluentGpu.Pal.InputKind.KeyUp
+  id: KeyUp
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: KeyUp
+  nameWithType: InputKind.KeyUp
+  fullName: FluentGpu.Pal.InputKind.KeyUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyUp
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: KeyUp = 7
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.PointerCancel
+  commentId: F:FluentGpu.Pal.InputKind.PointerCancel
+  id: PointerCancel
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: PointerCancel
+  nameWithType: InputKind.PointerCancel
+  fullName: FluentGpu.Pal.InputKind.PointerCancel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PointerCancel
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The platform cancelled an in-flight pointer interaction (capture lost, touch cancel).
+  example: []
+  syntax:
+    content: PointerCancel = 8
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.WindowBlur
+  commentId: F:FluentGpu.Pal.InputKind.WindowBlur
+  id: WindowBlur
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: WindowBlur
+  nameWithType: InputKind.WindowBlur
+  fullName: FluentGpu.Pal.InputKind.WindowBlur
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowBlur
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The window lost activation (WM_ACTIVATE WA_INACTIVE) — light-dismiss overlays close, pressed state clears.
+  example: []
+  syntax:
+    content: WindowBlur = 9
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.WindowFocus
+  commentId: F:FluentGpu.Pal.InputKind.WindowFocus
+  id: WindowFocus
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: WindowFocus
+  nameWithType: InputKind.WindowFocus
+  fullName: FluentGpu.Pal.InputKind.WindowFocus
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowFocus
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  syntax:
+    content: WindowFocus = 10
+    return:
+      type: FluentGpu.Pal.InputKind
+- uid: FluentGpu.Pal.InputKind.WindowStateChanged
+  commentId: F:FluentGpu.Pal.InputKind.WindowStateChanged
+  id: WindowStateChanged
+  parent: FluentGpu.Pal.InputKind
+  langs:
+  - csharp
+  - vb
+  name: WindowStateChanged
+  nameWithType: InputKind.WindowStateChanged
+  fullName: FluentGpu.Pal.InputKind.WindowStateChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Pal/Pal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WindowStateChanged
+    path: ../../src/FluentGpu.Pal/Pal.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The window's placement changed (normal ↔ maximized/minimized) — a custom titlebar re-glyphs max↔restore.
+  example: []
+  syntax:
+    content: WindowStateChanged = 11
+    return:
+      type: FluentGpu.Pal.InputKind
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.InputKind
+  commentId: T:FluentGpu.Pal.InputKind
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.InputKind.html
+  name: InputKind
+  nameWithType: InputKind
+  fullName: FluentGpu.Pal.InputKind

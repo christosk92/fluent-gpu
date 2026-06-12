@@ -41,7 +41,9 @@ sealed class ShotScene : Component
         "contentdialog-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.Modal))),
         "teachingtip-closing" => OverlayShot(Embed.Comp(() => new OverlayClosingShot(PopupChrome.TeachingTip))),
         "atlas-stress" => CenterShot(Embed.Comp(() => new AtlasStressShot())),
+        "text-snap" => new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new TextSnapShot())] },
         "expander-open" => CenterShot(Embed.Comp(() => new ExpanderOpenShot())),
+        "expander-reflow" => CenterShot(Embed.Comp(() => new ExpanderReflowShot())),
         "pips" => CenterShot(Embed.Comp(() => new PipsPagerShot())),
         "selectorbar" => CenterShot(Embed.Comp(() => new SelectorBarShot())),
         "pivot" => CenterShot(Embed.Comp(() => new PivotShot())),
@@ -630,6 +632,49 @@ sealed class ExpanderOpenShot : Component
     };
 }
 
+// REPRO: a NARROW expander (body wraps to 2 lines) driven through collapse -> re-expand, so a --frames 70 screenshot
+// captures the settled post-reflow state. Mirrors the user's gallery case (width-constrained wrapping body + the toggle).
+sealed class ExpanderReflowShot : Component
+{
+    public override Element Render()
+    {
+        var tick = UseContext(FrameClock.Tick);   // subscribe -> re-render every frame so the toggle schedule advances
+        var open = UseSignal(true);               // start expanded
+        var frame = UseRef(0);
+        UseEffect(() =>
+        {
+            frame.Value++;
+            if (frame.Value == 4) open.Value = false;        // collapse
+            else if (frame.Value == 28) open.Value = true;   // re-expand after the 167ms collapse settles
+        }, tick);
+        return new BoxEl
+        {
+            Direction = 1,
+            Width = 440f,   // gallery-like content width: the body wraps boundary-proximate (2 lines)
+            Children =
+            [
+                ControlExample.Build("A simple Expander",
+                    Embed.Comp(() => new Expander
+                    {
+                        Header = "This text is collapsible",
+                        Content = new BoxEl
+                        {
+                            Direction = 1,
+                            Gap = 8f,
+                            Children =
+                            [
+                                new TextEl("Hidden content, revealed when the Expander is expanded.") { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap },
+                                Button.Standard("An action", () => { }),
+                            ],
+                        },
+                        IsExpanded = open,
+                    }),
+                    code: "Expander.Create(\"This text is collapsible\", VStack(8, Body(text), Button), initiallyExpanded: true)"),
+            ],
+        };
+    }
+}
+
 sealed class PipsPagerShot : Component
 {
     public override Element Render()
@@ -800,6 +845,27 @@ sealed class ItemsViewListShot : Component
             Padding = new Edges4(0, 4, 0, 4),
             Children = [ItemsView.List(Items, selected)],
         };
+    }
+}
+
+// Glyph vertical pixel-snap proof: 12 copies of the SAME 14px label, each pushed down by an extra 0.1 DIP of top
+// padding, so the run's device baseline phase sweeps a bit more than one device pixel down the column. With the
+// glyph-run Y snap, all 12 rows rasterize byte-identical (modulo a whole-pixel shift); without it, the fractional
+// rows blit an integer-baseline atlas bitmap at a fractional device Y through the LINEAR sampler and the bottom
+// coverage row fades — the intermittent "text shaved at the bottom" report. Verified numerically off the PNG.
+sealed class TextSnapShot : Component
+{
+    public override Element Render()
+    {
+        var rows = new List<Element>(12);
+        for (int i = 0; i < 12; i++)
+            rows.Add(new BoxEl
+            {
+                Height = 30f,
+                Padding = new Edges4(0f, i * 0.1f, 0f, 0f),
+                Children = [new TextEl("Source code") { Size = 14f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) }],
+            });
+        return new BoxEl { Grow = 1, Direction = 1, Padding = Edges4.All(20f), Children = [.. rows] };
     }
 }
 

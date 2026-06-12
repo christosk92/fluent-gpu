@@ -1,0 +1,221 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SizeMode
+  commentId: T:FluentGpu.Foundation.SizeMode
+  id: SizeMode
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SizeMode.Auto
+  - FluentGpu.Foundation.SizeMode.Reflow
+  - FluentGpu.Foundation.SizeMode.Relayout
+  - FluentGpu.Foundation.SizeMode.Reveal
+  - FluentGpu.Foundation.SizeMode.ScaleCorrect
+  langs:
+  - csharp
+  - vb
+  name: SizeMode
+  nameWithType: SizeMode
+  fullName: FluentGpu.Foundation.SizeMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeMode
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    How a SIZE change is animated. <xref href="FluentGpu.Foundation.SizeMode.Auto" data-throw-if-not-resolved="false"></xref> picks per node: pure-chrome leaf → <xref href="FluentGpu.Foundation.SizeMode.ScaleCorrect" data-throw-if-not-resolved="false"></xref>;
+        a text/wrapping subtree under budget → <xref href="FluentGpu.Foundation.SizeMode.Relayout" data-throw-if-not-resolved="false"></xref>; everything else → <xref href="FluentGpu.Foundation.SizeMode.Reveal" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public enum SizeMode : byte'
+    content.vb: Public Enum SizeMode As Byte
+- uid: FluentGpu.Foundation.SizeMode.Reveal
+  commentId: F:FluentGpu.Foundation.SizeMode.Reveal
+  id: Reveal
+  parent: FluentGpu.Foundation.SizeMode
+  langs:
+  - csharp
+  - vb
+  name: Reveal
+  nameWithType: SizeMode.Reveal
+  fullName: FluentGpu.Foundation.SizeMode.Reveal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reveal
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Reveal = 0
+    return:
+      type: FluentGpu.Foundation.SizeMode
+- uid: FluentGpu.Foundation.SizeMode.ScaleCorrect
+  commentId: F:FluentGpu.Foundation.SizeMode.ScaleCorrect
+  id: ScaleCorrect
+  parent: FluentGpu.Foundation.SizeMode
+  langs:
+  - csharp
+  - vb
+  name: ScaleCorrect
+  nameWithType: SizeMode.ScaleCorrect
+  fullName: FluentGpu.Foundation.SizeMode.ScaleCorrect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScaleCorrect
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ScaleCorrect = 1
+    return:
+      type: FluentGpu.Foundation.SizeMode
+- uid: FluentGpu.Foundation.SizeMode.Relayout
+  commentId: F:FluentGpu.Foundation.SizeMode.Relayout
+  id: Relayout
+  parent: FluentGpu.Foundation.SizeMode
+  langs:
+  - csharp
+  - vb
+  name: Relayout
+  nameWithType: SizeMode.Relayout
+  fullName: FluentGpu.Foundation.SizeMode.Relayout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Relayout
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Relayout = 2
+    return:
+      type: FluentGpu.Foundation.SizeMode
+- uid: FluentGpu.Foundation.SizeMode.Reflow
+  commentId: F:FluentGpu.Foundation.SizeMode.Reflow
+  id: Reflow
+  parent: FluentGpu.Foundation.SizeMode
+  langs:
+  - csharp
+  - vb
+  name: Reflow
+  nameWithType: SizeMode.Reflow
+  fullName: FluentGpu.Foundation.SizeMode.Reflow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reflow
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Reflow = 3
+    return:
+      type: FluentGpu.Foundation.SizeMode
+- uid: FluentGpu.Foundation.SizeMode.Auto
+  commentId: F:FluentGpu.Foundation.SizeMode.Auto
+  id: Auto
+  parent: FluentGpu.Foundation.SizeMode
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: SizeMode.Auto
+  fullName: FluentGpu.Foundation.SizeMode.Auto
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Auto = 4
+    return:
+      type: FluentGpu.Foundation.SizeMode
+references:
+- uid: FluentGpu.Foundation.SizeMode.Auto
+  commentId: F:FluentGpu.Foundation.SizeMode.Auto
+  href: FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Auto
+  name: Auto
+  nameWithType: SizeMode.Auto
+  fullName: FluentGpu.Foundation.SizeMode.Auto
+- uid: FluentGpu.Foundation.SizeMode.ScaleCorrect
+  commentId: F:FluentGpu.Foundation.SizeMode.ScaleCorrect
+  href: FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_ScaleCorrect
+  name: ScaleCorrect
+  nameWithType: SizeMode.ScaleCorrect
+  fullName: FluentGpu.Foundation.SizeMode.ScaleCorrect
+- uid: FluentGpu.Foundation.SizeMode.Relayout
+  commentId: F:FluentGpu.Foundation.SizeMode.Relayout
+  href: FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Relayout
+  name: Relayout
+  nameWithType: SizeMode.Relayout
+  fullName: FluentGpu.Foundation.SizeMode.Relayout
+- uid: FluentGpu.Foundation.SizeMode.Reveal
+  commentId: F:FluentGpu.Foundation.SizeMode.Reveal
+  href: FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Reveal
+  name: Reveal
+  nameWithType: SizeMode.Reveal
+  fullName: FluentGpu.Foundation.SizeMode.Reveal
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.SizeMode
+  commentId: T:FluentGpu.Foundation.SizeMode
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SizeMode.html
+  name: SizeMode
+  nameWithType: SizeMode
+  fullName: FluentGpu.Foundation.SizeMode

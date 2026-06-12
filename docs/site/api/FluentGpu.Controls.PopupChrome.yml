@@ -1,0 +1,307 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PopupChrome
+  commentId: T:FluentGpu.Controls.PopupChrome
+  id: PopupChrome
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PopupChrome.Dropdown
+  - FluentGpu.Controls.PopupChrome.Flyout
+  - FluentGpu.Controls.PopupChrome.Modal
+  - FluentGpu.Controls.PopupChrome.Popup
+  - FluentGpu.Controls.PopupChrome.Raw
+  - FluentGpu.Controls.PopupChrome.Static
+  - FluentGpu.Controls.PopupChrome.TeachingTip
+  langs:
+  - csharp
+  - vb
+  name: PopupChrome
+  nameWithType: PopupChrome
+  fullName: FluentGpu.Controls.PopupChrome
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupChrome
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Which presenter chrome + open/close MOTION the overlay host supplies around popup content. Each kind maps
+        1:1 to the WinUI transition family that owns that surface:
+
+        <ul><li><xref href="FluentGpu.Controls.PopupChrome.Flyout" data-throw-if-not-resolved="false"></xref> — menus (MenuFlyout/DropDownButton/SplitButton/MenuBar/context): MenuPopupThemeTransition
+        (clip-reveal + content translate 250ms cubic-bezier(0,0,0,1); close = 83ms linear fade) — the default.</li><li><xref href="FluentGpu.Controls.PopupChrome.Popup" data-throw-if-not-resolved="false"></xref> — the WinUI <code>Flyout</code>/FlyoutPresenter (FlyoutBase attaches PopupThemeTransition,
+        FlyoutBase_Partial.cpp:1968–1975): OS-PVL TAS_SHOWPOPUP/TAS_HIDEPOPUP (slide ±50 + delayed fade; close 83ms fade).</li><li><xref href="FluentGpu.Controls.PopupChrome.Dropdown" data-throw-if-not-resolved="false"></xref> — the ComboBox dropdown: SplitOpen/SplitCloseThemeAnimation (generic.xaml:9047/9056) —
+        clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade. With
+        <xref href="FluentGpu.Controls.PopupOptions.SeamOffsetY" data-throw-if-not-resolved="false"></xref> set, the band is centred on the SEAM (selected row) and grows/shrinks both
+        ways (WinUI OffsetFromCenter); otherwise it reveals from the anchor edge.</li><li><xref href="FluentGpu.Controls.PopupChrome.Raw" data-throw-if-not-resolved="false"></xref> — ToolTip/Slider value tip: FadeIn/FadeOutThemeAnimation (TAS_FADEIN/TAS_FADEOUT, 167ms linear).</li><li><xref href="FluentGpu.Controls.PopupChrome.Modal" data-throw-if-not-resolved="false"></xref> — ContentDialog scale/fade; <xref href="FluentGpu.Controls.PopupChrome.TeachingTip" data-throw-if-not-resolved="false"></xref> — muxc expand/contract scale.</li><li><xref href="FluentGpu.Controls.PopupChrome.Static" data-throw-if-not-resolved="false"></xref> — a bare WinUI <code>Popup</code> with no transitions (the AutoSuggestBox SuggestionsPopup,
+        generic.xaml AutoSuggestBox template — no TransitionCollection and AutoSuggestBox_Partial.cpp adds none): instant.</li></ul>
+  example: []
+  syntax:
+    content: 'public enum PopupChrome : byte'
+    content.vb: Public Enum PopupChrome As Byte
+- uid: FluentGpu.Controls.PopupChrome.Flyout
+  commentId: F:FluentGpu.Controls.PopupChrome.Flyout
+  id: Flyout
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Flyout
+  nameWithType: PopupChrome.Flyout
+  fullName: FluentGpu.Controls.PopupChrome.Flyout
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Flyout
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Flyout = 0
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.Raw
+  commentId: F:FluentGpu.Controls.PopupChrome.Raw
+  id: Raw
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Raw
+  nameWithType: PopupChrome.Raw
+  fullName: FluentGpu.Controls.PopupChrome.Raw
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Raw
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Raw = 1
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.Modal
+  commentId: F:FluentGpu.Controls.PopupChrome.Modal
+  id: Modal
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Modal
+  nameWithType: PopupChrome.Modal
+  fullName: FluentGpu.Controls.PopupChrome.Modal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Modal
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Modal = 2
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.TeachingTip
+  commentId: F:FluentGpu.Controls.PopupChrome.TeachingTip
+  id: TeachingTip
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: TeachingTip
+  nameWithType: PopupChrome.TeachingTip
+  fullName: FluentGpu.Controls.PopupChrome.TeachingTip
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TeachingTip
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: TeachingTip = 3
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.Popup
+  commentId: F:FluentGpu.Controls.PopupChrome.Popup
+  id: Popup
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Popup
+  nameWithType: PopupChrome.Popup
+  fullName: FluentGpu.Controls.PopupChrome.Popup
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Popup
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Popup = 4
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.Dropdown
+  commentId: F:FluentGpu.Controls.PopupChrome.Dropdown
+  id: Dropdown
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Dropdown
+  nameWithType: PopupChrome.Dropdown
+  fullName: FluentGpu.Controls.PopupChrome.Dropdown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dropdown
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Dropdown = 5
+    return:
+      type: FluentGpu.Controls.PopupChrome
+- uid: FluentGpu.Controls.PopupChrome.Static
+  commentId: F:FluentGpu.Controls.PopupChrome.Static
+  id: Static
+  parent: FluentGpu.Controls.PopupChrome
+  langs:
+  - csharp
+  - vb
+  name: Static
+  nameWithType: PopupChrome.Static
+  fullName: FluentGpu.Controls.PopupChrome.Static
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/OverlayHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Static
+    path: ../../src/FluentGpu.Controls/OverlayHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Static = 6
+    return:
+      type: FluentGpu.Controls.PopupChrome
+references:
+- uid: FluentGpu.Controls.PopupChrome.Flyout
+  commentId: F:FluentGpu.Controls.PopupChrome.Flyout
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Flyout
+  name: Flyout
+  nameWithType: PopupChrome.Flyout
+  fullName: FluentGpu.Controls.PopupChrome.Flyout
+- uid: FluentGpu.Controls.PopupChrome.Popup
+  commentId: F:FluentGpu.Controls.PopupChrome.Popup
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Popup
+  name: Popup
+  nameWithType: PopupChrome.Popup
+  fullName: FluentGpu.Controls.PopupChrome.Popup
+- uid: FluentGpu.Controls.PopupChrome.Dropdown
+  commentId: F:FluentGpu.Controls.PopupChrome.Dropdown
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Dropdown
+  name: Dropdown
+  nameWithType: PopupChrome.Dropdown
+  fullName: FluentGpu.Controls.PopupChrome.Dropdown
+- uid: FluentGpu.Controls.PopupOptions.SeamOffsetY
+  commentId: P:FluentGpu.Controls.PopupOptions.SeamOffsetY
+  href: FluentGpu.Controls.PopupOptions.html#FluentGpu_Controls_PopupOptions_SeamOffsetY
+  name: SeamOffsetY
+  nameWithType: PopupOptions.SeamOffsetY
+  fullName: FluentGpu.Controls.PopupOptions.SeamOffsetY
+- uid: FluentGpu.Controls.PopupChrome.Raw
+  commentId: F:FluentGpu.Controls.PopupChrome.Raw
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Raw
+  name: Raw
+  nameWithType: PopupChrome.Raw
+  fullName: FluentGpu.Controls.PopupChrome.Raw
+- uid: FluentGpu.Controls.PopupChrome.Modal
+  commentId: F:FluentGpu.Controls.PopupChrome.Modal
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Modal
+  name: Modal
+  nameWithType: PopupChrome.Modal
+  fullName: FluentGpu.Controls.PopupChrome.Modal
+- uid: FluentGpu.Controls.PopupChrome.TeachingTip
+  commentId: F:FluentGpu.Controls.PopupChrome.TeachingTip
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_TeachingTip
+  name: TeachingTip
+  nameWithType: PopupChrome.TeachingTip
+  fullName: FluentGpu.Controls.PopupChrome.TeachingTip
+- uid: FluentGpu.Controls.PopupChrome.Static
+  commentId: F:FluentGpu.Controls.PopupChrome.Static
+  href: FluentGpu.Controls.PopupChrome.html#FluentGpu_Controls_PopupChrome_Static
+  name: Static
+  nameWithType: PopupChrome.Static
+  fullName: FluentGpu.Controls.PopupChrome.Static
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.PopupChrome
+  commentId: T:FluentGpu.Controls.PopupChrome
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PopupChrome.html
+  name: PopupChrome
+  nameWithType: PopupChrome
+  fullName: FluentGpu.Controls.PopupChrome

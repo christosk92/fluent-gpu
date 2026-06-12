@@ -1,0 +1,1570 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SplitButton
+  commentId: T:FluentGpu.Controls.SplitButton
+  id: SplitButton
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SplitButton.ChevronGlyphSize
+  - FluentGpu.Controls.SplitButton.ChevronSize
+  - FluentGpu.Controls.SplitButton.ControlHeight
+  - FluentGpu.Controls.SplitButton.CornerRadius
+  - FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Boolean)
+  - FluentGpu.Controls.SplitButton.Create(System.String,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  - FluentGpu.Controls.SplitButton.DividerHeight
+  - FluentGpu.Controls.SplitButton.DividerWidth
+  - FluentGpu.Controls.SplitButton.FontSize
+  - FluentGpu.Controls.SplitButton.Glyph
+  - FluentGpu.Controls.SplitButton.IsEnabled
+  - FluentGpu.Controls.SplitButton.Items
+  - FluentGpu.Controls.SplitButton.Label
+  - FluentGpu.Controls.SplitButton.OnInvoke
+  - FluentGpu.Controls.SplitButton.OpenOnMount
+  - FluentGpu.Controls.SplitButton.PartChevron
+  - FluentGpu.Controls.SplitButton.PartDivider
+  - FluentGpu.Controls.SplitButton.PartPrimaryButton
+  - FluentGpu.Controls.SplitButton.PartRoot
+  - FluentGpu.Controls.SplitButton.PartSecondaryButton
+  - FluentGpu.Controls.SplitButton.Parts
+  - FluentGpu.Controls.SplitButton.PrimaryButtonMinWidth
+  - FluentGpu.Controls.SplitButton.PrimaryContent
+  - FluentGpu.Controls.SplitButton.Render
+  - FluentGpu.Controls.SplitButton.SecondaryButtonSize
+  langs:
+  - csharp
+  - vb
+  name: SplitButton
+  nameWithType: SplitButton
+  fullName: FluentGpu.Controls.SplitButton
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SplitButton
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI 3 <code>SplitButton</code>: a primary action button joined to a secondary dropdown half, sharing one rounded
+
+    chrome with a 1px divider between them. The two halves are <b>independently</b> interactive — the primary half runs
+
+    <xref href="FluentGpu.Controls.SplitButton.OnInvoke" data-throw-if-not-resolved="false"></xref> (the <code>Click</code> event / <code>OnClickPrimary</code>), the secondary half opens a
+
+    <xref href="FluentGpu.Controls.MenuFlyout" data-throw-if-not-resolved="false"></xref> anchored below the whole control (<code>OnClickSecondary → OpenFlyout</code>). Each half carries
+
+    its own hover/press fill + foreground ramp; the inner corner where each half meets the divider is squared so the
+
+    pair reads as one control (WinUI PrimaryButtonBorder <code>4,0,0,4</code> / SecondaryButtonBorder <code>0,4,4,0</code>).
+
+
+    Source of truth: <code>microsoft-ui-xaml/controls/dev/SplitButton/SplitButton.xaml</code> (+ <code>_themeresources.xaml</code>,
+
+    <code>SplitButton.cpp</code>). Tokens, sizes, padding, corners and the state matrix are 1:1 with that template.
+  example: []
+  syntax:
+    content: 'public sealed class SplitButton : Component'
+    content.vb: Public NotInheritable Class SplitButton Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.SplitButton.PartRoot
+  commentId: F:FluentGpu.Controls.SplitButton.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: SplitButton.PartRoot
+  fullName: FluentGpu.Controls.SplitButton.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The joined chrome (WinUI RootGrid + Border): fill, border, corners, clip. Owned: OnKeyDown (the
+        Space/Enter/Down/F4 chords), OnRealized (flyout anchor capture, chained), Children.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.SplitButton.PartPrimaryButton
+  commentId: F:FluentGpu.Controls.SplitButton.PartPrimaryButton
+  id: PartPrimaryButton
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PartPrimaryButton
+  nameWithType: SplitButton.PartPrimaryButton
+  fullName: FluentGpu.Controls.SplitButton.PartPrimaryButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartPrimaryButton
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The primary half (WinUI PrimaryButton). Owned: OnClick (<xref href="FluentGpu.Controls.SplitButton.OnInvoke" data-throw-if-not-resolved="false"></xref>), Role,
+        Children (the <xref href="FluentGpu.Controls.SplitButton.PrimaryContent" data-throw-if-not-resolved="false"></xref> slot).
+  example: []
+  syntax:
+    content: public const string PartPrimaryButton = "PrimaryButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartPrimaryButton As String = "PrimaryButton"
+- uid: FluentGpu.Controls.SplitButton.PartSecondaryButton
+  commentId: F:FluentGpu.Controls.SplitButton.PartSecondaryButton
+  id: PartSecondaryButton
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PartSecondaryButton
+  nameWithType: SplitButton.PartSecondaryButton
+  fullName: FluentGpu.Controls.SplitButton.PartSecondaryButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSecondaryButton
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The dropdown half (WinUI SecondaryButton). Owned: OnClick (the flyout toggle), Role, Children.'
+  example: []
+  syntax:
+    content: public const string PartSecondaryButton = "SecondaryButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartSecondaryButton As String = "SecondaryButton"
+- uid: FluentGpu.Controls.SplitButton.PartDivider
+  commentId: F:FluentGpu.Controls.SplitButton.PartDivider
+  id: PartDivider
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PartDivider
+  nameWithType: SplitButton.PartDivider
+  fullName: FluentGpu.Controls.SplitButton.PartDivider
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartDivider
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The 1px divider between the halves (WinUI DividerBackgroundGrid). Owned: none.'
+  example: []
+  syntax:
+    content: public const string PartDivider = "Divider"
+    return:
+      type: System.String
+    content.vb: Public Const PartDivider As String = "Divider"
+- uid: FluentGpu.Controls.SplitButton.PartChevron
+  commentId: F:FluentGpu.Controls.SplitButton.PartChevron
+  id: PartChevron
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PartChevron
+  nameWithType: SplitButton.PartChevron
+  fullName: FluentGpu.Controls.SplitButton.PartChevron
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartChevron
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'The 12×12 chevron box inside the dropdown half (the AnimatedIcon column). Owned: none.'
+  example: []
+  syntax:
+    content: public const string PartChevron = "Chevron"
+    return:
+      type: System.String
+    content.vb: Public Const PartChevron As String = "Chevron"
+- uid: FluentGpu.Controls.SplitButton.PrimaryButtonMinWidth
+  commentId: F:FluentGpu.Controls.SplitButton.PrimaryButtonMinWidth
+  id: PrimaryButtonMinWidth
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PrimaryButtonMinWidth
+  nameWithType: SplitButton.PrimaryButtonMinWidth
+  fullName: FluentGpu.Controls.SplitButton.PrimaryButtonMinWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryButtonMinWidth
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float PrimaryButtonMinWidth = 35
+    return:
+      type: System.Single
+    content.vb: Public Const PrimaryButtonMinWidth As Single = 35
+- uid: FluentGpu.Controls.SplitButton.SecondaryButtonSize
+  commentId: F:FluentGpu.Controls.SplitButton.SecondaryButtonSize
+  id: SecondaryButtonSize
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: SecondaryButtonSize
+  nameWithType: SplitButton.SecondaryButtonSize
+  fullName: FluentGpu.Controls.SplitButton.SecondaryButtonSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SecondaryButtonSize
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float SecondaryButtonSize = 35
+    return:
+      type: System.Single
+    content.vb: Public Const SecondaryButtonSize As Single = 35
+- uid: FluentGpu.Controls.SplitButton.ControlHeight
+  commentId: F:FluentGpu.Controls.SplitButton.ControlHeight
+  id: ControlHeight
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: ControlHeight
+  nameWithType: SplitButton.ControlHeight
+  fullName: FluentGpu.Controls.SplitButton.ControlHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ControlHeight
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ControlHeight = 32
+    return:
+      type: System.Single
+    content.vb: Public Const ControlHeight As Single = 32
+- uid: FluentGpu.Controls.SplitButton.DividerWidth
+  commentId: F:FluentGpu.Controls.SplitButton.DividerWidth
+  id: DividerWidth
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: DividerWidth
+  nameWithType: SplitButton.DividerWidth
+  fullName: FluentGpu.Controls.SplitButton.DividerWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DividerWidth
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float DividerWidth = 1
+    return:
+      type: System.Single
+    content.vb: Public Const DividerWidth As Single = 1
+- uid: FluentGpu.Controls.SplitButton.DividerHeight
+  commentId: F:FluentGpu.Controls.SplitButton.DividerHeight
+  id: DividerHeight
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: DividerHeight
+  nameWithType: SplitButton.DividerHeight
+  fullName: FluentGpu.Controls.SplitButton.DividerHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DividerHeight
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float DividerHeight = 32
+    return:
+      type: System.Single
+    content.vb: Public Const DividerHeight As Single = 32
+- uid: FluentGpu.Controls.SplitButton.FontSize
+  commentId: F:FluentGpu.Controls.SplitButton.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: SplitButton.FontSize
+  fullName: FluentGpu.Controls.SplitButton.FontSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float FontSize = 14
+    return:
+      type: System.Single
+    content.vb: Public Const FontSize As Single = 14
+- uid: FluentGpu.Controls.SplitButton.ChevronSize
+  commentId: F:FluentGpu.Controls.SplitButton.ChevronSize
+  id: ChevronSize
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: ChevronSize
+  nameWithType: SplitButton.ChevronSize
+  fullName: FluentGpu.Controls.SplitButton.ChevronSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronSize
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ChevronSize = 12
+    return:
+      type: System.Single
+    content.vb: Public Const ChevronSize As Single = 12
+- uid: FluentGpu.Controls.SplitButton.ChevronGlyphSize
+  commentId: F:FluentGpu.Controls.SplitButton.ChevronGlyphSize
+  id: ChevronGlyphSize
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: ChevronGlyphSize
+  nameWithType: SplitButton.ChevronGlyphSize
+  fullName: FluentGpu.Controls.SplitButton.ChevronGlyphSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ChevronGlyphSize
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ChevronGlyphSize = 8
+    return:
+      type: System.Single
+    content.vb: Public Const ChevronGlyphSize As Single = 8
+- uid: FluentGpu.Controls.SplitButton.CornerRadius
+  commentId: F:FluentGpu.Controls.SplitButton.CornerRadius
+  id: CornerRadius
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: CornerRadius
+  nameWithType: SplitButton.CornerRadius
+  fullName: FluentGpu.Controls.SplitButton.CornerRadius
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CornerRadius
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 44
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float CornerRadius = 4
+    return:
+      type: System.Single
+    content.vb: Public Const CornerRadius As Single = 4
+- uid: FluentGpu.Controls.SplitButton.Label
+  commentId: F:FluentGpu.Controls.SplitButton.Label
+  id: Label
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Label
+  nameWithType: SplitButton.Label
+  fullName: FluentGpu.Controls.SplitButton.Label
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Label
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Label
+    return:
+      type: System.String
+    content.vb: Public Label As String
+- uid: FluentGpu.Controls.SplitButton.Glyph
+  commentId: F:FluentGpu.Controls.SplitButton.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: SplitButton.Glyph
+  fullName: FluentGpu.Controls.SplitButton.Glyph
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 49
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Glyph
+    return:
+      type: System.String
+    content.vb: Public Glyph As String
+- uid: FluentGpu.Controls.SplitButton.PrimaryContent
+  commentId: F:FluentGpu.Controls.SplitButton.PrimaryContent
+  id: PrimaryContent
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: PrimaryContent
+  nameWithType: SplitButton.PrimaryContent
+  fullName: FluentGpu.Controls.SplitButton.PrimaryContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PrimaryContent
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Element? PrimaryContent
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public PrimaryContent As Element
+- uid: FluentGpu.Controls.SplitButton.OnInvoke
+  commentId: F:FluentGpu.Controls.SplitButton.OnInvoke
+  id: OnInvoke
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: OnInvoke
+  nameWithType: SplitButton.OnInvoke
+  fullName: FluentGpu.Controls.SplitButton.OnInvoke
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnInvoke
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action? OnInvoke
+    return:
+      type: System.Action
+    content.vb: Public OnInvoke As Action
+- uid: FluentGpu.Controls.SplitButton.Items
+  commentId: F:FluentGpu.Controls.SplitButton.Items
+  id: Items
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Items
+  nameWithType: SplitButton.Items
+  fullName: FluentGpu.Controls.SplitButton.Items
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Items
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<MenuFlyoutItem> Items
+    return:
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    content.vb: Public Items As IReadOnlyList(Of MenuFlyoutItem)
+- uid: FluentGpu.Controls.SplitButton.IsEnabled
+  commentId: F:FluentGpu.Controls.SplitButton.IsEnabled
+  id: IsEnabled
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: IsEnabled
+  nameWithType: SplitButton.IsEnabled
+  fullName: FluentGpu.Controls.SplitButton.IsEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEnabled
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsEnabled As Boolean
+- uid: FluentGpu.Controls.SplitButton.OpenOnMount
+  commentId: F:FluentGpu.Controls.SplitButton.OpenOnMount
+  id: OpenOnMount
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: OpenOnMount
+  nameWithType: SplitButton.OpenOnMount
+  fullName: FluentGpu.Controls.SplitButton.OpenOnMount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OpenOnMount
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool OpenOnMount
+    return:
+      type: System.Boolean
+    content.vb: Public OpenOnMount As Boolean
+- uid: FluentGpu.Controls.SplitButton.Parts
+  commentId: F:FluentGpu.Controls.SplitButton.Parts
+  id: Parts
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: SplitButton.Parts
+  fullName: FluentGpu.Controls.SplitButton.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.SplitButton.Create(System.String,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  commentId: M:FluentGpu.Controls.SplitButton.Create(System.String,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  id: Create(System.String,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.String,System.Boolean)
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Create(string, Action, IReadOnlyList<MenuFlyoutItem>, string?, bool)
+  nameWithType: SplitButton.Create(string, Action, IReadOnlyList<MenuFlyoutItem>, string?, bool)
+  fullName: FluentGpu.Controls.SplitButton.Create(string, System.Action, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, string?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
+    parameters:
+    - id: label
+      type: System.String
+    - id: onInvoke
+      type: System.Action
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    - id: glyph
+      type: System.String
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(label As String, onInvoke As Action, items As IReadOnlyList(Of MenuFlyoutItem), glyph As String = Nothing, isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.SplitButton.Create*
+  nameWithType.vb: SplitButton.Create(String, Action, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+  fullName.vb: FluentGpu.Controls.SplitButton.Create(String, System.Action, System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), String, Boolean)
+  name.vb: Create(String, Action, IReadOnlyList(Of MenuFlyoutItem), String, Boolean)
+- uid: FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Boolean)
+  commentId: M:FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Boolean)
+  id: Create(FluentGpu.Dsl.Element,System.Action,System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem},System.Boolean)
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Create(Element, Action, IReadOnlyList<MenuFlyoutItem>, bool)
+  nameWithType: SplitButton.Create(Element, Action, IReadOnlyList<MenuFlyoutItem>, bool)
+  fullName: FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element, System.Action, System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
+    parameters:
+    - id: primaryContent
+      type: FluentGpu.Dsl.Element
+    - id: onInvoke
+      type: System.Action
+    - id: items
+      type: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(primaryContent As Element, onInvoke As Action, items As IReadOnlyList(Of MenuFlyoutItem), isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.SplitButton.Create*
+  nameWithType.vb: SplitButton.Create(Element, Action, IReadOnlyList(Of MenuFlyoutItem), Boolean)
+  fullName.vb: FluentGpu.Controls.SplitButton.Create(FluentGpu.Dsl.Element, System.Action, System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem), Boolean)
+  name.vb: Create(Element, Action, IReadOnlyList(Of MenuFlyoutItem), Boolean)
+- uid: FluentGpu.Controls.SplitButton.Render
+  commentId: M:FluentGpu.Controls.SplitButton.Render
+  id: Render
+  parent: FluentGpu.Controls.SplitButton
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: SplitButton.Render()
+  fullName: FluentGpu.Controls.SplitButton.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SplitButton.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/SplitButton.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.SplitButton.Render*
+references:
+- uid: FluentGpu.Controls.SplitButton.OnInvoke
+  commentId: F:FluentGpu.Controls.SplitButton.OnInvoke
+  href: FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_OnInvoke
+  name: OnInvoke
+  nameWithType: SplitButton.OnInvoke
+  fullName: FluentGpu.Controls.SplitButton.OnInvoke
+- uid: FluentGpu.Controls.MenuFlyout
+  commentId: T:FluentGpu.Controls.MenuFlyout
+  href: FluentGpu.Controls.MenuFlyout.html
+  name: MenuFlyout
+  nameWithType: MenuFlyout
+  fullName: FluentGpu.Controls.MenuFlyout
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.SplitButton.PrimaryContent
+  commentId: F:FluentGpu.Controls.SplitButton.PrimaryContent
+  href: FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_PrimaryContent
+  name: PrimaryContent
+  nameWithType: SplitButton.PrimaryContent
+  fullName: FluentGpu.Controls.SplitButton.PrimaryContent
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  commentId: T:System.Collections.Generic.IReadOnlyList{FluentGpu.Controls.MenuFlyoutItem}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<MenuFlyoutItem>
+  nameWithType: IReadOnlyList<MenuFlyoutItem>
+  fullName: System.Collections.Generic.IReadOnlyList<FluentGpu.Controls.MenuFlyoutItem>
+  nameWithType.vb: IReadOnlyList(Of MenuFlyoutItem)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of FluentGpu.Controls.MenuFlyoutItem)
+  name.vb: IReadOnlyList(Of MenuFlyoutItem)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    href: FluentGpu.Controls.MenuFlyoutItem.html
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Controls.SplitButton.Create*
+  commentId: Overload:FluentGpu.Controls.SplitButton.Create
+  href: FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_Create_System_String_System_Action_System_Collections_Generic_IReadOnlyList_FluentGpu_Controls_MenuFlyoutItem__System_String_System_Boolean_
+  name: Create
+  nameWithType: SplitButton.Create
+  fullName: FluentGpu.Controls.SplitButton.Create
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.SplitButton.Render*
+  commentId: Overload:FluentGpu.Controls.SplitButton.Render
+  href: FluentGpu.Controls.SplitButton.html#FluentGpu_Controls_SplitButton_Render
+  name: Render
+  nameWithType: SplitButton.Render
+  fullName: FluentGpu.Controls.SplitButton.Render

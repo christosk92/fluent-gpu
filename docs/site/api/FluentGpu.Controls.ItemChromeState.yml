@@ -1,0 +1,590 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemChromeState
+  commentId: T:FluentGpu.Controls.ItemChromeState
+  id: ItemChromeState
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemChromeState.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Boolean)
+  - FluentGpu.Controls.ItemChromeState.IsChecked
+  - FluentGpu.Controls.ItemChromeState.IsCurrent
+  - FluentGpu.Controls.ItemChromeState.IsEnabled
+  - FluentGpu.Controls.ItemChromeState.IsSelected
+  - FluentGpu.Controls.ItemChromeState.ShowCheckbox
+  langs:
+  - csharp
+  - vb
+  name: ItemChromeState
+  nameWithType: ItemChromeState
+  fullName: FluentGpu.Controls.ItemChromeState
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemChromeState
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Per-item visual state handed to a custom <xref href="FluentGpu.Controls.ItemContainerFactory" data-throw-if-not-resolved="false"></xref> (the L4 skin seam).
+  example: []
+  syntax:
+    content: 'public readonly record struct ItemChromeState : IEquatable<ItemChromeState>'
+    content.vb: Public Structure ItemChromeState Implements IEquatable(Of ItemChromeState)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.ItemChromeState}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.ItemChromeState.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.ItemChromeState.#ctor(System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Boolean)
+  id: '#ctor(System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Boolean)'
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: ItemChromeState(bool, bool, bool, bool, bool)
+  nameWithType: ItemChromeState.ItemChromeState(bool, bool, bool, bool, bool)
+  fullName: FluentGpu.Controls.ItemChromeState.ItemChromeState(bool, bool, bool, bool, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Per-item visual state handed to a custom <xref href="FluentGpu.Controls.ItemContainerFactory" data-throw-if-not-resolved="false"></xref> (the L4 skin seam).
+  example: []
+  syntax:
+    content: public ItemChromeState(bool IsSelected, bool IsEnabled, bool ShowCheckbox, bool IsChecked, bool IsCurrent)
+    parameters:
+    - id: IsSelected
+      type: System.Boolean
+    - id: IsEnabled
+      type: System.Boolean
+    - id: ShowCheckbox
+      type: System.Boolean
+    - id: IsChecked
+      type: System.Boolean
+    - id: IsCurrent
+      type: System.Boolean
+    content.vb: Public Sub New(IsSelected As Boolean, IsEnabled As Boolean, ShowCheckbox As Boolean, IsChecked As Boolean, IsCurrent As Boolean)
+  overload: FluentGpu.Controls.ItemChromeState.#ctor*
+  nameWithType.vb: ItemChromeState.New(Boolean, Boolean, Boolean, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.ItemChromeState.New(Boolean, Boolean, Boolean, Boolean, Boolean)
+  name.vb: New(Boolean, Boolean, Boolean, Boolean, Boolean)
+- uid: FluentGpu.Controls.ItemChromeState.IsSelected
+  commentId: P:FluentGpu.Controls.ItemChromeState.IsSelected
+  id: IsSelected
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: IsSelected
+  nameWithType: ItemChromeState.IsSelected
+  fullName: FluentGpu.Controls.ItemChromeState.IsSelected
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsSelected
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsSelected { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsSelected As Boolean
+  overload: FluentGpu.Controls.ItemChromeState.IsSelected*
+- uid: FluentGpu.Controls.ItemChromeState.IsEnabled
+  commentId: P:FluentGpu.Controls.ItemChromeState.IsEnabled
+  id: IsEnabled
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: IsEnabled
+  nameWithType: ItemChromeState.IsEnabled
+  fullName: FluentGpu.Controls.ItemChromeState.IsEnabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEnabled
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsEnabled { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsEnabled As Boolean
+  overload: FluentGpu.Controls.ItemChromeState.IsEnabled*
+- uid: FluentGpu.Controls.ItemChromeState.ShowCheckbox
+  commentId: P:FluentGpu.Controls.ItemChromeState.ShowCheckbox
+  id: ShowCheckbox
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: ShowCheckbox
+  nameWithType: ItemChromeState.ShowCheckbox
+  fullName: FluentGpu.Controls.ItemChromeState.ShowCheckbox
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ShowCheckbox
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool ShowCheckbox { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property ShowCheckbox As Boolean
+  overload: FluentGpu.Controls.ItemChromeState.ShowCheckbox*
+- uid: FluentGpu.Controls.ItemChromeState.IsChecked
+  commentId: P:FluentGpu.Controls.ItemChromeState.IsChecked
+  id: IsChecked
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: IsChecked
+  nameWithType: ItemChromeState.IsChecked
+  fullName: FluentGpu.Controls.ItemChromeState.IsChecked
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsChecked
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsChecked { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsChecked As Boolean
+  overload: FluentGpu.Controls.ItemChromeState.IsChecked*
+- uid: FluentGpu.Controls.ItemChromeState.IsCurrent
+  commentId: P:FluentGpu.Controls.ItemChromeState.IsCurrent
+  id: IsCurrent
+  parent: FluentGpu.Controls.ItemChromeState
+  langs:
+  - csharp
+  - vb
+  name: IsCurrent
+  nameWithType: ItemChromeState.IsCurrent
+  fullName: FluentGpu.Controls.ItemChromeState.IsCurrent
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsCurrent
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsCurrent { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsCurrent As Boolean
+  overload: FluentGpu.Controls.ItemChromeState.IsCurrent*
+references:
+- uid: FluentGpu.Controls.ItemContainerFactory
+  commentId: T:FluentGpu.Controls.ItemContainerFactory
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemContainerFactory.html
+  name: ItemContainerFactory
+  nameWithType: ItemContainerFactory
+  fullName: FluentGpu.Controls.ItemContainerFactory
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.ItemChromeState}
+  commentId: T:System.IEquatable{FluentGpu.Controls.ItemChromeState}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ItemChromeState>
+  nameWithType: IEquatable<ItemChromeState>
+  fullName: System.IEquatable<FluentGpu.Controls.ItemChromeState>
+  nameWithType.vb: IEquatable(Of ItemChromeState)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.ItemChromeState)
+  name.vb: IEquatable(Of ItemChromeState)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.ItemChromeState
+    name: ItemChromeState
+    href: FluentGpu.Controls.ItemChromeState.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ItemChromeState
+    name: ItemChromeState
+    href: FluentGpu.Controls.ItemChromeState.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.ItemChromeState.#ctor*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.#ctor
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState__ctor_System_Boolean_System_Boolean_System_Boolean_System_Boolean_System_Boolean_
+  name: ItemChromeState
+  nameWithType: ItemChromeState.ItemChromeState
+  fullName: FluentGpu.Controls.ItemChromeState.ItemChromeState
+  nameWithType.vb: ItemChromeState.New
+  fullName.vb: FluentGpu.Controls.ItemChromeState.New
+  name.vb: New
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.ItemChromeState.IsSelected*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.IsSelected
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState_IsSelected
+  name: IsSelected
+  nameWithType: ItemChromeState.IsSelected
+  fullName: FluentGpu.Controls.ItemChromeState.IsSelected
+- uid: FluentGpu.Controls.ItemChromeState.IsEnabled*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.IsEnabled
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState_IsEnabled
+  name: IsEnabled
+  nameWithType: ItemChromeState.IsEnabled
+  fullName: FluentGpu.Controls.ItemChromeState.IsEnabled
+- uid: FluentGpu.Controls.ItemChromeState.ShowCheckbox*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.ShowCheckbox
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState_ShowCheckbox
+  name: ShowCheckbox
+  nameWithType: ItemChromeState.ShowCheckbox
+  fullName: FluentGpu.Controls.ItemChromeState.ShowCheckbox
+- uid: FluentGpu.Controls.ItemChromeState.IsChecked*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.IsChecked
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState_IsChecked
+  name: IsChecked
+  nameWithType: ItemChromeState.IsChecked
+  fullName: FluentGpu.Controls.ItemChromeState.IsChecked
+- uid: FluentGpu.Controls.ItemChromeState.IsCurrent*
+  commentId: Overload:FluentGpu.Controls.ItemChromeState.IsCurrent
+  href: FluentGpu.Controls.ItemChromeState.html#FluentGpu_Controls_ItemChromeState_IsCurrent
+  name: IsCurrent
+  nameWithType: ItemChromeState.IsCurrent
+  fullName: FluentGpu.Controls.ItemChromeState.IsCurrent

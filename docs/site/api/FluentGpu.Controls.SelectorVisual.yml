@@ -1,0 +1,243 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SelectorVisual
+  commentId: T:FluentGpu.Controls.SelectorVisual
+  id: SelectorVisual
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SelectorVisual.AccentPill
+  - FluentGpu.Controls.SelectorVisual.Border
+  - FluentGpu.Controls.SelectorVisual.Check
+  - FluentGpu.Controls.SelectorVisual.FullRow
+  - FluentGpu.Controls.SelectorVisual.None
+  langs:
+  - csharp
+  - vb
+  name: SelectorVisual
+  nameWithType: SelectorVisual
+  fullName: FluentGpu.Controls.SelectorVisual
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectorVisual
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The selector-VISUAL presets — the user-pickable item-chrome skins the premiere <xref href="FluentGpu.Controls.ItemsView" data-throw-if-not-resolved="false"></xref> exposes
+
+    (the WinUI "ListView's accent bar" the user likes, GridView's corner check, ItemContainer's accent ring, …) as a
+
+    single DATA enum so any layout × any selection mode can wear any selector (no WinUI-style capability cliffs):
+
+
+    <ul><li><xref href="FluentGpu.Controls.SelectorVisual.AccentPill" data-throw-if-not-resolved="false"></xref> — the WinUI <code>ListViewItem</code> SelectionIndicator (the 3×16 accent bar at the row's
+
+    left edge over a subtle backplate); the ListView preset's default.</li><li><xref href="FluentGpu.Controls.SelectorVisual.Check" data-throw-if-not-resolved="false"></xref> — the WinUI <code>GridViewItem</code> dual-border + top-right corner check; the GridView preset's default.</li><li><xref href="FluentGpu.Controls.SelectorVisual.FullRow" data-throw-if-not-resolved="false"></xref> — a documented SUPERSET (no exact WinUI analogue): the AccentPill row plate WITHOUT the
+
+    left pill, so the whole row fills with the accent-subtle selected highlight (full-bleed selected backplate).</li><li><xref href="FluentGpu.Controls.SelectorVisual.Border" data-throw-if-not-resolved="false"></xref> — the WinUI <code>ItemContainer</code> chrome (3px accent ring + 1px inner stroke + checkbox).</li><li><xref href="FluentGpu.Controls.SelectorVisual.None" data-throw-if-not-resolved="false"></xref> — no selection chrome at all (a bare recyclable container) for app-drawn selection.</li></ul>
+  example: []
+  syntax:
+    content: 'public enum SelectorVisual : byte'
+    content.vb: Public Enum SelectorVisual As Byte
+- uid: FluentGpu.Controls.SelectorVisual.AccentPill
+  commentId: F:FluentGpu.Controls.SelectorVisual.AccentPill
+  id: AccentPill
+  parent: FluentGpu.Controls.SelectorVisual
+  langs:
+  - csharp
+  - vb
+  name: AccentPill
+  nameWithType: SelectorVisual.AccentPill
+  fullName: FluentGpu.Controls.SelectorVisual.AccentPill
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AccentPill
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: AccentPill = 0
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.SelectorVisual.Check
+  commentId: F:FluentGpu.Controls.SelectorVisual.Check
+  id: Check
+  parent: FluentGpu.Controls.SelectorVisual
+  langs:
+  - csharp
+  - vb
+  name: Check
+  nameWithType: SelectorVisual.Check
+  fullName: FluentGpu.Controls.SelectorVisual.Check
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Check
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Check = 1
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.SelectorVisual.FullRow
+  commentId: F:FluentGpu.Controls.SelectorVisual.FullRow
+  id: FullRow
+  parent: FluentGpu.Controls.SelectorVisual
+  langs:
+  - csharp
+  - vb
+  name: FullRow
+  nameWithType: SelectorVisual.FullRow
+  fullName: FluentGpu.Controls.SelectorVisual.FullRow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FullRow
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: FullRow = 2
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.SelectorVisual.Border
+  commentId: F:FluentGpu.Controls.SelectorVisual.Border
+  id: Border
+  parent: FluentGpu.Controls.SelectorVisual
+  langs:
+  - csharp
+  - vb
+  name: Border
+  nameWithType: SelectorVisual.Border
+  fullName: FluentGpu.Controls.SelectorVisual.Border
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Border
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Border = 3
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+- uid: FluentGpu.Controls.SelectorVisual.None
+  commentId: F:FluentGpu.Controls.SelectorVisual.None
+  id: None
+  parent: FluentGpu.Controls.SelectorVisual
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: SelectorVisual.None
+  fullName: FluentGpu.Controls.SelectorVisual.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SelectorVisuals.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/SelectorVisuals.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 4
+    return:
+      type: FluentGpu.Controls.SelectorVisual
+references:
+- uid: FluentGpu.Controls.ItemsView
+  commentId: T:FluentGpu.Controls.ItemsView
+  href: FluentGpu.Controls.ItemsView.html
+  name: ItemsView
+  nameWithType: ItemsView
+  fullName: FluentGpu.Controls.ItemsView
+- uid: FluentGpu.Controls.SelectorVisual.AccentPill
+  commentId: F:FluentGpu.Controls.SelectorVisual.AccentPill
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_AccentPill
+  name: AccentPill
+  nameWithType: SelectorVisual.AccentPill
+  fullName: FluentGpu.Controls.SelectorVisual.AccentPill
+- uid: FluentGpu.Controls.SelectorVisual.Check
+  commentId: F:FluentGpu.Controls.SelectorVisual.Check
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_Check
+  name: Check
+  nameWithType: SelectorVisual.Check
+  fullName: FluentGpu.Controls.SelectorVisual.Check
+- uid: FluentGpu.Controls.SelectorVisual.FullRow
+  commentId: F:FluentGpu.Controls.SelectorVisual.FullRow
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_FullRow
+  name: FullRow
+  nameWithType: SelectorVisual.FullRow
+  fullName: FluentGpu.Controls.SelectorVisual.FullRow
+- uid: FluentGpu.Controls.SelectorVisual.Border
+  commentId: F:FluentGpu.Controls.SelectorVisual.Border
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_Border
+  name: Border
+  nameWithType: SelectorVisual.Border
+  fullName: FluentGpu.Controls.SelectorVisual.Border
+- uid: FluentGpu.Controls.SelectorVisual.None
+  commentId: F:FluentGpu.Controls.SelectorVisual.None
+  href: FluentGpu.Controls.SelectorVisual.html#FluentGpu_Controls_SelectorVisual_None
+  name: None
+  nameWithType: SelectorVisual.None
+  fullName: FluentGpu.Controls.SelectorVisual.None
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.SelectorVisual
+  commentId: T:FluentGpu.Controls.SelectorVisual
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectorVisual.html
+  name: SelectorVisual
+  nameWithType: SelectorVisual
+  fullName: FluentGpu.Controls.SelectorVisual

@@ -11,6 +11,13 @@ public enum NodeFlags : uint
     PaintDirty = 1u << 1,
     TransformDirty = 1u << 2,
 
+    // input
+    DragYieldsToPan = 1u << 3,     // an OnDrag node that is a CROSS-AXIS content-pan (SwipeControl/FlipView): instead of
+                                   // eagerly capturing the contact on press (Slider/EditableText do), it enrolls an
+                                   // axis-locked Drag arena member that COMPETES with an enclosing scroller's Pan — it
+                                   // wins when the gesture runs along its own axis and yields (the list scrolls) when
+                                   // cross-axis (input-a11y.md §7A; the declarative form of DragController.YieldsToPan)
+
     // state
     Visible = 1u << 8,
     HitTestVisible = 1u << 9,

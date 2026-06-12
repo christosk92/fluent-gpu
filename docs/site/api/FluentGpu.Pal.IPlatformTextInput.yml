@@ -1,0 +1,286 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Pal.IPlatformTextInput
+  commentId: T:FluentGpu.Pal.IPlatformTextInput
+  id: IPlatformTextInput
+  parent: FluentGpu.Pal
+  children:
+  - FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+  - FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx(FluentGpu.Foundation.RectF@)
+  - FluentGpu.Pal.IPlatformTextInput.SetEditable(System.Boolean)
+  - FluentGpu.Pal.IPlatformTextInput.SetSink(FluentGpu.Pal.ITextInputSink)
+  langs:
+  - csharp
+  - vb
+  name: IPlatformTextInput
+  nameWithType: IPlatformTextInput
+  fullName: FluentGpu.Pal.IPlatformTextInput
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IPlatformTextInput
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    The per-window IME/text-services seam (Imm32 today; the interface is event-shaped so a TSF/ITextStoreACP
+
+    implementation can replace it without touching the engine — full in-place TSF is a named hardening item).
+  example: []
+  syntax:
+    content: public interface IPlatformTextInput
+    content.vb: Public Interface IPlatformTextInput
+  derivedClasses:
+  - FluentGpu.Pal.Windows.Win32TextInput
+- uid: FluentGpu.Pal.IPlatformTextInput.SetSink(FluentGpu.Pal.ITextInputSink)
+  commentId: M:FluentGpu.Pal.IPlatformTextInput.SetSink(FluentGpu.Pal.ITextInputSink)
+  id: SetSink(FluentGpu.Pal.ITextInputSink)
+  parent: FluentGpu.Pal.IPlatformTextInput
+  langs:
+  - csharp
+  - vb
+  name: SetSink(ITextInputSink?)
+  nameWithType: IPlatformTextInput.SetSink(ITextInputSink?)
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetSink(FluentGpu.Pal.ITextInputSink?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetSink
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: Register the composition sink (the focused editor, via the input router). Null = none.
+  example: []
+  syntax:
+    content: void SetSink(ITextInputSink? sink)
+    parameters:
+    - id: sink
+      type: FluentGpu.Pal.ITextInputSink
+    content.vb: Sub SetSink(sink As ITextInputSink)
+  overload: FluentGpu.Pal.IPlatformTextInput.SetSink*
+  nameWithType.vb: IPlatformTextInput.SetSink(ITextInputSink)
+  fullName.vb: FluentGpu.Pal.IPlatformTextInput.SetSink(FluentGpu.Pal.ITextInputSink)
+  name.vb: SetSink(ITextInputSink)
+- uid: FluentGpu.Pal.IPlatformTextInput.SetEditable(System.Boolean)
+  commentId: M:FluentGpu.Pal.IPlatformTextInput.SetEditable(System.Boolean)
+  id: SetEditable(System.Boolean)
+  parent: FluentGpu.Pal.IPlatformTextInput
+  langs:
+  - csharp
+  - vb
+  name: SetEditable(bool)
+  nameWithType: IPlatformTextInput.SetEditable(bool)
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetEditable(bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetEditable
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: >-
+    Enable/disable the IME for this window (ImmAssociateContext on/off) — flipped when keyboard focus
+        enters/leaves an editable control, so the IME never composes over a button.
+  example: []
+  syntax:
+    content: void SetEditable(bool editable)
+    parameters:
+    - id: editable
+      type: System.Boolean
+    content.vb: Sub SetEditable(editable As Boolean)
+  overload: FluentGpu.Pal.IPlatformTextInput.SetEditable*
+  nameWithType.vb: IPlatformTextInput.SetEditable(Boolean)
+  fullName.vb: FluentGpu.Pal.IPlatformTextInput.SetEditable(Boolean)
+  name.vb: SetEditable(Boolean)
+- uid: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx(FluentGpu.Foundation.RectF@)
+  commentId: M:FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx(FluentGpu.Foundation.RectF@)
+  id: SetCaretRectPx(FluentGpu.Foundation.RectF@)
+  parent: FluentGpu.Pal.IPlatformTextInput
+  langs:
+  - csharp
+  - vb
+  name: SetCaretRectPx(in RectF)
+  nameWithType: IPlatformTextInput.SetCaretRectPx(in RectF)
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx(in FluentGpu.Foundation.RectF)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SetCaretRectPx
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: 'Position the candidate window: the caret rect in PHYSICAL window pixels (CFS_EXCLUDE placement).'
+  example: []
+  syntax:
+    content: void SetCaretRectPx(in RectF rect)
+    parameters:
+    - id: rect
+      type: FluentGpu.Foundation.RectF
+    content.vb: Sub SetCaretRectPx(rect As RectF)
+  overload: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx*
+  nameWithType.vb: IPlatformTextInput.SetCaretRectPx(RectF)
+  fullName.vb: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx(FluentGpu.Foundation.RectF)
+  name.vb: SetCaretRectPx(RectF)
+- uid: FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+  commentId: P:FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+  id: CaretBlinkMs
+  parent: FluentGpu.Pal.IPlatformTextInput
+  langs:
+  - csharp
+  - vb
+  name: CaretBlinkMs
+  nameWithType: IPlatformTextInput.CaretBlinkMs
+  fullName: FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Pal/TextInput.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CaretBlinkMs
+    path: ../../src/FluentGpu.Pal/TextInput.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Pal
+  namespace: FluentGpu.Pal
+  summary: The OS caret blink half-period in ms (Win32 GetCaretBlinkTime; headless = a fixed test value).
+  example: []
+  syntax:
+    content: int CaretBlinkMs { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: ReadOnly Property CaretBlinkMs As Integer
+  overload: FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs*
+references:
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Pal.IPlatformTextInput.SetSink*
+  commentId: Overload:FluentGpu.Pal.IPlatformTextInput.SetSink
+  href: FluentGpu.Pal.IPlatformTextInput.html#FluentGpu_Pal_IPlatformTextInput_SetSink_FluentGpu_Pal_ITextInputSink_
+  name: SetSink
+  nameWithType: IPlatformTextInput.SetSink
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetSink
+- uid: FluentGpu.Pal.ITextInputSink
+  commentId: T:FluentGpu.Pal.ITextInputSink
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.ITextInputSink.html
+  name: ITextInputSink
+  nameWithType: ITextInputSink
+  fullName: FluentGpu.Pal.ITextInputSink
+- uid: FluentGpu.Pal.IPlatformTextInput.SetEditable*
+  commentId: Overload:FluentGpu.Pal.IPlatformTextInput.SetEditable
+  href: FluentGpu.Pal.IPlatformTextInput.html#FluentGpu_Pal_IPlatformTextInput_SetEditable_System_Boolean_
+  name: SetEditable
+  nameWithType: IPlatformTextInput.SetEditable
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetEditable
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx*
+  commentId: Overload:FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx
+  href: FluentGpu.Pal.IPlatformTextInput.html#FluentGpu_Pal_IPlatformTextInput_SetCaretRectPx_FluentGpu_Foundation_RectF__
+  name: SetCaretRectPx
+  nameWithType: IPlatformTextInput.SetCaretRectPx
+  fullName: FluentGpu.Pal.IPlatformTextInput.SetCaretRectPx
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs*
+  commentId: Overload:FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+  href: FluentGpu.Pal.IPlatformTextInput.html#FluentGpu_Pal_IPlatformTextInput_CaretBlinkMs
+  name: CaretBlinkMs
+  nameWithType: IPlatformTextInput.CaretBlinkMs
+  fullName: FluentGpu.Pal.IPlatformTextInput.CaretBlinkMs
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer

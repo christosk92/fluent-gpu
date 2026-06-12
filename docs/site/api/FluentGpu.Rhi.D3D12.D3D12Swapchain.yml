@@ -1,0 +1,623 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  commentId: T:FluentGpu.Rhi.D3D12.D3D12Swapchain
+  id: D3D12Swapchain
+  parent: FluentGpu.Rhi.D3D12
+  children:
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor(FluentGpu.Rhi.D3D12.D3D12Device)
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain.Present
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize(FluentGpu.Foundation.Size2)
+  - FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+  langs:
+  - csharp
+  - vb
+  name: D3D12Swapchain
+  nameWithType: D3D12Swapchain
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: D3D12Swapchain
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1114
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  syntax:
+    content: 'public sealed class D3D12Swapchain : ISwapchain, IDisposable'
+    content.vb: Public NotInheritable Class D3D12Swapchain Implements ISwapchain, IDisposable
+  inheritance:
+  - System.Object
+  implements:
+  - FluentGpu.Rhi.ISwapchain
+  - System.IDisposable
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor(FluentGpu.Rhi.D3D12.D3D12Device)
+  commentId: M:FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor(FluentGpu.Rhi.D3D12.D3D12Device)
+  id: '#ctor(FluentGpu.Rhi.D3D12.D3D12Device)'
+  parent: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: D3D12Swapchain(D3D12Device)
+  nameWithType: D3D12Swapchain.D3D12Swapchain(D3D12Device)
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.D3D12Swapchain(FluentGpu.Rhi.D3D12.D3D12Device)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1117
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  syntax:
+    content: public D3D12Swapchain(D3D12Device device)
+    parameters:
+    - id: device
+      type: FluentGpu.Rhi.D3D12.D3D12Device
+    content.vb: Public Sub New(device As D3D12Device)
+  overload: FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor*
+  nameWithType.vb: D3D12Swapchain.New(D3D12Device)
+  fullName.vb: FluentGpu.Rhi.D3D12.D3D12Swapchain.New(FluentGpu.Rhi.D3D12.D3D12Device)
+  name.vb: New(D3D12Device)
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+  commentId: P:FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+  id: SizePx
+  parent: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: SizePx
+  nameWithType: D3D12Swapchain.SizePx
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizePx
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1118
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  example: []
+  syntax:
+    content: public Size2 SizePx { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public ReadOnly Property SizePx As Size2
+  overload: FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx*
+  implements:
+  - FluentGpu.Rhi.ISwapchain.SizePx
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize(FluentGpu.Foundation.Size2)
+  commentId: M:FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize(FluentGpu.Foundation.Size2)
+  id: Resize(FluentGpu.Foundation.Size2)
+  parent: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: Resize(Size2)
+  nameWithType: D3D12Swapchain.Resize(Size2)
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize(FluentGpu.Foundation.Size2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Resize
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1119
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  example: []
+  syntax:
+    content: public void Resize(Size2 px)
+    parameters:
+    - id: px
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Sub Resize(px As Size2)
+  overload: FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize*
+  implements:
+  - FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Present
+  commentId: M:FluentGpu.Rhi.D3D12.D3D12Swapchain.Present
+  id: Present
+  parent: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: Present()
+  nameWithType: D3D12Swapchain.Present()
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Present()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Present
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1120
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  example: []
+  syntax:
+    content: public void Present()
+    content.vb: Public Sub Present()
+  overload: FluentGpu.Rhi.D3D12.D3D12Swapchain.Present*
+  implements:
+  - FluentGpu.Rhi.ISwapchain.Present
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose
+  commentId: M:FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose
+  id: Dispose
+  parent: FluentGpu.Rhi.D3D12.D3D12Swapchain
+  langs:
+  - csharp
+  - vb
+  name: Dispose()
+  nameWithType: D3D12Swapchain.Dispose()
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Dispose
+    path: ../../src/FluentGpu.Rhi.D3D12/D3D12Device.cs
+    startLine: 1121
+  assemblies:
+  - FluentGpu.Rhi.D3D12
+  namespace: FluentGpu.Rhi.D3D12
+  summary: Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
+  example: []
+  syntax:
+    content: public void Dispose()
+    content.vb: Public Sub Dispose()
+  overload: FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose*
+  implements:
+  - System.IDisposable.Dispose
+references:
+- uid: FluentGpu.Rhi.D3D12
+  commentId: N:FluentGpu.Rhi.D3D12
+  href: FluentGpu.html
+  name: FluentGpu.Rhi.D3D12
+  nameWithType: FluentGpu.Rhi.D3D12
+  fullName: FluentGpu.Rhi.D3D12
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  - name: .
+  - uid: FluentGpu.Rhi.D3D12
+    name: D3D12
+    href: FluentGpu.Rhi.D3D12.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  - name: .
+  - uid: FluentGpu.Rhi.D3D12
+    name: D3D12
+    href: FluentGpu.Rhi.D3D12.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Rhi.ISwapchain
+  commentId: T:FluentGpu.Rhi.ISwapchain
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.ISwapchain.html
+  name: ISwapchain
+  nameWithType: ISwapchain
+  fullName: FluentGpu.Rhi.ISwapchain
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor*
+  commentId: Overload:FluentGpu.Rhi.D3D12.D3D12Swapchain.#ctor
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html#FluentGpu_Rhi_D3D12_D3D12Swapchain__ctor_FluentGpu_Rhi_D3D12_D3D12Device_
+  name: D3D12Swapchain
+  nameWithType: D3D12Swapchain.D3D12Swapchain
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.D3D12Swapchain
+  nameWithType.vb: D3D12Swapchain.New
+  fullName.vb: FluentGpu.Rhi.D3D12.D3D12Swapchain.New
+  name.vb: New
+- uid: FluentGpu.Rhi.D3D12.D3D12Device
+  commentId: T:FluentGpu.Rhi.D3D12.D3D12Device
+  parent: FluentGpu.Rhi.D3D12
+  href: FluentGpu.Rhi.D3D12.D3D12Device.html
+  name: D3D12Device
+  nameWithType: D3D12Device
+  fullName: FluentGpu.Rhi.D3D12.D3D12Device
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx*
+  commentId: Overload:FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html#FluentGpu_Rhi_D3D12_D3D12Swapchain_SizePx
+  name: SizePx
+  nameWithType: D3D12Swapchain.SizePx
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.SizePx
+- uid: FluentGpu.Rhi.ISwapchain.SizePx
+  commentId: P:FluentGpu.Rhi.ISwapchain.SizePx
+  parent: FluentGpu.Rhi.ISwapchain
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_SizePx
+  name: SizePx
+  nameWithType: ISwapchain.SizePx
+  fullName: FluentGpu.Rhi.ISwapchain.SizePx
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize*
+  commentId: Overload:FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html#FluentGpu_Rhi_D3D12_D3D12Swapchain_Resize_FluentGpu_Foundation_Size2_
+  name: Resize
+  nameWithType: D3D12Swapchain.Resize
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Resize
+- uid: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  commentId: M:FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  parent: FluentGpu.Rhi.ISwapchain
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Resize_FluentGpu_Foundation_Size2_
+  name: Resize(Size2)
+  nameWithType: ISwapchain.Resize(Size2)
+  fullName: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+  spec.csharp:
+  - uid: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+    name: Resize
+    href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Resize_FluentGpu_Foundation_Size2_
+  - name: (
+  - uid: FluentGpu.Foundation.Size2
+    name: Size2
+    href: FluentGpu.Foundation.Size2.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Rhi.ISwapchain.Resize(FluentGpu.Foundation.Size2)
+    name: Resize
+    href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Resize_FluentGpu_Foundation_Size2_
+  - name: (
+  - uid: FluentGpu.Foundation.Size2
+    name: Size2
+    href: FluentGpu.Foundation.Size2.html
+  - name: )
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Present*
+  commentId: Overload:FluentGpu.Rhi.D3D12.D3D12Swapchain.Present
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html#FluentGpu_Rhi_D3D12_D3D12Swapchain_Present
+  name: Present
+  nameWithType: D3D12Swapchain.Present
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Present
+- uid: FluentGpu.Rhi.ISwapchain.Present
+  commentId: M:FluentGpu.Rhi.ISwapchain.Present
+  parent: FluentGpu.Rhi.ISwapchain
+  href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Present
+  name: Present()
+  nameWithType: ISwapchain.Present()
+  fullName: FluentGpu.Rhi.ISwapchain.Present()
+  spec.csharp:
+  - uid: FluentGpu.Rhi.ISwapchain.Present
+    name: Present
+    href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Present
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Rhi.ISwapchain.Present
+    name: Present
+    href: FluentGpu.Rhi.ISwapchain.html#FluentGpu_Rhi_ISwapchain_Present
+  - name: (
+  - name: )
+- uid: FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose*
+  commentId: Overload:FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose
+  href: FluentGpu.Rhi.D3D12.D3D12Swapchain.html#FluentGpu_Rhi_D3D12_D3D12Swapchain_Dispose
+  name: Dispose
+  nameWithType: D3D12Swapchain.Dispose
+  fullName: FluentGpu.Rhi.D3D12.D3D12Swapchain.Dispose
+- uid: System.IDisposable.Dispose
+  commentId: M:System.IDisposable.Dispose
+  parent: System.IDisposable
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  name: Dispose()
+  nameWithType: IDisposable.Dispose()
+  fullName: System.IDisposable.Dispose()
+  spec.csharp:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.IDisposable.Dispose
+    name: Dispose
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.idisposable.dispose
+  - name: (
+  - name: )

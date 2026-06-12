@@ -1,0 +1,541 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.TextTiers
+  commentId: T:FluentGpu.Dsl.TextTiers
+  id: TextTiers
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.TextTiers.Accent(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.TextTiers.Disabled(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.TextTiers.OnAccent(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.TextTiers.Primary(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.TextTiers.Secondary(FluentGpu.Dsl.TextEl)
+  - FluentGpu.Dsl.TextTiers.Tertiary(FluentGpu.Dsl.TextEl)
+  langs:
+  - csharp
+  - vb
+  name: TextTiers
+  nameWithType: TextTiers
+  fullName: FluentGpu.Dsl.TextTiers
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextTiers
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: 'Color-tier modifiers for any TextEl: <code>Ui.Body("x").Secondary()</code>.'
+  example: []
+  syntax:
+    content: public static class TextTiers
+    content.vb: Public Module TextTiers
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.TextTiers.Primary(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.Primary(FluentGpu.Dsl.TextEl)
+  id: Primary(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: Primary(TextEl)
+  nameWithType: TextTiers.Primary(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.Primary(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Primary
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Primary(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Primary(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.Primary*
+- uid: FluentGpu.Dsl.TextTiers.Secondary(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.Secondary(FluentGpu.Dsl.TextEl)
+  id: Secondary(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: Secondary(TextEl)
+  nameWithType: TextTiers.Secondary(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.Secondary(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Secondary
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Secondary(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Secondary(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.Secondary*
+- uid: FluentGpu.Dsl.TextTiers.Tertiary(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.Tertiary(FluentGpu.Dsl.TextEl)
+  id: Tertiary(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: Tertiary(TextEl)
+  nameWithType: TextTiers.Tertiary(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.Tertiary(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tertiary
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Tertiary(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Tertiary(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.Tertiary*
+- uid: FluentGpu.Dsl.TextTiers.Disabled(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.Disabled(FluentGpu.Dsl.TextEl)
+  id: Disabled(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: Disabled(TextEl)
+  nameWithType: TextTiers.Disabled(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.Disabled(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Disabled
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Disabled(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Disabled(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.Disabled*
+- uid: FluentGpu.Dsl.TextTiers.Accent(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.Accent(FluentGpu.Dsl.TextEl)
+  id: Accent(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: Accent(TextEl)
+  nameWithType: TextTiers.Accent(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.Accent(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Accent
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl Accent(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function Accent(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.Accent*
+- uid: FluentGpu.Dsl.TextTiers.OnAccent(FluentGpu.Dsl.TextEl)
+  commentId: M:FluentGpu.Dsl.TextTiers.OnAccent(FluentGpu.Dsl.TextEl)
+  id: OnAccent(FluentGpu.Dsl.TextEl)
+  isExtensionMethod: true
+  parent: FluentGpu.Dsl.TextTiers
+  langs:
+  - csharp
+  - vb
+  name: OnAccent(TextEl)
+  nameWithType: TextTiers.OnAccent(TextEl)
+  fullName: FluentGpu.Dsl.TextTiers.OnAccent(FluentGpu.Dsl.TextEl)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Typography.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnAccent
+    path: ../../src/FluentGpu.Dsl/Typography.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public static TextEl OnAccent(this TextEl t)
+    parameters:
+    - id: t
+      type: FluentGpu.Dsl.TextEl
+    return:
+      type: FluentGpu.Dsl.TextEl
+    content.vb: Public Shared Function OnAccent(t As TextEl) As TextEl
+  overload: FluentGpu.Dsl.TextTiers.OnAccent*
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl.TextTiers.Primary*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.Primary
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_Primary_FluentGpu_Dsl_TextEl_
+  name: Primary
+  nameWithType: TextTiers.Primary
+  fullName: FluentGpu.Dsl.TextTiers.Primary
+- uid: FluentGpu.Dsl.TextEl
+  commentId: T:FluentGpu.Dsl.TextEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TextEl.html
+  name: TextEl
+  nameWithType: TextEl
+  fullName: FluentGpu.Dsl.TextEl
+- uid: FluentGpu.Dsl.TextTiers.Secondary*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.Secondary
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_Secondary_FluentGpu_Dsl_TextEl_
+  name: Secondary
+  nameWithType: TextTiers.Secondary
+  fullName: FluentGpu.Dsl.TextTiers.Secondary
+- uid: FluentGpu.Dsl.TextTiers.Tertiary*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.Tertiary
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_Tertiary_FluentGpu_Dsl_TextEl_
+  name: Tertiary
+  nameWithType: TextTiers.Tertiary
+  fullName: FluentGpu.Dsl.TextTiers.Tertiary
+- uid: FluentGpu.Dsl.TextTiers.Disabled*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.Disabled
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_Disabled_FluentGpu_Dsl_TextEl_
+  name: Disabled
+  nameWithType: TextTiers.Disabled
+  fullName: FluentGpu.Dsl.TextTiers.Disabled
+- uid: FluentGpu.Dsl.TextTiers.Accent*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.Accent
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_Accent_FluentGpu_Dsl_TextEl_
+  name: Accent
+  nameWithType: TextTiers.Accent
+  fullName: FluentGpu.Dsl.TextTiers.Accent
+- uid: FluentGpu.Dsl.TextTiers.OnAccent*
+  commentId: Overload:FluentGpu.Dsl.TextTiers.OnAccent
+  href: FluentGpu.Dsl.TextTiers.html#FluentGpu_Dsl_TextTiers_OnAccent_FluentGpu_Dsl_TextEl_
+  name: OnAccent
+  nameWithType: TextTiers.OnAccent
+  fullName: FluentGpu.Dsl.TextTiers.OnAccent

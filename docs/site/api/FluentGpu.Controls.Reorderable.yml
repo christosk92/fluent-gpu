@@ -1,0 +1,2260 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.Reorderable
+  commentId: T:FluentGpu.Controls.Reorderable
+  id: Reorderable
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.Reorderable.#ctor(System.String)
+  - FluentGpu.Controls.Reorderable.Advance(System.Single)
+  - FluentGpu.Controls.Reorderable.AutoDwell
+  - FluentGpu.Controls.Reorderable.Core
+  - FluentGpu.Controls.Reorderable.DwellMs
+  - FluentGpu.Controls.Reorderable.ExtentOf
+  - FluentGpu.Controls.Reorderable.Horizontal
+  - FluentGpu.Controls.Reorderable.InsertionIndex
+  - FluentGpu.Controls.Reorderable.InsertionLine
+  - FluentGpu.Controls.Reorderable.InsertionLineOffset
+  - FluentGpu.Controls.Reorderable.InsertionVisible
+  - FluentGpu.Controls.Reorderable.IsKeyboardLifted
+  - FluentGpu.Controls.Reorderable.IsLifted
+  - FluentGpu.Controls.Reorderable.Item(System.Int32,FluentGpu.Dsl.Element,System.String,System.Nullable{FluentGpu.Foundation.LayoutTransition})
+  - FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+  - FluentGpu.Controls.Reorderable.ItemCount
+  - FluentGpu.Controls.Reorderable.ItemExtent
+  - FluentGpu.Controls.Reorderable.ItemOf
+  - FluentGpu.Controls.Reorderable.Kind
+  - FluentGpu.Controls.Reorderable.LiftOpacity
+  - FluentGpu.Controls.Reorderable.LiftedIndex
+  - FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  - FluentGpu.Controls.Reorderable.LiveProject
+  - FluentGpu.Controls.Reorderable.OffsetFor(System.Int32)
+  - FluentGpu.Controls.Reorderable.OnCrossCommit
+  - FluentGpu.Controls.Reorderable.OnReorder
+  - FluentGpu.Controls.Reorderable.RequestRender
+  - FluentGpu.Controls.Reorderable.Scene
+  - FluentGpu.Controls.Reorderable.ShowInsertionLine
+  - FluentGpu.Controls.Reorderable.Spacing
+  - FluentGpu.Controls.Reorderable.TargetIndex
+  langs:
+  - csharp
+  - vb
+  name: Reorderable
+  nameWithType: Reorderable
+  fullName: FluentGpu.Controls.Reorderable
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reorderable
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    E5-L3 — drag-reorder for ANY one-axis item list (incl. <code>Virtual.List</code>), composed from the engine layers
+
+    beneath it (plan Part B E5; user ruling: the Flutter Draggable/DragTarget + react-beautiful-dnd + SwiftUI model,
+
+    deliberately NOT WinUI's OLE loop): each item is an L2 <xref href="FluentGpu.Foundation.DragSource" data-throw-if-not-resolved="false"></xref> of <xref href="FluentGpu.Controls.Reorderable.Kind" data-throw-if-not-resolved="false"></xref>, the list
+
+    body is ONE accepting <xref href="FluentGpu.Foundation.DropTargetSpec" data-throw-if-not-resolved="false"></xref>, the slot math is <xref href="FluentGpu.Controls.ReorderList" data-throw-if-not-resolved="false"></xref> (WinUI's midpoint
+
+    rule + live-reorder dwell — ListViewBase_Partial_Reorder.cpp:984-1063, :50-51), sibling displacement is the
+
+    engine FLIP pipeline (each wrapped item carries a <code>LayoutTransition</code>; re-rendering the PROJECTED order moves
+
+    them through their springs), the ghost/lift visuals and the drop-glide are L1 <code>DragController</code>, and edge
+
+    auto-scroll is engine-level in <code>DragDropContext</code> (WinUI's 100px/150–1500px/s gradient) — this class adds none
+
+    of those mechanics, only the list semantics.
+
+
+    Usage (inside a component render):
+
+
+    <pre><code class="lang-csharp">var ro = UseMemo(() =&gt; new Reorderable("track") { OnReorder = (f, t) =&gt; Move(tracks, f, t) });
+
+    ro.Scene = Context.Scene; ro.RequestRender = Context.RequestRerender;
+
+    ro.ItemCount = tracks.Count; ro.ItemExtent = 48f;
+
+    return ro.List(Virtual.List(tracks.Count, 48f,
+        slot =&gt; ro.Item(ro.ItemAt(slot), RowFor(tracks[ro.ItemAt(slot)]), key: tracks[ro.ItemAt(slot)].Id)));</code></pre>
+
+    Render slots through <xref href="FluentGpu.Controls.Reorderable.ItemAt(System.Int32)" data-throw-if-not-resolved="false"></xref> with STABLE per-item keys: mid-drag the projection moves the dragged
+
+    item to the dwell-committed slot, the keyed diff keeps node identity, and the FLIP pass animates the displaced
+
+    siblings (the part-to-make-room motion) while <code>DragController.Move</code> re-anchors the pointer-held visual.
+
+
+    CROSS-LIST: two Reorderables sharing a Kind. The target list accepts the foreign session, shows the insertion
+
+    line while hovered, and on drop routes the ONE <xref href="FluentGpu.Controls.Reorderable.OnCrossCommit" data-throw-if-not-resolved="false"></xref> (target's, else the source's) —
+
+    the source's gesture completion then cancels its local reorder instead of committing (no double mutation).
+
+
+    KEYBOARD lift mode (the react-beautiful-dnd a11y pattern): Space on a focused item lifts it (a pointer-free
+
+    reorder; the item dims to the L1 drag opacity with the lifted shadow), Up/Down (Left/Right when
+
+    <xref href="FluentGpu.Controls.Reorderable.Horizontal" data-throw-if-not-resolved="false"></xref>) move the insertion slot with NO dwell, Space drops (commits), Escape cancels, and
+
+    focus leaving the lifted item cancels. All slot moves re-render the projection → FLIP animates them.
+  example: []
+  syntax:
+    content: public sealed class Reorderable
+    content.vb: Public NotInheritable Class Reorderable
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.Reorderable.LiftOpacity
+  commentId: F:FluentGpu.Controls.Reorderable.LiftOpacity
+  id: LiftOpacity
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: LiftOpacity
+  nameWithType: Reorderable.LiftOpacity
+  fullName: FluentGpu.Controls.Reorderable.LiftOpacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LiftOpacity
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Keyboard-lift visual opacity — the SAME lift visual the pointer path gets from L1
+        (WinUI <code>ListViewItemDragThemeOpacity</code> = 0.80 — microsoft-ui-xaml
+        controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7, identical in all ThemeDictionaries).
+  example: []
+  syntax:
+    content: public const float LiftOpacity = 0.8
+    return:
+      type: System.Single
+    content.vb: Public Const LiftOpacity As Single = 0.8
+- uid: FluentGpu.Controls.Reorderable.#ctor(System.String)
+  commentId: M:FluentGpu.Controls.Reorderable.#ctor(System.String)
+  id: '#ctor(System.String)'
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Reorderable(string)
+  nameWithType: Reorderable.Reorderable(string)
+  fullName: FluentGpu.Controls.Reorderable.Reorderable(string)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Reorderable(string kind)
+    parameters:
+    - id: kind
+      type: System.String
+    content.vb: Public Sub New(kind As String)
+  overload: FluentGpu.Controls.Reorderable.#ctor*
+  nameWithType.vb: Reorderable.New(String)
+  fullName.vb: FluentGpu.Controls.Reorderable.New(String)
+  name.vb: New(String)
+- uid: FluentGpu.Controls.Reorderable.Kind
+  commentId: P:FluentGpu.Controls.Reorderable.Kind
+  id: Kind
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: Reorderable.Kind
+  fullName: FluentGpu.Controls.Reorderable.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 85
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The drag kind this list emits AND accepts (the cast-free L2 discriminator).
+  example: []
+  syntax:
+    content: public string Kind { get; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public ReadOnly Property Kind As String
+  overload: FluentGpu.Controls.Reorderable.Kind*
+- uid: FluentGpu.Controls.Reorderable.Core
+  commentId: P:FluentGpu.Controls.Reorderable.Core
+  id: Core
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Core
+  nameWithType: Reorderable.Core
+  fullName: FluentGpu.Controls.Reorderable.Core
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Core
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 89
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The slot-math core (midpoint rule + dwell + displacement hints + projection). Exposed for advanced
+        composition; normal consumers only read the surface properties here.
+  example: []
+  syntax:
+    content: public ReorderList Core { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.ReorderList
+    content.vb: Public ReadOnly Property Core As ReorderList
+  overload: FluentGpu.Controls.Reorderable.Core*
+- uid: FluentGpu.Controls.Reorderable.ItemCount
+  commentId: F:FluentGpu.Controls.Reorderable.ItemCount
+  id: ItemCount
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ItemCount
+  nameWithType: Reorderable.ItemCount
+  fullName: FluentGpu.Controls.Reorderable.ItemCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemCount
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Item count this render (drives <xref href="FluentGpu.Controls.ReorderList.Begin(System.Int32%2cSystem.ReadOnlySpan%7bSystem.Single%7d%2cSystem.Single)" data-throw-if-not-resolved="false"></xref> at lift).
+  example: []
+  syntax:
+    content: public int ItemCount
+    return:
+      type: System.Int32
+    content.vb: Public ItemCount As Integer
+- uid: FluentGpu.Controls.Reorderable.ItemExtent
+  commentId: F:FluentGpu.Controls.Reorderable.ItemExtent
+  id: ItemExtent
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ItemExtent
+  nameWithType: Reorderable.ItemExtent
+  fullName: FluentGpu.Controls.Reorderable.ItemExtent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemExtent
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Uniform resting main-axis extent per item (ignored when <xref href="FluentGpu.Controls.Reorderable.ExtentOf" data-throw-if-not-resolved="false"></xref> is set).
+  example: []
+  syntax:
+    content: public float ItemExtent
+    return:
+      type: System.Single
+    content.vb: Public ItemExtent As Single
+- uid: FluentGpu.Controls.Reorderable.ExtentOf
+  commentId: F:FluentGpu.Controls.Reorderable.ExtentOf
+  id: ExtentOf
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ExtentOf
+  nameWithType: Reorderable.ExtentOf
+  fullName: FluentGpu.Controls.Reorderable.ExtentOf
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ExtentOf
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 98
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Variable extents: resting main-axis extent per ORIGINAL index (sampled once at lift into pooled
+        storage). Cross-list insertion math still assumes the uniform <xref href="FluentGpu.Controls.Reorderable.ItemExtent" data-throw-if-not-resolved="false"></xref> pitch.
+  example: []
+  syntax:
+    content: public Func<int, float>? ExtentOf
+    return:
+      type: System.Func{System.Int32,System.Single}
+    content.vb: Public ExtentOf As Func(Of Integer, Single)
+- uid: FluentGpu.Controls.Reorderable.Spacing
+  commentId: F:FluentGpu.Controls.Reorderable.Spacing
+  id: Spacing
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Spacing
+  nameWithType: Reorderable.Spacing
+  fullName: FluentGpu.Controls.Reorderable.Spacing
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spacing
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The container's main-axis Gap between items.
+  example: []
+  syntax:
+    content: public float Spacing
+    return:
+      type: System.Single
+    content.vb: Public Spacing As Single
+- uid: FluentGpu.Controls.Reorderable.Horizontal
+  commentId: F:FluentGpu.Controls.Reorderable.Horizontal
+  id: Horizontal
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Horizontal
+  nameWithType: Reorderable.Horizontal
+  fullName: FluentGpu.Controls.Reorderable.Horizontal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Horizontal
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Horizontal strip (TotalDx drives the slot math; Left/Right are the keyboard-lift arrows).
+  example: []
+  syntax:
+    content: public bool Horizontal
+    return:
+      type: System.Boolean
+    content.vb: Public Horizontal As Boolean
+- uid: FluentGpu.Controls.Reorderable.Scene
+  commentId: F:FluentGpu.Controls.Reorderable.Scene
+  id: Scene
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Scene
+  nameWithType: Reorderable.Scene
+  fullName: FluentGpu.Controls.Reorderable.Scene
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Scene
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The scene (wire <code>Context.Scene</code>) — needed only for CROSS-LIST insertion math (pointer →
+        slot) and the insertion-line offset; same-list reorder works without it.
+  example: []
+  syntax:
+    content: public SceneStore? Scene
+    return:
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Scene As SceneStore
+- uid: FluentGpu.Controls.Reorderable.RequestRender
+  commentId: F:FluentGpu.Controls.Reorderable.RequestRender
+  id: RequestRender
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: RequestRender
+  nameWithType: Reorderable.RequestRender
+  fullName: FluentGpu.Controls.Reorderable.RequestRender
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RequestRender
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 108
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Re-render request (wire <code>Context.RequestRerender</code> or a signal bump): fired whenever the
+        projected order / lift / insertion-line state changed and the consumer must re-render the list.
+  example: []
+  syntax:
+    content: public Action? RequestRender
+    return:
+      type: System.Action
+    content.vb: Public RequestRender As Action
+- uid: FluentGpu.Controls.Reorderable.OnReorder
+  commentId: F:FluentGpu.Controls.Reorderable.OnReorder
+  id: OnReorder
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: OnReorder
+  nameWithType: Reorderable.OnReorder
+  fullName: FluentGpu.Controls.Reorderable.OnReorder
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnReorder
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    SAME-LIST commit: (fromIndex, toIndex) in the ORIGINAL order — remove at from, insert at to
+        (<xref href="FluentGpu.Controls.ReorderList.Move%60%601(System.Collections.Generic.IList%7b%60%600%7d%2cSystem.Int32%2cSystem.Int32)" data-throw-if-not-resolved="false"></xref> applies it to an <code>IList&lt;T&gt;</code>).
+  example: []
+  syntax:
+    content: public Action<int, int>? OnReorder
+    return:
+      type: System.Action{System.Int32,System.Int32}
+    content.vb: Public OnReorder As Action(Of Integer, Integer)
+- uid: FluentGpu.Controls.Reorderable.OnCrossCommit
+  commentId: F:FluentGpu.Controls.Reorderable.OnCrossCommit
+  id: OnCrossCommit
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: OnCrossCommit
+  nameWithType: Reorderable.OnCrossCommit
+  fullName: FluentGpu.Controls.Reorderable.OnCrossCommit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnCrossCommit
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    CROSS-LIST commit (see <xref href="FluentGpu.Controls.ReorderCrossCommit" data-throw-if-not-resolved="false"></xref>). The drop TARGET's delegate runs; when it
+        has none, the SOURCE's is used — set the one shared callback on both lists.
+  example: []
+  syntax:
+    content: public ReorderCrossCommit? OnCrossCommit
+    return:
+      type: FluentGpu.Controls.ReorderCrossCommit
+    content.vb: Public OnCrossCommit As ReorderCrossCommit
+- uid: FluentGpu.Controls.Reorderable.ItemOf
+  commentId: F:FluentGpu.Controls.Reorderable.ItemOf
+  id: ItemOf
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ItemOf
+  nameWithType: Reorderable.ItemOf
+  fullName: FluentGpu.Controls.Reorderable.ItemOf
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemOf
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The app item carried as <xref href="FluentGpu.Controls.ReorderPayload.Item" data-throw-if-not-resolved="false"></xref> (what a foreign target receives).
+  example: []
+  syntax:
+    content: public Func<int, object?>? ItemOf
+    return:
+      type: System.Func{System.Int32,System.Object}
+    content.vb: Public ItemOf As Func(Of Integer, Object)
+- uid: FluentGpu.Controls.Reorderable.DwellMs
+  commentId: P:FluentGpu.Controls.Reorderable.DwellMs
+  id: DwellMs
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: DwellMs
+  nameWithType: Reorderable.DwellMs
+  fullName: FluentGpu.Controls.Reorderable.DwellMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DwellMs
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Live-reorder dwell before displaced items shift (WinUI LISTVIEW_LIVEREORDER_TIMER 200ms /
+        GRIDVIEW 300ms — ListViewBase_Partial_Reorder.cpp:50-51). 0 ⇒ displacement follows the pointer immediately.
+  example: []
+  syntax:
+    content: public float DwellMs { get; set; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DwellMs As Single
+  overload: FluentGpu.Controls.Reorderable.DwellMs*
+- uid: FluentGpu.Controls.Reorderable.AutoDwell
+  commentId: F:FluentGpu.Controls.Reorderable.AutoDwell
+  id: AutoDwell
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: AutoDwell
+  nameWithType: Reorderable.AutoDwell
+  fullName: FluentGpu.Controls.Reorderable.AutoDwell
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AutoDwell
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Advance the dwell from the wall clock on every drag delta (default). Set false for deterministic
+        tests and drive <xref href="FluentGpu.Controls.Reorderable.Advance(System.Single)" data-throw-if-not-resolved="false"></xref> yourself (or set <xref href="FluentGpu.Controls.Reorderable.DwellMs" data-throw-if-not-resolved="false"></xref> = 0).
+  example: []
+  syntax:
+    content: public bool AutoDwell
+    return:
+      type: System.Boolean
+    content.vb: Public AutoDwell As Boolean
+- uid: FluentGpu.Controls.Reorderable.ShowInsertionLine
+  commentId: F:FluentGpu.Controls.Reorderable.ShowInsertionLine
+  id: ShowInsertionLine
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ShowInsertionLine
+  nameWithType: Reorderable.ShowInsertionLine
+  fullName: FluentGpu.Controls.Reorderable.ShowInsertionLine
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ShowInsertionLine
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 127
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Show the built-in 2px accent insertion line while a FOREIGN session hovers this list, and for
+        same-list feedback when <xref href="FluentGpu.Controls.Reorderable.LiveProject" data-throw-if-not-resolved="false"></xref> is off. Default true.
+  example: []
+  syntax:
+    content: public bool ShowInsertionLine
+    return:
+      type: System.Boolean
+    content.vb: Public ShowInsertionLine As Boolean
+- uid: FluentGpu.Controls.Reorderable.LiveProject
+  commentId: F:FluentGpu.Controls.Reorderable.LiveProject
+  id: LiveProject
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: LiveProject
+  nameWithType: Reorderable.LiveProject
+  fullName: FluentGpu.Controls.Reorderable.LiveProject
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LiveProject
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 134
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Live mid-drag projection (default): <xref href="FluentGpu.Controls.Reorderable.ItemAt(System.Int32)" data-throw-if-not-resolved="false"></xref> returns the PROJECTED order while lifted, so
+        displaced siblings FLIP to make room (the rbd motion). REQUIRES key-preserving children (plain keyed children /
+        <code>ForEl</code> / <code>Repeater</code>): the keyed diff moves nodes with their items. Set FALSE over
+        <code>Virtual.List</code>/<code>VirtualListEl</code> — its window diff recycles nodes POSITIONALLY (no keys), so a mid-drag
+        projection would swap content under the lifted node; instead the resting order holds during the drag and the
+        insertion LINE shows the pending slot (commit still lands exactly where shown).
+  example: []
+  syntax:
+    content: public bool LiveProject
+    return:
+      type: System.Boolean
+    content.vb: Public LiveProject As Boolean
+- uid: FluentGpu.Controls.Reorderable.IsLifted
+  commentId: P:FluentGpu.Controls.Reorderable.IsLifted
+  id: IsLifted
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: IsLifted
+  nameWithType: Reorderable.IsLifted
+  fullName: FluentGpu.Controls.Reorderable.IsLifted
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsLifted
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 138
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: A lift is in flight on THIS list (pointer drag or keyboard lift).
+  example: []
+  syntax:
+    content: public bool IsLifted { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsLifted As Boolean
+  overload: FluentGpu.Controls.Reorderable.IsLifted*
+- uid: FluentGpu.Controls.Reorderable.LiftedIndex
+  commentId: P:FluentGpu.Controls.Reorderable.LiftedIndex
+  id: LiftedIndex
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: LiftedIndex
+  nameWithType: Reorderable.LiftedIndex
+  fullName: FluentGpu.Controls.Reorderable.LiftedIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LiftedIndex
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 140
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The lifted item's ORIGINAL index (−1 when idle).
+  example: []
+  syntax:
+    content: public int LiftedIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property LiftedIndex As Integer
+  overload: FluentGpu.Controls.Reorderable.LiftedIndex*
+- uid: FluentGpu.Controls.Reorderable.IsKeyboardLifted
+  commentId: P:FluentGpu.Controls.Reorderable.IsKeyboardLifted
+  id: IsKeyboardLifted
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: IsKeyboardLifted
+  nameWithType: Reorderable.IsKeyboardLifted
+  fullName: FluentGpu.Controls.Reorderable.IsKeyboardLifted
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsKeyboardLifted
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 142
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: True while the lift is the pointer-free keyboard mode.
+  example: []
+  syntax:
+    content: public bool IsKeyboardLifted { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsKeyboardLifted As Boolean
+  overload: FluentGpu.Controls.Reorderable.IsKeyboardLifted*
+- uid: FluentGpu.Controls.Reorderable.TargetIndex
+  commentId: P:FluentGpu.Controls.Reorderable.TargetIndex
+  id: TargetIndex
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: TargetIndex
+  nameWithType: Reorderable.TargetIndex
+  fullName: FluentGpu.Controls.Reorderable.TargetIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TargetIndex
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 144
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: The dwell-committed slot the projection currently shows (−1 when idle).
+  example: []
+  syntax:
+    content: public int TargetIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property TargetIndex As Integer
+  overload: FluentGpu.Controls.Reorderable.TargetIndex*
+- uid: FluentGpu.Controls.Reorderable.InsertionVisible
+  commentId: P:FluentGpu.Controls.Reorderable.InsertionVisible
+  id: InsertionVisible
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: InsertionVisible
+  nameWithType: Reorderable.InsertionVisible
+  fullName: FluentGpu.Controls.Reorderable.InsertionVisible
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InsertionVisible
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 147
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The insertion line is showing: a foreign session hovers the list, OR a same-list lift with
+        <xref href="FluentGpu.Controls.Reorderable.LiveProject" data-throw-if-not-resolved="false"></xref> off has a pending slot away from home (the virtual-list feedback mode).
+  example: []
+  syntax:
+    content: public bool InsertionVisible { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property InsertionVisible As Boolean
+  overload: FluentGpu.Controls.Reorderable.InsertionVisible*
+- uid: FluentGpu.Controls.Reorderable.InsertionIndex
+  commentId: P:FluentGpu.Controls.Reorderable.InsertionIndex
+  id: InsertionIndex
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: InsertionIndex
+  nameWithType: Reorderable.InsertionIndex
+  fullName: FluentGpu.Controls.Reorderable.InsertionIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InsertionIndex
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 153
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The slot the line marks: the foreign session's insertion slot (0..<xref href="FluentGpu.Controls.Reorderable.ItemCount" data-throw-if-not-resolved="false"></xref>), else the
+        same-list pending slot (−1 when nothing shows).
+  example: []
+  syntax:
+    content: public int InsertionIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property InsertionIndex As Integer
+  overload: FluentGpu.Controls.Reorderable.InsertionIndex*
+- uid: FluentGpu.Controls.Reorderable.InsertionLineOffset
+  commentId: P:FluentGpu.Controls.Reorderable.InsertionLineOffset
+  id: InsertionLineOffset
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: InsertionLineOffset
+  nameWithType: Reorderable.InsertionLineOffset
+  fullName: FluentGpu.Controls.Reorderable.InsertionLineOffset
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InsertionLineOffset
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 162
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Main-axis offset (list-wrapper space, scroll-corrected) of the insertion boundary — where the
+        built-in <xref href="FluentGpu.Controls.Reorderable.InsertionLine" data-throw-if-not-resolved="false"></xref> sits. Foreign sessions mark the slot boundary; a same-list
+        (<xref href="FluentGpu.Controls.Reorderable.LiveProject" data-throw-if-not-resolved="false"></xref>-off) lift marks the resting start the dragged item will land at
+        (<xref href="FluentGpu.Controls.ReorderList.DraggedTargetStart" data-throw-if-not-resolved="false"></xref>... computed at the PENDING slot for immediacy).
+  example: []
+  syntax:
+    content: public float InsertionLineOffset { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property InsertionLineOffset As Single
+  overload: FluentGpu.Controls.Reorderable.InsertionLineOffset*
+- uid: FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+  commentId: M:FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+  id: ItemAt(System.Int32)
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: ItemAt(int)
+  nameWithType: Reorderable.ItemAt(int)
+  fullName: FluentGpu.Controls.Reorderable.ItemAt(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemAt
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 189
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The ORIGINAL item index shown at <code class="paramref">slot</code> under the current projection (identity when
+        idle): render slot s with the item at <code>ItemAt(s)</code> and the item's STABLE key — mid-drag the dragged item
+        occupies the dwell-committed slot and the keyed diff + FLIP animate the displaced siblings. With
+        <xref href="FluentGpu.Controls.Reorderable.LiveProject" data-throw-if-not-resolved="false"></xref> off this stays identity while lifted (virtual-list mode — the insertion line is the
+        feedback; the commit reorders the model itself).
+  example: []
+  syntax:
+    content: public int ItemAt(int slot)
+    parameters:
+    - id: slot
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Function ItemAt(slot As Integer) As Integer
+  overload: FluentGpu.Controls.Reorderable.ItemAt*
+  nameWithType.vb: Reorderable.ItemAt(Integer)
+  fullName.vb: FluentGpu.Controls.Reorderable.ItemAt(Integer)
+  name.vb: ItemAt(Integer)
+- uid: FluentGpu.Controls.Reorderable.OffsetFor(System.Int32)
+  commentId: M:FluentGpu.Controls.Reorderable.OffsetFor(System.Int32)
+  id: OffsetFor(System.Int32)
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: OffsetFor(int)
+  nameWithType: Reorderable.OffsetFor(int)
+  fullName: FluentGpu.Controls.Reorderable.OffsetFor(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffsetFor
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 199
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Displacement hint passthrough (<xref href="FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)" data-throw-if-not-resolved="false"></xref>) for offset-hint consumers that
+        render the RESTING order with translation hints instead of the projected order. Do not combine an authored
+        offset hint with a FLIP <code>Animate</code> on the same node (see the ReorderList class remarks).
+  example: []
+  syntax:
+    content: public float OffsetFor(int originalIndex)
+    parameters:
+    - id: originalIndex
+      type: System.Int32
+    return:
+      type: System.Single
+    content.vb: Public Function OffsetFor(originalIndex As Integer) As Single
+  overload: FluentGpu.Controls.Reorderable.OffsetFor*
+  nameWithType.vb: Reorderable.OffsetFor(Integer)
+  fullName.vb: FluentGpu.Controls.Reorderable.OffsetFor(Integer)
+  name.vb: OffsetFor(Integer)
+- uid: FluentGpu.Controls.Reorderable.Advance(System.Single)
+  commentId: M:FluentGpu.Controls.Reorderable.Advance(System.Single)
+  id: Advance(System.Single)
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Advance(float)
+  nameWithType: Reorderable.Advance(float)
+  fullName: FluentGpu.Controls.Reorderable.Advance(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Advance
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 203
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Deterministic dwell driver (tests / a FrameClock subscriber when <xref href="FluentGpu.Controls.Reorderable.AutoDwell" data-throw-if-not-resolved="false"></xref> is off).
+        Returns true when the shown target changed (a re-render was requested).
+  example: []
+  syntax:
+    content: public bool Advance(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    return:
+      type: System.Boolean
+    content.vb: Public Function Advance(dtMs As Single) As Boolean
+  overload: FluentGpu.Controls.Reorderable.Advance*
+  nameWithType.vb: Reorderable.Advance(Single)
+  fullName.vb: FluentGpu.Controls.Reorderable.Advance(Single)
+  name.vb: Advance(Single)
+- uid: FluentGpu.Controls.Reorderable.Item(System.Int32,FluentGpu.Dsl.Element,System.String,System.Nullable{FluentGpu.Foundation.LayoutTransition})
+  commentId: M:FluentGpu.Controls.Reorderable.Item(System.Int32,FluentGpu.Dsl.Element,System.String,System.Nullable{FluentGpu.Foundation.LayoutTransition})
+  id: Item(System.Int32,FluentGpu.Dsl.Element,System.String,System.Nullable{FluentGpu.Foundation.LayoutTransition})
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: Item(int, Element, string?, LayoutTransition?)
+  nameWithType: Reorderable.Item(int, Element, string?, LayoutTransition?)
+  fullName: FluentGpu.Controls.Reorderable.Item(int, FluentGpu.Dsl.Element, string?, FluentGpu.Foundation.LayoutTransition?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Item
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 217
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Wrap one item's content: an L2 <xref href="FluentGpu.Foundation.DragSource" data-throw-if-not-resolved="false"></xref> of <xref href="FluentGpu.Controls.Reorderable.Kind" data-throw-if-not-resolved="false"></xref> (payload =
+        <xref href="FluentGpu.Controls.ReorderPayload" data-throw-if-not-resolved="false"></xref>, resolved once at promotion), the L1 lifecycle wired into the slot math, a FLIP
+        <code>LayoutTransition</code> (default <xref href="FluentGpu.Foundation.LayoutTransition.Slide" data-throw-if-not-resolved="false"></xref>) for the displacement motion, focusable
+        with the keyboard lift-mode keys, and the keyboard-lift visuals when lifted that way (the pointer path gets
+        identical visuals from L1). <code class="paramref">index</code> is the ORIGINAL item index (pass <code>ItemAt(slot)</code>).
+  example: []
+  syntax:
+    content: public Element Item(int index, Element content, string? key = null, LayoutTransition? transition = null)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: content
+      type: FluentGpu.Dsl.Element
+    - id: key
+      type: System.String
+    - id: transition
+      type: System.Nullable{FluentGpu.Foundation.LayoutTransition}
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Function Item(index As Integer, content As Element, key As String = Nothing, transition As LayoutTransition? = Nothing) As Element
+  overload: FluentGpu.Controls.Reorderable.Item*
+  nameWithType.vb: Reorderable.Item(Integer, Element, String, LayoutTransition?)
+  fullName.vb: FluentGpu.Controls.Reorderable.Item(Integer, FluentGpu.Dsl.Element, String, FluentGpu.Foundation.LayoutTransition?)
+  name.vb: Item(Integer, Element, String, LayoutTransition?)
+- uid: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  commentId: M:FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  id: List(FluentGpu.Dsl.Element)
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: List(Element)
+  nameWithType: Reorderable.List(Element)
+  fullName: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: List
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 243
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Wrap the list body as the ONE accepting drop target of <xref href="FluentGpu.Controls.Reorderable.Kind" data-throw-if-not-resolved="false"></xref> (a ZStack so the
+        insertion-line overlay can ride above the body): same-list releases commit through the gesture completion,
+        foreign sessions get the insertion line + <xref href="FluentGpu.Controls.Reorderable.OnCrossCommit" data-throw-if-not-resolved="false"></xref>. Captures the wrapper node for the
+        pointer→slot math (set <xref href="FluentGpu.Controls.Reorderable.Scene" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public Element List(Element body)
+    parameters:
+    - id: body
+      type: FluentGpu.Dsl.Element
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Function List(body As Element) As Element
+  overload: FluentGpu.Controls.Reorderable.List*
+- uid: FluentGpu.Controls.Reorderable.InsertionLine
+  commentId: M:FluentGpu.Controls.Reorderable.InsertionLine
+  id: InsertionLine
+  parent: FluentGpu.Controls.Reorderable
+  langs:
+  - csharp
+  - vb
+  name: InsertionLine()
+  nameWithType: Reorderable.InsertionLine()
+  fullName: FluentGpu.Controls.Reorderable.InsertionLine()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/Reorderable.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InsertionLine
+    path: ../../src/FluentGpu.Controls/Reorderable.cs
+    startLine: 262
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The built-in cross-list insertion indicator: a 2px accent bar at the insertion boundary, stretched
+        across the list (rbd's insertion cue; WinUI's native cue is displacement, which same-list reorder gets via
+        FLIP). Non-hit-testable. Consumers composing their own <xref href="FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)" data-throw-if-not-resolved="false"></xref> wrapper can place it manually from
+        <xref href="FluentGpu.Controls.Reorderable.InsertionVisible" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Controls.Reorderable.InsertionLineOffset" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public Element InsertionLine()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Function InsertionLine() As Element
+  overload: FluentGpu.Controls.Reorderable.InsertionLine*
+references:
+- uid: FluentGpu.Foundation.DragSource
+  commentId: T:FluentGpu.Foundation.DragSource
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DragSource.html
+  name: DragSource
+  nameWithType: DragSource
+  fullName: FluentGpu.Foundation.DragSource
+- uid: FluentGpu.Controls.Reorderable.Kind
+  commentId: P:FluentGpu.Controls.Reorderable.Kind
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Kind
+  name: Kind
+  nameWithType: Reorderable.Kind
+  fullName: FluentGpu.Controls.Reorderable.Kind
+- uid: FluentGpu.Foundation.DropTargetSpec
+  commentId: T:FluentGpu.Foundation.DropTargetSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DropTargetSpec.html
+  name: DropTargetSpec
+  nameWithType: DropTargetSpec
+  fullName: FluentGpu.Foundation.DropTargetSpec
+- uid: FluentGpu.Controls.ReorderList
+  commentId: T:FluentGpu.Controls.ReorderList
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ReorderList.html
+  name: ReorderList
+  nameWithType: ReorderList
+  fullName: FluentGpu.Controls.ReorderList
+- uid: FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+  commentId: M:FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_
+  name: ItemAt(int)
+  nameWithType: Reorderable.ItemAt(int)
+  fullName: FluentGpu.Controls.Reorderable.ItemAt(int)
+  nameWithType.vb: Reorderable.ItemAt(Integer)
+  fullName.vb: FluentGpu.Controls.Reorderable.ItemAt(Integer)
+  name.vb: ItemAt(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+    name: ItemAt
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Reorderable.ItemAt(System.Int32)
+    name: ItemAt
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.OnCrossCommit
+  commentId: F:FluentGpu.Controls.Reorderable.OnCrossCommit
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_OnCrossCommit
+  name: OnCrossCommit
+  nameWithType: Reorderable.OnCrossCommit
+  fullName: FluentGpu.Controls.Reorderable.OnCrossCommit
+- uid: FluentGpu.Controls.Reorderable.Horizontal
+  commentId: F:FluentGpu.Controls.Reorderable.Horizontal
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Horizontal
+  name: Horizontal
+  nameWithType: Reorderable.Horizontal
+  fullName: FluentGpu.Controls.Reorderable.Horizontal
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.Reorderable.#ctor*
+  commentId: Overload:FluentGpu.Controls.Reorderable.#ctor
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable__ctor_System_String_
+  name: Reorderable
+  nameWithType: Reorderable.Reorderable
+  fullName: FluentGpu.Controls.Reorderable.Reorderable
+  nameWithType.vb: Reorderable.New
+  fullName.vb: FluentGpu.Controls.Reorderable.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.Reorderable.Kind*
+  commentId: Overload:FluentGpu.Controls.Reorderable.Kind
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Kind
+  name: Kind
+  nameWithType: Reorderable.Kind
+  fullName: FluentGpu.Controls.Reorderable.Kind
+- uid: FluentGpu.Controls.Reorderable.Core*
+  commentId: Overload:FluentGpu.Controls.Reorderable.Core
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Core
+  name: Core
+  nameWithType: Reorderable.Core
+  fullName: FluentGpu.Controls.Reorderable.Core
+- uid: FluentGpu.Controls.ReorderList.Begin(System.Int32,System.ReadOnlySpan{System.Single},System.Single)
+  commentId: M:FluentGpu.Controls.ReorderList.Begin(System.Int32,System.ReadOnlySpan{System.Single},System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_
+  name: Begin(int, ReadOnlySpan<float>, float)
+  nameWithType: ReorderList.Begin(int, ReadOnlySpan<float>, float)
+  fullName: FluentGpu.Controls.ReorderList.Begin(int, System.ReadOnlySpan<float>, float)
+  nameWithType.vb: ReorderList.Begin(Integer, ReadOnlySpan(Of Single), Single)
+  fullName.vb: FluentGpu.Controls.ReorderList.Begin(Integer, System.ReadOnlySpan(Of Single), Single)
+  name.vb: Begin(Integer, ReadOnlySpan(Of Single), Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ReorderList.Begin(System.Int32,System.ReadOnlySpan{System.Single},System.Single)
+    name: Begin
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ReorderList.Begin(System.Int32,System.ReadOnlySpan{System.Single},System.Single)
+    name: Begin
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.Reorderable.ExtentOf
+  commentId: F:FluentGpu.Controls.Reorderable.ExtentOf
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ExtentOf
+  name: ExtentOf
+  nameWithType: Reorderable.ExtentOf
+  fullName: FluentGpu.Controls.Reorderable.ExtentOf
+- uid: FluentGpu.Controls.Reorderable.ItemExtent
+  commentId: F:FluentGpu.Controls.Reorderable.ItemExtent
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemExtent
+  name: ItemExtent
+  nameWithType: Reorderable.ItemExtent
+  fullName: FluentGpu.Controls.Reorderable.ItemExtent
+- uid: System.Func{System.Int32,System.Single}
+  commentId: T:System.Func{System.Int32,System.Single}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, float>
+  nameWithType: Func<int, float>
+  fullName: System.Func<int, float>
+  nameWithType.vb: Func(Of Integer, Single)
+  fullName.vb: System.Func(Of Integer, Single)
+  name.vb: Func(Of Integer, Single)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.ReorderList.Move``1(System.Collections.Generic.IList{``0},System.Int32,System.Int32)
+  commentId: M:FluentGpu.Controls.ReorderList.Move``1(System.Collections.Generic.IList{``0},System.Int32,System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Move__1_System_Collections_Generic_IList___0__System_Int32_System_Int32_
+  name: Move<T>(IList<T>, int, int)
+  nameWithType: ReorderList.Move<T>(IList<T>, int, int)
+  fullName: FluentGpu.Controls.ReorderList.Move<T>(System.Collections.Generic.IList<T>, int, int)
+  nameWithType.vb: ReorderList.Move(Of T)(IList(Of T), Integer, Integer)
+  fullName.vb: FluentGpu.Controls.ReorderList.Move(Of T)(System.Collections.Generic.IList(Of T), Integer, Integer)
+  name.vb: Move(Of T)(IList(Of T), Integer, Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ReorderList.Move``1(System.Collections.Generic.IList{``0},System.Int32,System.Int32)
+    name: Move
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Move__1_System_Collections_Generic_IList___0__System_Int32_System_Int32_
+  - name: <
+  - name: T
+  - name: '>'
+  - name: (
+  - uid: System.Collections.Generic.IList`1
+    name: IList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ilist-1
+  - name: <
+  - name: T
+  - name: '>'
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ReorderList.Move``1(System.Collections.Generic.IList{``0},System.Int32,System.Int32)
+    name: Move
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Move__1_System_Collections_Generic_IList___0__System_Int32_System_Int32_
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: (
+  - uid: System.Collections.Generic.IList`1
+    name: IList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ilist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action{System.Int32,System.Int32}
+  commentId: T:System.Action{System.Int32,System.Int32}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<int, int>
+  nameWithType: Action<int, int>
+  fullName: System.Action<int, int>
+  nameWithType.vb: Action(Of Integer, Integer)
+  fullName.vb: System.Action(Of Integer, Integer)
+  name.vb: Action(Of Integer, Integer)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Controls.ReorderCrossCommit
+  commentId: T:FluentGpu.Controls.ReorderCrossCommit
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ReorderCrossCommit.html
+  name: ReorderCrossCommit
+  nameWithType: ReorderCrossCommit
+  fullName: FluentGpu.Controls.ReorderCrossCommit
+- uid: FluentGpu.Controls.ReorderPayload.Item
+  commentId: P:FluentGpu.Controls.ReorderPayload.Item
+  isExternal: true
+- uid: System.Func{System.Int32,System.Object}
+  commentId: T:System.Func{System.Int32,System.Object}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<int, object>
+  nameWithType: Func<int, object>
+  fullName: System.Func<int, object>
+  nameWithType.vb: Func(Of Integer, Object)
+  fullName.vb: System.Func(Of Integer, Object)
+  name.vb: Func(Of Integer, Object)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.DwellMs*
+  commentId: Overload:FluentGpu.Controls.Reorderable.DwellMs
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_DwellMs
+  name: DwellMs
+  nameWithType: Reorderable.DwellMs
+  fullName: FluentGpu.Controls.Reorderable.DwellMs
+- uid: FluentGpu.Controls.Reorderable.Advance(System.Single)
+  commentId: M:FluentGpu.Controls.Reorderable.Advance(System.Single)
+  isExternal: true
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Advance_System_Single_
+  name: Advance(float)
+  nameWithType: Reorderable.Advance(float)
+  fullName: FluentGpu.Controls.Reorderable.Advance(float)
+  nameWithType.vb: Reorderable.Advance(Single)
+  fullName.vb: FluentGpu.Controls.Reorderable.Advance(Single)
+  name.vb: Advance(Single)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Reorderable.Advance(System.Single)
+    name: Advance
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Advance_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Reorderable.Advance(System.Single)
+    name: Advance
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Advance_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.DwellMs
+  commentId: P:FluentGpu.Controls.Reorderable.DwellMs
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_DwellMs
+  name: DwellMs
+  nameWithType: Reorderable.DwellMs
+  fullName: FluentGpu.Controls.Reorderable.DwellMs
+- uid: FluentGpu.Controls.Reorderable.LiveProject
+  commentId: F:FluentGpu.Controls.Reorderable.LiveProject
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiveProject
+  name: LiveProject
+  nameWithType: Reorderable.LiveProject
+  fullName: FluentGpu.Controls.Reorderable.LiveProject
+- uid: FluentGpu.Controls.Reorderable.IsLifted*
+  commentId: Overload:FluentGpu.Controls.Reorderable.IsLifted
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_IsLifted
+  name: IsLifted
+  nameWithType: Reorderable.IsLifted
+  fullName: FluentGpu.Controls.Reorderable.IsLifted
+- uid: FluentGpu.Controls.Reorderable.LiftedIndex*
+  commentId: Overload:FluentGpu.Controls.Reorderable.LiftedIndex
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiftedIndex
+  name: LiftedIndex
+  nameWithType: Reorderable.LiftedIndex
+  fullName: FluentGpu.Controls.Reorderable.LiftedIndex
+- uid: FluentGpu.Controls.Reorderable.IsKeyboardLifted*
+  commentId: Overload:FluentGpu.Controls.Reorderable.IsKeyboardLifted
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_IsKeyboardLifted
+  name: IsKeyboardLifted
+  nameWithType: Reorderable.IsKeyboardLifted
+  fullName: FluentGpu.Controls.Reorderable.IsKeyboardLifted
+- uid: FluentGpu.Controls.Reorderable.TargetIndex*
+  commentId: Overload:FluentGpu.Controls.Reorderable.TargetIndex
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_TargetIndex
+  name: TargetIndex
+  nameWithType: Reorderable.TargetIndex
+  fullName: FluentGpu.Controls.Reorderable.TargetIndex
+- uid: FluentGpu.Controls.Reorderable.InsertionVisible*
+  commentId: Overload:FluentGpu.Controls.Reorderable.InsertionVisible
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionVisible
+  name: InsertionVisible
+  nameWithType: Reorderable.InsertionVisible
+  fullName: FluentGpu.Controls.Reorderable.InsertionVisible
+- uid: FluentGpu.Controls.Reorderable.ItemCount
+  commentId: F:FluentGpu.Controls.Reorderable.ItemCount
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemCount
+  name: ItemCount
+  nameWithType: Reorderable.ItemCount
+  fullName: FluentGpu.Controls.Reorderable.ItemCount
+- uid: FluentGpu.Controls.Reorderable.InsertionIndex*
+  commentId: Overload:FluentGpu.Controls.Reorderable.InsertionIndex
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionIndex
+  name: InsertionIndex
+  nameWithType: Reorderable.InsertionIndex
+  fullName: FluentGpu.Controls.Reorderable.InsertionIndex
+- uid: FluentGpu.Controls.Reorderable.InsertionLine
+  commentId: M:FluentGpu.Controls.Reorderable.InsertionLine
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLine
+  name: InsertionLine()
+  nameWithType: Reorderable.InsertionLine()
+  fullName: FluentGpu.Controls.Reorderable.InsertionLine()
+  spec.csharp:
+  - uid: FluentGpu.Controls.Reorderable.InsertionLine
+    name: InsertionLine
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLine
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Reorderable.InsertionLine
+    name: InsertionLine
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLine
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.ReorderList.DraggedTargetStart
+  commentId: P:FluentGpu.Controls.ReorderList.DraggedTargetStart
+  href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_DraggedTargetStart
+  name: DraggedTargetStart
+  nameWithType: ReorderList.DraggedTargetStart
+  fullName: FluentGpu.Controls.ReorderList.DraggedTargetStart
+- uid: FluentGpu.Controls.Reorderable.InsertionLineOffset*
+  commentId: Overload:FluentGpu.Controls.Reorderable.InsertionLineOffset
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLineOffset
+  name: InsertionLineOffset
+  nameWithType: Reorderable.InsertionLineOffset
+  fullName: FluentGpu.Controls.Reorderable.InsertionLineOffset
+- uid: FluentGpu.Controls.Reorderable.ItemAt*
+  commentId: Overload:FluentGpu.Controls.Reorderable.ItemAt
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_
+  name: ItemAt
+  nameWithType: Reorderable.ItemAt
+  fullName: FluentGpu.Controls.Reorderable.ItemAt
+- uid: FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)
+  commentId: M:FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)
+  isExternal: true
+  href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_
+  name: OffsetFor(int)
+  nameWithType: ReorderList.OffsetFor(int)
+  fullName: FluentGpu.Controls.ReorderList.OffsetFor(int)
+  nameWithType.vb: ReorderList.OffsetFor(Integer)
+  fullName.vb: FluentGpu.Controls.ReorderList.OffsetFor(Integer)
+  name.vb: OffsetFor(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)
+    name: OffsetFor
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.ReorderList.OffsetFor(System.Int32)
+    name: OffsetFor
+    href: FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.OffsetFor*
+  commentId: Overload:FluentGpu.Controls.Reorderable.OffsetFor
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_OffsetFor_System_Int32_
+  name: OffsetFor
+  nameWithType: Reorderable.OffsetFor
+  fullName: FluentGpu.Controls.Reorderable.OffsetFor
+- uid: FluentGpu.Controls.Reorderable.AutoDwell
+  commentId: F:FluentGpu.Controls.Reorderable.AutoDwell
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_AutoDwell
+  name: AutoDwell
+  nameWithType: Reorderable.AutoDwell
+  fullName: FluentGpu.Controls.Reorderable.AutoDwell
+- uid: FluentGpu.Controls.Reorderable.Advance*
+  commentId: Overload:FluentGpu.Controls.Reorderable.Advance
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Advance_System_Single_
+  name: Advance
+  nameWithType: Reorderable.Advance
+  fullName: FluentGpu.Controls.Reorderable.Advance
+- uid: FluentGpu.Controls.ReorderPayload
+  commentId: T:FluentGpu.Controls.ReorderPayload
+  href: FluentGpu.Controls.ReorderPayload.html
+  name: ReorderPayload
+  nameWithType: ReorderPayload
+  fullName: FluentGpu.Controls.ReorderPayload
+- uid: FluentGpu.Foundation.LayoutTransition.Slide
+  commentId: P:FluentGpu.Foundation.LayoutTransition.Slide
+  href: FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Slide
+  name: Slide
+  nameWithType: LayoutTransition.Slide
+  fullName: FluentGpu.Foundation.LayoutTransition.Slide
+- uid: FluentGpu.Controls.Reorderable.Item*
+  commentId: Overload:FluentGpu.Controls.Reorderable.Item
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Item_System_Int32_FluentGpu_Dsl_Element_System_String_System_Nullable_FluentGpu_Foundation_LayoutTransition__
+  name: Item
+  nameWithType: Reorderable.Item
+  fullName: FluentGpu.Controls.Reorderable.Item
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.Nullable{FluentGpu.Foundation.LayoutTransition}
+  commentId: T:System.Nullable{FluentGpu.Foundation.LayoutTransition}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.LayoutTransition.html
+  name: LayoutTransition?
+  nameWithType: LayoutTransition?
+  fullName: FluentGpu.Foundation.LayoutTransition?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.LayoutTransition
+    name: LayoutTransition
+    href: FluentGpu.Foundation.LayoutTransition.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.LayoutTransition
+    name: LayoutTransition
+    href: FluentGpu.Foundation.LayoutTransition.html
+  - name: '?'
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.Scene
+  commentId: F:FluentGpu.Controls.Reorderable.Scene
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Scene
+  name: Scene
+  nameWithType: Reorderable.Scene
+  fullName: FluentGpu.Controls.Reorderable.Scene
+- uid: FluentGpu.Controls.Reorderable.List*
+  commentId: Overload:FluentGpu.Controls.Reorderable.List
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_
+  name: List
+  nameWithType: Reorderable.List
+  fullName: FluentGpu.Controls.Reorderable.List
+- uid: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  commentId: M:FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_
+  name: List(Element)
+  nameWithType: Reorderable.List(Element)
+  fullName: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+  spec.csharp:
+  - uid: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+    name: List
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_
+  - name: (
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)
+    name: List
+    href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_
+  - name: (
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: FluentGpu.Controls.Reorderable.InsertionVisible
+  commentId: P:FluentGpu.Controls.Reorderable.InsertionVisible
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionVisible
+  name: InsertionVisible
+  nameWithType: Reorderable.InsertionVisible
+  fullName: FluentGpu.Controls.Reorderable.InsertionVisible
+- uid: FluentGpu.Controls.Reorderable.InsertionLineOffset
+  commentId: P:FluentGpu.Controls.Reorderable.InsertionLineOffset
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLineOffset
+  name: InsertionLineOffset
+  nameWithType: Reorderable.InsertionLineOffset
+  fullName: FluentGpu.Controls.Reorderable.InsertionLineOffset
+- uid: FluentGpu.Controls.Reorderable.InsertionLine*
+  commentId: Overload:FluentGpu.Controls.Reorderable.InsertionLine
+  href: FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLine
+  name: InsertionLine
+  nameWithType: Reorderable.InsertionLine
+  fullName: FluentGpu.Controls.Reorderable.InsertionLine

@@ -1,0 +1,943 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.RatingControlTemplateSettings
+  commentId: T:FluentGpu.Controls.RatingControlTemplateSettings
+  id: RatingControlTemplateSettings
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.RatingControlTemplateSettings.#ctor(System.Single,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  - FluentGpu.Controls.RatingControlTemplateSettings.Background
+  - FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+  - FluentGpu.Controls.RatingControlTemplateSettings.For(System.Single,System.Single,System.Single,System.Int32,System.Boolean,System.Boolean)
+  - FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  - FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  - FluentGpu.Controls.RatingControlTemplateSettings.NoPointerOverFocal
+  - FluentGpu.Controls.RatingControlTemplateSettings.StarCenter(System.Int32,System.Single,System.Single)
+  - FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single)
+  - FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single,System.Single)
+  - FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  langs:
+  - csharp
+  - vb
+  name: RatingControlTemplateSettings
+  nameWithType: RatingControlTemplateSettings
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RatingControlTemplateSettings
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the <xref href="FluentGpu.Controls.RatingControl" data-throw-if-not-resolved="false"></xref> (the typed-record convention -- see
+
+    <xref href="FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings" data-throw-if-not-resolved="false"></xref> / Expander.ExpanderTemplateSettings):
+
+    the resolved <em>display value</em> (the rating shown right now -- pointer-over preview, else committed value, else
+
+    placeholder), the foreground/background brushes for the current visual state, and the partial-star clip width baked
+
+    for the foreground "Set" layer. Mirrors the geometry WinUI's <code>RatingControl::UpdateRatingItemsAppearance</code> derives
+
+    each pass and binds into its two clipped stack panels. Pure factory: no signals are read here -- the caller passes the
+
+    already-resolved inputs, so this struct is cheap to build per render and never allocates in a hot bind.
+
+
+    <p>The star foreground recolor is INSTANT, never eased: WinUI drives every star visual state with
+
+    <code>VisualStateManager::GoToState(useTransitions:false)</code> (see <code>UpdateRatingItemsAppearance</code>), so the brush
+
+    steps the instant the pointer-over preview resolves. We honor that by computing the resting <xref href="FluentGpu.Controls.RatingControlTemplateSettings.Foreground" data-throw-if-not-resolved="false"></xref>
+
+    directly from the sweep and leaving the glyph's <code>HoverColor</code> at <code>default</code> (A==0 ⇒ the recorder leaves the
+
+    color untouched and runs no hover ramp) -- a granular re-render swaps the resting color in one step, no cross-fade.</p>
+  example: []
+  syntax:
+    content: 'public readonly record struct RatingControlTemplateSettings : IEquatable<RatingControlTemplateSettings>'
+    content.vb: Public Structure RatingControlTemplateSettings Implements IEquatable(Of RatingControlTemplateSettings)
+  implements:
+  - System.IEquatable{FluentGpu.Controls.RatingControlTemplateSettings}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.#ctor(System.Single,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  commentId: M:FluentGpu.Controls.RatingControlTemplateSettings.#ctor(System.Single,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)
+  id: '#ctor(System.Single,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF)'
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: RatingControlTemplateSettings(float, ColorF, ColorF)
+  nameWithType: RatingControlTemplateSettings.RatingControlTemplateSettings(float, ColorF, ColorF)
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.RatingControlTemplateSettings(float, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Computed template settings for the <xref href="FluentGpu.Controls.RatingControl" data-throw-if-not-resolved="false"></xref> (the typed-record convention -- see
+
+    <xref href="FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings" data-throw-if-not-resolved="false"></xref> / Expander.ExpanderTemplateSettings):
+
+    the resolved <em>display value</em> (the rating shown right now -- pointer-over preview, else committed value, else
+
+    placeholder), the foreground/background brushes for the current visual state, and the partial-star clip width baked
+
+    for the foreground "Set" layer. Mirrors the geometry WinUI's <code>RatingControl::UpdateRatingItemsAppearance</code> derives
+
+    each pass and binds into its two clipped stack panels. Pure factory: no signals are read here -- the caller passes the
+
+    already-resolved inputs, so this struct is cheap to build per render and never allocates in a hot bind.
+
+
+    <p>The star foreground recolor is INSTANT, never eased: WinUI drives every star visual state with
+
+    <code>VisualStateManager::GoToState(useTransitions:false)</code> (see <code>UpdateRatingItemsAppearance</code>), so the brush
+
+    steps the instant the pointer-over preview resolves. We honor that by computing the resting <xref href="FluentGpu.Controls.RatingControlTemplateSettings.Foreground" data-throw-if-not-resolved="false"></xref>
+
+    directly from the sweep and leaving the glyph's <code>HoverColor</code> at <code>default</code> (A==0 ⇒ the recorder leaves the
+
+    color untouched and runs no hover ramp) -- a granular re-render swaps the resting color in one step, no cross-fade.</p>
+  example: []
+  syntax:
+    content: public RatingControlTemplateSettings(float DisplayValue, ColorF Foreground, ColorF Background)
+    parameters:
+    - id: DisplayValue
+      type: System.Single
+    - id: Foreground
+      type: FluentGpu.Foundation.ColorF
+    - id: Background
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Sub New(DisplayValue As Single, Foreground As ColorF, Background As ColorF)
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.#ctor*
+  nameWithType.vb: RatingControlTemplateSettings.New(Single, ColorF, ColorF)
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.New(Single, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF)
+  name.vb: New(Single, ColorF, ColorF)
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+  commentId: P:FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+  id: DisplayValue
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: DisplayValue
+  nameWithType: RatingControlTemplateSettings.DisplayValue
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DisplayValue
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DisplayValue { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DisplayValue As Single
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue*
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  commentId: P:FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  id: Foreground
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Foreground
+  nameWithType: RatingControlTemplateSettings.Foreground
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Foreground
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Foreground { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Foreground As ColorF
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.Foreground*
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.Background
+  commentId: P:FluentGpu.Controls.RatingControlTemplateSettings.Background
+  id: Background
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: Background
+  nameWithType: RatingControlTemplateSettings.Background
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.Background
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Background
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF Background { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Background As ColorF
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.Background*
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.For(System.Single,System.Single,System.Single,System.Int32,System.Boolean,System.Boolean)
+  commentId: M:FluentGpu.Controls.RatingControlTemplateSettings.For(System.Single,System.Single,System.Single,System.Int32,System.Boolean,System.Boolean)
+  id: For(System.Single,System.Single,System.Single,System.Int32,System.Boolean,System.Boolean)
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: For(float, float, float, int, bool, bool)
+  nameWithType: RatingControlTemplateSettings.For(float, float, float, int, bool, bool)
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.For(float, float, float, int, bool, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: For
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public static RatingControlTemplateSettings For(float value, float placeholder, float preview, int max, bool isEnabled, bool readOnly)
+    parameters:
+    - id: value
+      type: System.Single
+      description: Committed rating, or <xref href="FluentGpu.Controls.RatingControl.NoValueSet" data-throw-if-not-resolved="false"></xref> (-1) when unset.
+    - id: placeholder
+      type: System.Single
+      description: Placeholder rating, or -1 for none.
+    - id: preview
+      type: System.Single
+      description: Pointer-over preview value, or -1 when not hovering/interacting.
+    - id: max
+      type: System.Int32
+    - id: isEnabled
+      type: System.Boolean
+    - id: readOnly
+      type: System.Boolean
+    return:
+      type: FluentGpu.Controls.RatingControlTemplateSettings
+    content.vb: Public Shared Function [For](value As Single, placeholder As Single, preview As Single, max As Integer, isEnabled As Boolean, [readOnly] As Boolean) As RatingControlTemplateSettings
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.For*
+  nameWithType.vb: RatingControlTemplateSettings.For(Single, Single, Single, Integer, Boolean, Boolean)
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.For(Single, Single, Single, Integer, Boolean, Boolean)
+  name.vb: For(Single, Single, Single, Integer, Boolean, Boolean)
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  commentId: F:FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  id: MouseOverScale
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: MouseOverScale
+  nameWithType: RatingControlTemplateSettings.MouseOverScale
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MouseOverScale
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MouseOverScale = 0.8
+    return:
+      type: System.Single
+    content.vb: Public Const MouseOverScale As Single = 0.8
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  commentId: F:FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  id: TouchOverScale
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: TouchOverScale
+  nameWithType: RatingControlTemplateSettings.TouchOverScale
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TouchOverScale
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float TouchOverScale = 1
+    return:
+      type: System.Single
+    content.vb: Public Const TouchOverScale As Single = 1
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.NoPointerOverFocal
+  commentId: F:FluentGpu.Controls.RatingControlTemplateSettings.NoPointerOverFocal
+  id: NoPointerOverFocal
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: NoPointerOverFocal
+  nameWithType: RatingControlTemplateSettings.NoPointerOverFocal
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.NoPointerOverFocal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NoPointerOverFocal
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float NoPointerOverFocal = -100
+    return:
+      type: System.Single
+    content.vb: Public Const NoPointerOverFocal As Single = -100
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single,System.Single)
+  id: StarScale(System.Single,System.Single,System.Single)
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: StarScale(float, float, float)
+  nameWithType: RatingControlTemplateSettings.StarScale(float, float, float)
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(float, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StarScale
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The re-based per-star scale at <code class="paramref">starCenterX</code> given the live <code class="paramref">focalX</code>
+        (both panel-local on-screen px) and the device <code class="paramref">pointerScalar</code> (<xref href="FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale" data-throw-if-not-resolved="false"></xref> /
+        <xref href="FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale" data-throw-if-not-resolved="false"></xref>). 1.0 = resting (our 16px glyph); focal peak 1.6 (mouse) or 2.0 (touch).
+  example: []
+  syntax:
+    content: public static float StarScale(float starCenterX, float focalX, float pointerScalar)
+    parameters:
+    - id: starCenterX
+      type: System.Single
+    - id: focalX
+      type: System.Single
+    - id: pointerScalar
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Public Shared Function StarScale(starCenterX As Single, focalX As Single, pointerScalar As Single) As Single
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.StarScale*
+  nameWithType.vb: RatingControlTemplateSettings.StarScale(Single, Single, Single)
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(Single, Single, Single)
+  name.vb: StarScale(Single, Single, Single)
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RatingControlTemplateSettings.StarScale(System.Single,System.Single)
+  id: StarScale(System.Single,System.Single)
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: StarScale(float, float)
+  nameWithType: RatingControlTemplateSettings.StarScale(float, float)
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StarScale
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Mouse-scalar convenience overload (the pre-touch-damping signature, kept for source compat).
+  example: []
+  syntax:
+    content: public static float StarScale(float starCenterX, float focalX)
+    parameters:
+    - id: starCenterX
+      type: System.Single
+    - id: focalX
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Public Shared Function StarScale(starCenterX As Single, focalX As Single) As Single
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.StarScale*
+  nameWithType.vb: RatingControlTemplateSettings.StarScale(Single, Single)
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.StarScale(Single, Single)
+  name.vb: StarScale(Single, Single)
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter(System.Int32,System.Single,System.Single)
+  commentId: M:FluentGpu.Controls.RatingControlTemplateSettings.StarCenter(System.Int32,System.Single,System.Single)
+  id: StarCenter(System.Int32,System.Single,System.Single)
+  parent: FluentGpu.Controls.RatingControlTemplateSettings
+  langs:
+  - csharp
+  - vb
+  name: StarCenter(int, float, float)
+  nameWithType: RatingControlTemplateSettings.StarCenter(int, float, float)
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter(int, float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/RatingControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StarCenter
+    path: ../../src/FluentGpu.Controls/RatingControl.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Star center in panel-local on-screen px (RatingControl::CalculateStarCenter, RatingControl.cpp:926-932):
+        ActualRatingFontSize·(index+0.5) + index·ItemSpacing, with ActualRatingFontSize = 32/2 = 16 (cpp:51-54).
+  example: []
+  syntax:
+    content: public static float StarCenter(int index, float starSize, float itemSpacing)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: starSize
+      type: System.Single
+    - id: itemSpacing
+      type: System.Single
+    return:
+      type: System.Single
+    content.vb: Public Shared Function StarCenter(index As Integer, starSize As Single, itemSpacing As Single) As Single
+  overload: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter*
+  nameWithType.vb: RatingControlTemplateSettings.StarCenter(Integer, Single, Single)
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter(Integer, Single, Single)
+  name.vb: StarCenter(Integer, Single, Single)
+references:
+- uid: FluentGpu.Controls.RatingControl
+  commentId: T:FluentGpu.Controls.RatingControl
+  href: FluentGpu.Controls.RatingControl.html
+  name: RatingControl
+  nameWithType: RatingControl
+  fullName: FluentGpu.Controls.RatingControl
+- uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  commentId: T:FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.PersonPicture.html
+  name: PersonPicture.PersonPictureTemplateSettings
+  nameWithType: PersonPicture.PersonPictureTemplateSettings
+  fullName: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+  spec.csharp:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+  spec.vb:
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    href: FluentGpu.Controls.PersonPicture.html
+  - name: .
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPictureTemplateSettings
+    href: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings.html
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  commentId: P:FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_Foreground
+  name: Foreground
+  nameWithType: RatingControlTemplateSettings.Foreground
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.IEquatable{FluentGpu.Controls.RatingControlTemplateSettings}
+  commentId: T:System.IEquatable{FluentGpu.Controls.RatingControlTemplateSettings}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<RatingControlTemplateSettings>
+  nameWithType: IEquatable<RatingControlTemplateSettings>
+  fullName: System.IEquatable<FluentGpu.Controls.RatingControlTemplateSettings>
+  nameWithType.vb: IEquatable(Of RatingControlTemplateSettings)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.RatingControlTemplateSettings)
+  name.vb: IEquatable(Of RatingControlTemplateSettings)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.RatingControlTemplateSettings
+    name: RatingControlTemplateSettings
+    href: FluentGpu.Controls.RatingControlTemplateSettings.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.RatingControlTemplateSettings
+    name: RatingControlTemplateSettings
+    href: FluentGpu.Controls.RatingControlTemplateSettings.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.#ctor*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.#ctor
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings__ctor_System_Single_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_
+  name: RatingControlTemplateSettings
+  nameWithType: RatingControlTemplateSettings.RatingControlTemplateSettings
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.RatingControlTemplateSettings
+  nameWithType.vb: RatingControlTemplateSettings.New
+  fullName.vb: FluentGpu.Controls.RatingControlTemplateSettings.New
+  name.vb: New
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_DisplayValue
+  name: DisplayValue
+  nameWithType: RatingControlTemplateSettings.DisplayValue
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.DisplayValue
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.Foreground*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_Foreground
+  name: Foreground
+  nameWithType: RatingControlTemplateSettings.Foreground
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.Foreground
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.Background*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.Background
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_Background
+  name: Background
+  nameWithType: RatingControlTemplateSettings.Background
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.Background
+- uid: FluentGpu.Controls.RatingControl.NoValueSet
+  commentId: F:FluentGpu.Controls.RatingControl.NoValueSet
+  href: FluentGpu.Controls.RatingControl.html#FluentGpu_Controls_RatingControl_NoValueSet
+  name: NoValueSet
+  nameWithType: RatingControl.NoValueSet
+  fullName: FluentGpu.Controls.RatingControl.NoValueSet
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.For*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.For
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_For_System_Single_System_Single_System_Single_System_Int32_System_Boolean_System_Boolean_
+  name: For
+  nameWithType: RatingControlTemplateSettings.For
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.For
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.RatingControlTemplateSettings
+  commentId: T:FluentGpu.Controls.RatingControlTemplateSettings
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html
+  name: RatingControlTemplateSettings
+  nameWithType: RatingControlTemplateSettings
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  commentId: F:FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_MouseOverScale
+  name: MouseOverScale
+  nameWithType: RatingControlTemplateSettings.MouseOverScale
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.MouseOverScale
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  commentId: F:FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_TouchOverScale
+  name: TouchOverScale
+  nameWithType: RatingControlTemplateSettings.TouchOverScale
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.TouchOverScale
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.StarScale*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.StarScale
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_StarScale_System_Single_System_Single_System_Single_
+  name: StarScale
+  nameWithType: RatingControlTemplateSettings.StarScale
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.StarScale
+- uid: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter*
+  commentId: Overload:FluentGpu.Controls.RatingControlTemplateSettings.StarCenter
+  href: FluentGpu.Controls.RatingControlTemplateSettings.html#FluentGpu_Controls_RatingControlTemplateSettings_StarCenter_System_Int32_System_Single_System_Single_
+  name: StarCenter
+  nameWithType: RatingControlTemplateSettings.StarCenter
+  fullName: FluentGpu.Controls.RatingControlTemplateSettings.StarCenter

@@ -1,0 +1,781 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.LineBreaker
+  commentId: T:FluentGpu.Text.LineBreaker
+  id: LineBreaker
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.LineBreaker.FitEllipsis``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Single,``0@)
+  - FluentGpu.Text.LineBreaker.MeasureRange``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,``0@)
+  - FluentGpu.Text.LineBreaker.MeasureWrapped``1(System.ReadOnlySpan{System.Char},System.Single,System.Int32,System.Int32,System.Int32,System.Single,``0@)
+  - FluentGpu.Text.LineBreaker.SkipSpaces(System.ReadOnlySpan{System.Char},System.Int32)
+  - FluentGpu.Text.LineBreaker.WrapEnd``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Int32,``0@)
+  langs:
+  - csharp
+  - vb
+  name: LineBreaker
+  nameWithType: LineBreaker
+  fullName: FluentGpu.Text.LineBreaker
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineBreaker
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    THE single source of truth for line breaking, ellipsis fitting, and wrapped-box measurement — extracted verbatim from
+
+    the D3D12 <code>GlyphRenderer</code> shaping so the layout MEASURE path and the glyph RENDER path can never disagree on where
+
+    lines break or how tall a wrapped block is (the GDI-measure/DWrite-render mismatch that overlapped wrapped content).
+
+    Pure, COM-free, allocation-free over a <xref href="System.ReadOnlySpan%601" data-throw-if-not-resolved="false"></xref> + a struct <xref href="FluentGpu.Text.IAdvanceSource" data-throw-if-not-resolved="false"></xref>.
+
+    <code>wrap</code> uses the <code>TextWrap</code> enum value (0 = NoWrap, 1 = Wrap, 2 = WrapWholeWords); <code>trim</code> uses the
+
+    <code>TextTrim</code> enum value (0 = None). LTR design-advance positioning (matches the v1 renderer).
+  example: []
+  syntax:
+    content: public static class LineBreaker
+    content.vb: Public Module LineBreaker
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Text.LineBreaker.MeasureWrapped``1(System.ReadOnlySpan{System.Char},System.Single,System.Int32,System.Int32,System.Int32,System.Single,``0@)
+  commentId: M:FluentGpu.Text.LineBreaker.MeasureWrapped``1(System.ReadOnlySpan{System.Char},System.Single,System.Int32,System.Int32,System.Int32,System.Single,``0@)
+  id: MeasureWrapped``1(System.ReadOnlySpan{System.Char},System.Single,System.Int32,System.Int32,System.Int32,System.Single,``0@)
+  parent: FluentGpu.Text.LineBreaker
+  langs:
+  - csharp
+  - vb
+  name: MeasureWrapped<TAdv>(ReadOnlySpan<char>, float, int, int, int, float, in TAdv)
+  nameWithType: LineBreaker.MeasureWrapped<TAdv>(ReadOnlySpan<char>, float, int, int, int, float, in TAdv)
+  fullName: FluentGpu.Text.LineBreaker.MeasureWrapped<TAdv>(System.ReadOnlySpan<char>, float, int, int, int, float, in TAdv)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MeasureWrapped
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Measure a (possibly wrapping/trimming) run: line count, widest line width, total box height. Mirrors the
+        <code>GlyphRenderer.ShapeInto</code> line loop exactly. Width is clamped to <code class="paramref">maxWidth</code> when finite.
+  example: []
+  syntax:
+    content: 'public static (int lines, float width, float height) MeasureWrapped<TAdv>(ReadOnlySpan<char> text, float maxWidth, int wrap, int trim, int maxLines, float lineHeight, in TAdv adv) where TAdv : struct, IAdvanceSource'
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: maxWidth
+      type: System.Single
+    - id: wrap
+      type: System.Int32
+    - id: trim
+      type: System.Int32
+    - id: maxLines
+      type: System.Int32
+    - id: lineHeight
+      type: System.Single
+    - id: adv
+      type: '{TAdv}'
+    typeParameters:
+    - id: TAdv
+    return:
+      type: System.ValueTuple{System.Int32,System.Single,System.Single}
+    content.vb: Public Shared Function MeasureWrapped(Of TAdv As {Structure, IAdvanceSource})(text As ReadOnlySpan(Of Char), maxWidth As Single, wrap As Integer, trim As Integer, maxLines As Integer, lineHeight As Single, adv As TAdv) As (lines As Integer, width As Single, height As Single)
+  overload: FluentGpu.Text.LineBreaker.MeasureWrapped*
+  nameWithType.vb: LineBreaker.MeasureWrapped(Of TAdv)(ReadOnlySpan(Of Char), Single, Integer, Integer, Integer, Single, TAdv)
+  fullName.vb: FluentGpu.Text.LineBreaker.MeasureWrapped(Of TAdv)(System.ReadOnlySpan(Of Char), Single, Integer, Integer, Integer, Single, TAdv)
+  name.vb: MeasureWrapped(Of TAdv)(ReadOnlySpan(Of Char), Single, Integer, Integer, Integer, Single, TAdv)
+- uid: FluentGpu.Text.LineBreaker.WrapEnd``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Int32,``0@)
+  commentId: M:FluentGpu.Text.LineBreaker.WrapEnd``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Int32,``0@)
+  id: WrapEnd``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Int32,``0@)
+  parent: FluentGpu.Text.LineBreaker
+  langs:
+  - csharp
+  - vb
+  name: WrapEnd<TAdv>(ReadOnlySpan<char>, int, int, float, int, in TAdv)
+  nameWithType: LineBreaker.WrapEnd<TAdv>(ReadOnlySpan<char>, int, int, float, int, in TAdv)
+  fullName: FluentGpu.Text.LineBreaker.WrapEnd<TAdv>(System.ReadOnlySpan<char>, int, int, float, int, in TAdv)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WrapEnd
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 77
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Greedy line break: the exclusive end index of the line starting at <code class="paramref">start</code> that fits within
+        <code class="paramref">maxWidth</code> (breaking at word boundaries; inside an over-long word only when wrap == Wrap (1)).
+  example: []
+  syntax:
+    content: 'public static int WrapEnd<TAdv>(ReadOnlySpan<char> text, int start, int n, float maxWidth, int wrap, in TAdv adv) where TAdv : struct, IAdvanceSource'
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: start
+      type: System.Int32
+    - id: n
+      type: System.Int32
+    - id: maxWidth
+      type: System.Single
+    - id: wrap
+      type: System.Int32
+    - id: adv
+      type: '{TAdv}'
+    typeParameters:
+    - id: TAdv
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function WrapEnd(Of TAdv As {Structure, IAdvanceSource})(text As ReadOnlySpan(Of Char), start As Integer, n As Integer, maxWidth As Single, wrap As Integer, adv As TAdv) As Integer
+  overload: FluentGpu.Text.LineBreaker.WrapEnd*
+  nameWithType.vb: LineBreaker.WrapEnd(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, Single, Integer, TAdv)
+  fullName.vb: FluentGpu.Text.LineBreaker.WrapEnd(Of TAdv)(System.ReadOnlySpan(Of Char), Integer, Integer, Single, Integer, TAdv)
+  name.vb: WrapEnd(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, Single, Integer, TAdv)
+- uid: FluentGpu.Text.LineBreaker.FitEllipsis``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Single,``0@)
+  commentId: M:FluentGpu.Text.LineBreaker.FitEllipsis``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Single,``0@)
+  id: FitEllipsis``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,System.Single,System.Single,``0@)
+  parent: FluentGpu.Text.LineBreaker
+  langs:
+  - csharp
+  - vb
+  name: FitEllipsis<TAdv>(ReadOnlySpan<char>, int, int, float, float, in TAdv)
+  nameWithType: LineBreaker.FitEllipsis<TAdv>(ReadOnlySpan<char>, int, int, float, float, in TAdv)
+  fullName: FluentGpu.Text.LineBreaker.FitEllipsis<TAdv>(System.ReadOnlySpan<char>, int, int, float, float, in TAdv)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FitEllipsis
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: The exclusive end index of the longest prefix of [s,e) that fits in <code class="paramref">maxWidth</code> with room for the ellipsis.
+  example: []
+  syntax:
+    content: 'public static int FitEllipsis<TAdv>(ReadOnlySpan<char> text, int s, int e, float maxWidth, float ellipsisW, in TAdv adv) where TAdv : struct, IAdvanceSource'
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: s
+      type: System.Int32
+    - id: e
+      type: System.Int32
+    - id: maxWidth
+      type: System.Single
+    - id: ellipsisW
+      type: System.Single
+    - id: adv
+      type: '{TAdv}'
+    typeParameters:
+    - id: TAdv
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function FitEllipsis(Of TAdv As {Structure, IAdvanceSource})(text As ReadOnlySpan(Of Char), s As Integer, e As Integer, maxWidth As Single, ellipsisW As Single, adv As TAdv) As Integer
+  overload: FluentGpu.Text.LineBreaker.FitEllipsis*
+  nameWithType.vb: LineBreaker.FitEllipsis(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, Single, Single, TAdv)
+  fullName.vb: FluentGpu.Text.LineBreaker.FitEllipsis(Of TAdv)(System.ReadOnlySpan(Of Char), Integer, Integer, Single, Single, TAdv)
+  name.vb: FitEllipsis(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, Single, Single, TAdv)
+- uid: FluentGpu.Text.LineBreaker.MeasureRange``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,``0@)
+  commentId: M:FluentGpu.Text.LineBreaker.MeasureRange``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,``0@)
+  id: MeasureRange``1(System.ReadOnlySpan{System.Char},System.Int32,System.Int32,``0@)
+  parent: FluentGpu.Text.LineBreaker
+  langs:
+  - csharp
+  - vb
+  name: MeasureRange<TAdv>(ReadOnlySpan<char>, int, int, in TAdv)
+  nameWithType: LineBreaker.MeasureRange<TAdv>(ReadOnlySpan<char>, int, int, in TAdv)
+  fullName: FluentGpu.Text.LineBreaker.MeasureRange<TAdv>(System.ReadOnlySpan<char>, int, int, in TAdv)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MeasureRange
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: Sum of advances over [s,e).
+  example: []
+  syntax:
+    content: 'public static float MeasureRange<TAdv>(ReadOnlySpan<char> text, int s, int e, in TAdv adv) where TAdv : struct, IAdvanceSource'
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: s
+      type: System.Int32
+    - id: e
+      type: System.Int32
+    - id: adv
+      type: '{TAdv}'
+    typeParameters:
+    - id: TAdv
+    return:
+      type: System.Single
+    content.vb: Public Shared Function MeasureRange(Of TAdv As {Structure, IAdvanceSource})(text As ReadOnlySpan(Of Char), s As Integer, e As Integer, adv As TAdv) As Single
+  overload: FluentGpu.Text.LineBreaker.MeasureRange*
+  nameWithType.vb: LineBreaker.MeasureRange(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, TAdv)
+  fullName.vb: FluentGpu.Text.LineBreaker.MeasureRange(Of TAdv)(System.ReadOnlySpan(Of Char), Integer, Integer, TAdv)
+  name.vb: MeasureRange(Of TAdv)(ReadOnlySpan(Of Char), Integer, Integer, TAdv)
+- uid: FluentGpu.Text.LineBreaker.SkipSpaces(System.ReadOnlySpan{System.Char},System.Int32)
+  commentId: M:FluentGpu.Text.LineBreaker.SkipSpaces(System.ReadOnlySpan{System.Char},System.Int32)
+  id: SkipSpaces(System.ReadOnlySpan{System.Char},System.Int32)
+  parent: FluentGpu.Text.LineBreaker
+  langs:
+  - csharp
+  - vb
+  name: SkipSpaces(ReadOnlySpan<char>, int)
+  nameWithType: LineBreaker.SkipSpaces(ReadOnlySpan<char>, int)
+  fullName: FluentGpu.Text.LineBreaker.SkipSpaces(System.ReadOnlySpan<char>, int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Text/LineBreaker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SkipSpaces
+    path: ../../src/FluentGpu.Text/LineBreaker.cs
+    startLine: 115
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: public static int SkipSpaces(ReadOnlySpan<char> text, int i)
+    parameters:
+    - id: text
+      type: System.ReadOnlySpan{System.Char}
+    - id: i
+      type: System.Int32
+    return:
+      type: System.Int32
+    content.vb: Public Shared Function SkipSpaces(text As ReadOnlySpan(Of Char), i As Integer) As Integer
+  overload: FluentGpu.Text.LineBreaker.SkipSpaces*
+  nameWithType.vb: LineBreaker.SkipSpaces(ReadOnlySpan(Of Char), Integer)
+  fullName.vb: FluentGpu.Text.LineBreaker.SkipSpaces(System.ReadOnlySpan(Of Char), Integer)
+  name.vb: SkipSpaces(ReadOnlySpan(Of Char), Integer)
+references:
+- uid: System.ReadOnlySpan`1
+  commentId: T:System.ReadOnlySpan`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<T>
+  nameWithType: ReadOnlySpan<T>
+  fullName: System.ReadOnlySpan<T>
+  nameWithType.vb: ReadOnlySpan(Of T)
+  fullName.vb: System.ReadOnlySpan(Of T)
+  name.vb: ReadOnlySpan(Of T)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Text.IAdvanceSource
+  commentId: T:FluentGpu.Text.IAdvanceSource
+  href: FluentGpu.Text.IAdvanceSource.html
+  name: IAdvanceSource
+  nameWithType: IAdvanceSource
+  fullName: FluentGpu.Text.IAdvanceSource
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Text.LineBreaker.MeasureWrapped*
+  commentId: Overload:FluentGpu.Text.LineBreaker.MeasureWrapped
+  href: FluentGpu.Text.LineBreaker.html#FluentGpu_Text_LineBreaker_MeasureWrapped__1_System_ReadOnlySpan_System_Char__System_Single_System_Int32_System_Int32_System_Int32_System_Single___0__
+  name: MeasureWrapped
+  nameWithType: LineBreaker.MeasureWrapped
+  fullName: FluentGpu.Text.LineBreaker.MeasureWrapped
+- uid: System.ReadOnlySpan{System.Char}
+  commentId: T:System.ReadOnlySpan{System.Char}
+  parent: System
+  definition: System.ReadOnlySpan`1
+  href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  name: ReadOnlySpan<char>
+  nameWithType: ReadOnlySpan<char>
+  fullName: System.ReadOnlySpan<char>
+  nameWithType.vb: ReadOnlySpan(Of Char)
+  fullName.vb: System.ReadOnlySpan(Of Char)
+  name.vb: ReadOnlySpan(Of Char)
+  spec.csharp:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: <
+  - uid: System.Char
+    name: char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: '>'
+  spec.vb:
+  - uid: System.ReadOnlySpan`1
+    name: ReadOnlySpan
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.readonlyspan-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Char
+    name: Char
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.char
+  - name: )
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: '{TAdv}'
+  commentId: '!:TAdv'
+  definition: TAdv
+  name: TAdv
+  nameWithType: TAdv
+  fullName: TAdv
+- uid: System.ValueTuple{System.Int32,System.Single,System.Single}
+  commentId: T:System.ValueTuple{System.Int32,System.Single,System.Single}
+  parent: System
+  definition: System.ValueTuple`3
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: (int lines, float width, float height)
+  nameWithType: (int lines, float width, float height)
+  fullName: (int lines, float width, float height)
+  nameWithType.vb: (lines As Integer, width As Single, height As Single)
+  fullName.vb: (lines As Integer, width As Single, height As Single)
+  name.vb: (lines As Integer, width As Single, height As Single)
+  spec.csharp:
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.lines
+    name: lines
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.lines
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.width
+    name: width
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.width
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.height
+    name: height
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.height
+  - name: )
+  spec.vb:
+  - name: (
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.lines
+    name: lines
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.lines
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.width
+    name: width
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.width
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.ValueTuple{System.Int32,System.Single,System.Single}.height
+    name: height
+    href: https://learn.microsoft.com/dotnet/api/system.valuetuple-system.int32,system.single,system.single-.height
+  - name: " "
+  - name: As
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: TAdv
+  name: TAdv
+  nameWithType: TAdv
+  fullName: TAdv
+- uid: System.ValueTuple`3
+  commentId: T:System.ValueTuple`3
+  name: (T1, T2, T3)
+  nameWithType: (T1, T2, T3)
+  fullName: (T1, T2, T3)
+  spec.csharp:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: )
+  spec.vb:
+  - name: (
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: )
+- uid: FluentGpu.Text.LineBreaker.WrapEnd*
+  commentId: Overload:FluentGpu.Text.LineBreaker.WrapEnd
+  href: FluentGpu.Text.LineBreaker.html#FluentGpu_Text_LineBreaker_WrapEnd__1_System_ReadOnlySpan_System_Char__System_Int32_System_Int32_System_Single_System_Int32___0__
+  name: WrapEnd
+  nameWithType: LineBreaker.WrapEnd
+  fullName: FluentGpu.Text.LineBreaker.WrapEnd
+- uid: FluentGpu.Text.LineBreaker.FitEllipsis*
+  commentId: Overload:FluentGpu.Text.LineBreaker.FitEllipsis
+  href: FluentGpu.Text.LineBreaker.html#FluentGpu_Text_LineBreaker_FitEllipsis__1_System_ReadOnlySpan_System_Char__System_Int32_System_Int32_System_Single_System_Single___0__
+  name: FitEllipsis
+  nameWithType: LineBreaker.FitEllipsis
+  fullName: FluentGpu.Text.LineBreaker.FitEllipsis
+- uid: FluentGpu.Text.LineBreaker.MeasureRange*
+  commentId: Overload:FluentGpu.Text.LineBreaker.MeasureRange
+  href: FluentGpu.Text.LineBreaker.html#FluentGpu_Text_LineBreaker_MeasureRange__1_System_ReadOnlySpan_System_Char__System_Int32_System_Int32___0__
+  name: MeasureRange
+  nameWithType: LineBreaker.MeasureRange
+  fullName: FluentGpu.Text.LineBreaker.MeasureRange
+- uid: FluentGpu.Text.LineBreaker.SkipSpaces*
+  commentId: Overload:FluentGpu.Text.LineBreaker.SkipSpaces
+  href: FluentGpu.Text.LineBreaker.html#FluentGpu_Text_LineBreaker_SkipSpaces_System_ReadOnlySpan_System_Char__System_Int32_
+  name: SkipSpaces
+  nameWithType: LineBreaker.SkipSpaces
+  fullName: FluentGpu.Text.LineBreaker.SkipSpaces

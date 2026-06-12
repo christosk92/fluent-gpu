@@ -1,0 +1,1588 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Input.DragController
+  commentId: T:FluentGpu.Input.DragController
+  id: DragController
+  parent: FluentGpu.Input
+  children:
+  - FluentGpu.Input.DragController.#ctor(FluentGpu.Scene.SceneStore,System.Action)
+  - FluentGpu.Input.DragController.ActiveNode
+  - FluentGpu.Input.DragController.Cancel
+  - FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  - FluentGpu.Input.DragController.Disarm
+  - FluentGpu.Input.DragController.DragOpacity
+  - FluentGpu.Input.DragController.DragShadow
+  - FluentGpu.Input.DragController.DragThresholdPx
+  - FluentGpu.Input.DragController.FollowOmega
+  - FluentGpu.Input.DragController.HasActiveWork
+  - FluentGpu.Input.DragController.IsActive
+  - FluentGpu.Input.DragController.IsArmed
+  - FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  - FluentGpu.Input.DragController.OnSettle
+  - FluentGpu.Input.DragController.PruneDead
+  - FluentGpu.Input.DragController.SpringFollow
+  - FluentGpu.Input.DragController.Tick(System.Single)
+  - FluentGpu.Input.DragController.TryArm(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2,FluentGpu.Foundation.PointerKind,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  - FluentGpu.Input.DragController.VelocityX
+  - FluentGpu.Input.DragController.VelocityY
+  langs:
+  - csharp
+  - vb
+  name: DragController
+  nameWithType: DragController
+  fullName: FluentGpu.Input.DragController
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragController
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    The drag-reorder gesture engine (E5). A left press on (or inside) a <code>CanDrag</code> node ARMS a candidate; pointer
+
+    travel outside the drag box PROMOTES it from a click to a drag (the dispatcher then suppresses the click and routes
+
+    every move here — capture semantics). The promoted drag draws its visual on the dragged node itself: a parent-space
+
+    <code>LocalTransform</code> translate + 0.8 opacity + a flyout-class shadow
+
+    (WinUI <code>ListViewItemDragThemeOpacity</code> = 0.80 — microsoft-ui-xaml controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7),
+
+    and the node stops hit-testing so drop-target queries see THROUGH the moving visual.
+
+
+    Threshold: the Windows drag box is <code>SM_CXDRAG</code>/<code>SM_CYDRAG</code> (4px default), tested per-axis
+
+    (<code>dx &gt; maxDx || dy &gt; maxDy</code> — microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:1864-1878).
+
+    WinUI's list items double it (LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER = 2.0, same file :54); this engine
+
+    uses the 4px base box per plan E5, matching <xref href="FluentGpu.Input.InputDispatcher.ClickSlopPx" data-throw-if-not-resolved="false"></xref>.
+
+
+    Axis-aware arena-lite (promotion-time arbitration): the item's reorder axis is its PARENT container's main axis
+
+    (row → horizontal item-drag). A gesture whose dominant axis is PERPENDICULAR to that, with a scrollable ancestor
+
+    that actually overflows along the gesture axis, yields to the pan (vertical pan over a scrollable beats a
+
+    horizontal item-drag) — the WinUI manipulation-arena outcome for a tab strip inside a scrolling page.
+
+
+    Drop-settle rides the existing FLIP pipeline: <code>Complete</code> restores the resting visuals and reports
+
+    (draggedRect → restingRect) through <xref href="FluentGpu.Input.DragController.OnSettle" data-throw-if-not-resolved="false"></xref>; the host wires that to
+
+    <code>AnimEngine.AnimateBounds</code>, so the seeded position spring is retargeted velocity-continuously by the same
+
+    commit's <code>ApplyProjections</code> when the app's <code>OnDragCompleted</code> handler reorders the collection — displaced
+
+    siblings and the dropped item all animate through the one layout-transition path (reorder hints come free).
+
+
+    Mid-drag live reorder rides the same pipeline: when the consumer re-projects the children ORDER at the
+
+    dwell-committed target (<code>ReorderList.ProjectOrder</code>), displaced siblings FLIP to their new slots while
+
+    <xref href="FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2%2cFluentGpu.Foundation.KeyModifiers%2cSystem.UInt32)" data-throw-if-not-resolved="false"></xref> RE-ANCHORS the pointer-held visual — it strips the translate it last applied to find the node's
+
+    CURRENT resting origin, then aims at (grab origin + gesture delta), so a slot move under the pointer (or an
+
+    ancestor scrolling) never jumps the visual (the WinUI outcome: the dragged item tracks the pointer while
+
+    <code>MoveItemsForLiveReorder</code> shifts the rest — ListViewBase_Partial_Reorder.cpp:2254). The drag visuals are
+
+    re-asserted on every move because a mid-drag commit's patch restores the authored opacity/shadow/hit-test
+
+    (Reconciler ApplyBox writes them unconditionally).
+
+
+    GHOST (E5-L2): while a drag is active the lifted node carries <xref href="FluentGpu.Foundation.NodeFlags.DragGhost" data-throw-if-not-resolved="false"></xref> and is published as
+
+    <xref href="FluentGpu.Scene.SceneStore.DragGhost" data-throw-if-not-resolved="false"></xref> — the recorder excludes it from the clipped main pass and re-walks its subtree
+
+    in an UNCLIPPED top band emitted last (mirroring the orphan pass), so the visual escapes every ancestor scissor (a
+
+    row dragged out of a clipped list keeps drawing) and paints above overlays — the Flutter/rbd ghost layer.
+
+
+    Spring-lag follow (the rbd feel): the PRESENTED translate eases toward the gesture target with a critically-damped
+
+    spring (<xref href="FluentGpu.Input.DragController.FollowOmega" data-throw-if-not-resolved="false"></xref>) instead of pinning rigidly — 0-alloc per move/tick. It engages only when the
+
+    platform delivers real timestamps (consecutive non-zero <code>TimestampMs</code>); 0-stamp gestures (the headless
+
+    default) snap presented == target, keeping every position assertion deterministic. <xref href="FluentGpu.Input.DragController.SpringFollow" data-throw-if-not-resolved="false"></xref>
+
+    false disables it outright. The host advances in-between-move easing (and the pointer-pin while an edge
+
+    auto-scroll moves the resting origin under a still pointer) via <xref href="FluentGpu.Input.DragController.Tick(System.Single)" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public sealed class DragController
+    content.vb: Public NotInheritable Class DragController
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Input.DragController.DragThresholdPx
+  commentId: F:FluentGpu.Input.DragController.DragThresholdPx
+  id: DragThresholdPx
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: DragThresholdPx
+  nameWithType: DragController.DragThresholdPx
+  fullName: FluentGpu.Input.DragController.DragThresholdPx
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragThresholdPx
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    The drag box half-extent, tested per-axis (Win32 SM_CXDRAG/SM_CYDRAG default = 4;
+        ListViewBaseItem_Partial.cpp:1871-1877. WinUI list items apply a ×2 multiplier — see class remarks).
+  example: []
+  syntax:
+    content: public const float DragThresholdPx = 4
+    return:
+      type: System.Single
+    content.vb: Public Const DragThresholdPx As Single = 4
+- uid: FluentGpu.Input.DragController.DragOpacity
+  commentId: F:FluentGpu.Input.DragController.DragOpacity
+  id: DragOpacity
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: DragOpacity
+  nameWithType: DragController.DragOpacity
+  fullName: FluentGpu.Input.DragController.DragOpacity
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragOpacity
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Dragged-visual opacity — WinUI <code>ListViewItemDragThemeOpacity</code> = 0.80
+        (ListViewItem_themeresources.xaml:7, identical in all ThemeDictionaries incl. _perf2026).
+  example: []
+  syntax:
+    content: public const float DragOpacity = 0.8
+    return:
+      type: System.Single
+    content.vb: Public Const DragOpacity As Single = 0.8
+- uid: FluentGpu.Input.DragController.DragShadow
+  commentId: F:FluentGpu.Input.DragController.DragShadow
+  id: DragShadow
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: DragShadow
+  nameWithType: DragController.DragShadow
+  fullName: FluentGpu.Input.DragController.DragShadow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DragShadow
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Flyout-class soft shadow under the drag visual (the engine's analytic equivalent of the 32px-depth
+        ThemeShadow WinUI gives lifted drag visuals; values match <code>Dsl.Elevation.Flyout</code> — Input cannot reference Dsl).
+  example: []
+  syntax:
+    content: public static readonly ShadowSpec DragShadow
+    return:
+      type: FluentGpu.Foundation.ShadowSpec
+    content.vb: Public Shared ReadOnly DragShadow As ShadowSpec
+- uid: FluentGpu.Input.DragController.FollowOmega
+  commentId: F:FluentGpu.Input.DragController.FollowOmega
+  id: FollowOmega
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: FollowOmega
+  nameWithType: DragController.FollowOmega
+  fullName: FluentGpu.Input.DragController.FollowOmega
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FollowOmega
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Critically-damped spring rate (rad/s) of the ghost's pointer-follow lag — ~150ms visual settle, the
+        react-beautiful-dnd "the ghost breathes behind the pointer" feel. Engine value (the WinUI OLE drag visual is an
+        OS layer with no published spring; the adopted model is Flutter/rbd per the E5 user ruling).
+  example: []
+  syntax:
+    content: public const float FollowOmega = 38
+    return:
+      type: System.Single
+    content.vb: Public Const FollowOmega As Single = 38
+- uid: FluentGpu.Input.DragController.SpringFollow
+  commentId: P:FluentGpu.Input.DragController.SpringFollow
+  id: SpringFollow
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: SpringFollow
+  nameWithType: DragController.SpringFollow
+  fullName: FluentGpu.Input.DragController.SpringFollow
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpringFollow
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Enable the critically-damped pointer-follow lag (default true). It only engages on gestures whose
+        events carry real platform timestamps — 0-stamp (headless) gestures always track exactly.
+  example: []
+  syntax:
+    content: public bool SpringFollow { get; set; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property SpringFollow As Boolean
+  overload: FluentGpu.Input.DragController.SpringFollow*
+- uid: FluentGpu.Input.DragController.#ctor(FluentGpu.Scene.SceneStore,System.Action)
+  commentId: M:FluentGpu.Input.DragController.#ctor(FluentGpu.Scene.SceneStore,System.Action)
+  id: '#ctor(FluentGpu.Scene.SceneStore,System.Action)'
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: DragController(SceneStore, Action)
+  nameWithType: DragController.DragController(SceneStore, Action)
+  fullName: FluentGpu.Input.DragController.DragController(FluentGpu.Scene.SceneStore, System.Action)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 106
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public DragController(SceneStore scene, Action requestRerender)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    - id: requestRerender
+      type: System.Action
+    content.vb: Public Sub New(scene As SceneStore, requestRerender As Action)
+  overload: FluentGpu.Input.DragController.#ctor*
+  nameWithType.vb: DragController.New(SceneStore, Action)
+  fullName.vb: FluentGpu.Input.DragController.New(FluentGpu.Scene.SceneStore, System.Action)
+  name.vb: New(SceneStore, Action)
+- uid: FluentGpu.Input.DragController.IsArmed
+  commentId: P:FluentGpu.Input.DragController.IsArmed
+  id: IsArmed
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: IsArmed
+  nameWithType: DragController.IsArmed
+  fullName: FluentGpu.Input.DragController.IsArmed
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsArmed
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 114
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: A candidate is armed (press seen, threshold not yet crossed).
+  example: []
+  syntax:
+    content: public bool IsArmed { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsArmed As Boolean
+  overload: FluentGpu.Input.DragController.IsArmed*
+- uid: FluentGpu.Input.DragController.IsActive
+  commentId: P:FluentGpu.Input.DragController.IsActive
+  id: IsActive
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: IsActive
+  nameWithType: DragController.IsActive
+  fullName: FluentGpu.Input.DragController.IsActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsActive
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 117
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: A drag is in flight (threshold crossed; the pointer is owned until release / Escape / cancel).
+  example: []
+  syntax:
+    content: public bool IsActive { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property IsActive As Boolean
+  overload: FluentGpu.Input.DragController.IsActive*
+- uid: FluentGpu.Input.DragController.ActiveNode
+  commentId: P:FluentGpu.Input.DragController.ActiveNode
+  id: ActiveNode
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: ActiveNode
+  nameWithType: DragController.ActiveNode
+  fullName: FluentGpu.Input.DragController.ActiveNode
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ActiveNode
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    The node whose drag is in flight (<xref href="FluentGpu.Foundation.NodeHandle.Null" data-throw-if-not-resolved="false"></xref> when idle/armed). The host's FLIP pass
+        must SKIP this node — the pointer owns its presented transform until the drag ends.
+  example: []
+  syntax:
+    content: public NodeHandle ActiveNode { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public ReadOnly Property ActiveNode As NodeHandle
+  overload: FluentGpu.Input.DragController.ActiveNode*
+- uid: FluentGpu.Input.DragController.VelocityX
+  commentId: P:FluentGpu.Input.DragController.VelocityX
+  id: VelocityX
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: VelocityX
+  nameWithType: DragController.VelocityX
+  fullName: FluentGpu.Input.DragController.VelocityX
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VelocityX
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 124
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: The smoothed pointer velocity (px/s, ~50ms EMA) — fed into the L2 <xref href="FluentGpu.Input.DragDropContext" data-throw-if-not-resolved="false"></xref> session.
+  example: []
+  syntax:
+    content: public float VelocityX { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property VelocityX As Single
+  overload: FluentGpu.Input.DragController.VelocityX*
+- uid: FluentGpu.Input.DragController.VelocityY
+  commentId: P:FluentGpu.Input.DragController.VelocityY
+  id: VelocityY
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: VelocityY
+  nameWithType: DragController.VelocityY
+  fullName: FluentGpu.Input.DragController.VelocityY
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: VelocityY
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 125
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  syntax:
+    content: public float VelocityY { get; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public ReadOnly Property VelocityY As Single
+  overload: FluentGpu.Input.DragController.VelocityY*
+- uid: FluentGpu.Input.DragController.HasActiveWork
+  commentId: P:FluentGpu.Input.DragController.HasActiveWork
+  id: HasActiveWork
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: HasActiveWork
+  nameWithType: DragController.HasActiveWork
+  fullName: FluentGpu.Input.DragController.HasActiveWork
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasActiveWork
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 129
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    True while the presented (spring-lagged) translate is still easing toward the gesture target — the
+        host keeps frames coming and calls <xref href="FluentGpu.Input.DragController.Tick(System.Single)" data-throw-if-not-resolved="false"></xref>. Always false for snap-tracking gestures.
+  example: []
+  syntax:
+    content: public bool HasActiveWork { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property HasActiveWork As Boolean
+  overload: FluentGpu.Input.DragController.HasActiveWork*
+- uid: FluentGpu.Input.DragController.OnSettle
+  commentId: F:FluentGpu.Input.DragController.OnSettle
+  id: OnSettle
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: OnSettle
+  nameWithType: DragController.OnSettle
+  fullName: FluentGpu.Input.DragController.OnSettle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnSettle
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 137
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Set by the host: the drop-settle seam. Fired after <xref href="FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2%2cFluentGpu.Foundation.KeyModifiers%2cSystem.UInt32%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Input.DragController.Cancel" data-throw-if-not-resolved="false"></xref> restored
+        the resting visuals, with the dragged presented rect and the resting rect — wire to
+        <code>AnimEngine.AnimateBounds(node, fromAbs, toAbs, spec)</code> so the visual glides from the drop point into its
+        slot (and is velocity-continuously retargeted by the reorder commit's FLIP pass). Null ⇒ the visual snaps home.
+  example: []
+  syntax:
+    content: public Action<NodeHandle, RectF, RectF>? OnSettle
+    return:
+      type: System.Action{FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF,FluentGpu.Foundation.RectF}
+    content.vb: Public OnSettle As Action(Of NodeHandle, RectF, RectF)
+- uid: FluentGpu.Input.DragController.TryArm(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2,FluentGpu.Foundation.PointerKind,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  commentId: M:FluentGpu.Input.DragController.TryArm(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2,FluentGpu.Foundation.PointerKind,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  id: TryArm(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Point2,FluentGpu.Foundation.PointerKind,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: TryArm(NodeHandle, Point2, PointerKind, KeyModifiers, uint)
+  nameWithType: DragController.TryArm(NodeHandle, Point2, PointerKind, KeyModifiers, uint)
+  fullName: FluentGpu.Input.DragController.TryArm(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2, FluentGpu.Foundation.PointerKind, FluentGpu.Foundation.KeyModifiers, uint)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TryArm
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 142
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Arm a drag candidate from a left press: walk up from <code class="paramref">pressTarget</code> for the nearest
+        enabled node carrying <xref href="FluentGpu.Scene.InteractionInfo.DragBit" data-throw-if-not-resolved="false"></xref> (a press on a child of a draggable row arms the row,
+        like WinUI's item container). Returns false when nothing in the chain is draggable.
+  example: []
+  syntax:
+    content: public bool TryArm(NodeHandle pressTarget, Point2 abs, PointerKind kind, KeyModifiers mods, uint timestampMs)
+    parameters:
+    - id: pressTarget
+      type: FluentGpu.Foundation.NodeHandle
+    - id: abs
+      type: FluentGpu.Foundation.Point2
+    - id: kind
+      type: FluentGpu.Foundation.PointerKind
+    - id: mods
+      type: FluentGpu.Foundation.KeyModifiers
+    - id: timestampMs
+      type: System.UInt32
+    return:
+      type: System.Boolean
+    content.vb: Public Function TryArm(pressTarget As NodeHandle, abs As Point2, kind As PointerKind, mods As KeyModifiers, timestampMs As UInteger) As Boolean
+  overload: FluentGpu.Input.DragController.TryArm*
+  nameWithType.vb: DragController.TryArm(NodeHandle, Point2, PointerKind, KeyModifiers, UInteger)
+  fullName.vb: FluentGpu.Input.DragController.TryArm(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Point2, FluentGpu.Foundation.PointerKind, FluentGpu.Foundation.KeyModifiers, UInteger)
+  name.vb: TryArm(NodeHandle, Point2, PointerKind, KeyModifiers, UInteger)
+- uid: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  commentId: M:FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  id: Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: Move(Point2, KeyModifiers, uint)
+  nameWithType: DragController.Move(Point2, KeyModifiers, uint)
+  fullName: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, uint)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Move
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 165
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Pointer move while armed or active. Armed: crossing the drag box either PROMOTES (fires
+        <code>OnDragStarted</code> then the first <code>OnDragDelta</code>) or YIELDS to a cross-axis pan (arena-lite) and disarms.
+        Active: applies the parent-space translate and fires <code>OnDragDelta</code>. Returns true iff the gesture owns the
+        pointer after this call (the dispatcher then skips hover/scroll/slider routing).
+  example: []
+  syntax:
+    content: public bool Move(Point2 abs, KeyModifiers mods, uint timestampMs)
+    parameters:
+    - id: abs
+      type: FluentGpu.Foundation.Point2
+    - id: mods
+      type: FluentGpu.Foundation.KeyModifiers
+    - id: timestampMs
+      type: System.UInt32
+    return:
+      type: System.Boolean
+    content.vb: Public Function Move(abs As Point2, mods As KeyModifiers, timestampMs As UInteger) As Boolean
+  overload: FluentGpu.Input.DragController.Move*
+  nameWithType.vb: DragController.Move(Point2, KeyModifiers, UInteger)
+  fullName.vb: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, UInteger)
+  name.vb: Move(Point2, KeyModifiers, UInteger)
+- uid: FluentGpu.Input.DragController.Tick(System.Single)
+  commentId: M:FluentGpu.Input.DragController.Tick(System.Single)
+  id: Tick(System.Single)
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: Tick(float)
+  nameWithType: DragController.Tick(float)
+  fullName: FluentGpu.Input.DragController.Tick(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 205
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Phase-7 host tick: re-aim at the node's CURRENT resting origin (an edge auto-scroll moves it under a
+        still pointer — the ghost must stay pinned to the grab point) and advance the spring-lag easing between pointer
+        moves. Returns true while the presented translate moved (the host requests the next frame). 0-alloc.
+  example: []
+  syntax:
+    content: public bool Tick(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    return:
+      type: System.Boolean
+    content.vb: Public Function Tick(dtMs As Single) As Boolean
+  overload: FluentGpu.Input.DragController.Tick*
+  nameWithType.vb: DragController.Tick(Single)
+  fullName.vb: FluentGpu.Input.DragController.Tick(Single)
+  name.vb: Tick(Single)
+- uid: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  commentId: M:FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  id: Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: Complete(Point2, KeyModifiers, uint, bool)
+  nameWithType: DragController.Complete(Point2, KeyModifiers, uint, bool)
+  fullName: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, uint, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Complete
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 284
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Release after an active drag: restore the resting visuals, fire <code>OnDragCompleted</code> (the app commits
+        the reorder here), then hand the (dragged → resting) rects to <xref href="FluentGpu.Input.DragController.OnSettle" data-throw-if-not-resolved="false"></xref> for the FLIP glide.
+        Returns true iff a drag was active — the dispatcher suppresses the click. An armed-only candidate just disarms.
+        <code class="paramref">suppressSettle</code> (E5-L2): an accepted DROP on a non-reorder target skips the glide — the
+        payload was deposited there, so the visual snaps home instead of springing back
+        (<xref href="FluentGpu.Foundation.DropTargetSpec.SettleOnDrop" data-throw-if-not-resolved="false"></xref> opts a reorder target back into the glide).
+  example: []
+  syntax:
+    content: public bool Complete(Point2 abs, KeyModifiers mods, uint timestampMs, bool suppressSettle = false)
+    parameters:
+    - id: abs
+      type: FluentGpu.Foundation.Point2
+    - id: mods
+      type: FluentGpu.Foundation.KeyModifiers
+    - id: timestampMs
+      type: System.UInt32
+    - id: suppressSettle
+      type: System.Boolean
+    return:
+      type: System.Boolean
+    content.vb: Public Function Complete(abs As Point2, mods As KeyModifiers, timestampMs As UInteger, suppressSettle As Boolean = False) As Boolean
+  overload: FluentGpu.Input.DragController.Complete*
+  nameWithType.vb: DragController.Complete(Point2, KeyModifiers, UInteger, Boolean)
+  fullName.vb: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, UInteger, Boolean)
+  name.vb: Complete(Point2, KeyModifiers, UInteger, Boolean)
+- uid: FluentGpu.Input.DragController.Cancel
+  commentId: M:FluentGpu.Input.DragController.Cancel
+  id: Cancel
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: Cancel()
+  nameWithType: DragController.Cancel()
+  fullName: FluentGpu.Input.DragController.Cancel()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 314
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Abort the gesture (Escape / pointer-capture loss / window blur): restore the resting visuals, fire
+        <code>OnDragCanceled</code>, and glide the visual home via <xref href="FluentGpu.Input.DragController.OnSettle" data-throw-if-not-resolved="false"></xref>. A no-op when idle; an armed-only
+        candidate silently disarms (WinUI: a canceled drag never raises a click or a drop).
+  example: []
+  syntax:
+    content: public void Cancel()
+    content.vb: Public Sub Cancel()
+  overload: FluentGpu.Input.DragController.Cancel*
+- uid: FluentGpu.Input.DragController.Disarm
+  commentId: M:FluentGpu.Input.DragController.Disarm
+  id: Disarm
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: Disarm()
+  nameWithType: DragController.Disarm()
+  fullName: FluentGpu.Input.DragController.Disarm()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Disarm
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 331
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: Drop an armed candidate that never promoted (release inside the drag box ⇒ a plain click).
+  example: []
+  syntax:
+    content: public void Disarm()
+    content.vb: Public Sub Disarm()
+  overload: FluentGpu.Input.DragController.Disarm*
+- uid: FluentGpu.Input.DragController.PruneDead
+  commentId: M:FluentGpu.Input.DragController.PruneDead
+  id: PruneDead
+  parent: FluentGpu.Input.DragController
+  langs:
+  - csharp
+  - vb
+  name: PruneDead()
+  nameWithType: DragController.PruneDead()
+  fullName: FluentGpu.Input.DragController.PruneDead()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Input/DragController.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PruneDead
+    path: ../../src/FluentGpu.Input/DragController.cs
+    startLine: 338
+  assemblies:
+  - FluentGpu.Input
+  namespace: FluentGpu.Input
+  summary: >-
+    Called at dispatch start: an armed/active node freed by a reconcile is abandoned WITHOUT touching its
+        (dead) columns — the visual state died with the slot.
+  example: []
+  syntax:
+    content: public void PruneDead()
+    content.vb: Public Sub PruneDead()
+  overload: FluentGpu.Input.DragController.PruneDead*
+references:
+- uid: FluentGpu.Input.InputDispatcher.ClickSlopPx
+  commentId: F:FluentGpu.Input.InputDispatcher.ClickSlopPx
+  href: FluentGpu.Input.InputDispatcher.html#FluentGpu_Input_InputDispatcher_ClickSlopPx
+  name: ClickSlopPx
+  nameWithType: InputDispatcher.ClickSlopPx
+  fullName: FluentGpu.Input.InputDispatcher.ClickSlopPx
+- uid: FluentGpu.Input.DragController.OnSettle
+  commentId: F:FluentGpu.Input.DragController.OnSettle
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_OnSettle
+  name: OnSettle
+  nameWithType: DragController.OnSettle
+  fullName: FluentGpu.Input.DragController.OnSettle
+- uid: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  commentId: M:FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+  isExternal: true
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Move_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_
+  name: Move(Point2, KeyModifiers, uint)
+  nameWithType: DragController.Move(Point2, KeyModifiers, uint)
+  fullName: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, uint)
+  nameWithType.vb: DragController.Move(Point2, KeyModifiers, UInteger)
+  fullName.vb: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, UInteger)
+  name.vb: Move(Point2, KeyModifiers, UInteger)
+  spec.csharp:
+  - uid: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+    name: Move
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Move_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt32
+    name: uint
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Input.DragController.Move(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32)
+    name: Move
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Move_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt32
+    name: UInteger
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint32
+  - name: )
+- uid: FluentGpu.Foundation.NodeFlags.DragGhost
+  commentId: F:FluentGpu.Foundation.NodeFlags.DragGhost
+  href: FluentGpu.Foundation.NodeFlags.html#FluentGpu_Foundation_NodeFlags_DragGhost
+  name: DragGhost
+  nameWithType: NodeFlags.DragGhost
+  fullName: FluentGpu.Foundation.NodeFlags.DragGhost
+- uid: FluentGpu.Scene.SceneStore.DragGhost
+  commentId: P:FluentGpu.Scene.SceneStore.DragGhost
+  href: FluentGpu.Scene.SceneStore.html#FluentGpu_Scene_SceneStore_DragGhost
+  name: DragGhost
+  nameWithType: SceneStore.DragGhost
+  fullName: FluentGpu.Scene.SceneStore.DragGhost
+- uid: FluentGpu.Input.DragController.FollowOmega
+  commentId: F:FluentGpu.Input.DragController.FollowOmega
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_FollowOmega
+  name: FollowOmega
+  nameWithType: DragController.FollowOmega
+  fullName: FluentGpu.Input.DragController.FollowOmega
+- uid: FluentGpu.Input.DragController.SpringFollow
+  commentId: P:FluentGpu.Input.DragController.SpringFollow
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_SpringFollow
+  name: SpringFollow
+  nameWithType: DragController.SpringFollow
+  fullName: FluentGpu.Input.DragController.SpringFollow
+- uid: FluentGpu.Input.DragController.Tick(System.Single)
+  commentId: M:FluentGpu.Input.DragController.Tick(System.Single)
+  isExternal: true
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Tick_System_Single_
+  name: Tick(float)
+  nameWithType: DragController.Tick(float)
+  fullName: FluentGpu.Input.DragController.Tick(float)
+  nameWithType.vb: DragController.Tick(Single)
+  fullName.vb: FluentGpu.Input.DragController.Tick(Single)
+  name.vb: Tick(Single)
+  spec.csharp:
+  - uid: FluentGpu.Input.DragController.Tick(System.Single)
+    name: Tick
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Tick_System_Single_
+  - name: (
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Input.DragController.Tick(System.Single)
+    name: Tick
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Tick_System_Single_
+  - name: (
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: FluentGpu.Input
+  commentId: N:FluentGpu.Input
+  href: FluentGpu.html
+  name: FluentGpu.Input
+  nameWithType: FluentGpu.Input
+  fullName: FluentGpu.Input
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Input
+    name: Input
+    href: FluentGpu.Input.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.ShadowSpec
+  commentId: T:FluentGpu.Foundation.ShadowSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ShadowSpec.html
+  name: ShadowSpec
+  nameWithType: ShadowSpec
+  fullName: FluentGpu.Foundation.ShadowSpec
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Input.DragController.SpringFollow*
+  commentId: Overload:FluentGpu.Input.DragController.SpringFollow
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_SpringFollow
+  name: SpringFollow
+  nameWithType: DragController.SpringFollow
+  fullName: FluentGpu.Input.DragController.SpringFollow
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Input.DragController.#ctor*
+  commentId: Overload:FluentGpu.Input.DragController.#ctor
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController__ctor_FluentGpu_Scene_SceneStore_System_Action_
+  name: DragController
+  nameWithType: DragController.DragController
+  fullName: FluentGpu.Input.DragController.DragController
+  nameWithType.vb: DragController.New
+  fullName.vb: FluentGpu.Input.DragController.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Input.DragController.IsArmed*
+  commentId: Overload:FluentGpu.Input.DragController.IsArmed
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_IsArmed
+  name: IsArmed
+  nameWithType: DragController.IsArmed
+  fullName: FluentGpu.Input.DragController.IsArmed
+- uid: FluentGpu.Input.DragController.IsActive*
+  commentId: Overload:FluentGpu.Input.DragController.IsActive
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_IsActive
+  name: IsActive
+  nameWithType: DragController.IsActive
+  fullName: FluentGpu.Input.DragController.IsActive
+- uid: FluentGpu.Foundation.NodeHandle.Null
+  commentId: P:FluentGpu.Foundation.NodeHandle.Null
+  href: FluentGpu.Foundation.NodeHandle.html#FluentGpu_Foundation_NodeHandle_Null
+  name: "Null"
+  nameWithType: NodeHandle.Null
+  fullName: FluentGpu.Foundation.NodeHandle.Null
+- uid: FluentGpu.Input.DragController.ActiveNode*
+  commentId: Overload:FluentGpu.Input.DragController.ActiveNode
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_ActiveNode
+  name: ActiveNode
+  nameWithType: DragController.ActiveNode
+  fullName: FluentGpu.Input.DragController.ActiveNode
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Input.DragDropContext
+  commentId: T:FluentGpu.Input.DragDropContext
+  parent: FluentGpu.Input
+  href: FluentGpu.Input.DragDropContext.html
+  name: DragDropContext
+  nameWithType: DragDropContext
+  fullName: FluentGpu.Input.DragDropContext
+- uid: FluentGpu.Input.DragController.VelocityX*
+  commentId: Overload:FluentGpu.Input.DragController.VelocityX
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_VelocityX
+  name: VelocityX
+  nameWithType: DragController.VelocityX
+  fullName: FluentGpu.Input.DragController.VelocityX
+- uid: FluentGpu.Input.DragController.VelocityY*
+  commentId: Overload:FluentGpu.Input.DragController.VelocityY
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_VelocityY
+  name: VelocityY
+  nameWithType: DragController.VelocityY
+  fullName: FluentGpu.Input.DragController.VelocityY
+- uid: FluentGpu.Input.DragController.HasActiveWork*
+  commentId: Overload:FluentGpu.Input.DragController.HasActiveWork
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_HasActiveWork
+  name: HasActiveWork
+  nameWithType: DragController.HasActiveWork
+  fullName: FluentGpu.Input.DragController.HasActiveWork
+- uid: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  commentId: M:FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Complete_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_System_Boolean_
+  name: Complete(Point2, KeyModifiers, uint, bool)
+  nameWithType: DragController.Complete(Point2, KeyModifiers, uint, bool)
+  fullName: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, uint, bool)
+  nameWithType.vb: DragController.Complete(Point2, KeyModifiers, UInteger, Boolean)
+  fullName.vb: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2, FluentGpu.Foundation.KeyModifiers, UInteger, Boolean)
+  name.vb: Complete(Point2, KeyModifiers, UInteger, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+    name: Complete
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Complete_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_System_Boolean_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt32
+    name: uint
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Input.DragController.Complete(FluentGpu.Foundation.Point2,FluentGpu.Foundation.KeyModifiers,System.UInt32,System.Boolean)
+    name: Complete
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Complete_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_System_Boolean_
+  - name: (
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    href: FluentGpu.Foundation.Point2.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: ','
+  - name: " "
+  - uid: System.UInt32
+    name: UInteger
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.uint32
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Input.DragController.Cancel
+  commentId: M:FluentGpu.Input.DragController.Cancel
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Cancel
+  name: Cancel()
+  nameWithType: DragController.Cancel()
+  fullName: FluentGpu.Input.DragController.Cancel()
+  spec.csharp:
+  - uid: FluentGpu.Input.DragController.Cancel
+    name: Cancel
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Cancel
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Input.DragController.Cancel
+    name: Cancel
+    href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Cancel
+  - name: (
+  - name: )
+- uid: System.Action{FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF,FluentGpu.Foundation.RectF}
+  commentId: T:System.Action{FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.RectF,FluentGpu.Foundation.RectF}
+  parent: System
+  definition: System.Action`3
+  href: https://learn.microsoft.com/dotnet/api/system.action-3
+  name: Action<NodeHandle, RectF, RectF>
+  nameWithType: Action<NodeHandle, RectF, RectF>
+  fullName: System.Action<FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.RectF, FluentGpu.Foundation.RectF>
+  nameWithType.vb: Action(Of NodeHandle, RectF, RectF)
+  fullName.vb: System.Action(Of FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.RectF, FluentGpu.Foundation.RectF)
+  name.vb: Action(Of NodeHandle, RectF, RectF)
+  spec.csharp:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: <
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    href: FluentGpu.Foundation.RectF.html
+  - name: )
+- uid: System.Action`3
+  commentId: T:System.Action`3
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-3
+  name: Action<T1, T2, T3>
+  nameWithType: Action<T1, T2, T3>
+  fullName: System.Action<T1, T2, T3>
+  nameWithType.vb: Action(Of T1, T2, T3)
+  fullName.vb: System.Action(Of T1, T2, T3)
+  name.vb: Action(Of T1, T2, T3)
+  spec.csharp:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`3
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-3
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: ','
+  - name: " "
+  - name: T3
+  - name: )
+- uid: FluentGpu.Scene.InteractionInfo.DragBit
+  commentId: F:FluentGpu.Scene.InteractionInfo.DragBit
+  href: FluentGpu.Scene.InteractionInfo.html#FluentGpu_Scene_InteractionInfo_DragBit
+  name: DragBit
+  nameWithType: InteractionInfo.DragBit
+  fullName: FluentGpu.Scene.InteractionInfo.DragBit
+- uid: FluentGpu.Input.DragController.TryArm*
+  commentId: Overload:FluentGpu.Input.DragController.TryArm
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_TryArm_FluentGpu_Foundation_NodeHandle_FluentGpu_Foundation_Point2_FluentGpu_Foundation_PointerKind_FluentGpu_Foundation_KeyModifiers_System_UInt32_
+  name: TryArm
+  nameWithType: DragController.TryArm
+  fullName: FluentGpu.Input.DragController.TryArm
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: FluentGpu.Foundation.PointerKind
+  commentId: T:FluentGpu.Foundation.PointerKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.PointerKind.html
+  name: PointerKind
+  nameWithType: PointerKind
+  fullName: FluentGpu.Foundation.PointerKind
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+- uid: System.UInt32
+  commentId: T:System.UInt32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint32
+  name: uint
+  nameWithType: uint
+  fullName: uint
+  nameWithType.vb: UInteger
+  fullName.vb: UInteger
+  name.vb: UInteger
+- uid: FluentGpu.Input.DragController.Move*
+  commentId: Overload:FluentGpu.Input.DragController.Move
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Move_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_
+  name: Move
+  nameWithType: DragController.Move
+  fullName: FluentGpu.Input.DragController.Move
+- uid: FluentGpu.Input.DragController.Tick*
+  commentId: Overload:FluentGpu.Input.DragController.Tick
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Tick_System_Single_
+  name: Tick
+  nameWithType: DragController.Tick
+  fullName: FluentGpu.Input.DragController.Tick
+- uid: FluentGpu.Foundation.DropTargetSpec.SettleOnDrop
+  commentId: P:FluentGpu.Foundation.DropTargetSpec.SettleOnDrop
+  href: FluentGpu.Foundation.DropTargetSpec.html#FluentGpu_Foundation_DropTargetSpec_SettleOnDrop
+  name: SettleOnDrop
+  nameWithType: DropTargetSpec.SettleOnDrop
+  fullName: FluentGpu.Foundation.DropTargetSpec.SettleOnDrop
+- uid: FluentGpu.Input.DragController.Complete*
+  commentId: Overload:FluentGpu.Input.DragController.Complete
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Complete_FluentGpu_Foundation_Point2_FluentGpu_Foundation_KeyModifiers_System_UInt32_System_Boolean_
+  name: Complete
+  nameWithType: DragController.Complete
+  fullName: FluentGpu.Input.DragController.Complete
+- uid: FluentGpu.Input.DragController.Cancel*
+  commentId: Overload:FluentGpu.Input.DragController.Cancel
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Cancel
+  name: Cancel
+  nameWithType: DragController.Cancel
+  fullName: FluentGpu.Input.DragController.Cancel
+- uid: FluentGpu.Input.DragController.Disarm*
+  commentId: Overload:FluentGpu.Input.DragController.Disarm
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_Disarm
+  name: Disarm
+  nameWithType: DragController.Disarm
+  fullName: FluentGpu.Input.DragController.Disarm
+- uid: FluentGpu.Input.DragController.PruneDead*
+  commentId: Overload:FluentGpu.Input.DragController.PruneDead
+  href: FluentGpu.Input.DragController.html#FluentGpu_Input_DragController_PruneDead
+  name: PruneDead
+  nameWithType: DragController.PruneDead
+  fullName: FluentGpu.Input.DragController.PruneDead

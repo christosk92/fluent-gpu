@@ -99,8 +99,14 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly List<RunKey> _evictScratch = new();      // reused eviction sweep buffer (off the hot path)
     // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
     // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
-    // this list retains every returned array, so steady-state churn reuses instead of allocating.
+    // this list retains returned arrays (up to a per-bucket cap), so steady-state churn reuses instead of allocating.
     private readonly Stack<ShapedGlyph[]>[] _quadPool = new Stack<ShapedGlyph[]>[14];   // buckets 1<<0 .. 1<<13
+    // Per-bucket retained-depth cap (audit mem-02): without it the free-list ratchets to the session-peak run count and
+    // never gives memory back. A single frame can rent at most one array per cache-MISS run; an eviction sweep can
+    // return many same-size arrays at once. 8 per bucket absorbs that transient (an eviction sweep landing while a few
+    // new same-size runs are mid-shape) without holding peak. Returns beyond the cap drop the reference (managed arrays
+    // — the GC reclaims them); the only cost of dropping is that the NEXT miss at that size re-allocates one array.
+    private const int MaxPooledQuadArraysPerBucket = 8;
     // Liveness source for the run cache: a reclaimed text id resolves to "" (StringTable), so its runs can never be
     // hit again — evict them promptly instead of waiting out the age backstop (keeps the free-list small under storms).
     private StringTable? _liveness;
@@ -118,10 +124,12 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private ID3D12PipelineState* _pso;
     private ID3D12Resource* _quad;
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
-    private ID3D12Resource* _instances;
-    private GlyphInstance* _mapped;
+    private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
+    private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
+    private readonly GlyphInstance*[] _mapped = new GlyphInstance*[FrameCount];
     private const int MaxGlyphs = 8192;
     private int _cursor;
+    private int _active;
 
     private const string Hlsl = """
 struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
@@ -160,6 +168,20 @@ float4 PSMain(VSOut i) : SV_Target
     public int RunsCached => _runsCached;
     public int RunsShaped => _runsShaped;
     public long AtlasNonZero => _atlasNonZero;
+
+    // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum) ────────────────────────────────────
+    /// <summary>Cached rasterized glyph entries (the glyph atlas cache) — O(1) census.</summary>
+    internal int CachedGlyphCount => _cache.Count;
+    /// <summary>Cached shaped text runs (the run cache) — O(1) census.</summary>
+    internal int CachedRunCount => _runCache.Count;
+    /// <summary>Atlas generation-reset count (the epoch counter; bumped when the atlas fills and flushes) — O(1).</summary>
+    internal int AtlasResetCount => _atlasEpoch;
+    /// <summary>Total retained quad arrays across the pow2 free-list buckets — a fixed 14-bucket sum (census cadence,
+    /// never per-frame): how many shaped-run arrays the renderer is holding for reuse.</summary>
+    internal int QuadPoolRetained
+    {
+        get { int n = 0; for (int i = 0; i < _quadPool.Length; i++) { var s = _quadPool[i]; if (s is not null) n += s.Count; } return n; }
+    }
 
     private static void Check(HRESULT hr, string what)
     {
@@ -388,7 +410,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// the layout engine, so the GPU path lays out exactly like the measure path.</summary>
     public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
-        int spanRunId = 0, bool forceColor = false)
+        int spanRunId = 0, bool forceColor = false, bool inMotion = false)
     {
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
 
@@ -400,7 +422,8 @@ float4 PSMain(VSOut i) : SV_Target
 #if DEBUG
             if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
 #endif
-            Replay(hit.Glyphs.AsSpan(0, hit.Count), hit.Colors, forceColor, color, world, opacity, outList);
+            var quads = hit.Glyphs.AsSpan(0, hit.Count);
+            Replay(quads, hit.Colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList);
             return;
         }
 
@@ -426,7 +449,8 @@ float4 PSMain(VSOut i) : SV_Target
         }
         _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
-        Replay(arr.AsSpan(0, n), colors, forceColor, color, world, opacity, outList);
+        var baked = arr.AsSpan(0, n);
+        Replay(baked, colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(baked, world, dpiScale), outList);
     }
 
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
@@ -446,7 +470,9 @@ float4 PSMain(VSOut i) : SV_Target
         if (arr.Length == 0) return;
         int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
         if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
-        (_quadPool[bucket] ??= new Stack<ShapedGlyph[]>()).Push(arr);
+        var stack = _quadPool[bucket] ??= new Stack<ShapedGlyph[]>();
+        if (stack.Count >= MaxPooledQuadArraysPerBucket) return;   // cap reached → drop the reference (GC reclaims)
+        stack.Push(arr);
     }
 
     private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
@@ -459,12 +485,32 @@ float4 PSMain(VSOut i) : SV_Target
             (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
 
-    /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity.
-    /// Allocation-free (appends into the reused glyph-instance list) — the steady-state path for unchanged text.
+    /// <summary>Per-run vertical device-grid correction (local DIP), applied at replay. Glyph bitmaps are rasterized
+    /// for an INTEGER device baseline (CreateGlyphRunAnalysis at baselineOrigin 0,0) and every bearing/height is an
+    /// integer device row, so all of a run's quads share the first quad's fractional device-Y phase. Drawn at a
+    /// fractional device Y, the LINEAR/CLAMP atlas sampler attenuates the bottom coverage row by (1−frac) — the
+    /// intermittent "label shaved 1-2px at the bottom" defect (layout never snaps: a centered row yields fractional
+    /// DIP Y, and the DPI scale is fractional at 125/150/175%). Snapping happens HERE, not at bake, so cached quads
+    /// stay phase-agnostic and one run cached at one position replays correctly at any other. One scalar for the
+    /// whole run: multi-line leading stays uniform (lines snap as a group from the first baseline). Y only — X keeps
+    /// DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds (M12 ≠ 0 or M22 ≤ 0) draw unsnapped — there
+    /// is no meaningful pixel grid for them. MOTION-GATED at the call sites: a run whose world was written this frame
+    /// (DrawGlyphRunCmd.InMotion — scroll/fling/drag/FLIP) draws unsnapped so it rides sub-pixel with its plate instead
+    /// of hopping a device row at every half-pixel crossing; the host's settle frame re-snaps it crisp at rest.</summary>
+    private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale)
+    {
+        if (glyphs.Length == 0 || world.M12 != 0f || world.M22 <= 0f) return 0f;
+        float devY = (world.M22 * glyphs[0].DstY + world.Dy) * dpiScale;
+        return (MathF.Round(devY) - devY) / (world.M22 * dpiScale);
+    }
+
+    /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity
+    /// and the run's <see cref="SnapDy"/> correction. Allocation-free (appends into the reused glyph-instance list) —
+    /// the steady-state path for unchanged text.
     /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
     /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, List<GlyphInstance> outList)
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
@@ -472,7 +518,7 @@ float4 PSMain(VSOut i) : SV_Target
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             outList.Add(new GlyphInstance
             {
-                DstX = s.DstX, DstY = s.DstY, DstW = s.DstW, DstH = s.DstH,
+                DstX = s.DstX, DstY = s.DstY + snapDy, DstW = s.DstW, DstH = s.DstH,
                 U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
                 R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
@@ -666,6 +712,8 @@ float4 PSMain(VSOut i) : SV_Target
         ID3D12DescriptorHeap* heap;
         Check(device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap), "CreateDescriptorHeap(SRV)");
         _srvHeap = heap;
+        D3D12MemoryDiagnostics.Track(_srvHeap, "Glyph.SrvHeap",
+            (ulong)hd.NumDescriptors * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
 
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = default;
         sd.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
@@ -790,12 +838,16 @@ float4 PSMain(VSOut i) : SV_Target
         void* qp; _quad->Map(0, null, &qp); Buffer.MemoryCopy(quad, qp, 32, 32); _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = 32, StrideInBytes = 8 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
-        void* ip; _instances->Map(0, null, &ip); _mapped = (GlyphInstance*)ip;
+        for (int f = 0; f < FrameCount; f++)
+        {
+            _instances[f] = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
+            void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped
+        }
     }
 
-    public void BeginFrame()
+    public void BeginFrame(int frameIndex)
     {
+        _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
         _cursor = 0;
         _frame++;
         _runsCached = 0;
@@ -811,7 +863,7 @@ float4 PSMain(VSOut i) : SV_Target
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
         if (count <= 0) return;
-        for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
+        for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
         ID3D12DescriptorHeap* heap = _srvHeap;
@@ -821,7 +873,7 @@ float4 PSMain(VSOut i) : SV_Target
         float* vp = stackalloc float[2] { vpW, vpH };
         cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
         cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
-        cmd->SetGraphicsRootShaderResourceView(2, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
@@ -845,11 +897,12 @@ float4 PSMain(VSOut i) : SV_Target
     public void Dispose()
     {
         _engine?.Dispose();
-        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "Glyph.InstanceUpload"); _instances->Release(); _instances = null; }
+        for (int f = 0; f < FrameCount; f++)
+            if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
-        if (_srvHeap != null) _srvHeap->Release();
+        if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release(); }
         if (_texUpload != null) { D3D12MemoryDiagnostics.Release(_texUpload, "Glyph.AtlasUpload"); _texUpload->Release(); _texUpload = null; }
         if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
         foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();

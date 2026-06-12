@@ -1,0 +1,149 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  id: ImagePriority
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ImagePriority.Overscan
+  - FluentGpu.Scene.ImagePriority.Prefetch
+  - FluentGpu.Scene.ImagePriority.Visible
+  langs:
+  - csharp
+  - vb
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImagePriority
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    Decode urgency (media-pipeline.md §3). Workers drain higher priority first; under backpressure the lowest
+        off-screen lane (Prefetch, then Overscan) is dropped — never <xref href="FluentGpu.Scene.ImagePriority.Visible" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public enum ImagePriority : byte'
+    content.vb: Public Enum ImagePriority As Byte
+- uid: FluentGpu.Scene.ImagePriority.Visible
+  commentId: F:FluentGpu.Scene.ImagePriority.Visible
+  id: Visible
+  parent: FluentGpu.Scene.ImagePriority
+  langs:
+  - csharp
+  - vb
+  name: Visible
+  nameWithType: ImagePriority.Visible
+  fullName: FluentGpu.Scene.ImagePriority.Visible
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Visible
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Visible = 0
+    return:
+      type: FluentGpu.Scene.ImagePriority
+- uid: FluentGpu.Scene.ImagePriority.Overscan
+  commentId: F:FluentGpu.Scene.ImagePriority.Overscan
+  id: Overscan
+  parent: FluentGpu.Scene.ImagePriority
+  langs:
+  - csharp
+  - vb
+  name: Overscan
+  nameWithType: ImagePriority.Overscan
+  fullName: FluentGpu.Scene.ImagePriority.Overscan
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Overscan
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Overscan = 1
+    return:
+      type: FluentGpu.Scene.ImagePriority
+- uid: FluentGpu.Scene.ImagePriority.Prefetch
+  commentId: F:FluentGpu.Scene.ImagePriority.Prefetch
+  id: Prefetch
+  parent: FluentGpu.Scene.ImagePriority
+  langs:
+  - csharp
+  - vb
+  name: Prefetch
+  nameWithType: ImagePriority.Prefetch
+  fullName: FluentGpu.Scene.ImagePriority.Prefetch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Prefetch
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Prefetch = 2
+    return:
+      type: FluentGpu.Scene.ImagePriority
+references:
+- uid: FluentGpu.Scene.ImagePriority.Visible
+  commentId: F:FluentGpu.Scene.ImagePriority.Visible
+  href: FluentGpu.Scene.ImagePriority.html#FluentGpu_Scene_ImagePriority_Visible
+  name: Visible
+  nameWithType: ImagePriority.Visible
+  fullName: FluentGpu.Scene.ImagePriority.Visible
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.ImagePriority
+  commentId: T:FluentGpu.Scene.ImagePriority
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImagePriority.html
+  name: ImagePriority
+  nameWithType: ImagePriority
+  fullName: FluentGpu.Scene.ImagePriority

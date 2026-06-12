@@ -1,0 +1,743 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd
+  commentId: T:FluentGpu.Render.DrawRoundRectStrokeCmd
+  id: DrawRoundRectStrokeCmd
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Affine2D,System.Single,System.Single,System.Single)
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+  - FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+  langs:
+  - csharp
+  - vb
+  name: DrawRoundRectStrokeCmd
+  nameWithType: DrawRoundRectStrokeCmd
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawRoundRectStrokeCmd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: 'public readonly record struct DrawRoundRectStrokeCmd : IEquatable<DrawRoundRectStrokeCmd>'
+    content.vb: Public Structure DrawRoundRectStrokeCmd Implements IEquatable(Of DrawRoundRectStrokeCmd)
+  implements:
+  - System.IEquatable{FluentGpu.Render.DrawRoundRectStrokeCmd}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Affine2D,System.Single,System.Single,System.Single)
+  commentId: M:FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Affine2D,System.Single,System.Single,System.Single)
+  id: '#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.ColorF,System.Single,FluentGpu.Foundation.Affine2D,System.Single,System.Single,System.Single)'
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: DrawRoundRectStrokeCmd(RectF, CornerRadius4, ColorF, float, Affine2D, float, float, float)
+  nameWithType: DrawRoundRectStrokeCmd.DrawRoundRectStrokeCmd(RectF, CornerRadius4, ColorF, float, Affine2D, float, float, float)
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DrawRoundRectStrokeCmd(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, float, FluentGpu.Foundation.Affine2D, float, float, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawRoundRectStrokeCmd(RectF Rect, CornerRadius4 Radii, ColorF Color, float StrokeWidth, Affine2D Transform, float Opacity, float DashOn = 0, float DashOff = 0)
+    parameters:
+    - id: Rect
+      type: FluentGpu.Foundation.RectF
+    - id: Radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: Color
+      type: FluentGpu.Foundation.ColorF
+    - id: StrokeWidth
+      type: System.Single
+    - id: Transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: Opacity
+      type: System.Single
+    - id: DashOn
+      type: System.Single
+    - id: DashOff
+      type: System.Single
+    content.vb: Public Sub New(Rect As RectF, Radii As CornerRadius4, Color As ColorF, StrokeWidth As Single, Transform As Affine2D, Opacity As Single, DashOn As Single = 0, DashOff As Single = 0)
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor*
+  nameWithType.vb: DrawRoundRectStrokeCmd.New(RectF, CornerRadius4, ColorF, Single, Affine2D, Single, Single, Single)
+  fullName.vb: FluentGpu.Render.DrawRoundRectStrokeCmd.New(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.ColorF, Single, FluentGpu.Foundation.Affine2D, Single, Single, Single)
+  name.vb: New(RectF, CornerRadius4, ColorF, Single, Affine2D, Single, Single, Single)
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+  id: Rect
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Rect
+  nameWithType: DrawRoundRectStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public RectF Rect { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Rect As RectF
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.Rect*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+  id: Radii
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Radii
+  nameWithType: DrawRoundRectStrokeCmd.Radii
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Radii
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public CornerRadius4 Radii { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Property Radii As CornerRadius4
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.Radii*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+  id: Color
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: DrawRoundRectStrokeCmd.Color
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.Color*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+  id: StrokeWidth
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: StrokeWidth
+  nameWithType: DrawRoundRectStrokeCmd.StrokeWidth
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeWidth
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float StrokeWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property StrokeWidth As Single
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+  id: Transform
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Transform
+  nameWithType: DrawRoundRectStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Affine2D Transform { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Property Transform As Affine2D
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.Transform*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: DrawRoundRectStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+  id: DashOn
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: DashOn
+  nameWithType: DrawRoundRectStrokeCmd.DashOn
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DashOn
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float DashOn { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DashOn As Single
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn*
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff
+  commentId: P:FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff
+  id: DashOff
+  parent: FluentGpu.Render.DrawRoundRectStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: DashOff
+  nameWithType: DrawRoundRectStrokeCmd.DashOff
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DashOff
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float DashOff { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DashOff As Single
+  overload: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff*
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.DrawRoundRectStrokeCmd}
+  commentId: T:System.IEquatable{FluentGpu.Render.DrawRoundRectStrokeCmd}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DrawRoundRectStrokeCmd>
+  nameWithType: IEquatable<DrawRoundRectStrokeCmd>
+  fullName: System.IEquatable<FluentGpu.Render.DrawRoundRectStrokeCmd>
+  nameWithType.vb: IEquatable(Of DrawRoundRectStrokeCmd)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.DrawRoundRectStrokeCmd)
+  name.vb: IEquatable(Of DrawRoundRectStrokeCmd)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.DrawRoundRectStrokeCmd
+    name: DrawRoundRectStrokeCmd
+    href: FluentGpu.Render.DrawRoundRectStrokeCmd.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.DrawRoundRectStrokeCmd
+    name: DrawRoundRectStrokeCmd
+    href: FluentGpu.Render.DrawRoundRectStrokeCmd.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.#ctor
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd__ctor_FluentGpu_Foundation_RectF_FluentGpu_Foundation_CornerRadius4_FluentGpu_Foundation_ColorF_System_Single_FluentGpu_Foundation_Affine2D_System_Single_System_Single_System_Single_
+  name: DrawRoundRectStrokeCmd
+  nameWithType: DrawRoundRectStrokeCmd.DrawRoundRectStrokeCmd
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DrawRoundRectStrokeCmd
+  nameWithType.vb: DrawRoundRectStrokeCmd.New
+  fullName.vb: FluentGpu.Render.DrawRoundRectStrokeCmd.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Rect*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_Rect
+  name: Rect
+  nameWithType: DrawRoundRectStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Rect
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Radii*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_Radii
+  name: Radii
+  nameWithType: DrawRoundRectStrokeCmd.Radii
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Radii
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Color*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_Color
+  name: Color
+  nameWithType: DrawRoundRectStrokeCmd.Color
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Color
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_StrokeWidth
+  name: StrokeWidth
+  nameWithType: DrawRoundRectStrokeCmd.StrokeWidth
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.StrokeWidth
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Transform*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_Transform
+  name: Transform
+  nameWithType: DrawRoundRectStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Transform
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_Opacity
+  name: Opacity
+  nameWithType: DrawRoundRectStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.Opacity
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_DashOn
+  name: DashOn
+  nameWithType: DrawRoundRectStrokeCmd.DashOn
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOn
+- uid: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff*
+  commentId: Overload:FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff
+  href: FluentGpu.Render.DrawRoundRectStrokeCmd.html#FluentGpu_Render_DrawRoundRectStrokeCmd_DashOff
+  name: DashOff
+  nameWithType: DrawRoundRectStrokeCmd.DashOff
+  fullName: FluentGpu.Render.DrawRoundRectStrokeCmd.DashOff

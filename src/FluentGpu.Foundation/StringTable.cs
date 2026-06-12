@@ -56,6 +56,10 @@ public sealed class StringTable
     public int MapCount => _map.Count;
     /// <summary>Releases whose slots await the reader quarantine — diagnostics.</summary>
     public int PendingReclaim => _pendingClear.Count;
+    /// <summary>Releases whose slots await the reader quarantine (census alias of <see cref="PendingReclaim"/>).</summary>
+    public int PendingReclaimCount => _pendingClear.Count;
+    /// <summary>The monotonic next-id counter (one past the highest minted id) — ids never reuse, so this only grows.</summary>
+    public int IdHighWater => Volatile.Read(ref _count);
 
     /// <summary>Intern a string to a stable id. UI-thread only (the single writer). A live id is never moved; reclaimed
     /// ids are never reused (re-interning previously-released content yields a fresh id).</summary>

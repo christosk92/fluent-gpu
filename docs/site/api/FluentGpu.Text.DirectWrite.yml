@@ -1,0 +1,72 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.DirectWrite
+  commentId: N:FluentGpu.Text.DirectWrite
+  id: FluentGpu.Text.DirectWrite
+  children:
+  - FluentGpu.Text.DirectWrite.DWriteItemizer
+  - FluentGpu.Text.DirectWrite.DWriteTextShaper
+  - FluentGpu.Text.DirectWrite.DirectWriteBackend
+  - FluentGpu.Text.DirectWrite.DirectWriteFontSystem
+  - FluentGpu.Text.DirectWrite.LaidCluster
+  - FluentGpu.Text.DirectWrite.LaidGlyph
+  - FluentGpu.Text.DirectWrite.LaidLine
+  - FluentGpu.Text.DirectWrite.TextLayoutEngine
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Text.DirectWrite
+  nameWithType: FluentGpu.Text.DirectWrite
+  fullName: FluentGpu.Text.DirectWrite
+  type: Namespace
+  assemblies:
+  - FluentGpu.Text.DirectWrite
+references:
+- uid: FluentGpu.Text.DirectWrite.DirectWriteFontSystem
+  commentId: T:FluentGpu.Text.DirectWrite.DirectWriteFontSystem
+  href: FluentGpu.Text.DirectWrite.DirectWriteFontSystem.html
+  name: DirectWriteFontSystem
+  nameWithType: DirectWriteFontSystem
+  fullName: FluentGpu.Text.DirectWrite.DirectWriteFontSystem
+- uid: FluentGpu.Text.DirectWrite.DWriteItemizer
+  commentId: T:FluentGpu.Text.DirectWrite.DWriteItemizer
+  href: FluentGpu.Text.DirectWrite.DWriteItemizer.html
+  name: DWriteItemizer
+  nameWithType: DWriteItemizer
+  fullName: FluentGpu.Text.DirectWrite.DWriteItemizer
+- uid: FluentGpu.Text.DirectWrite.DWriteTextShaper
+  commentId: T:FluentGpu.Text.DirectWrite.DWriteTextShaper
+  href: FluentGpu.Text.DirectWrite.DWriteTextShaper.html
+  name: DWriteTextShaper
+  nameWithType: DWriteTextShaper
+  fullName: FluentGpu.Text.DirectWrite.DWriteTextShaper
+- uid: FluentGpu.Text.DirectWrite.DirectWriteBackend
+  commentId: T:FluentGpu.Text.DirectWrite.DirectWriteBackend
+  href: FluentGpu.Text.DirectWrite.DirectWriteBackend.html
+  name: DirectWriteBackend
+  nameWithType: DirectWriteBackend
+  fullName: FluentGpu.Text.DirectWrite.DirectWriteBackend
+- uid: FluentGpu.Text.DirectWrite.LaidGlyph
+  commentId: T:FluentGpu.Text.DirectWrite.LaidGlyph
+  href: FluentGpu.Text.DirectWrite.LaidGlyph.html
+  name: LaidGlyph
+  nameWithType: LaidGlyph
+  fullName: FluentGpu.Text.DirectWrite.LaidGlyph
+- uid: FluentGpu.Text.DirectWrite.LaidCluster
+  commentId: T:FluentGpu.Text.DirectWrite.LaidCluster
+  href: FluentGpu.Text.DirectWrite.LaidCluster.html
+  name: LaidCluster
+  nameWithType: LaidCluster
+  fullName: FluentGpu.Text.DirectWrite.LaidCluster
+- uid: FluentGpu.Text.DirectWrite.LaidLine
+  commentId: T:FluentGpu.Text.DirectWrite.LaidLine
+  href: FluentGpu.Text.DirectWrite.LaidLine.html
+  name: LaidLine
+  nameWithType: LaidLine
+  fullName: FluentGpu.Text.DirectWrite.LaidLine
+- uid: FluentGpu.Text.DirectWrite.TextLayoutEngine
+  commentId: T:FluentGpu.Text.DirectWrite.TextLayoutEngine
+  href: FluentGpu.Text.DirectWrite.TextLayoutEngine.html
+  name: TextLayoutEngine
+  nameWithType: TextLayoutEngine
+  fullName: FluentGpu.Text.DirectWrite.TextLayoutEngine

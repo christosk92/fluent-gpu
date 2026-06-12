@@ -265,6 +265,15 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face);
     }
 
+    // A word wraps to the next line only when it overruns the box by MORE than this sub-pixel slack. The box width
+    // handed to layout can land a hair UNDER the run's own natural width: ancestor flex chains accumulate fractional
+    // rounding, and a shrink-to-fit container sizes to ~the run's natural width but its child box ends a few hundredths
+    // of a pixel short. A strict `> maxWidth` test then wraps the trailing word — reserving ONE line's height (the
+    // measure pass saw it fit) while the run actually rasterizes TWO, so the following sibling overlaps it (the Expander
+    // "body overlaps the action button after collapse→re-expand" defect). One DIP of slack keeps measure ≡ render at
+    // that boundary — the run clips at most ~1px on the right, imperceptible — without affecting genuinely-narrower boxes.
+    private const float WrapSlack = 1f;
+
     private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face)
     {
         bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
@@ -303,7 +312,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                 if (canBreak) lastBreak = i;
 
                 float adv = _glyphs[i].Advance;
-                if (doWrap && pen + adv > maxWidth && i > lineStart)
+                if (doWrap && pen + adv > maxWidth + WrapSlack && i > lineStart)
                 {
                     int br = lastBreak > lineStart ? lastBreak : i;
                     if (line + 1 >= maxL)
@@ -677,6 +686,16 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         T("Hidden content, revealed when the Expander is expanded.", 200f);
         T("Hidden content, revealed when the Expander is expanded.", float.PositiveInfinity);
         T("AVAWAV", float.PositiveInfinity);   // kerned advances
+
+        // WrapSlack guard: a run whose natural width sits a hair OVER its box (sub-pixel ancestor-layout rounding) must
+        // NOT wrap a whole word — otherwise the reserved height (1 line) disagrees with what rasterizes (2 lines) and the
+        // following sibling overlaps it (the Expander body↔action-button defect after collapse→re-expand). See WrapSlack.
+        const string slackProbe = "Hidden content, revealed when the Expander is expanded.";
+        e.Layout(slackProbe.AsSpan(), "Segoe UI", 400, 14f, float.PositiveInfinity, 1, 0, 0);
+        float slackNatural = e.Width;
+        e.Layout(slackProbe.AsSpan(), "Segoe UI", 400, 14f, slackNatural - 0.5f, 1, 0, 0);
+        Console.WriteLine($"[wrapslack] natural={slackNatural:0.00}, @ natural-0.5 -> {e.LineCount} line(s)  {(e.LineCount == 1 ? "PASS" : "FAIL (reserves 1 line, rasterizes 2)")}");
+
         // Fallback: Latin + CJK + emoji should resolve to multiple covering faces with non-.notdef gids.
         e.Layout("Hi 你好 😀".AsSpan(), "Segoe UI", 400, 14f, float.PositiveInfinity, 1, 0, 0);
         var faces = new HashSet<nint>(); int zero = 0;

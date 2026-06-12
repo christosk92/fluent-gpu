@@ -1,0 +1,614 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.KeyEventArgs
+  commentId: T:FluentGpu.Foundation.KeyEventArgs
+  id: KeyEventArgs
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32)
+  - FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32,FluentGpu.Foundation.KeyModifiers,System.Boolean)
+  - FluentGpu.Foundation.KeyEventArgs.Alt
+  - FluentGpu.Foundation.KeyEventArgs.Ctrl
+  - FluentGpu.Foundation.KeyEventArgs.Handled
+  - FluentGpu.Foundation.KeyEventArgs.IsRepeat
+  - FluentGpu.Foundation.KeyEventArgs.KeyCode
+  - FluentGpu.Foundation.KeyEventArgs.Mods
+  - FluentGpu.Foundation.KeyEventArgs.Shift
+  langs:
+  - csharp
+  - vb
+  name: KeyEventArgs
+  nameWithType: KeyEventArgs
+  fullName: FluentGpu.Foundation.KeyEventArgs
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyEventArgs
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Keyboard event passed to node handlers during tunnel/bubble routing. <xref href="FluentGpu.Foundation.KeyEventArgs.Handled" data-throw-if-not-resolved="false"></xref> stops propagation.
+
+    Carries the modifier chord and the auto-repeat flag (Win32 lParam bit 30) so editors can do Ctrl+arrow word
+
+    navigation and Shift+arrow selection without re-querying the keyboard.
+  example: []
+  syntax:
+    content: public sealed class KeyEventArgs
+    content.vb: Public NotInheritable Class KeyEventArgs
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.KeyEventArgs.KeyCode
+  commentId: F:FluentGpu.Foundation.KeyEventArgs.KeyCode
+  id: KeyCode
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: KeyCode
+  nameWithType: KeyEventArgs.KeyCode
+  fullName: FluentGpu.Foundation.KeyEventArgs.KeyCode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: KeyCode
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public int KeyCode
+    return:
+      type: System.Int32
+    content.vb: Public KeyCode As Integer
+- uid: FluentGpu.Foundation.KeyEventArgs.Mods
+  commentId: F:FluentGpu.Foundation.KeyEventArgs.Mods
+  id: Mods
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: Mods
+  nameWithType: KeyEventArgs.Mods
+  fullName: FluentGpu.Foundation.KeyEventArgs.Mods
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Mods
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public KeyModifiers Mods
+    return:
+      type: FluentGpu.Foundation.KeyModifiers
+    content.vb: Public Mods As KeyModifiers
+- uid: FluentGpu.Foundation.KeyEventArgs.IsRepeat
+  commentId: F:FluentGpu.Foundation.KeyEventArgs.IsRepeat
+  id: IsRepeat
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: IsRepeat
+  nameWithType: KeyEventArgs.IsRepeat
+  fullName: FluentGpu.Foundation.KeyEventArgs.IsRepeat
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsRepeat
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool IsRepeat
+    return:
+      type: System.Boolean
+    content.vb: Public IsRepeat As Boolean
+- uid: FluentGpu.Foundation.KeyEventArgs.Handled
+  commentId: F:FluentGpu.Foundation.KeyEventArgs.Handled
+  id: Handled
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: Handled
+  nameWithType: KeyEventArgs.Handled
+  fullName: FluentGpu.Foundation.KeyEventArgs.Handled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Handled
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Handled
+    return:
+      type: System.Boolean
+    content.vb: Public Handled As Boolean
+- uid: FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32)
+  commentId: M:FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32)
+  id: '#ctor(System.Int32)'
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: KeyEventArgs(int)
+  nameWithType: KeyEventArgs.KeyEventArgs(int)
+  fullName: FluentGpu.Foundation.KeyEventArgs.KeyEventArgs(int)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public KeyEventArgs(int keyCode)
+    parameters:
+    - id: keyCode
+      type: System.Int32
+    content.vb: Public Sub New(keyCode As Integer)
+  overload: FluentGpu.Foundation.KeyEventArgs.#ctor*
+  nameWithType.vb: KeyEventArgs.New(Integer)
+  fullName.vb: FluentGpu.Foundation.KeyEventArgs.New(Integer)
+  name.vb: New(Integer)
+- uid: FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32,FluentGpu.Foundation.KeyModifiers,System.Boolean)
+  commentId: M:FluentGpu.Foundation.KeyEventArgs.#ctor(System.Int32,FluentGpu.Foundation.KeyModifiers,System.Boolean)
+  id: '#ctor(System.Int32,FluentGpu.Foundation.KeyModifiers,System.Boolean)'
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: KeyEventArgs(int, KeyModifiers, bool)
+  nameWithType: KeyEventArgs.KeyEventArgs(int, KeyModifiers, bool)
+  fullName: FluentGpu.Foundation.KeyEventArgs.KeyEventArgs(int, FluentGpu.Foundation.KeyModifiers, bool)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public KeyEventArgs(int keyCode, KeyModifiers mods, bool isRepeat = false)
+    parameters:
+    - id: keyCode
+      type: System.Int32
+    - id: mods
+      type: FluentGpu.Foundation.KeyModifiers
+    - id: isRepeat
+      type: System.Boolean
+    content.vb: Public Sub New(keyCode As Integer, mods As KeyModifiers, isRepeat As Boolean = False)
+  overload: FluentGpu.Foundation.KeyEventArgs.#ctor*
+  nameWithType.vb: KeyEventArgs.New(Integer, KeyModifiers, Boolean)
+  fullName.vb: FluentGpu.Foundation.KeyEventArgs.New(Integer, FluentGpu.Foundation.KeyModifiers, Boolean)
+  name.vb: New(Integer, KeyModifiers, Boolean)
+- uid: FluentGpu.Foundation.KeyEventArgs.Shift
+  commentId: P:FluentGpu.Foundation.KeyEventArgs.Shift
+  id: Shift
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: Shift
+  nameWithType: KeyEventArgs.Shift
+  fullName: FluentGpu.Foundation.KeyEventArgs.Shift
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shift
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Shift { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property Shift As Boolean
+  overload: FluentGpu.Foundation.KeyEventArgs.Shift*
+- uid: FluentGpu.Foundation.KeyEventArgs.Ctrl
+  commentId: P:FluentGpu.Foundation.KeyEventArgs.Ctrl
+  id: Ctrl
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: Ctrl
+  nameWithType: KeyEventArgs.Ctrl
+  fullName: FluentGpu.Foundation.KeyEventArgs.Ctrl
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ctrl
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Ctrl { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property Ctrl As Boolean
+  overload: FluentGpu.Foundation.KeyEventArgs.Ctrl*
+- uid: FluentGpu.Foundation.KeyEventArgs.Alt
+  commentId: P:FluentGpu.Foundation.KeyEventArgs.Alt
+  id: Alt
+  parent: FluentGpu.Foundation.KeyEventArgs
+  langs:
+  - csharp
+  - vb
+  name: Alt
+  nameWithType: KeyEventArgs.Alt
+  fullName: FluentGpu.Foundation.KeyEventArgs.Alt
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Events.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Alt
+    path: ../../src/FluentGpu.Foundation/Events.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public bool Alt { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property Alt As Boolean
+  overload: FluentGpu.Foundation.KeyEventArgs.Alt*
+references:
+- uid: FluentGpu.Foundation.KeyEventArgs.Handled
+  commentId: F:FluentGpu.Foundation.KeyEventArgs.Handled
+  href: FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs_Handled
+  name: Handled
+  nameWithType: KeyEventArgs.Handled
+  fullName: FluentGpu.Foundation.KeyEventArgs.Handled
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.KeyModifiers
+  commentId: T:FluentGpu.Foundation.KeyModifiers
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.KeyModifiers.html
+  name: KeyModifiers
+  nameWithType: KeyModifiers
+  fullName: FluentGpu.Foundation.KeyModifiers
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Foundation.KeyEventArgs.#ctor*
+  commentId: Overload:FluentGpu.Foundation.KeyEventArgs.#ctor
+  href: FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs__ctor_System_Int32_
+  name: KeyEventArgs
+  nameWithType: KeyEventArgs.KeyEventArgs
+  fullName: FluentGpu.Foundation.KeyEventArgs.KeyEventArgs
+  nameWithType.vb: KeyEventArgs.New
+  fullName.vb: FluentGpu.Foundation.KeyEventArgs.New
+  name.vb: New
+- uid: FluentGpu.Foundation.KeyEventArgs.Shift*
+  commentId: Overload:FluentGpu.Foundation.KeyEventArgs.Shift
+  href: FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs_Shift
+  name: Shift
+  nameWithType: KeyEventArgs.Shift
+  fullName: FluentGpu.Foundation.KeyEventArgs.Shift
+- uid: FluentGpu.Foundation.KeyEventArgs.Ctrl*
+  commentId: Overload:FluentGpu.Foundation.KeyEventArgs.Ctrl
+  href: FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs_Ctrl
+  name: Ctrl
+  nameWithType: KeyEventArgs.Ctrl
+  fullName: FluentGpu.Foundation.KeyEventArgs.Ctrl
+- uid: FluentGpu.Foundation.KeyEventArgs.Alt*
+  commentId: Overload:FluentGpu.Foundation.KeyEventArgs.Alt
+  href: FluentGpu.Foundation.KeyEventArgs.html#FluentGpu_Foundation_KeyEventArgs_Alt
+  name: Alt
+  nameWithType: KeyEventArgs.Alt
+  fullName: FluentGpu.Foundation.KeyEventArgs.Alt

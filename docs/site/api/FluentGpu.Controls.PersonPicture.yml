@@ -1,0 +1,551 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.PersonPicture
+  commentId: T:FluentGpu.Controls.PersonPicture
+  id: PersonPicture
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.PersonPicture.Create(System.String,System.Single,System.String,System.Boolean,System.Int32,System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  - FluentGpu.Controls.PersonPicture.InitialsFromDisplayName(System.String)
+  langs:
+  - csharp
+  - vb
+  name: PersonPicture
+  nameWithType: PersonPicture
+  fullName: FluentGpu.Controls.PersonPicture
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PersonPicture
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI <code>PersonPicture</code>: a circular avatar that shows — in WinUI's order of precedence — a circular-cropped photo
+
+    (Create(string,float,string?,bool,int,string?,ColorF?) via <code class="paramref">imageSource</code>), otherwise
+
+    the contact's initials, otherwise a generic Contact/People fallback glyph, all on the quaternary alt control fill
+
+    (<code>ControlAltFillColorQuarternary</code>) ringed by a 1px card stroke. An optional accent badge (number / glyph) floats
+
+    at the top-right. Default diameter 96; the initials font is 42% of the diameter (the WinUI design rule), the badge
+
+    plate is 50% of the diameter, and the badge font is 60% of the badge plate.
+  example: []
+  syntax:
+    content: public static class PersonPicture
+    content.vb: Public Module PersonPicture
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.PersonPicture.Create(System.String,System.Single,System.String,System.Boolean,System.Int32,System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  commentId: M:FluentGpu.Controls.PersonPicture.Create(System.String,System.Single,System.String,System.Boolean,System.Int32,System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  id: Create(System.String,System.Single,System.String,System.Boolean,System.Int32,System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  parent: FluentGpu.Controls.PersonPicture
+  langs:
+  - csharp
+  - vb
+  name: Create(string, float, string?, bool, int, string?, string?, ColorF?)
+  nameWithType: PersonPicture.Create(string, float, string?, bool, int, string?, string?, ColorF?)
+  fullName: FluentGpu.Controls.PersonPicture.Create(string, float, string?, bool, int, string?, string?, FluentGpu.Foundation.ColorF?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public static BoxEl Create(string initials, float size = 96, string? displayName = null, bool isGroup = false, int badgeNumber = 0, string? badgeGlyph = null, string? imageSourcePath = null, ColorF? fill = null)
+    parameters:
+    - id: initials
+      type: System.String
+      description: >-
+        Explicit initials (highest precedence). When empty, <code class="paramref">displayName</code> drives
+            the initials via the WinUI InitialsGenerator rules; when both are empty, the Contact/People fallback glyph shows.
+    - id: size
+      type: System.Single
+      description: Diameter (Width == Height); the control stays circular. Default 96.
+    - id: displayName
+      type: System.String
+      description: >-
+        Contact display name; initials are generated from it (strip-trailing-brackets, first
+            letter of first + last word, uppercased) only when <code class="paramref">initials</code> is empty.
+    - id: isGroup
+      type: System.Boolean
+      description: When true, the avatar shows the People (group) glyph regardless of initials.
+    - id: badgeNumber
+      type: System.Int32
+      description: >-
+        When &gt; 0, draws an accent number badge (top-right): ≤99 shows the number, &gt;99 shows
+            "99+". A NEGATIVE value shows no badge at all (WinUI: a non-zero BadgeNumber owns the badge slot and ≤0 maps to
+            NoBadge — the glyph never substitutes, PersonPicture.cpp:191-198).
+    - id: badgeGlyph
+      type: System.String
+      description: >-
+        When set (and <code class="paramref">badgeNumber</code> is 0), draws an accent glyph badge
+            (top-right) in the symbol font.
+    - id: imageSourcePath
+      type: System.String
+      description: >-
+        When set, shows a circular-cropped photo (UniformToFill) instead of initials/glyph
+            — WinUI ProfilePicture. Takes precedence over initials, but not over <code class="paramref">isGroup</code>.
+    - id: fill
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+      description: Override the ellipse fill (default <code>ControlAltFillColorQuarternary</code>); also the photo placeholder tint.
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Shared Function Create(initials As String, size As Single = 96, displayName As String = Nothing, isGroup As Boolean = False, badgeNumber As Integer = 0, badgeGlyph As String = Nothing, imageSourcePath As String = Nothing, fill As ColorF? = Nothing) As BoxEl
+  overload: FluentGpu.Controls.PersonPicture.Create*
+  nameWithType.vb: PersonPicture.Create(String, Single, String, Boolean, Integer, String, String, ColorF?)
+  fullName.vb: FluentGpu.Controls.PersonPicture.Create(String, Single, String, Boolean, Integer, String, String, FluentGpu.Foundation.ColorF?)
+  name.vb: Create(String, Single, String, Boolean, Integer, String, String, ColorF?)
+- uid: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName(System.String)
+  commentId: M:FluentGpu.Controls.PersonPicture.InitialsFromDisplayName(System.String)
+  id: InitialsFromDisplayName(System.String)
+  parent: FluentGpu.Controls.PersonPicture
+  langs:
+  - csharp
+  - vb
+  name: InitialsFromDisplayName(string)
+  nameWithType: PersonPicture.InitialsFromDisplayName(string)
+  fullName: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName(string)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/PersonPicture.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InitialsFromDisplayName
+    path: ../../src/FluentGpu.Controls/PersonPicture.cs
+    startLine: 208
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Port of <code>InitialsGenerator::InitialsFromDisplayName</code>: strip a trailing bracket group, split on
+        spaces, take the first full character of the first (and, if more than one word, the last) word, uppercased.
+        Returns "" for symbolic/glyph scripts (CJK, Arabic, Greek, etc.) so the caller falls back to the Contact glyph.
+  example: []
+  syntax:
+    content: public static string InitialsFromDisplayName(string displayName)
+    parameters:
+    - id: displayName
+      type: System.String
+    return:
+      type: System.String
+    content.vb: Public Shared Function InitialsFromDisplayName(displayName As String) As String
+  overload: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName*
+  nameWithType.vb: PersonPicture.InitialsFromDisplayName(String)
+  fullName.vb: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName(String)
+  name.vb: InitialsFromDisplayName(String)
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.PersonPicture.Create*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.Create
+  href: FluentGpu.Controls.PersonPicture.html#FluentGpu_Controls_PersonPicture_Create_System_String_System_Single_System_String_System_Boolean_System_Int32_System_String_System_String_System_Nullable_FluentGpu_Foundation_ColorF__
+  name: Create
+  nameWithType: PersonPicture.Create
+  fullName: FluentGpu.Controls.PersonPicture.Create
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Nullable{FluentGpu.Foundation.ColorF}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ColorF}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF?
+  nameWithType: ColorF?
+  fullName: FluentGpu.Foundation.ColorF?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName*
+  commentId: Overload:FluentGpu.Controls.PersonPicture.InitialsFromDisplayName
+  href: FluentGpu.Controls.PersonPicture.html#FluentGpu_Controls_PersonPicture_InitialsFromDisplayName_System_String_
+  name: InitialsFromDisplayName
+  nameWithType: PersonPicture.InitialsFromDisplayName
+  fullName: FluentGpu.Controls.PersonPicture.InitialsFromDisplayName

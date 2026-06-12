@@ -1,0 +1,584 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.AutomationRole
+  commentId: T:FluentGpu.Foundation.AutomationRole
+  id: AutomationRole
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.AutomationRole.Button
+  - FluentGpu.Foundation.AutomationRole.CheckBox
+  - FluentGpu.Foundation.AutomationRole.ComboBox
+  - FluentGpu.Foundation.AutomationRole.Expander
+  - FluentGpu.Foundation.AutomationRole.Hyperlink
+  - FluentGpu.Foundation.AutomationRole.InfoBar
+  - FluentGpu.Foundation.AutomationRole.MenuItem
+  - FluentGpu.Foundation.AutomationRole.NavigationItem
+  - FluentGpu.Foundation.AutomationRole.None
+  - FluentGpu.Foundation.AutomationRole.Pager
+  - FluentGpu.Foundation.AutomationRole.ProgressBar
+  - FluentGpu.Foundation.AutomationRole.RadioButton
+  - FluentGpu.Foundation.AutomationRole.Rating
+  - FluentGpu.Foundation.AutomationRole.ScrollBar
+  - FluentGpu.Foundation.AutomationRole.Slider
+  - FluentGpu.Foundation.AutomationRole.Tab
+  - FluentGpu.Foundation.AutomationRole.Text
+  - FluentGpu.Foundation.AutomationRole.ToggleButton
+  - FluentGpu.Foundation.AutomationRole.ToggleSwitch
+  langs:
+  - csharp
+  - vb
+  name: AutomationRole
+  nameWithType: AutomationRole
+  fullName: FluentGpu.Foundation.AutomationRole
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AutomationRole
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The semantic role of a node, set by the control factories (a button IS a BoxEl, so the role is how it announces
+
+    itself). Carried on the input/a11y column; surfaced to the future UIA layer (ControlType), devtools, and UI tests.
+
+    Default <xref href="FluentGpu.Foundation.AutomationRole.None" data-throw-if-not-resolved="false"></xref> = a plain box/container.
+  example: []
+  syntax:
+    content: 'public enum AutomationRole : byte'
+    content.vb: Public Enum AutomationRole As Byte
+- uid: FluentGpu.Foundation.AutomationRole.None
+  commentId: F:FluentGpu.Foundation.AutomationRole.None
+  id: None
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: AutomationRole.None
+  fullName: FluentGpu.Foundation.AutomationRole.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Button
+  commentId: F:FluentGpu.Foundation.AutomationRole.Button
+  id: Button
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Button
+  nameWithType: AutomationRole.Button
+  fullName: FluentGpu.Foundation.AutomationRole.Button
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Button
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Button = 1
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.ToggleButton
+  commentId: F:FluentGpu.Foundation.AutomationRole.ToggleButton
+  id: ToggleButton
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: ToggleButton
+  nameWithType: AutomationRole.ToggleButton
+  fullName: FluentGpu.Foundation.AutomationRole.ToggleButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleButton
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ToggleButton = 2
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Slider
+  commentId: F:FluentGpu.Foundation.AutomationRole.Slider
+  id: Slider
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Slider
+  nameWithType: AutomationRole.Slider
+  fullName: FluentGpu.Foundation.AutomationRole.Slider
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Slider
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Slider = 3
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.ScrollBar
+  commentId: F:FluentGpu.Foundation.AutomationRole.ScrollBar
+  id: ScrollBar
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: ScrollBar
+  nameWithType: AutomationRole.ScrollBar
+  fullName: FluentGpu.Foundation.AutomationRole.ScrollBar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollBar
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ScrollBar = 4
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.NavigationItem
+  commentId: F:FluentGpu.Foundation.AutomationRole.NavigationItem
+  id: NavigationItem
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: NavigationItem
+  nameWithType: AutomationRole.NavigationItem
+  fullName: FluentGpu.Foundation.AutomationRole.NavigationItem
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NavigationItem
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: NavigationItem = 5
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.CheckBox
+  commentId: F:FluentGpu.Foundation.AutomationRole.CheckBox
+  id: CheckBox
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: CheckBox
+  nameWithType: AutomationRole.CheckBox
+  fullName: FluentGpu.Foundation.AutomationRole.CheckBox
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CheckBox
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: CheckBox = 6
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.RadioButton
+  commentId: F:FluentGpu.Foundation.AutomationRole.RadioButton
+  id: RadioButton
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: RadioButton
+  nameWithType: AutomationRole.RadioButton
+  fullName: FluentGpu.Foundation.AutomationRole.RadioButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RadioButton
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: RadioButton = 7
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Hyperlink
+  commentId: F:FluentGpu.Foundation.AutomationRole.Hyperlink
+  id: Hyperlink
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Hyperlink
+  nameWithType: AutomationRole.Hyperlink
+  fullName: FluentGpu.Foundation.AutomationRole.Hyperlink
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Hyperlink
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Hyperlink = 8
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Rating
+  commentId: F:FluentGpu.Foundation.AutomationRole.Rating
+  id: Rating
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Rating
+  nameWithType: AutomationRole.Rating
+  fullName: FluentGpu.Foundation.AutomationRole.Rating
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rating
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Rating = 9
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.ToggleSwitch
+  commentId: F:FluentGpu.Foundation.AutomationRole.ToggleSwitch
+  id: ToggleSwitch
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: ToggleSwitch
+  nameWithType: AutomationRole.ToggleSwitch
+  fullName: FluentGpu.Foundation.AutomationRole.ToggleSwitch
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ToggleSwitch
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ToggleSwitch = 10
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.ComboBox
+  commentId: F:FluentGpu.Foundation.AutomationRole.ComboBox
+  id: ComboBox
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: ComboBox
+  nameWithType: AutomationRole.ComboBox
+  fullName: FluentGpu.Foundation.AutomationRole.ComboBox
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ComboBox
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ComboBox = 11
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.MenuItem
+  commentId: F:FluentGpu.Foundation.AutomationRole.MenuItem
+  id: MenuItem
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: MenuItem
+  nameWithType: AutomationRole.MenuItem
+  fullName: FluentGpu.Foundation.AutomationRole.MenuItem
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MenuItem
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: MenuItem = 12
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Text
+  commentId: F:FluentGpu.Foundation.AutomationRole.Text
+  id: Text
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: AutomationRole.Text
+  fullName: FluentGpu.Foundation.AutomationRole.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Text = 13
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.ProgressBar
+  commentId: F:FluentGpu.Foundation.AutomationRole.ProgressBar
+  id: ProgressBar
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: ProgressBar
+  nameWithType: AutomationRole.ProgressBar
+  fullName: FluentGpu.Foundation.AutomationRole.ProgressBar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ProgressBar
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: ProgressBar = 14
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.InfoBar
+  commentId: F:FluentGpu.Foundation.AutomationRole.InfoBar
+  id: InfoBar
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: InfoBar
+  nameWithType: AutomationRole.InfoBar
+  fullName: FluentGpu.Foundation.AutomationRole.InfoBar
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBar
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: InfoBar = 15
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Expander
+  commentId: F:FluentGpu.Foundation.AutomationRole.Expander
+  id: Expander
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Expander
+  nameWithType: AutomationRole.Expander
+  fullName: FluentGpu.Foundation.AutomationRole.Expander
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Expander
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Expander = 16
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Pager
+  commentId: F:FluentGpu.Foundation.AutomationRole.Pager
+  id: Pager
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Pager
+  nameWithType: AutomationRole.Pager
+  fullName: FluentGpu.Foundation.AutomationRole.Pager
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pager
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Pager = 17
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+- uid: FluentGpu.Foundation.AutomationRole.Tab
+  commentId: F:FluentGpu.Foundation.AutomationRole.Tab
+  id: Tab
+  parent: FluentGpu.Foundation.AutomationRole
+  langs:
+  - csharp
+  - vb
+  name: Tab
+  nameWithType: AutomationRole.Tab
+  fullName: FluentGpu.Foundation.AutomationRole.Tab
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/AutomationRole.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tab
+    path: ../../src/FluentGpu.Foundation/AutomationRole.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Tab = 18
+    return:
+      type: FluentGpu.Foundation.AutomationRole
+references:
+- uid: FluentGpu.Foundation.AutomationRole.None
+  commentId: F:FluentGpu.Foundation.AutomationRole.None
+  href: FluentGpu.Foundation.AutomationRole.html#FluentGpu_Foundation_AutomationRole_None
+  name: None
+  nameWithType: AutomationRole.None
+  fullName: FluentGpu.Foundation.AutomationRole.None
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.AutomationRole
+  commentId: T:FluentGpu.Foundation.AutomationRole
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.AutomationRole.html
+  name: AutomationRole
+  nameWithType: AutomationRole
+  fullName: FluentGpu.Foundation.AutomationRole

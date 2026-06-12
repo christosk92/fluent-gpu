@@ -1,0 +1,1568 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Dsl.SpanTextEl
+  commentId: T:FluentGpu.Dsl.SpanTextEl
+  id: SpanTextEl
+  parent: FluentGpu.Dsl
+  children:
+  - FluentGpu.Dsl.SpanTextEl.#ctor(FluentGpu.Foundation.TextSpan[])
+  - FluentGpu.Dsl.SpanTextEl.AlignSelf
+  - FluentGpu.Dsl.SpanTextEl.Basis
+  - FluentGpu.Dsl.SpanTextEl.CharSpacing
+  - FluentGpu.Dsl.SpanTextEl.Color
+  - FluentGpu.Dsl.SpanTextEl.ElementTypeId
+  - FluentGpu.Dsl.SpanTextEl.FontFamily
+  - FluentGpu.Dsl.SpanTextEl.Grow
+  - FluentGpu.Dsl.SpanTextEl.Height
+  - FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+  - FluentGpu.Dsl.SpanTextEl.LineBounds
+  - FluentGpu.Dsl.SpanTextEl.LineHeight
+  - FluentGpu.Dsl.SpanTextEl.LineStacking
+  - FluentGpu.Dsl.SpanTextEl.Margin
+  - FluentGpu.Dsl.SpanTextEl.MaxHeight
+  - FluentGpu.Dsl.SpanTextEl.MaxLines
+  - FluentGpu.Dsl.SpanTextEl.MaxWidth
+  - FluentGpu.Dsl.SpanTextEl.MinHeight
+  - FluentGpu.Dsl.SpanTextEl.MinWidth
+  - FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+  - FluentGpu.Dsl.SpanTextEl.Shrink
+  - FluentGpu.Dsl.SpanTextEl.Size
+  - FluentGpu.Dsl.SpanTextEl.Spans
+  - FluentGpu.Dsl.SpanTextEl.Trim
+  - FluentGpu.Dsl.SpanTextEl.Weight
+  - FluentGpu.Dsl.SpanTextEl.Width
+  - FluentGpu.Dsl.SpanTextEl.Wrap
+  langs:
+  - csharp
+  - vb
+  name: SpanTextEl
+  nameWithType: SpanTextEl
+  fullName: FluentGpu.Dsl.SpanTextEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanTextEl
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 417
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <code>TextBlock.Inlines</code>/RichTextBlock paragraph
+
+    model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+
+    re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+
+    base style here; a span with <code>OnClick</code> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+
+    rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+
+    accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+
+    No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
+  example: []
+  syntax:
+    content: 'public sealed record SpanTextEl : Element, IEquatable<Element>, IEquatable<SpanTextEl>'
+    content.vb: Public NotInheritable Class SpanTextEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of SpanTextEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Dsl.SpanTextEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Dsl.SpanTextEl.#ctor(FluentGpu.Foundation.TextSpan[])
+  commentId: M:FluentGpu.Dsl.SpanTextEl.#ctor(FluentGpu.Foundation.TextSpan[])
+  id: '#ctor(FluentGpu.Foundation.TextSpan[])'
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: SpanTextEl(TextSpan[])
+  nameWithType: SpanTextEl.SpanTextEl(TextSpan[])
+  fullName: FluentGpu.Dsl.SpanTextEl.SpanTextEl(FluentGpu.Foundation.TextSpan[])
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 417
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <code>TextBlock.Inlines</code>/RichTextBlock paragraph
+
+    model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+
+    re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+
+    base style here; a span with <code>OnClick</code> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+
+    rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+
+    accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+
+    No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
+  example: []
+  syntax:
+    content: public SpanTextEl(TextSpan[] Spans)
+    parameters:
+    - id: Spans
+      type: FluentGpu.Foundation.TextSpan[]
+    content.vb: Public Sub New(Spans As TextSpan())
+  overload: FluentGpu.Dsl.SpanTextEl.#ctor*
+  nameWithType.vb: SpanTextEl.New(TextSpan())
+  fullName.vb: FluentGpu.Dsl.SpanTextEl.New(FluentGpu.Foundation.TextSpan())
+  name.vb: New(TextSpan())
+- uid: FluentGpu.Dsl.SpanTextEl.Spans
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Spans
+  id: Spans
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Spans
+  nameWithType: SpanTextEl.Spans
+  fullName: FluentGpu.Dsl.SpanTextEl.Spans
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spans
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 417
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public TextSpan[] Spans { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextSpan[]
+    content.vb: Public Property Spans As TextSpan()
+  overload: FluentGpu.Dsl.SpanTextEl.Spans*
+- uid: FluentGpu.Dsl.SpanTextEl.ElementTypeId
+  commentId: P:FluentGpu.Dsl.SpanTextEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: SpanTextEl.ElementTypeId
+  fullName: FluentGpu.Dsl.SpanTextEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 419
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Dsl.SpanTextEl.ElementTypeId*
+- uid: FluentGpu.Dsl.SpanTextEl.Size
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Size
+  id: Size
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Size
+  nameWithType: SpanTextEl.Size
+  fullName: FluentGpu.Dsl.SpanTextEl.Size
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Size
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 422
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Size { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Size As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Size*
+- uid: FluentGpu.Dsl.SpanTextEl.Weight
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Weight
+  id: Weight
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Weight
+  nameWithType: SpanTextEl.Weight
+  fullName: FluentGpu.Dsl.SpanTextEl.Weight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Weight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 424
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Base numeric font weight (0 = Normal 400); spans override per range.
+  example: []
+  syntax:
+    content: public ushort Weight { get; init; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Property Weight As UShort
+  overload: FluentGpu.Dsl.SpanTextEl.Weight*
+- uid: FluentGpu.Dsl.SpanTextEl.Color
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Color
+  id: Color
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: SpanTextEl.Color
+  fullName: FluentGpu.Dsl.SpanTextEl.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 426
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: Defaults to the live theme's <code>TextFillColorPrimary</code> (the TextEl default), resolved at construction.
+  example: []
+  syntax:
+    content: public ColorF Color { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property Color As ColorF
+  overload: FluentGpu.Dsl.SpanTextEl.Color*
+- uid: FluentGpu.Dsl.SpanTextEl.FontFamily
+  commentId: P:FluentGpu.Dsl.SpanTextEl.FontFamily
+  id: FontFamily
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: FontFamily
+  nameWithType: SpanTextEl.FontFamily
+  fullName: FluentGpu.Dsl.SpanTextEl.FontFamily
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontFamily
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 427
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public string? FontFamily { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property FontFamily As String
+  overload: FluentGpu.Dsl.SpanTextEl.FontFamily*
+- uid: FluentGpu.Dsl.SpanTextEl.CharSpacing
+  commentId: P:FluentGpu.Dsl.SpanTextEl.CharSpacing
+  id: CharSpacing
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: CharSpacing
+  nameWithType: SpanTextEl.CharSpacing
+  fullName: FluentGpu.Dsl.SpanTextEl.CharSpacing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CharSpacing
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 428
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float CharSpacing { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property CharSpacing As Single
+  overload: FluentGpu.Dsl.SpanTextEl.CharSpacing*
+- uid: FluentGpu.Dsl.SpanTextEl.LineHeight
+  commentId: P:FluentGpu.Dsl.SpanTextEl.LineHeight
+  id: LineHeight
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: LineHeight
+  nameWithType: SpanTextEl.LineHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.LineHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineHeight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 429
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float LineHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property LineHeight As Single
+  overload: FluentGpu.Dsl.SpanTextEl.LineHeight*
+- uid: FluentGpu.Dsl.SpanTextEl.LineStacking
+  commentId: P:FluentGpu.Dsl.SpanTextEl.LineStacking
+  id: LineStacking
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: LineStacking
+  nameWithType: SpanTextEl.LineStacking
+  fullName: FluentGpu.Dsl.SpanTextEl.LineStacking
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineStacking
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 430
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public LineStacking LineStacking { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.LineStacking
+    content.vb: Public Property LineStacking As LineStacking
+  overload: FluentGpu.Dsl.SpanTextEl.LineStacking*
+- uid: FluentGpu.Dsl.SpanTextEl.LineBounds
+  commentId: P:FluentGpu.Dsl.SpanTextEl.LineBounds
+  id: LineBounds
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: LineBounds
+  nameWithType: SpanTextEl.LineBounds
+  fullName: FluentGpu.Dsl.SpanTextEl.LineBounds
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LineBounds
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 431
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public TextLineBounds LineBounds { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextLineBounds
+    content.vb: Public Property LineBounds As TextLineBounds
+  overload: FluentGpu.Dsl.SpanTextEl.LineBounds*
+- uid: FluentGpu.Dsl.SpanTextEl.Wrap
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Wrap
+  id: Wrap
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: SpanTextEl.Wrap
+  fullName: FluentGpu.Dsl.SpanTextEl.Wrap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 434
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Paragraphs WRAP by default — the WinUI BaseRichTextBlockStyle sets TextWrapping=Wrap
+        (generic.xaml:13286-13295); pass NoWrap explicitly for a single-line run of spans.
+  example: []
+  syntax:
+    content: public TextWrap Wrap { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextWrap
+    content.vb: Public Property Wrap As TextWrap
+  overload: FluentGpu.Dsl.SpanTextEl.Wrap*
+- uid: FluentGpu.Dsl.SpanTextEl.Trim
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Trim
+  id: Trim
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Trim
+  nameWithType: SpanTextEl.Trim
+  fullName: FluentGpu.Dsl.SpanTextEl.Trim
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Trim
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 435
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public TextTrim Trim { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TextTrim
+    content.vb: Public Property Trim As TextTrim
+  overload: FluentGpu.Dsl.SpanTextEl.Trim*
+- uid: FluentGpu.Dsl.SpanTextEl.MaxLines
+  commentId: P:FluentGpu.Dsl.SpanTextEl.MaxLines
+  id: MaxLines
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: MaxLines
+  nameWithType: SpanTextEl.MaxLines
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxLines
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxLines
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 436
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public int MaxLines { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property MaxLines As Integer
+  overload: FluentGpu.Dsl.SpanTextEl.MaxLines*
+- uid: FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+  commentId: P:FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+  id: IsTextSelectionEnabled
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: IsTextSelectionEnabled
+  nameWithType: SpanTextEl.IsTextSelectionEnabled
+  fullName: FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsTextSelectionEnabled
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 441
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Read-only selection (rtb-02): drag selects across the whole paragraph flow, Ctrl+C copies. OPT-IN here
+        (like WinUI TextBlock, TextBlock.cpp:583); the RichTextBlock control turns it on by default
+        (IsTextSelectionEnabled=TRUE by default on CRichTextBlock, RichTextBlock.cpp:1730).
+  example: []
+  syntax:
+    content: public bool IsTextSelectionEnabled { get; init; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public Property IsTextSelectionEnabled As Boolean
+  overload: FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled*
+- uid: FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+  commentId: P:FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+  id: SelectionHighlightColor
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: SelectionHighlightColor
+  nameWithType: SpanTextEl.SelectionHighlightColor
+  fullName: FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectionHighlightColor
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 444
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  summary: >-
+    Per-control selection highlight (api-04). A==0 = the engine/theme accent brush
+        (TextSelectionManager.cpp:52-56).
+  example: []
+  syntax:
+    content: public ColorF SelectionHighlightColor { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property SelectionHighlightColor As ColorF
+  overload: FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor*
+- uid: FluentGpu.Dsl.SpanTextEl.Width
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Width
+  id: Width
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: SpanTextEl.Width
+  fullName: FluentGpu.Dsl.SpanTextEl.Width
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 447
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Width { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Width As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Width*
+- uid: FluentGpu.Dsl.SpanTextEl.Height
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Height
+  id: Height
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: SpanTextEl.Height
+  fullName: FluentGpu.Dsl.SpanTextEl.Height
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 448
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Height { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Height As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Height*
+- uid: FluentGpu.Dsl.SpanTextEl.MinWidth
+  commentId: P:FluentGpu.Dsl.SpanTextEl.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: SpanTextEl.MinWidth
+  fullName: FluentGpu.Dsl.SpanTextEl.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 449
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Dsl.SpanTextEl.MinWidth*
+- uid: FluentGpu.Dsl.SpanTextEl.MinHeight
+  commentId: P:FluentGpu.Dsl.SpanTextEl.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: SpanTextEl.MinHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 450
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Dsl.SpanTextEl.MinHeight*
+- uid: FluentGpu.Dsl.SpanTextEl.MaxWidth
+  commentId: P:FluentGpu.Dsl.SpanTextEl.MaxWidth
+  id: MaxWidth
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: MaxWidth
+  nameWithType: SpanTextEl.MaxWidth
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxWidth
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 451
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MaxWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxWidth As Single
+  overload: FluentGpu.Dsl.SpanTextEl.MaxWidth*
+- uid: FluentGpu.Dsl.SpanTextEl.MaxHeight
+  commentId: P:FluentGpu.Dsl.SpanTextEl.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: SpanTextEl.MaxHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 452
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float MaxHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MaxHeight As Single
+  overload: FluentGpu.Dsl.SpanTextEl.MaxHeight*
+- uid: FluentGpu.Dsl.SpanTextEl.Grow
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Grow
+  id: Grow
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Grow
+  nameWithType: SpanTextEl.Grow
+  fullName: FluentGpu.Dsl.SpanTextEl.Grow
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Grow
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 453
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Grow { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Grow As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Grow*
+- uid: FluentGpu.Dsl.SpanTextEl.Shrink
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Shrink
+  id: Shrink
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Shrink
+  nameWithType: SpanTextEl.Shrink
+  fullName: FluentGpu.Dsl.SpanTextEl.Shrink
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shrink
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 454
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Shrink { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Shrink As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Shrink*
+- uid: FluentGpu.Dsl.SpanTextEl.Basis
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Basis
+  id: Basis
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Basis
+  nameWithType: SpanTextEl.Basis
+  fullName: FluentGpu.Dsl.SpanTextEl.Basis
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Basis
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 455
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public float Basis { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Basis As Single
+  overload: FluentGpu.Dsl.SpanTextEl.Basis*
+- uid: FluentGpu.Dsl.SpanTextEl.AlignSelf
+  commentId: P:FluentGpu.Dsl.SpanTextEl.AlignSelf
+  id: AlignSelf
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: AlignSelf
+  nameWithType: SpanTextEl.AlignSelf
+  fullName: FluentGpu.Dsl.SpanTextEl.AlignSelf
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignSelf
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 456
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public FlexAlign AlignSelf { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public Property AlignSelf As FlexAlign
+  overload: FluentGpu.Dsl.SpanTextEl.AlignSelf*
+- uid: FluentGpu.Dsl.SpanTextEl.Margin
+  commentId: P:FluentGpu.Dsl.SpanTextEl.Margin
+  id: Margin
+  parent: FluentGpu.Dsl.SpanTextEl
+  langs:
+  - csharp
+  - vb
+  name: Margin
+  nameWithType: SpanTextEl.Margin
+  fullName: FluentGpu.Dsl.SpanTextEl.Margin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Dsl/Element.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Margin
+    path: ../../src/FluentGpu.Dsl/Element.cs
+    startLine: 457
+  assemblies:
+  - FluentGpu.Dsl
+  namespace: FluentGpu.Dsl
+  syntax:
+    content: public Edges4 Margin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property Margin As Edges4
+  overload: FluentGpu.Dsl.SpanTextEl.Margin*
+references:
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Dsl.SpanTextEl}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.SpanTextEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<SpanTextEl>
+  nameWithType: IEquatable<SpanTextEl>
+  fullName: System.IEquatable<FluentGpu.Dsl.SpanTextEl>
+  nameWithType.vb: IEquatable(Of SpanTextEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.SpanTextEl)
+  name.vb: IEquatable(Of SpanTextEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.SpanTextEl
+    name: SpanTextEl
+    href: FluentGpu.Dsl.SpanTextEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.SpanTextEl
+    name: SpanTextEl
+    href: FluentGpu.Dsl.SpanTextEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Dsl.SpanTextEl.#ctor*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.#ctor
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl__ctor_FluentGpu_Foundation_TextSpan___
+  name: SpanTextEl
+  nameWithType: SpanTextEl.SpanTextEl
+  fullName: FluentGpu.Dsl.SpanTextEl.SpanTextEl
+  nameWithType.vb: SpanTextEl.New
+  fullName.vb: FluentGpu.Dsl.SpanTextEl.New
+  name.vb: New
+- uid: FluentGpu.Foundation.TextSpan[]
+  isExternal: true
+  href: FluentGpu.Foundation.TextSpan.html
+  name: TextSpan[]
+  nameWithType: TextSpan[]
+  fullName: FluentGpu.Foundation.TextSpan[]
+  nameWithType.vb: TextSpan()
+  fullName.vb: FluentGpu.Foundation.TextSpan()
+  name.vb: TextSpan()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    href: FluentGpu.Foundation.TextSpan.html
+  - name: (
+  - name: )
+- uid: FluentGpu.Dsl.SpanTextEl.Spans*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Spans
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Spans
+  name: Spans
+  nameWithType: SpanTextEl.Spans
+  fullName: FluentGpu.Dsl.SpanTextEl.Spans
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Dsl.SpanTextEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.ElementTypeId
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: SpanTextEl.ElementTypeId
+  fullName: FluentGpu.Dsl.SpanTextEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort
+- uid: FluentGpu.Dsl.SpanTextEl.Size*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Size
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Size
+  name: Size
+  nameWithType: SpanTextEl.Size
+  fullName: FluentGpu.Dsl.SpanTextEl.Size
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Dsl.SpanTextEl.Weight*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Weight
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Weight
+  name: Weight
+  nameWithType: SpanTextEl.Weight
+  fullName: FluentGpu.Dsl.SpanTextEl.Weight
+- uid: FluentGpu.Dsl.SpanTextEl.Color*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Color
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Color
+  name: Color
+  nameWithType: SpanTextEl.Color
+  fullName: FluentGpu.Dsl.SpanTextEl.Color
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Dsl.SpanTextEl.FontFamily*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.FontFamily
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_FontFamily
+  name: FontFamily
+  nameWithType: SpanTextEl.FontFamily
+  fullName: FluentGpu.Dsl.SpanTextEl.FontFamily
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Dsl.SpanTextEl.CharSpacing*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.CharSpacing
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_CharSpacing
+  name: CharSpacing
+  nameWithType: SpanTextEl.CharSpacing
+  fullName: FluentGpu.Dsl.SpanTextEl.CharSpacing
+- uid: FluentGpu.Dsl.SpanTextEl.LineHeight*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.LineHeight
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_LineHeight
+  name: LineHeight
+  nameWithType: SpanTextEl.LineHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.LineHeight
+- uid: FluentGpu.Dsl.SpanTextEl.LineStacking*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.LineStacking
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_LineStacking
+  name: LineStacking
+  nameWithType: SpanTextEl.LineStacking
+  fullName: FluentGpu.Dsl.SpanTextEl.LineStacking
+- uid: FluentGpu.Foundation.LineStacking
+  commentId: T:FluentGpu.Foundation.LineStacking
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.LineStacking.html
+  name: LineStacking
+  nameWithType: LineStacking
+  fullName: FluentGpu.Foundation.LineStacking
+- uid: FluentGpu.Dsl.SpanTextEl.LineBounds*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.LineBounds
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_LineBounds
+  name: LineBounds
+  nameWithType: SpanTextEl.LineBounds
+  fullName: FluentGpu.Dsl.SpanTextEl.LineBounds
+- uid: FluentGpu.Foundation.TextLineBounds
+  commentId: T:FluentGpu.Foundation.TextLineBounds
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextLineBounds.html
+  name: TextLineBounds
+  nameWithType: TextLineBounds
+  fullName: FluentGpu.Foundation.TextLineBounds
+- uid: FluentGpu.Dsl.SpanTextEl.Wrap*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Wrap
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Wrap
+  name: Wrap
+  nameWithType: SpanTextEl.Wrap
+  fullName: FluentGpu.Dsl.SpanTextEl.Wrap
+- uid: FluentGpu.Foundation.TextWrap
+  commentId: T:FluentGpu.Foundation.TextWrap
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextWrap.html
+  name: TextWrap
+  nameWithType: TextWrap
+  fullName: FluentGpu.Foundation.TextWrap
+- uid: FluentGpu.Dsl.SpanTextEl.Trim*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Trim
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Trim
+  name: Trim
+  nameWithType: SpanTextEl.Trim
+  fullName: FluentGpu.Dsl.SpanTextEl.Trim
+- uid: FluentGpu.Foundation.TextTrim
+  commentId: T:FluentGpu.Foundation.TextTrim
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TextTrim.html
+  name: TextTrim
+  nameWithType: TextTrim
+  fullName: FluentGpu.Foundation.TextTrim
+- uid: FluentGpu.Dsl.SpanTextEl.MaxLines*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.MaxLines
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_MaxLines
+  name: MaxLines
+  nameWithType: SpanTextEl.MaxLines
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxLines
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_IsTextSelectionEnabled
+  name: IsTextSelectionEnabled
+  nameWithType: SpanTextEl.IsTextSelectionEnabled
+  fullName: FluentGpu.Dsl.SpanTextEl.IsTextSelectionEnabled
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_SelectionHighlightColor
+  name: SelectionHighlightColor
+  nameWithType: SpanTextEl.SelectionHighlightColor
+  fullName: FluentGpu.Dsl.SpanTextEl.SelectionHighlightColor
+- uid: FluentGpu.Dsl.SpanTextEl.Width*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Width
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Width
+  name: Width
+  nameWithType: SpanTextEl.Width
+  fullName: FluentGpu.Dsl.SpanTextEl.Width
+- uid: FluentGpu.Dsl.SpanTextEl.Height*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Height
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Height
+  name: Height
+  nameWithType: SpanTextEl.Height
+  fullName: FluentGpu.Dsl.SpanTextEl.Height
+- uid: FluentGpu.Dsl.SpanTextEl.MinWidth*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.MinWidth
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_MinWidth
+  name: MinWidth
+  nameWithType: SpanTextEl.MinWidth
+  fullName: FluentGpu.Dsl.SpanTextEl.MinWidth
+- uid: FluentGpu.Dsl.SpanTextEl.MinHeight*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.MinHeight
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_MinHeight
+  name: MinHeight
+  nameWithType: SpanTextEl.MinHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.MinHeight
+- uid: FluentGpu.Dsl.SpanTextEl.MaxWidth*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.MaxWidth
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_MaxWidth
+  name: MaxWidth
+  nameWithType: SpanTextEl.MaxWidth
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxWidth
+- uid: FluentGpu.Dsl.SpanTextEl.MaxHeight*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.MaxHeight
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_MaxHeight
+  name: MaxHeight
+  nameWithType: SpanTextEl.MaxHeight
+  fullName: FluentGpu.Dsl.SpanTextEl.MaxHeight
+- uid: FluentGpu.Dsl.SpanTextEl.Grow*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Grow
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Grow
+  name: Grow
+  nameWithType: SpanTextEl.Grow
+  fullName: FluentGpu.Dsl.SpanTextEl.Grow
+- uid: FluentGpu.Dsl.SpanTextEl.Shrink*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Shrink
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Shrink
+  name: Shrink
+  nameWithType: SpanTextEl.Shrink
+  fullName: FluentGpu.Dsl.SpanTextEl.Shrink
+- uid: FluentGpu.Dsl.SpanTextEl.Basis*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Basis
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Basis
+  name: Basis
+  nameWithType: SpanTextEl.Basis
+  fullName: FluentGpu.Dsl.SpanTextEl.Basis
+- uid: FluentGpu.Dsl.SpanTextEl.AlignSelf*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.AlignSelf
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_AlignSelf
+  name: AlignSelf
+  nameWithType: SpanTextEl.AlignSelf
+  fullName: FluentGpu.Dsl.SpanTextEl.AlignSelf
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Dsl.SpanTextEl.Margin*
+  commentId: Overload:FluentGpu.Dsl.SpanTextEl.Margin
+  href: FluentGpu.Dsl.SpanTextEl.html#FluentGpu_Dsl_SpanTextEl_Margin
+  name: Margin
+  nameWithType: SpanTextEl.Margin
+  fullName: FluentGpu.Dsl.SpanTextEl.Margin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4

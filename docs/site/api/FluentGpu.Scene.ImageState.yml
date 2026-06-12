@@ -1,0 +1,166 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageState
+  commentId: T:FluentGpu.Scene.ImageState
+  id: ImageState
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.ImageState.Failed
+  - FluentGpu.Scene.ImageState.None
+  - FluentGpu.Scene.ImageState.Pending
+  - FluentGpu.Scene.ImageState.Ready
+  langs:
+  - csharp
+  - vb
+  name: ImageState
+  nameWithType: ImageState
+  fullName: FluentGpu.Scene.ImageState
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageState
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: 'public enum ImageState : byte'
+    content.vb: Public Enum ImageState As Byte
+- uid: FluentGpu.Scene.ImageState.None
+  commentId: F:FluentGpu.Scene.ImageState.None
+  id: None
+  parent: FluentGpu.Scene.ImageState
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ImageState.None
+  fullName: FluentGpu.Scene.ImageState.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Scene.ImageState
+- uid: FluentGpu.Scene.ImageState.Pending
+  commentId: F:FluentGpu.Scene.ImageState.Pending
+  id: Pending
+  parent: FluentGpu.Scene.ImageState
+  langs:
+  - csharp
+  - vb
+  name: Pending
+  nameWithType: ImageState.Pending
+  fullName: FluentGpu.Scene.ImageState.Pending
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pending
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Pending = 1
+    return:
+      type: FluentGpu.Scene.ImageState
+- uid: FluentGpu.Scene.ImageState.Ready
+  commentId: F:FluentGpu.Scene.ImageState.Ready
+  id: Ready
+  parent: FluentGpu.Scene.ImageState
+  langs:
+  - csharp
+  - vb
+  name: Ready
+  nameWithType: ImageState.Ready
+  fullName: FluentGpu.Scene.ImageState.Ready
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Ready
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Ready = 2
+    return:
+      type: FluentGpu.Scene.ImageState
+- uid: FluentGpu.Scene.ImageState.Failed
+  commentId: F:FluentGpu.Scene.ImageState.Failed
+  id: Failed
+  parent: FluentGpu.Scene.ImageState
+  langs:
+  - csharp
+  - vb
+  name: Failed
+  nameWithType: ImageState.Failed
+  fullName: FluentGpu.Scene.ImageState.Failed
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Failed
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 4
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: Failed = 3
+    return:
+      type: FluentGpu.Scene.ImageState
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Scene.ImageState
+  commentId: T:FluentGpu.Scene.ImageState
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageState.html
+  name: ImageState
+  nameWithType: ImageState
+  fullName: FluentGpu.Scene.ImageState

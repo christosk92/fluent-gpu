@@ -1,0 +1,587 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.BrushAnim
+  commentId: T:FluentGpu.Scene.BrushAnim
+  id: BrushAnim
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.BrushAnim.BorderBit
+  - FluentGpu.Scene.BrushAnim.BorderFrom
+  - FluentGpu.Scene.BrushAnim.Channels
+  - FluentGpu.Scene.BrushAnim.DurationMs
+  - FluentGpu.Scene.BrushAnim.FillBit
+  - FluentGpu.Scene.BrushAnim.FillFrom
+  - FluentGpu.Scene.BrushAnim.T
+  - FluentGpu.Scene.BrushAnim.TextBit
+  - FluentGpu.Scene.BrushAnim.TextFrom
+  langs:
+  - csharp
+  - vb
+  name: BrushAnim
+  nameWithType: BrushAnim
+  fullName: FluentGpu.Scene.BrushAnim
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BrushAnim
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 238
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: >-
+    An implicit brush transition (WinUI <code>BrushTransition</code>, 83ms): when a LOGICAL state flip re-renders a node with a
+
+    different Fill/BorderColor/TextColor and the element opted in (<code>BrushTransitionMs</code>), the reconciler captures the
+
+    previously-DISPLAYED color here and the recorder cross-fades from it to the new resolved color as <code>T</code> advances
+
+    (linear-light, like the hover/press cross-fade). Sparse side-table — O(transitioning nodes), 0-alloc steady frames.
+  example: []
+  syntax:
+    content: public struct BrushAnim
+    content.vb: Public Structure BrushAnim
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.BrushAnim.FillFrom
+  commentId: F:FluentGpu.Scene.BrushAnim.FillFrom
+  id: FillFrom
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: FillFrom
+  nameWithType: BrushAnim.FillFrom
+  fullName: FluentGpu.Scene.BrushAnim.FillFrom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillFrom
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 240
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF FillFrom
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public FillFrom As ColorF
+- uid: FluentGpu.Scene.BrushAnim.BorderFrom
+  commentId: F:FluentGpu.Scene.BrushAnim.BorderFrom
+  id: BorderFrom
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: BorderFrom
+  nameWithType: BrushAnim.BorderFrom
+  fullName: FluentGpu.Scene.BrushAnim.BorderFrom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderFrom
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 240
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF BorderFrom
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public BorderFrom As ColorF
+- uid: FluentGpu.Scene.BrushAnim.TextFrom
+  commentId: F:FluentGpu.Scene.BrushAnim.TextFrom
+  id: TextFrom
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: TextFrom
+  nameWithType: BrushAnim.TextFrom
+  fullName: FluentGpu.Scene.BrushAnim.TextFrom
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextFrom
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 240
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public ColorF TextFrom
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public TextFrom As ColorF
+- uid: FluentGpu.Scene.BrushAnim.T
+  commentId: F:FluentGpu.Scene.BrushAnim.T
+  id: T
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: T
+  nameWithType: BrushAnim.T
+  fullName: FluentGpu.Scene.BrushAnim.T
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: T
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 241
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float T
+    return:
+      type: System.Single
+    content.vb: Public T As Single
+- uid: FluentGpu.Scene.BrushAnim.DurationMs
+  commentId: F:FluentGpu.Scene.BrushAnim.DurationMs
+  id: DurationMs
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: DurationMs
+  nameWithType: BrushAnim.DurationMs
+  fullName: FluentGpu.Scene.BrushAnim.DurationMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DurationMs
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 242
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float DurationMs
+    return:
+      type: System.Single
+    content.vb: Public DurationMs As Single
+- uid: FluentGpu.Scene.BrushAnim.Channels
+  commentId: F:FluentGpu.Scene.BrushAnim.Channels
+  id: Channels
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: Channels
+  nameWithType: BrushAnim.Channels
+  fullName: FluentGpu.Scene.BrushAnim.Channels
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Channels
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 243
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public byte Channels
+    return:
+      type: System.Byte
+    content.vb: Public Channels As Byte
+- uid: FluentGpu.Scene.BrushAnim.FillBit
+  commentId: F:FluentGpu.Scene.BrushAnim.FillBit
+  id: FillBit
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: FillBit
+  nameWithType: BrushAnim.FillBit
+  fullName: FluentGpu.Scene.BrushAnim.FillBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FillBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 244
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte FillBit = 1
+    return:
+      type: System.Byte
+    content.vb: Public Const FillBit As Byte = 1
+- uid: FluentGpu.Scene.BrushAnim.BorderBit
+  commentId: F:FluentGpu.Scene.BrushAnim.BorderBit
+  id: BorderBit
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: BorderBit
+  nameWithType: BrushAnim.BorderBit
+  fullName: FluentGpu.Scene.BrushAnim.BorderBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BorderBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 244
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte BorderBit = 2
+    return:
+      type: System.Byte
+    content.vb: Public Const BorderBit As Byte = 2
+- uid: FluentGpu.Scene.BrushAnim.TextBit
+  commentId: F:FluentGpu.Scene.BrushAnim.TextBit
+  id: TextBit
+  parent: FluentGpu.Scene.BrushAnim
+  langs:
+  - csharp
+  - vb
+  name: TextBit
+  nameWithType: BrushAnim.TextBit
+  fullName: FluentGpu.Scene.BrushAnim.TextBit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextBit
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 244
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public const byte TextBit = 4
+    return:
+      type: System.Byte
+    content.vb: Public Const TextBit As Byte = 4
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte

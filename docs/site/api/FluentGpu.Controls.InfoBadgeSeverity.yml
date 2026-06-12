@@ -1,0 +1,231 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBadgeSeverity
+  commentId: T:FluentGpu.Controls.InfoBadgeSeverity
+  id: InfoBadgeSeverity
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBadgeSeverity.Attention
+  - FluentGpu.Controls.InfoBadgeSeverity.Caution
+  - FluentGpu.Controls.InfoBadgeSeverity.Critical
+  - FluentGpu.Controls.InfoBadgeSeverity.Default
+  - FluentGpu.Controls.InfoBadgeSeverity.Informational
+  - FluentGpu.Controls.InfoBadgeSeverity.Success
+  langs:
+  - csharp
+  - vb
+  name: InfoBadgeSeverity
+  nameWithType: InfoBadgeSeverity
+  fullName: FluentGpu.Controls.InfoBadgeSeverity
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBadgeSeverity
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The severity preset that picks an <xref href="FluentGpu.Controls.InfoBadge" data-throw-if-not-resolved="false"></xref> background and (for Icon badges) a default glyph,
+        mirroring WinUI's {Attention,Informational,Success,Caution,Critical}InfoBadgeStyle set
+        (InfoBadge_themeresources.xaml). Default == the plain accent badge.
+  example: []
+  syntax:
+    content: 'public enum InfoBadgeSeverity : byte'
+    content.vb: Public Enum InfoBadgeSeverity As Byte
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Default
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Default
+  id: Default
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: InfoBadgeSeverity.Default
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Default
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Default = 0
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Attention
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Attention
+  id: Attention
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Attention
+  nameWithType: InfoBadgeSeverity.Attention
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Attention
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Attention
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Attention = 1
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Informational
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Informational
+  id: Informational
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Informational
+  nameWithType: InfoBadgeSeverity.Informational
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Informational
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Informational
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Informational = 2
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Success
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Success
+  id: Success
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Success
+  nameWithType: InfoBadgeSeverity.Success
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Success
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Success
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Success = 3
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Caution
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Caution
+  id: Caution
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Caution
+  nameWithType: InfoBadgeSeverity.Caution
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Caution
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Caution
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Caution = 4
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+- uid: FluentGpu.Controls.InfoBadgeSeverity.Critical
+  commentId: F:FluentGpu.Controls.InfoBadgeSeverity.Critical
+  id: Critical
+  parent: FluentGpu.Controls.InfoBadgeSeverity
+  langs:
+  - csharp
+  - vb
+  name: Critical
+  nameWithType: InfoBadgeSeverity.Critical
+  fullName: FluentGpu.Controls.InfoBadgeSeverity.Critical
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBadge.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Critical
+    path: ../../src/FluentGpu.Controls/InfoBadge.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Critical = 5
+    return:
+      type: FluentGpu.Controls.InfoBadgeSeverity
+references:
+- uid: FluentGpu.Controls.InfoBadge
+  commentId: T:FluentGpu.Controls.InfoBadge
+  href: FluentGpu.Controls.InfoBadge.html
+  name: InfoBadge
+  nameWithType: InfoBadge
+  fullName: FluentGpu.Controls.InfoBadge
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.InfoBadgeSeverity
+  commentId: T:FluentGpu.Controls.InfoBadgeSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBadgeSeverity.html
+  name: InfoBadgeSeverity
+  nameWithType: InfoBadgeSeverity
+  fullName: FluentGpu.Controls.InfoBadgeSeverity

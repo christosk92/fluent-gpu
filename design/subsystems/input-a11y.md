@@ -62,8 +62,8 @@ Reference: architecture-spec §4.8 + hardened-v1 §2.2. Input touches **phase 1 
  6 layout          [UI]  (Layout owns) — writes Bounds[] (LOCAL); overlay anchor placement-with-flip (layout.md §10)
  6.5 layout-effects[UI]  UseFocus(autoFocus)/scroll-into-view read VALID Bounds[]; focus rect + overlay layers marked dirty;
                           arena pointer-up sweep that needs post-layout geometry runs here
- 7 animation       [UI]  inertia integrator ticks fling (Input-owned), writes scroll viewport LocalTransform;
-                          EDGE-AUTOSCROLL driver integrates its velocity → writes ScrollOffset (TransformDirty only) (L11)
+ 7 animation       [UI]  inertia integrator ticks fling (Input-owned) → SetScrollOffset/ApplyScrollPosition (clamp +
+                          virtual re-realize; §7B); EDGE-AUTOSCROLL driver integrates its velocity → ScrollOffset (same path) (L11)
 PUBLISH (13a)      [UI]  SceneFrame snapshot sealed — Input is done for the frame
  8-11              [RENDER] record/batch/submit/present — Input contributes ONLY the DrawFocusRingCmd /
                           DrawSelectionRectCmd / DrawAccessKeyBadgeCmd / overlay-layer opcodes it authored
@@ -80,37 +80,54 @@ PUBLISH (13a)      [UI]  SceneFrame snapshot sealed — Input is done for the fr
 The window writes POD into a host-owned slab-backed ring (architecture-spec §4.7 amendment: **C# events are replaced by a POD ring**; no per-event delegate/closure alloc). `IPlatformWindow.PumpInto(ref InputEventRing ring)` drains `WM_*`/`NSEvent` into it once per frame.
 
 ```csharp
-namespace FluentGpu.Input;   // schema is portable; Pal.Windows fills it
+namespace FluentGpu.Pal;     // schema lives at the Pal seam (the window writes it, Input reads it); portable
 
 public enum InputKind : byte {
-    PointerDown, PointerUp, PointerMove, PointerWheel, PointerCaptureLost, PointerLeave, PointerHover,
-    KeyDown, KeyUp, Char,                 // Char = committed text (WM_CHAR after TranslateMessage)
-    ImeStartComposition, ImeUpdateComposition, ImeEndComposition,
-    FocusActivate, FocusDeactivate,       // window-level (WM_ACTIVATE)
-    DragEnter, DragOver, DragLeave, Drop, // OLE drop-target, on UI thread modal loop
+    PointerMove, PointerDown, PointerUp, Wheel, PointerCancel,   // PointerCancel = capture-lost / touch-cancel
+    Key, KeyUp, Char,                     // Char = committed text (WM_CHAR after TranslateMessage)
+    WindowBlur, WindowFocus, WindowStateChanged,
+    // ImeStart/Update/EndComposition + Drag* enrol here as the IME/OLE seams land (§9, §12)
 }
 
-[StructLayout(LayoutKind.Sequential)]    // 40B, blittable, zero managed refs
-public readonly struct InputEvent {
-    public readonly InputKind  Kind;
-    public readonly PointerKind Device;   // Mouse | Touch | Pen
-    public readonly ModifierKeys Mods;    // Ctrl/Shift/Alt/Win + LeftBtn/MiddleBtn/RightBtn snapshot
-    public readonly ushort      _pad;
-    public readonly uint        PointerId;// stable per active contact; mouse = 0
-    public readonly Vec2        PosDip;   // CLIENT-space DIP, DIP-converted ONCE at the pump boundary
-    public readonly float       WheelDelta;
-    public readonly uint        KeyOrChar;// VK_* for Key*, UTF-32 codepoint for Char
-    public readonly long        TimestampUs;
-    public readonly float       Pressure; // pen/touch; mouse = 1
-}
+// As-built: a blittable `readonly record struct`, no [StructLayout] (sequential is the default; the layout is
+// NOT load-bearing — it is never reinterpret-cast over the seam, never memcpy'd as a fixed-size blob; the ring
+// (below) stores it by value in a managed `InputEvent[]` slab). Trailing optional ctor params keep mouse call
+// sites (PointerId = 0, Pressure = 1) source-compatible.
+public readonly record struct InputEvent(
+    InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
+    KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
+    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f);
+//      PositionPx  CLIENT-space DIP, DIP-converted ONCE at the pump boundary (the field name is `PositionPx`;
+//                  the value is DIP — naming debt, not a coordinate bug). Wheel: ScrollDelta (DIP, signed).
+//      KeyCode     VK_* for Key/KeyUp, UTF-32 codepoint for Char (one field, kind-discriminated).
+//      TimestampMs platform message time in MILLISECONDS — drives velocity sampling (§7B) and multi-click.
+//      PointerId   stable per active contact (mouse = 0; touch/pen carry the OS pointer id); the ring coalesces
+//                  moves per id and the dispatcher captures per contact (§4 capture table).
+//      Pressure    normalized contact pressure (mouse = 1; touch/pen report 0..1).
 ```
 
-**Move-coalescing (Win32 map fix, folded):** the >1 kHz `WM_POINTERUPDATE`/`WM_INPUT`/`WM_MOUSEMOVE` flood is collapsed to the **latest** `PointerMove` per `PointerId` at ring-write time (the ring keeps a per-pointer "last-move index" and overwrites in place), so dispatch sees at most one move per pointer per frame. Wheel deltas **accumulate** (sum, not last). Down/Up/Char are never coalesced (ordering-significant).
+> **Ratified as-built (the four superseded forms are waived as not load-bearing).** The shipped event is the
+> `record struct` above, owned at the `FluentGpu.Pal` seam (not a portable `FluentGpu.Input` struct). The new
+> `PointerId`/`Pressure` fields are the only multi-contact additions §3 mandates; everything else the earlier
+> spec drew is intentionally **not** reconciled, because none of it is load-bearing: the explicit
+> `[StructLayout(LayoutKind.Sequential)]`/`40B` size <!-- canon-allow: names the waived layout form -->
+> (the event is never reinterpret-cast or memcpy'd as a fixed blob — it lives by value in the ring's managed
+> slab, so its byte layout buys nothing); `TimestampUs` <!-- canon-allow: names the waived field --> (the
+> platform message clock is milliseconds — `TimestampMs` — and ms resolution is sufficient for the §7B EMA and
+> multi-click windows); the `KeyOrChar` <!-- canon-allow: names the waived field --> rename (as-built is
+> `KeyCode`, same kind-discriminated dual use); and the `Vec2`→`PosDip` <!-- canon-allow: names the waived
+> field --> rename (as-built is `Point2 PositionPx`, DIP-valued — a naming debt, not a coordinate-space bug).
+> The §6 ref-struct event-args migration is likewise a non-goal (the cold-edge handler classes are fine).
 
-**Win32 map fixes (folded):**
+**The ring is a fixed-capacity, drained-to-empty slab — NOT a circular buffer.** `InputEventRing` is a `new InputEvent[Capacity]` slab (cap 512) that the host **Clear()s, the window fills, the dispatcher drains whole** every frame (`AppHost.RunFrame`). Because it empties each frame, a single contiguous `ReadOnlySpan<InputEvent>` over `[0, count)` is always the complete frame's input — which is exactly what `Drain` (§4) consumes; a ring/circular buffer would split that span across the wrap and break the single-span contract. On overflow of a non-coalescible event the **oldest pending move** is dropped (else the incoming event) — bounded, zero-growth, no `Array.Resize` (the earlier growable-ring form is retired).
+
+**Move-coalescing (Win32 map fix, folded):** the >1 kHz `WM_POINTERUPDATE`/`WM_INPUT`/`WM_MOUSEMOVE` flood is collapsed to the **latest** `PointerMove` per `PointerId` at ring-write time (the slab keeps a fixed per-id "last-move index" table — reset each drain, so allocation-free at steady state — and overwrites that id's pending move in place), so dispatch sees at most one move per pointer per frame. Consecutive `Wheel` deltas at the same position **accumulate** (sum, not last). Down/Up/Key/Char/Cancel are never coalesced (ordering-significant).
+
+**Win32 map fixes (folded) — pump primitives ratified:**
+- **`EnableMouseInPointer(TRUE)` at window create** is the ratified pump mode: it routes mouse, touch, and pen uniformly through the `WM_POINTER*` family, so one decode path tags `PointerId` + `PointerKind` + `Pressure` and the legacy `WM_MOUSE*`/`SetCapture` path is retired atomically (running both double-counts). NC caption input then arrives as `WM_NCPOINTER*` (the custom-frame handlers extend to it; `WM_NCHITTEST` is unaffected).
+- **`GetPointerFrameInfoHistory`** is the ratified OS-coalesced drain: each `WM_POINTERUPDATE` carries a frame of back-buffered samples which the pump reads in one call (the OS-side analogue of the slab's per-id coalescing), then **DIP-converts once** with the window's current effective DPI → ring. `GetPointerInfo`/`GetPointerType` classify the contact; `WM_POINTERCAPTURECHANGED` → a per-`PointerId` `PointerCancel` (§4).
 - Leave tracking via `WM_POINTERLEAVE` + `TrackMouseEvent(TME_LEAVE|TME_HOVER)` — **not** `RegisterTouchHitTestingWindow`.
 - Committed text is `WM_CHAR` after `TranslateMessage` (`WM_UNICHAR` optional for >BMP keyboards).
-- `WM_POINTERDOWN/UP/UPDATE` → `GetPointerInfo` → DIP-convert once with the window's current effective DPI → ring.
 
 **DPI (foundations / architecture-spec §7):** DIP↔px conversion happens **once** at the pump boundary using the window's post-`WM_DPICHANGED` `Scale`. Everything above the seam is in DIP. The shared transform helper (§5) never re-applies DPI — it composes node-local DIP transforms only.
 
@@ -166,7 +183,39 @@ public sealed class InputDispatcher          // UI thread only; asserts via Thre
 
 `DispatchPointer` computes the route once (§5.1) and threads `in route` to: the arena (§7A), cursor resolution (§12C), the overlay light-dismiss classifier (§12B), and (if a tracking gesture is active) the edge-autoscroll arming check (§12D). No subsystem re-hit-tests.
 
-Zero managed allocation in `Drain` itself (phases 1–2 alloc budget = "freshly-captured user closures at the edge only"; architecture-spec §8). Every internal collection is a slab/arena/`stackalloc`.
+> **`Dispatch(ReadOnlySpan<InputEvent>)` realizes this `Drain` (the names + return type differ only).** The
+> as-built entry point is `InputDispatcher.Dispatch(ReadOnlySpan<InputEvent>) → int` (the returned count is the
+> number of events acted on, a diagnostic); it is the same single-span, drain-the-whole-frame consumer
+> described here under the spec name `Drain`. The host pump is `ring.Clear() → window.PumpInto(ring) →
+> dispatcher.Dispatch(ring.Drain())` once per frame.
+
+> **Per-`PointerId` capture table (cap 10) — as-built.** The scalar capture/hover/drag fields above are realized
+> as a fixed per-contact **capture slab** (`PointerSlot[]`, cap **10** concurrent contacts; mouse always id 0).
+> `SlotIn(id)` loads that contact's `Down`/`DragTarget`/`ScrollDragNode`/`Pressed`/`ContextDown`/`MiddleDown` +
+> pan state into the working scalars, `SlotOut()` stores them back and **recycles** a fully-idle slot so a
+> finished contact frees its seat. The **11th** concurrent contact gets no slot — its events run harmlessly and
+> are discarded (a hard, deterministic, zero-growth policy: no eviction of a live contact, no heap growth). This
+> is the single-pointer dispatcher generalized per id, not a new arena.
+
+> **Overlay light-dismiss lives in `Controls/OverlayHost`, not an in-dispatcher `OverlayManager` — as-built.** The
+> `OverlayManager _overlays` field and the `_overlays.OnFrameEnd(...)` call above are **spec shape, not as-built**:
+> the dispatcher holds no overlay registry. An `OverlayHost` (the wrap-the-app-root component) renders the open
+> popups into a top-level z-stack with a full-bleed **scrim** node beneath them, and encodes the dismiss policy on
+> that scrim through ordinary `BoxEl` handlers reached via the dispatcher's hit-test → click/press delegates: a
+> `LightDismiss` scrim's `OnClick` closes the top overlay, a `Modal` scrim's `OnPointerDown` is a no-op that simply
+> eats the press. Because the scrim is the topmost hit-test target while a popup is open, an **outside-press lands on
+> the scrim** (never the content beneath) and the dismiss is **consumed** by it — no click-through (WinUI
+> `CPopupRoot::OnPointerPressed` sets `Handled = didCloseAPopup`, popup.cpp:5206). This is **device-agnostic**: a
+> touch tap routes through the SAME click delegate the mouse does (the single-recognizer tap path, §7B), so touch
+> light-dismiss is correct with no touch-specific branch; a per-`PointerId` `PointerCancel` over the scrim (capture
+> loss) is not a tap and dismisses nothing, and window-deactivation closes every `LightDismiss` overlay (the
+> `WindowBlur` host hook) while `Modal` traps. Escape still routes through the dispatcher's global key-preview hook
+> (§9 step 5) into the host's close-top. The §12B `OverlayManager`/`OverlayEntry`/arena-routed-dismiss design below
+> is the future single-owner z-stack + arena-competing-dismiss target (Phase 3, once the arena lands); until then
+> the OverlayHost scrim is the single owner of outside-press classification, and there is **no** dispatcher-side
+> overlay state to keep in sync with it.
+
+Zero managed allocation in `Dispatch`/`Drain` itself (phases 1–2 alloc budget = "freshly-captured user closures at the edge only"; architecture-spec §8). Every internal collection is a slab/arena/`stackalloc`.
 
 ---
 
@@ -416,6 +465,30 @@ This is the honest scoping note the gap analysis demanded:
 
 `PointerCaptureLost` (OS `WM_POINTERCAPTURECHANGED`) force-closes the arena: the current provisional winner (if any) wins by default, all others are rejected.
 
+> **Shipped Phase-3 (as-built) — the arena landed as written, on the touch path, behind the determinism gate.** The
+> §7A/§7B types above (`GestureArena`/`ArenaMember`/`ArenaVote`/`ArenaTeam`/`GestureArenaState`/`PointerFsm`/
+> `VelocitySampler`) ship **unamended** (`FluentGpu.Input/GestureArena.cs`, `GestureRecognizer.cs`; one arena per active
+> `PointerId` over the cap-10 contact model, innermost-first enrollment on the §5.1 route, the exact §7A.2 `ResolveStep`).
+> The dispatcher wires them on the **touch** path: `EnrollTouchArena` mirrors the scalar facts (the `_dragTarget`/OnDrag
+> node → `Drag`, the `CanDrag` chain → `DragReorder`, the `Scrollable` ancestor → `Pan`, the clickable → `Tap`/`DoubleTap`,
+> a context/hold chain → `Hold`); `StepTouchArena` casts the axis-locked move votes; the up-sweep resolves a clean tap.
+> The proven scalar machinery still **executes** the winner, so the single-recognizer common case is observably identical
+> (§7A.5). Two narrow as-built points: **(1)** the §7A.5 single-recognizer fast-path is realized concretely — an eager
+> OnDrag capture (Slider scrub / EditableText drag; `_dragTarget` set, **not** a `DragYieldsToPan` swipe) is resolved
+> **synchronously at the enrollment edge** (its `Drag` member is `EagerAccept`-promoted and `ResolveStep` runs immediately,
+> sweeping any incidental co-enrolled `Tap`/team), so capture is **hard, never tentative**, for that common case — the
+> editor/slider scrub fires the same frame as the press, exactly as the mouse path did. The tentative-until-resolution
+> shift therefore manifests **only** with ≥2 genuinely-competing recognizers (`Drag`-vs-`Pan` swipe-in-scroller,
+> `DragReorder`-vs-`Pan`), where it is the *intended* deferral. **(2)** `DragController.YieldsToPan` is **subsumed** on the
+> touch path — the arena's axis-locked `DragReorder`-vs-`Pan` vote is the single arbiter (the two-arbitration-models risk is
+> gone). The whole coordinator is pinned by the **`validation.md` §12.6** gesture-arena determinism gate: an opt-in
+> `GestureArenaRecorder` (Input assembly, attached via `GestureArena.Recorder` — the `Diag`/`WakeDiagnostics`
+> zero-cost-when-off discipline, a `_recorder?.X()` null-guard at each arbitration point) records the ordered ledger
+> (open / enroll / vote-transition / resolution-winner / sweep-order); the gate asserts a scripted multi-gesture sequence
+> replays **bit-identically** across runs and that the same fling target resolves to an identical **resolution** trace
+> across `dt ∈ {8.33, 16.67, 33.3} ms` (arbitration is on the event clock; the integrator is downstream of it). The
+> recorder is a **test/debug seam** — the host never attaches one (zero production cost).
+
 ---
 
 ### 7B. Per-pointer FSM + from-scratch inertia integrator
@@ -436,7 +509,33 @@ internal struct PointerFsm {            // one per (PointerId, recognizer), in a
 
 Recognized gestures emit their bubble events **only after the arena declares this FSM the winner** (§7A.2): `Tapped`, `DoubleTapped`, `RightTapped`, `Holding` (long-press timer fired in `OnFrameEnd`, which also promotes the FSM's vote to `EagerAccept`), `ManipulationStarted/Delta/Completed` (translate/scale/rotate deltas), and the selection gestures `SelectionDragStarted/Delta/Completed` (§12A). A loser FSM that is swept emits nothing and resets to `Idle`. Slop-crossing for `Drag`/`Pan`/`Pinch`/`SelectionDrag` is what produces the `EagerAccept` vote.
 
-**Inertia integrator (real work — WinUI's `ManipulationInertiaStarting` is gone):** on manipulation release, fling velocity is computed from the `VelocitySampler` window (last ~50 ms of samples, outlier-trimmed) and handed to a **friction-decay extrapolation** that runs in the **animation phase (7)**, not in dispatch. It writes the scroll viewport's `LocalTransform` directly (the `-ScrollOffset` translation is the viewport-child `LocalTransform`; architecture-spec §line 758) and marks `TransformDirty` only — **never** `LayoutDirty`. Decay terminates when |v| < threshold or the offset hits a clamp/bounce boundary. This is composition-style independent animation: no relayout, no re-record; the batcher re-applies the cached transform (architecture-spec §7 animation).
+**Inertia integrator (real work — WinUI's `ManipulationInertiaStarting` is gone):** on manipulation release, fling velocity is computed from the `VelocitySampler` window (last ~50 ms of samples, outlier-trimmed) and handed to a **friction-decay extrapolation** that runs in the **animation phase (7)**, not in dispatch. Each integrator tick **routes through the Input-owned `SetScrollOffset`/`ApplyScrollPosition` chokepoint** — it does **not** write the viewport `LocalTransform` directly. `SetScrollOffset` clamps to `[0, Content−Viewport]`, then `ApplyScrollPosition` writes the `-offset` viewport-child `LocalTransform` + `TransformDirty|PaintDirty` **and re-realizes the virtual window** (`VirtualWindowing.NeedsRealize → VirtualRangeDirty`); it **never** marks `LayoutDirty`. The fling thus inherits the *same* clamp + virtual re-realize as wheel/keyboard/`ScrollToIndex` — there is one scroll-offset writer (§12D.2). Setting `Target == Offset` per tick idles the wheel follower; same-axis wheel input cancels the fling. Decay terminates when |v| < threshold or the offset hits a clamp boundary. This is still composition-style independent animation downstream of the chokepoint: no relayout, no re-record; the batcher re-applies the cached transform (architecture-spec §7 animation).
+
+> **Why from-scratch, not an OS manipulation engine (recorded rationale).** WinUI rides DirectManipulation /
+> `InteractionTracker` / `InteractionContext` for pan-inertia; FluentGpu **rejects all of them** for the
+> integrator, on two hard grounds, neither stylistic:
+> 1. **They own their own clock and write offset out-of-band**, bypassing the `SetScrollOffset`/`ApplyScrollPosition`
+>    chokepoint — so the **virtual re-realize is lost** (a DManip-driven fling over a 10k-item `Virtual.ListBound`
+>    would scroll the transform but never fire `VirtualRangeDirty`, leaving the realized window stale). Routing
+>    every tick through the one chokepoint is the *reason* virtualization stays correct under inertia.
+> 2. **They have no headless presence.** The engine's gates — `HotPhaseAllocBytes == 0` over a fling, and the
+>    §12.6 / `validation.md` integrator-determinism sweep (same target + timestep ⇒ bit-identical trace at
+>    dt ∈ {8.33, 16.67, 33.3} ms) — require a deterministic, pure-managed integrator that runs in `Pal.Headless`.
+>    An OS engine cannot pass either gate. (Confined-to-`Pal.Windows` Win32 calls like `EnableMouseInPointer`
+>    are fine; an OS *animation/physics* engine in the hot integrator path is the rejected dependency.)
+
+> **Shipped Phase-1 subset (the arena lands later, §7A unchanged).** Phase 1 ships the **synchronous
+> single-recognizer** path only: one pan/tap recognizer in `Dispatch` (touch-down on a `Scrollable` anchors;
+> crossing the `SM_CXDRAG` slop claims the pan — kills the click candidate, routes `Pressed → PointerCancel` to
+> the down chain per the WinUI contract, never a Released/click — and drives `SetScrollOffset(start − delta)`;
+> below slop, down→up is the existing click/tap), plus a **Fling mode on `ScrollAnimator`** (the existing
+> phase-7 `Tick` armed via the `OnScrollArmed`/`OnScrollHover` delegate seam gains a velocity-seeded
+> friction-decay mode alongside its target-chase ease — the `velocity`/`Mode{TargetChase,Fling}` co-located on
+> `ScrollState`). The full **`GestureArena` + per-recognizer `PointerFsm`** above (§7A, and the `PointerFsm`
+> struct here) ships **unamended in Phase 3** behind the `validation.md §12.6` arena-determinism gate; the
+> single recognizer is the documented narrowing of that coordinator to one member. The §7A.5
+> tentative-until-resolution capture semantics shift is **Phase-3-only** — Phase 1's capture is immediate
+> (single recognizer), observably identical to the mouse path.
 
 ---
 

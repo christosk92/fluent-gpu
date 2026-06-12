@@ -1,0 +1,671 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.RepeatTicker
+  commentId: T:FluentGpu.Animation.RepeatTicker
+  id: RepeatTicker
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.RepeatTicker.#ctor(FluentGpu.Scene.SceneStore)
+  - FluentGpu.Animation.RepeatTicker.Arm(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.RepeatTicker.Disarm(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.RepeatTicker.HasActive
+  - FluentGpu.Animation.RepeatTicker.Pause(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.RepeatTicker.Resume(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Animation.RepeatTicker.Tick(System.Single)
+  langs:
+  - csharp
+  - vb
+  name: RepeatTicker
+  nameWithType: RepeatTicker
+  fullName: FluentGpu.Animation.RepeatTicker
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RepeatTicker
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    Drives WinUI RepeatButton auto-repeat: while a repeat node is held, its click handler is invoked once on press, then
+
+    after an initial delay, then at a fixed interval. A host system armed by the dispatcher on press / released on up
+
+    (the <xref href="FluentGpu.Animation.InteractionAnimator" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Animation.ScrollAnimator" data-throw-if-not-resolved="false"></xref> idiom), ticked once per frame in the host loop and
+
+    reported through <xref href="FluentGpu.Animation.RepeatTicker.HasActive" data-throw-if-not-resolved="false"></xref> so frames keep flowing while held — and stop the instant it's released
+
+    (no busy loop). Zero alloc on a steady frame (invokes the already-stored click <xref href="System.Action" data-throw-if-not-resolved="false"></xref>).
+
+    Delay/Interval come from the node (<code>InteractionInfo.RepeatDelayMs/RepeatIntervalMs</code>; NaN/non-positive = the
+
+    WinUI DP defaults, validated positive like RepeatButton_Partial.cpp:149-182). While the held pointer leaves the
+
+    node the ticker PAUSES; re-entry resumes with a fresh initial delay and never an immediate re-fire
+
+    (RepeatButton_Partial.cpp:530-548, :565-574).
+  example: []
+  syntax:
+    content: public sealed class RepeatTicker
+    content.vb: Public NotInheritable Class RepeatTicker
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Animation.RepeatTicker.#ctor(FluentGpu.Scene.SceneStore)
+  commentId: M:FluentGpu.Animation.RepeatTicker.#ctor(FluentGpu.Scene.SceneStore)
+  id: '#ctor(FluentGpu.Scene.SceneStore)'
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: RepeatTicker(SceneStore)
+  nameWithType: RepeatTicker.RepeatTicker(SceneStore)
+  fullName: FluentGpu.Animation.RepeatTicker.RepeatTicker(FluentGpu.Scene.SceneStore)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public RepeatTicker(SceneStore scene)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    content.vb: Public Sub New(scene As SceneStore)
+  overload: FluentGpu.Animation.RepeatTicker.#ctor*
+  nameWithType.vb: RepeatTicker.New(SceneStore)
+  fullName.vb: FluentGpu.Animation.RepeatTicker.New(FluentGpu.Scene.SceneStore)
+  name.vb: New(SceneStore)
+- uid: FluentGpu.Animation.RepeatTicker.HasActive
+  commentId: P:FluentGpu.Animation.RepeatTicker.HasActive
+  id: HasActive
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: HasActive
+  nameWithType: RepeatTicker.HasActive
+  fullName: FluentGpu.Animation.RepeatTicker.HasActive
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: HasActive
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: True while armed AND ticking — a paused ticker needs no frames (the resuming pointer move wakes it).
+  example: []
+  syntax:
+    content: public bool HasActive { get; }
+    parameters: []
+    return:
+      type: System.Boolean
+    content.vb: Public ReadOnly Property HasActive As Boolean
+  overload: FluentGpu.Animation.RepeatTicker.HasActive*
+- uid: FluentGpu.Animation.RepeatTicker.Arm(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.RepeatTicker.Arm(FluentGpu.Foundation.NodeHandle)
+  id: Arm(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: Arm(NodeHandle)
+  nameWithType: RepeatTicker.Arm(NodeHandle)
+  fullName: FluentGpu.Animation.RepeatTicker.Arm(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Arm
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'Begin auto-repeat for <code class="paramref">node</code>: fire the click once now, then schedule the repeat.'
+  example: []
+  syntax:
+    content: public void Arm(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub Arm(node As NodeHandle)
+  overload: FluentGpu.Animation.RepeatTicker.Arm*
+- uid: FluentGpu.Animation.RepeatTicker.Disarm(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.RepeatTicker.Disarm(FluentGpu.Foundation.NodeHandle)
+  id: Disarm(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: Disarm(NodeHandle)
+  nameWithType: RepeatTicker.Disarm(NodeHandle)
+  fullName: FluentGpu.Animation.RepeatTicker.Disarm(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Disarm
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: Stop auto-repeat (on pointer-up / key-up / cancel) if <code class="paramref">node</code> is the active one.
+  example: []
+  syntax:
+    content: public void Disarm(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub Disarm(node As NodeHandle)
+  overload: FluentGpu.Animation.RepeatTicker.Disarm*
+- uid: FluentGpu.Animation.RepeatTicker.Pause(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.RepeatTicker.Pause(FluentGpu.Foundation.NodeHandle)
+  id: Pause(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: Pause(NodeHandle)
+  nameWithType: RepeatTicker.Pause(NodeHandle)
+  fullName: FluentGpu.Animation.RepeatTicker.Pause(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Pause
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'The held pointer left the armed node: stop ticking (idempotent; stays armed for a Resume).'
+  example: []
+  syntax:
+    content: public void Pause(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub Pause(node As NodeHandle)
+  overload: FluentGpu.Animation.RepeatTicker.Pause*
+- uid: FluentGpu.Animation.RepeatTicker.Resume(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Animation.RepeatTicker.Resume(FluentGpu.Foundation.NodeHandle)
+  id: Resume(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: Resume(NodeHandle)
+  nameWithType: RepeatTicker.Resume(NodeHandle)
+  fullName: FluentGpu.Animation.RepeatTicker.Resume(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Resume
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 71
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    The held pointer re-entered the armed node: restart with a FRESH initial delay — never an immediate
+        re-fire (idempotent while already running).
+  example: []
+  syntax:
+    content: public void Resume(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub [Resume](node As NodeHandle)
+  overload: FluentGpu.Animation.RepeatTicker.Resume*
+- uid: FluentGpu.Animation.RepeatTicker.Tick(System.Single)
+  commentId: M:FluentGpu.Animation.RepeatTicker.Tick(System.Single)
+  id: Tick(System.Single)
+  parent: FluentGpu.Animation.RepeatTicker
+  langs:
+  - csharp
+  - vb
+  name: Tick(float)
+  nameWithType: RepeatTicker.Tick(float)
+  fullName: FluentGpu.Animation.RepeatTicker.Tick(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Animation/RepeatTicker.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tick
+    path: ../../src/FluentGpu.Animation/RepeatTicker.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  syntax:
+    content: public void Tick(float dtMs)
+    parameters:
+    - id: dtMs
+      type: System.Single
+    content.vb: Public Sub Tick(dtMs As Single)
+  overload: FluentGpu.Animation.RepeatTicker.Tick*
+  nameWithType.vb: RepeatTicker.Tick(Single)
+  fullName.vb: FluentGpu.Animation.RepeatTicker.Tick(Single)
+  name.vb: Tick(Single)
+references:
+- uid: FluentGpu.Animation.InteractionAnimator
+  commentId: T:FluentGpu.Animation.InteractionAnimator
+  href: FluentGpu.Animation.InteractionAnimator.html
+  name: InteractionAnimator
+  nameWithType: InteractionAnimator
+  fullName: FluentGpu.Animation.InteractionAnimator
+- uid: FluentGpu.Animation.ScrollAnimator
+  commentId: T:FluentGpu.Animation.ScrollAnimator
+  href: FluentGpu.Animation.ScrollAnimator.html
+  name: ScrollAnimator
+  nameWithType: ScrollAnimator
+  fullName: FluentGpu.Animation.ScrollAnimator
+- uid: FluentGpu.Animation.RepeatTicker.HasActive
+  commentId: P:FluentGpu.Animation.RepeatTicker.HasActive
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_HasActive
+  name: HasActive
+  nameWithType: RepeatTicker.HasActive
+  fullName: FluentGpu.Animation.RepeatTicker.HasActive
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Animation.RepeatTicker.#ctor*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.#ctor
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker__ctor_FluentGpu_Scene_SceneStore_
+  name: RepeatTicker
+  nameWithType: RepeatTicker.RepeatTicker
+  fullName: FluentGpu.Animation.RepeatTicker.RepeatTicker
+  nameWithType.vb: RepeatTicker.New
+  fullName.vb: FluentGpu.Animation.RepeatTicker.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Animation.RepeatTicker.HasActive*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.HasActive
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_HasActive
+  name: HasActive
+  nameWithType: RepeatTicker.HasActive
+  fullName: FluentGpu.Animation.RepeatTicker.HasActive
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Animation.RepeatTicker.Arm*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.Arm
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_Arm_FluentGpu_Foundation_NodeHandle_
+  name: Arm
+  nameWithType: RepeatTicker.Arm
+  fullName: FluentGpu.Animation.RepeatTicker.Arm
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Animation.RepeatTicker.Disarm*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.Disarm
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_Disarm_FluentGpu_Foundation_NodeHandle_
+  name: Disarm
+  nameWithType: RepeatTicker.Disarm
+  fullName: FluentGpu.Animation.RepeatTicker.Disarm
+- uid: FluentGpu.Animation.RepeatTicker.Pause*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.Pause
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_Pause_FluentGpu_Foundation_NodeHandle_
+  name: Pause
+  nameWithType: RepeatTicker.Pause
+  fullName: FluentGpu.Animation.RepeatTicker.Pause
+- uid: FluentGpu.Animation.RepeatTicker.Resume*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.Resume
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_Resume_FluentGpu_Foundation_NodeHandle_
+  name: Resume
+  nameWithType: RepeatTicker.Resume
+  fullName: FluentGpu.Animation.RepeatTicker.Resume
+- uid: FluentGpu.Animation.RepeatTicker.Tick*
+  commentId: Overload:FluentGpu.Animation.RepeatTicker.Tick
+  href: FluentGpu.Animation.RepeatTicker.html#FluentGpu_Animation_RepeatTicker_Tick_System_Single_
+  name: Tick
+  nameWithType: RepeatTicker.Tick
+  fullName: FluentGpu.Animation.RepeatTicker.Tick
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single

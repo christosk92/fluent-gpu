@@ -1,0 +1,623 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hooks.ContextProviderEl
+  commentId: T:FluentGpu.Hooks.ContextProviderEl
+  id: ContextProviderEl
+  parent: FluentGpu.Hooks
+  children:
+  - FluentGpu.Hooks.ContextProviderEl.#ctor(System.Object,System.Object,FluentGpu.Dsl.Element)
+  - FluentGpu.Hooks.ContextProviderEl.Channel
+  - FluentGpu.Hooks.ContextProviderEl.Child
+  - FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+  - FluentGpu.Hooks.ContextProviderEl.Value
+  langs:
+  - csharp
+  - vb
+  name: ContextProviderEl
+  nameWithType: ContextProviderEl
+  fullName: FluentGpu.Hooks.ContextProviderEl
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContextProviderEl
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Provides a context value to its subtree (the React <code>Context.Provider</code>). One child.
+  example: []
+  syntax:
+    content: 'public sealed record ContextProviderEl : Element, IEquatable<Element>, IEquatable<ContextProviderEl>'
+    content.vb: Public NotInheritable Class ContextProviderEl Inherits Element Implements IEquatable(Of Element), IEquatable(Of ContextProviderEl)
+  inheritance:
+  - System.Object
+  - FluentGpu.Dsl.Element
+  implements:
+  - System.IEquatable{FluentGpu.Dsl.Element}
+  - System.IEquatable{FluentGpu.Hooks.ContextProviderEl}
+  inheritedMembers:
+  - FluentGpu.Dsl.Element.Key
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Hooks.ContextProviderEl.#ctor(System.Object,System.Object,FluentGpu.Dsl.Element)
+  commentId: M:FluentGpu.Hooks.ContextProviderEl.#ctor(System.Object,System.Object,FluentGpu.Dsl.Element)
+  id: '#ctor(System.Object,System.Object,FluentGpu.Dsl.Element)'
+  parent: FluentGpu.Hooks.ContextProviderEl
+  langs:
+  - csharp
+  - vb
+  name: ContextProviderEl(object, object?, Element)
+  nameWithType: ContextProviderEl.ContextProviderEl(object, object?, Element)
+  fullName: FluentGpu.Hooks.ContextProviderEl.ContextProviderEl(object, object?, FluentGpu.Dsl.Element)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Provides a context value to its subtree (the React <code>Context.Provider</code>). One child.
+  example: []
+  syntax:
+    content: public ContextProviderEl(object Channel, object? Value, Element Child)
+    parameters:
+    - id: Channel
+      type: System.Object
+    - id: Value
+      type: System.Object
+    - id: Child
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Sub New(Channel As Object, Value As Object, Child As Element)
+  overload: FluentGpu.Hooks.ContextProviderEl.#ctor*
+  nameWithType.vb: ContextProviderEl.New(Object, Object, Element)
+  fullName.vb: FluentGpu.Hooks.ContextProviderEl.New(Object, Object, FluentGpu.Dsl.Element)
+  name.vb: New(Object, Object, Element)
+- uid: FluentGpu.Hooks.ContextProviderEl.Channel
+  commentId: P:FluentGpu.Hooks.ContextProviderEl.Channel
+  id: Channel
+  parent: FluentGpu.Hooks.ContextProviderEl
+  langs:
+  - csharp
+  - vb
+  name: Channel
+  nameWithType: ContextProviderEl.Channel
+  fullName: FluentGpu.Hooks.ContextProviderEl.Channel
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Channel
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public object Channel { get; init; }
+    parameters: []
+    return:
+      type: System.Object
+    content.vb: Public Property Channel As Object
+  overload: FluentGpu.Hooks.ContextProviderEl.Channel*
+- uid: FluentGpu.Hooks.ContextProviderEl.Value
+  commentId: P:FluentGpu.Hooks.ContextProviderEl.Value
+  id: Value
+  parent: FluentGpu.Hooks.ContextProviderEl
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: ContextProviderEl.Value
+  fullName: FluentGpu.Hooks.ContextProviderEl.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public object? Value { get; init; }
+    parameters: []
+    return:
+      type: System.Object
+    content.vb: Public Property Value As Object
+  overload: FluentGpu.Hooks.ContextProviderEl.Value*
+- uid: FluentGpu.Hooks.ContextProviderEl.Child
+  commentId: P:FluentGpu.Hooks.ContextProviderEl.Child
+  id: Child
+  parent: FluentGpu.Hooks.ContextProviderEl
+  langs:
+  - csharp
+  - vb
+  name: Child
+  nameWithType: ContextProviderEl.Child
+  fullName: FluentGpu.Hooks.ContextProviderEl.Child
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Child
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 176
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  syntax:
+    content: public Element Child { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Property Child As Element
+  overload: FluentGpu.Hooks.ContextProviderEl.Child*
+- uid: FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+  commentId: P:FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+  id: ElementTypeId
+  parent: FluentGpu.Hooks.ContextProviderEl
+  langs:
+  - csharp
+  - vb
+  name: ElementTypeId
+  nameWithType: ContextProviderEl.ElementTypeId
+  fullName: FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hooks/Context.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ElementTypeId
+    path: ../../src/FluentGpu.Hooks/Context.cs
+    startLine: 178
+  assemblies:
+  - FluentGpu.Hooks
+  namespace: FluentGpu.Hooks
+  summary: Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).
+  example: []
+  syntax:
+    content: public override ushort ElementTypeId { get; }
+    parameters: []
+    return:
+      type: System.UInt16
+    content.vb: Public Overrides ReadOnly Property ElementTypeId As UShort
+  overridden: FluentGpu.Dsl.Element.ElementTypeId
+  overload: FluentGpu.Hooks.ContextProviderEl.ElementTypeId*
+references:
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: System.IEquatable{FluentGpu.Dsl.Element}
+  commentId: T:System.IEquatable{FluentGpu.Dsl.Element}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<Element>
+  nameWithType: IEquatable<Element>
+  fullName: System.IEquatable<FluentGpu.Dsl.Element>
+  nameWithType.vb: IEquatable(Of Element)
+  fullName.vb: System.IEquatable(Of FluentGpu.Dsl.Element)
+  name.vb: IEquatable(Of Element)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    href: FluentGpu.Dsl.Element.html
+  - name: )
+- uid: System.IEquatable{FluentGpu.Hooks.ContextProviderEl}
+  commentId: T:System.IEquatable{FluentGpu.Hooks.ContextProviderEl}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<ContextProviderEl>
+  nameWithType: IEquatable<ContextProviderEl>
+  fullName: System.IEquatable<FluentGpu.Hooks.ContextProviderEl>
+  nameWithType.vb: IEquatable(Of ContextProviderEl)
+  fullName.vb: System.IEquatable(Of FluentGpu.Hooks.ContextProviderEl)
+  name.vb: IEquatable(Of ContextProviderEl)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Hooks.ContextProviderEl
+    name: ContextProviderEl
+    href: FluentGpu.Hooks.ContextProviderEl.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Hooks.ContextProviderEl
+    name: ContextProviderEl
+    href: FluentGpu.Hooks.ContextProviderEl.html
+  - name: )
+- uid: FluentGpu.Dsl.Element.Key
+  commentId: P:FluentGpu.Dsl.Element.Key
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_Key
+  name: Key
+  nameWithType: Element.Key
+  fullName: FluentGpu.Dsl.Element.Key
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Hooks.ContextProviderEl.#ctor*
+  commentId: Overload:FluentGpu.Hooks.ContextProviderEl.#ctor
+  href: FluentGpu.Hooks.ContextProviderEl.html#FluentGpu_Hooks_ContextProviderEl__ctor_System_Object_System_Object_FluentGpu_Dsl_Element_
+  name: ContextProviderEl
+  nameWithType: ContextProviderEl.ContextProviderEl
+  fullName: FluentGpu.Hooks.ContextProviderEl.ContextProviderEl
+  nameWithType.vb: ContextProviderEl.New
+  fullName.vb: FluentGpu.Hooks.ContextProviderEl.New
+  name.vb: New
+- uid: FluentGpu.Hooks.ContextProviderEl.Channel*
+  commentId: Overload:FluentGpu.Hooks.ContextProviderEl.Channel
+  href: FluentGpu.Hooks.ContextProviderEl.html#FluentGpu_Hooks_ContextProviderEl_Channel
+  name: Channel
+  nameWithType: ContextProviderEl.Channel
+  fullName: FluentGpu.Hooks.ContextProviderEl.Channel
+- uid: FluentGpu.Hooks.ContextProviderEl.Value*
+  commentId: Overload:FluentGpu.Hooks.ContextProviderEl.Value
+  href: FluentGpu.Hooks.ContextProviderEl.html#FluentGpu_Hooks_ContextProviderEl_Value
+  name: Value
+  nameWithType: ContextProviderEl.Value
+  fullName: FluentGpu.Hooks.ContextProviderEl.Value
+- uid: FluentGpu.Hooks.ContextProviderEl.Child*
+  commentId: Overload:FluentGpu.Hooks.ContextProviderEl.Child
+  href: FluentGpu.Hooks.ContextProviderEl.html#FluentGpu_Hooks_ContextProviderEl_Child
+  name: Child
+  nameWithType: ContextProviderEl.Child
+  fullName: FluentGpu.Hooks.ContextProviderEl.Child
+- uid: FluentGpu.Dsl.Element.ElementTypeId
+  commentId: P:FluentGpu.Dsl.Element.ElementTypeId
+  parent: FluentGpu.Dsl.Element
+  href: FluentGpu.Dsl.Element.html#FluentGpu_Dsl_Element_ElementTypeId
+  name: ElementTypeId
+  nameWithType: Element.ElementTypeId
+  fullName: FluentGpu.Dsl.Element.ElementTypeId
+- uid: FluentGpu.Hooks.ContextProviderEl.ElementTypeId*
+  commentId: Overload:FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+  href: FluentGpu.Hooks.ContextProviderEl.html#FluentGpu_Hooks_ContextProviderEl_ElementTypeId
+  name: ElementTypeId
+  nameWithType: ContextProviderEl.ElementTypeId
+  fullName: FluentGpu.Hooks.ContextProviderEl.ElementTypeId
+- uid: System.UInt16
+  commentId: T:System.UInt16
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.uint16
+  name: ushort
+  nameWithType: ushort
+  fullName: ushort
+  nameWithType.vb: UShort
+  fullName.vb: UShort
+  name.vb: UShort

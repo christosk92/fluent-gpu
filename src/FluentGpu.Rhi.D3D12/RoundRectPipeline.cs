@@ -46,14 +46,16 @@ internal struct RectInstance
 internal sealed unsafe class RoundRectPipeline : IDisposable
 {
     private const int MaxInstances = 4096;
+    private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
 
     private ID3D12RootSignature* _rootSig;
     private ID3D12PipelineState* _pso;
     private ID3D12Resource* _quad;          // 4-vertex unit quad (upload heap)
-    private ID3D12Resource* _instances;     // structured buffer of RectInstance (upload heap, persistently mapped)
-    private RectInstance* _mapped;
+    private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];   // structured buffer of RectInstance per frame-in-flight (upload heap, persistently mapped)
+    private readonly RectInstance*[] _mapped = new RectInstance*[FrameCount];
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
     private int _cursor;
+    private int _active;
 
     private const string Hlsl = """
 struct Inst
@@ -328,9 +330,12 @@ float4 PSMain(VSOut i) : SV_Target
         _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = sizeof(float) * 8, StrideInBytes = sizeof(float) * 2 };
 
-        _instances = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances), "RoundRect.InstanceUpload");
-        void* ip; _instances->Map(0, null, &ip);
-        _mapped = (RectInstance*)ip;   // persistently mapped
+        for (int f = 0; f < FrameCount; f++)
+        {
+            _instances[f] = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances), "RoundRect.InstanceUpload");
+            void* ip; _instances[f]->Map(0, null, &ip);
+            _mapped[f] = (RectInstance*)ip;   // persistently mapped
+        }
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
@@ -354,21 +359,23 @@ float4 PSMain(VSOut i) : SV_Target
         return res;
     }
 
-    public void BeginFrame() => _cursor = 0;
+    /// <summary>Select this frame's instance buffer (by back-buffer index) and reset the cursor. The chosen buffer was
+    /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
+    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _cursor = 0; }
 
     public void Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
         if (count <= 0) return;
-        for (int i = 0; i < count; i++) _mapped[start + i] = instances[i];
+        for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
         float* vp = stackalloc float[2] { vpW, vpH };
         cmd->SetGraphicsRootSignature(_rootSig);
         cmd->SetPipelineState(_pso);
         cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootShaderResourceView(1, _instances->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
+        cmd->SetGraphicsRootShaderResourceView(1, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
             cmd->IASetVertexBuffers(0, 1, qv);
@@ -377,7 +384,8 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        if (_instances != null) { _instances->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances, "RoundRect.InstanceUpload"); _instances->Release(); _instances = null; }
+        for (int f = 0; f < FrameCount; f++)
+            if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "RoundRect.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "RoundRect.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();

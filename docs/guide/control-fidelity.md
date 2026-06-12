@@ -246,8 +246,21 @@ Customization of a control's internals goes through `TemplateParts` (`src/Fluent
   signals/callbacks, options/config, and theme token-bundle `Style` records — those are not part-styling.
 - Part-name strings may match existing reconciler `Key`s (e.g. "sb-thumb") for one vocabulary, but `Key` remains a
   separate identity concept — repeated parts (tab items, tick marks) must never derive their `Key` from a part const.
-- Virtualized item chrome (ListView/GridView rows) stays on the `ContainerFactory` seam — per-item part modifiers in
-  hot scroll paths are a recycling/allocation hazard.
+- Virtualized item chrome stays on the `ContainerFactory`/`SelectorVisual` seam for the SKIN, and per-item VARIATION
+  rides the `PartDelta` value seam — `Func<int, ItemChromeState, PartDelta>` on `ItemsView` (`PartDelta` = nullable
+  `Fill`/`Foreground`/`Opacity`/`Corners`/`Padding`/`Border`/`Glyph`). The delta's values are baked into the chrome
+  record DURING construction (a plain `with`-swap into the already-allocated `BoxEl`/`TextEl`), so per-item variation
+  costs ZERO extra allocation and is provably shape-stable. Two guards enforce it in CI: a `[Conditional("DEBUG")]`
+  shape-hash assert in the realizer (`TreeReconciler`, at the recycle point — hashes element-type + child arity +
+  per-child type/Key; erased from the shipping AOT binary) and a steady-scroll `HotPhaseAllocBytes == 0` check
+  (`cp2.partdelta.alloc`). The `PartDelta` lambda must be PURE-VALUE — no `new`/box/LINQ/`Animate` per call (those
+  allocate; the displacement seed is edge-triggered for exactly this reason). Per-item STRUCTURE uses
+  permanently-present invisible parts (`Opacity=0`/`Width=0` flips on always-present keyed children — WinUI's
+  `x:DeferLoadStrategy`-vs-`Opacity=0` pattern), NEVER add/remove children (that would trip the shape-hash guard).
+  List-UNIFORM `TemplateParts` modifiers are legal again via the apply-once prototype cache
+  (`TemplateParts.TryApplyCached`, keyed on the parts epoch — invalidates when the modifier map mutates; no theme-epoch
+  term because a theme switch forces full reconstruction); per-item CONTENT differences must use `PartDelta`, never a
+  per-item `TemplateParts` modifier in a recycled path.
 - If a public factory returns `Embed.Comp(() => new Core { ... })`, every runtime-changeable prop must flow through a
   `Props` record plus `Ctx.Provide`, or through a caller-owned `Signal<T>` read by the component. The factory is not
   re-run when the parent re-renders, so fields set in the object initializer are mount-only seeds. Use frozen fields

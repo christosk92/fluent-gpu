@@ -1,0 +1,182 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+  commentId: T:FluentGpu.Controls.ContentDialog.DefaultBtn
+  id: ContentDialog.DefaultBtn
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ContentDialog.DefaultBtn.Close
+  - FluentGpu.Controls.ContentDialog.DefaultBtn.None
+  - FluentGpu.Controls.ContentDialog.DefaultBtn.Primary
+  - FluentGpu.Controls.ContentDialog.DefaultBtn.Secondary
+  langs:
+  - csharp
+  - vb
+  name: ContentDialog.DefaultBtn
+  nameWithType: ContentDialog.DefaultBtn
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultBtn
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public enum ContentDialog.DefaultBtn : byte'
+    content.vb: Public Enum ContentDialog.DefaultBtn As Byte
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn.None
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultBtn.None
+  id: None
+  parent: FluentGpu.Controls.ContentDialog.DefaultBtn
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: ContentDialog.DefaultBtn.None
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn.Primary
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultBtn.Primary
+  id: Primary
+  parent: FluentGpu.Controls.ContentDialog.DefaultBtn
+  langs:
+  - csharp
+  - vb
+  name: Primary
+  nameWithType: ContentDialog.DefaultBtn.Primary
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn.Primary
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Primary
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Primary = 1
+    return:
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn.Secondary
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultBtn.Secondary
+  id: Secondary
+  parent: FluentGpu.Controls.ContentDialog.DefaultBtn
+  langs:
+  - csharp
+  - vb
+  name: Secondary
+  nameWithType: ContentDialog.DefaultBtn.Secondary
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn.Secondary
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Secondary
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Secondary = 2
+    return:
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn.Close
+  commentId: F:FluentGpu.Controls.ContentDialog.DefaultBtn.Close
+  id: Close
+  parent: FluentGpu.Controls.ContentDialog.DefaultBtn
+  langs:
+  - csharp
+  - vb
+  name: Close
+  nameWithType: ContentDialog.DefaultBtn.Close
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn.Close
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ContentDialog.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Close
+    path: ../../src/FluentGpu.Controls/ContentDialog.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Close = 3
+    return:
+      type: FluentGpu.Controls.ContentDialog.DefaultBtn
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+  commentId: T:FluentGpu.Controls.ContentDialog.DefaultBtn
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ContentDialog.html
+  name: ContentDialog.DefaultBtn
+  nameWithType: ContentDialog.DefaultBtn
+  fullName: FluentGpu.Controls.ContentDialog.DefaultBtn
+  spec.csharp:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html
+  spec.vb:
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    href: FluentGpu.Controls.ContentDialog.html
+  - name: .
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: DefaultBtn
+    href: FluentGpu.Controls.ContentDialog.DefaultBtn.html

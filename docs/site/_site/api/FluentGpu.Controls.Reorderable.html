@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Reorderable | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Reorderable | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="E5-L3 — drag-reorder for ANY one-axis item list (incl. Virtual.List), composed from the engine layers beneath it (plan Part B E5; user ruling: the Flutter Draggable/DragTarget + react-beautiful-dnd + SwiftUI model, deliberately NOT WinUI&#39;s OLE loop): each item is an L2  of , the list body is ONE accepting , the slot math is  (WinUI&#39;s midpoint rule + live-reorder dwell — ListViewBase_Partial_Reorder.cpp:984-1063, :50-51), sibling displacement is the engine FLIP pipeline (each wrapped item carries a LayoutTransition; re-rendering the PROJECTED order moves them through their springs), the ghost/lift visuals and the drop-glide are L1 DragController, and edge auto-scroll is engine-level in DragDropContext (WinUI&#39;s 100px/150–1500px/s gradient) — this class adds none of those mechanics, only the list semantics. Usage (inside a component render): var ro = UseMemo(() =&amp;gt; new Reorderable(&quot;track&quot;) { OnReorder = (f, t) =&amp;gt; Move(tracks, f, t) }); ro.Scene = Context.Scene; ro.RequestRender = Context.RequestRerender; ro.ItemCount = tracks.Count; ro.ItemExtent = 48f; return ro.List(Virtual.List(tracks.Count, 48f,     slot =&amp;gt; ro.Item(ro.ItemAt(slot), RowFor(tracks[ro.ItemAt(slot)]), key: tracks[ro.ItemAt(slot)].Id))); Render slots through  with STABLE per-item keys: mid-drag the projection moves the dragged item to the dwell-committed slot, the keyed diff keeps node identity, and the FLIP pass animates the displaced siblings (the part-to-make-room motion) while DragController.Move re-anchors the pointer-held visual. CROSS-LIST: two Reorderables sharing a Kind. The target list accepts the foreign session, shows the insertion line while hovered, and on drop routes the ONE  (target&#39;s, else the source&#39;s) — the source&#39;s gesture completion then cancels its local reorder instead of committing (no double mutation). KEYBOARD lift mode (the react-beautiful-dnd a11y pattern): Space on a focused item lifts it (a pointer-free reorder; the item dims to the L1 drag opacity with the lifted shadow), Up/Down (Left/Right when ) move the insertion slot with NO dwell, Space drops (commits), Escape cancels, and focus leaving the lifted item cancels. All slot moves re-render the projection → FLIP animates them.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_Reorderable.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.Reorderable%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.Reorderable">
+
+
+
+  <h1 id="FluentGpu_Controls_Reorderable" data-uid="FluentGpu.Controls.Reorderable" class="text-break">
+Class Reorderable  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L51"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>E5-L3 — drag-reorder for ANY one-axis item list (incl. <code>Virtual.List</code>), composed from the engine layers
+beneath it (plan Part B E5; user ruling: the Flutter Draggable/DragTarget + react-beautiful-dnd + SwiftUI model,
+deliberately NOT WinUI's OLE loop): each item is an L2 <a class="xref" href="FluentGpu.Foundation.DragSource.html">DragSource</a> of <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Kind">Kind</a>, the list
+body is ONE accepting <a class="xref" href="FluentGpu.Foundation.DropTargetSpec.html">DropTargetSpec</a>, the slot math is <a class="xref" href="FluentGpu.Controls.ReorderList.html">ReorderList</a> (WinUI's midpoint
+rule + live-reorder dwell — ListViewBase_Partial_Reorder.cpp:984-1063, :50-51), sibling displacement is the
+engine FLIP pipeline (each wrapped item carries a <code>LayoutTransition</code>; re-rendering the PROJECTED order moves
+them through their springs), the ghost/lift visuals and the drop-glide are L1 <code>DragController</code>, and edge
+auto-scroll is engine-level in <code>DragDropContext</code> (WinUI's 100px/150–1500px/s gradient) — this class adds none
+of those mechanics, only the list semantics.</p>
+<p>Usage (inside a component render):</p>
+<pre><code class="lang-csharp">var ro = UseMemo(() =&gt; new Reorderable("track") { OnReorder = (f, t) =&gt; Move(tracks, f, t) });
+ro.Scene = Context.Scene; ro.RequestRender = Context.RequestRerender;
+ro.ItemCount = tracks.Count; ro.ItemExtent = 48f;
+return ro.List(Virtual.List(tracks.Count, 48f,
+    slot =&gt; ro.Item(ro.ItemAt(slot), RowFor(tracks[ro.ItemAt(slot)]), key: tracks[ro.ItemAt(slot)].Id)));</code></pre>
+<p>Render slots through <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_">ItemAt(int)</a> with STABLE per-item keys: mid-drag the projection moves the dragged
+item to the dwell-committed slot, the keyed diff keeps node identity, and the FLIP pass animates the displaced
+siblings (the part-to-make-room motion) while <code>DragController.Move</code> re-anchors the pointer-held visual.</p>
+<p>CROSS-LIST: two Reorderables sharing a Kind. The target list accepts the foreign session, shows the insertion
+line while hovered, and on drop routes the ONE <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_OnCrossCommit">OnCrossCommit</a> (target's, else the source's) —
+the source's gesture completion then cancels its local reorder instead of committing (no double mutation).</p>
+<p>KEYBOARD lift mode (the react-beautiful-dnd a11y pattern): Space on a focused item lifts it (a pointer-free
+reorder; the item dims to the L1 drag opacity with the lifted shadow), Up/Down (Left/Right when
+<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Horizontal">Horizontal</a>) move the insertion slot with NO dwell, Space drops (commits), Escape cancels, and
+focus leaving the lifted item cancels. All slot moves re-render the projection → FLIP animates them.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public sealed class Reorderable</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Reorderable</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="FluentGpu_Controls_Reorderable__ctor_" data-uid="FluentGpu.Controls.Reorderable.#ctor*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable__ctor_System_String_" data-uid="FluentGpu.Controls.Reorderable.#ctor(System.String)">
+  Reorderable(string)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L71"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Reorderable(string kind)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>kind</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_AutoDwell" data-uid="FluentGpu.Controls.Reorderable.AutoDwell">
+  AutoDwell
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L125"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Advance the dwell from the wall clock on every drag delta (default). Set false for deterministic
+tests and drive <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Advance_System_Single_">Advance(float)</a> yourself (or set <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_DwellMs">DwellMs</a> = 0).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool AutoDwell</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_ExtentOf" data-uid="FluentGpu.Controls.Reorderable.ExtentOf">
+  ExtentOf
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L99"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Variable extents: resting main-axis extent per ORIGINAL index (sampled once at lift into pooled
+storage). Cross-list insertion math still assumes the uniform <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemExtent">ItemExtent</a> pitch.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;int, float&gt;? ExtentOf</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_Horizontal" data-uid="FluentGpu.Controls.Reorderable.Horizontal">
+  Horizontal
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L103"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Horizontal strip (TotalDx drives the slot math; Left/Right are the keyboard-lift arrows).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Horizontal</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_ItemCount" data-uid="FluentGpu.Controls.Reorderable.ItemCount">
+  ItemCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Item count this render (drives <a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Begin_System_Int32_System_ReadOnlySpan_System_Single__System_Single_">Begin(int, ReadOnlySpan&lt;float&gt;, float)</a> at lift).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int ItemCount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_ItemExtent" data-uid="FluentGpu.Controls.Reorderable.ItemExtent">
+  ItemExtent
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Uniform resting main-axis extent per item (ignored when <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ExtentOf">ExtentOf</a> is set).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float ItemExtent</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_ItemOf" data-uid="FluentGpu.Controls.Reorderable.ItemOf">
+  ItemOf
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L118"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The app item carried as <a class="xref" href="FluentGpu.Controls.ReorderPayload.html#FluentGpu_Controls_ReorderPayload_Item">Item</a> (what a foreign target receives).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Func&lt;int, object?&gt;? ItemOf</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.func-2">Func</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_LiftOpacity" data-uid="FluentGpu.Controls.Reorderable.LiftOpacity">
+  LiftOpacity
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Keyboard-lift visual opacity — the SAME lift visual the pointer path gets from L1
+(WinUI <code>ListViewItemDragThemeOpacity</code> = 0.80 — microsoft-ui-xaml
+controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7, identical in all ThemeDictionaries).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const float LiftOpacity = 0.8</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_LiveProject" data-uid="FluentGpu.Controls.Reorderable.LiveProject">
+  LiveProject
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L135"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Live mid-drag projection (default): <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemAt_System_Int32_">ItemAt(int)</a> returns the PROJECTED order while lifted, so
+displaced siblings FLIP to make room (the rbd motion). REQUIRES key-preserving children (plain keyed children /
+<code>ForEl</code> / <code>Repeater</code>): the keyed diff moves nodes with their items. Set FALSE over
+<code>Virtual.List</code>/<code>VirtualListEl</code> — its window diff recycles nodes POSITIONALLY (no keys), so a mid-drag
+projection would swap content under the lifted node; instead the resting order holds during the drag and the
+insertion LINE shows the pending slot (commit still lands exactly where shown).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool LiveProject</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_OnCrossCommit" data-uid="FluentGpu.Controls.Reorderable.OnCrossCommit">
+  OnCrossCommit
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L116"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>CROSS-LIST commit (see <a class="xref" href="FluentGpu.Controls.ReorderCrossCommit.html">ReorderCrossCommit</a>). The drop TARGET's delegate runs; when it
+has none, the SOURCE's is used — set the one shared callback on both lists.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReorderCrossCommit? OnCrossCommit</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.ReorderCrossCommit.html">ReorderCrossCommit</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_OnReorder" data-uid="FluentGpu.Controls.Reorderable.OnReorder">
+  OnReorder
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L113"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>SAME-LIST commit: (fromIndex, toIndex) in the ORIGINAL order — remove at from, insert at to
+(<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_Move__1_System_Collections_Generic_IList___0__System_Int32_System_Int32_">Move&lt;T&gt;(IList&lt;T&gt;, int, int)</a> applies it to an <code>IList&lt;T&gt;</code>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action&lt;int, int&gt;? OnReorder</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-2">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>, <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_RequestRender" data-uid="FluentGpu.Controls.Reorderable.RequestRender">
+  RequestRender
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L109"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Re-render request (wire <code>Context.RequestRerender</code> or a signal bump): fired whenever the
+projected order / lift / insertion-line state changed and the consumer must re-render the list.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Action? RequestRender</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action">Action</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_Scene" data-uid="FluentGpu.Controls.Reorderable.Scene">
+  Scene
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L106"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The scene (wire <code>Context.Scene</code>) — needed only for CROSS-LIST insertion math (pointer →
+slot) and the insertion-line offset; same-list reorder works without it.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public SceneStore? Scene</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Scene.SceneStore.html">SceneStore</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_ShowInsertionLine" data-uid="FluentGpu.Controls.Reorderable.ShowInsertionLine">
+  ShowInsertionLine
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L128"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Show the built-in 2px accent insertion line while a FOREIGN session hovers this list, and for
+same-list feedback when <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiveProject">LiveProject</a> is off. Default true.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool ShowInsertionLine</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Reorderable_Spacing" data-uid="FluentGpu.Controls.Reorderable.Spacing">
+  Spacing
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The container's main-axis Gap between items.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float Spacing</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_Reorderable_Core_" data-uid="FluentGpu.Controls.Reorderable.Core*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_Core" data-uid="FluentGpu.Controls.Reorderable.Core">
+  Core
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L90"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The slot-math core (midpoint rule + dwell + displacement hints + projection). Exposed for advanced
+composition; normal consumers only read the surface properties here.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReorderList Core { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.ReorderList.html">ReorderList</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_DwellMs_" data-uid="FluentGpu.Controls.Reorderable.DwellMs*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_DwellMs" data-uid="FluentGpu.Controls.Reorderable.DwellMs">
+  DwellMs
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L122"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Live-reorder dwell before displaced items shift (WinUI LISTVIEW_LIVEREORDER_TIMER 200ms /
+GRIDVIEW 300ms — ListViewBase_Partial_Reorder.cpp:50-51). 0 ⇒ displacement follows the pointer immediately.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float DwellMs { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_InsertionIndex_" data-uid="FluentGpu.Controls.Reorderable.InsertionIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_InsertionIndex" data-uid="FluentGpu.Controls.Reorderable.InsertionIndex">
+  InsertionIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L154"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The slot the line marks: the foreign session's insertion slot (0..<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_ItemCount">ItemCount</a>), else the
+same-list pending slot (−1 when nothing shows).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int InsertionIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_InsertionLineOffset_" data-uid="FluentGpu.Controls.Reorderable.InsertionLineOffset*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_InsertionLineOffset" data-uid="FluentGpu.Controls.Reorderable.InsertionLineOffset">
+  InsertionLineOffset
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L163"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Main-axis offset (list-wrapper space, scroll-corrected) of the insertion boundary — where the
+built-in <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLine">InsertionLine()</a> sits. Foreign sessions mark the slot boundary; a same-list
+(<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiveProject">LiveProject</a>-off) lift marks the resting start the dragged item will land at
+(<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_DraggedTargetStart">DraggedTargetStart</a>... computed at the PENDING slot for immediacy).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float InsertionLineOffset { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_InsertionVisible_" data-uid="FluentGpu.Controls.Reorderable.InsertionVisible*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_InsertionVisible" data-uid="FluentGpu.Controls.Reorderable.InsertionVisible">
+  InsertionVisible
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L148"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The insertion line is showing: a foreign session hovers the list, OR a same-list lift with
+<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiveProject">LiveProject</a> off has a pending slot away from home (the virtual-list feedback mode).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool InsertionVisible { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_IsKeyboardLifted_" data-uid="FluentGpu.Controls.Reorderable.IsKeyboardLifted*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_IsKeyboardLifted" data-uid="FluentGpu.Controls.Reorderable.IsKeyboardLifted">
+  IsKeyboardLifted
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L143"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>True while the lift is the pointer-free keyboard mode.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsKeyboardLifted { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_IsLifted_" data-uid="FluentGpu.Controls.Reorderable.IsLifted*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_IsLifted" data-uid="FluentGpu.Controls.Reorderable.IsLifted">
+  IsLifted
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L139"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A lift is in flight on THIS list (pointer drag or keyboard lift).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsLifted { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_Kind_" data-uid="FluentGpu.Controls.Reorderable.Kind*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_Kind" data-uid="FluentGpu.Controls.Reorderable.Kind">
+  Kind
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The drag kind this list emits AND accepts (the cast-free L2 discriminator).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string Kind { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_LiftedIndex_" data-uid="FluentGpu.Controls.Reorderable.LiftedIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_LiftedIndex" data-uid="FluentGpu.Controls.Reorderable.LiftedIndex">
+  LiftedIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L141"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The lifted item's ORIGINAL index (−1 when idle).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int LiftedIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_TargetIndex_" data-uid="FluentGpu.Controls.Reorderable.TargetIndex*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_TargetIndex" data-uid="FluentGpu.Controls.Reorderable.TargetIndex">
+  TargetIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L145"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The dwell-committed slot the projection currently shows (−1 when idle).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int TargetIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_Reorderable_Advance_" data-uid="FluentGpu.Controls.Reorderable.Advance*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_Advance_System_Single_" data-uid="FluentGpu.Controls.Reorderable.Advance(System.Single)">
+  Advance(float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L204"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Deterministic dwell driver (tests / a FrameClock subscriber when <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_AutoDwell">AutoDwell</a> is off).
+Returns true when the shown target changed (a re-render was requested).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Advance(float dtMs)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>dtMs</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_InsertionLine_" data-uid="FluentGpu.Controls.Reorderable.InsertionLine*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_InsertionLine" data-uid="FluentGpu.Controls.Reorderable.InsertionLine">
+  InsertionLine()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L263"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The built-in cross-list insertion indicator: a 2px accent bar at the insertion boundary, stretched
+across the list (rbd's insertion cue; WinUI's native cue is displacement, which same-list reorder gets via
+FLIP). Non-hit-testable. Consumers composing their own <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_">List(Element)</a> wrapper can place it manually from
+<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionVisible">InsertionVisible</a>/<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_InsertionLineOffset">InsertionLineOffset</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element InsertionLine()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_Item_" data-uid="FluentGpu.Controls.Reorderable.Item*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_Item_System_Int32_FluentGpu_Dsl_Element_System_String_System_Nullable_FluentGpu_Foundation_LayoutTransition__" data-uid="FluentGpu.Controls.Reorderable.Item(System.Int32,FluentGpu.Dsl.Element,System.String,System.Nullable{FluentGpu.Foundation.LayoutTransition})">
+  Item(int, Element, string?, LayoutTransition?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L218"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Wrap one item's content: an L2 <a class="xref" href="FluentGpu.Foundation.DragSource.html">DragSource</a> of <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Kind">Kind</a> (payload =
+<a class="xref" href="FluentGpu.Controls.ReorderPayload.html">ReorderPayload</a>, resolved once at promotion), the L1 lifecycle wired into the slot math, a FLIP
+<code>LayoutTransition</code> (default <a class="xref" href="FluentGpu.Foundation.LayoutTransition.html#FluentGpu_Foundation_LayoutTransition_Slide">Slide</a>) for the displacement motion, focusable
+with the keyboard lift-mode keys, and the keyboard-lift visuals when lifted that way (the pointer path gets
+identical visuals from L1). <code class="paramref">index</code> is the ORIGINAL item index (pass <code>ItemAt(slot)</code>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element Item(int index, Element content, string? key = null, LayoutTransition? transition = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>content</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+    <dt><code>key</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>transition</code> <a class="xref" href="FluentGpu.Foundation.LayoutTransition.html">LayoutTransition</a>?</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_ItemAt_" data-uid="FluentGpu.Controls.Reorderable.ItemAt*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_ItemAt_System_Int32_" data-uid="FluentGpu.Controls.Reorderable.ItemAt(System.Int32)">
+  ItemAt(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L190"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The ORIGINAL item index shown at <code class="paramref">slot</code> under the current projection (identity when
+idle): render slot s with the item at <code>ItemAt(s)</code> and the item's STABLE key — mid-drag the dragged item
+occupies the dwell-committed slot and the keyed diff + FLIP animate the displaced siblings. With
+<a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_LiveProject">LiveProject</a> off this stays identity while lifted (virtual-list mode — the insertion line is the
+feedback; the commit reorders the model itself).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int ItemAt(int slot)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>slot</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_List_" data-uid="FluentGpu.Controls.Reorderable.List*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_List_FluentGpu_Dsl_Element_" data-uid="FluentGpu.Controls.Reorderable.List(FluentGpu.Dsl.Element)">
+  List(Element)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L244"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Wrap the list body as the ONE accepting drop target of <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Kind">Kind</a> (a ZStack so the
+insertion-line overlay can ride above the body): same-list releases commit through the gesture completion,
+foreign sessions get the insertion line + <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_OnCrossCommit">OnCrossCommit</a>. Captures the wrapper node for the
+pointer→slot math (set <a class="xref" href="FluentGpu.Controls.Reorderable.html#FluentGpu_Controls_Reorderable_Scene">Scene</a>).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Element List(Element body)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>body</code> <a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Reorderable_OffsetFor_" data-uid="FluentGpu.Controls.Reorderable.OffsetFor*"></a>
+
+  <h3 id="FluentGpu_Controls_Reorderable_OffsetFor_System_Int32_" data-uid="FluentGpu.Controls.Reorderable.OffsetFor(System.Int32)">
+  OffsetFor(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Reorderable.cs/#L200"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Displacement hint passthrough (<a class="xref" href="FluentGpu.Controls.ReorderList.html#FluentGpu_Controls_ReorderList_OffsetFor_System_Int32_">OffsetFor(int)</a>) for offset-hint consumers that
+render the RESTING order with translation hints instead of the projected order. Do not combine an authored
+offset hint with a FLIP <code>Animate</code> on the same node (see the ReorderList class remarks).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float OffsetFor(int originalIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>originalIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

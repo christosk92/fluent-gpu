@@ -1,0 +1,137 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SizeAnchor
+  commentId: T:FluentGpu.Foundation.SizeAnchor
+  id: SizeAnchor
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SizeAnchor.Leading
+  - FluentGpu.Foundation.SizeAnchor.Trailing
+  langs:
+  - csharp
+  - vb
+  name: SizeAnchor
+  nameWithType: SizeAnchor
+  fullName: FluentGpu.Foundation.SizeAnchor
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeAnchor
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Which edge of a <xref href="FluentGpu.Foundation.SizeMode.Reflow" data-throw-if-not-resolved="false"></xref> node its CONTENT is anchored to while the size animates.
+        <xref href="FluentGpu.Foundation.SizeAnchor.Leading" data-throw-if-not-resolved="false"></xref> = content stays put, the far edge sweeps (a wipe). <xref href="FluentGpu.Foundation.SizeAnchor.Trailing" data-throw-if-not-resolved="false"></xref> = the content's
+        end edge rides the animated edge (the WinUI Expander "slide out from under the header": at reveal 0 the content
+        sits fully behind the leading edge; its trailing rounded corners stay visible mid-motion). Applied by the recorder
+        as a child-group offset — compositor-composed, no per-child knowledge.
+  example: []
+  syntax:
+    content: 'public enum SizeAnchor : byte'
+    content.vb: Public Enum SizeAnchor As Byte
+- uid: FluentGpu.Foundation.SizeAnchor.Leading
+  commentId: F:FluentGpu.Foundation.SizeAnchor.Leading
+  id: Leading
+  parent: FluentGpu.Foundation.SizeAnchor
+  langs:
+  - csharp
+  - vb
+  name: Leading
+  nameWithType: SizeAnchor.Leading
+  fullName: FluentGpu.Foundation.SizeAnchor.Leading
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Leading
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Leading = 0
+    return:
+      type: FluentGpu.Foundation.SizeAnchor
+- uid: FluentGpu.Foundation.SizeAnchor.Trailing
+  commentId: F:FluentGpu.Foundation.SizeAnchor.Trailing
+  id: Trailing
+  parent: FluentGpu.Foundation.SizeAnchor
+  langs:
+  - csharp
+  - vb
+  name: Trailing
+  nameWithType: SizeAnchor.Trailing
+  fullName: FluentGpu.Foundation.SizeAnchor.Trailing
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Trailing
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: Trailing = 1
+    return:
+      type: FluentGpu.Foundation.SizeAnchor
+references:
+- uid: FluentGpu.Foundation.SizeMode.Reflow
+  commentId: F:FluentGpu.Foundation.SizeMode.Reflow
+  href: FluentGpu.Foundation.SizeMode.html#FluentGpu_Foundation_SizeMode_Reflow
+  name: Reflow
+  nameWithType: SizeMode.Reflow
+  fullName: FluentGpu.Foundation.SizeMode.Reflow
+- uid: FluentGpu.Foundation.SizeAnchor.Leading
+  commentId: F:FluentGpu.Foundation.SizeAnchor.Leading
+  href: FluentGpu.Foundation.SizeAnchor.html#FluentGpu_Foundation_SizeAnchor_Leading
+  name: Leading
+  nameWithType: SizeAnchor.Leading
+  fullName: FluentGpu.Foundation.SizeAnchor.Leading
+- uid: FluentGpu.Foundation.SizeAnchor.Trailing
+  commentId: F:FluentGpu.Foundation.SizeAnchor.Trailing
+  href: FluentGpu.Foundation.SizeAnchor.html#FluentGpu_Foundation_SizeAnchor_Trailing
+  name: Trailing
+  nameWithType: SizeAnchor.Trailing
+  fullName: FluentGpu.Foundation.SizeAnchor.Trailing
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.SizeAnchor
+  commentId: T:FluentGpu.Foundation.SizeAnchor
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SizeAnchor.html
+  name: SizeAnchor
+  nameWithType: SizeAnchor
+  fullName: FluentGpu.Foundation.SizeAnchor

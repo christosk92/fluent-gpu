@@ -1,0 +1,1450 @@
+### YamlMime:TableOfContent
+items:
+- uid: FluentGpu.Accessibility.Uia
+  name: FluentGpu.Accessibility.Uia
+  type: Namespace
+  items:
+  - uid: FluentGpu.Accessibility.Uia.UiaBackend
+    name: UiaBackend
+    type: Class
+- uid: FluentGpu.Animation
+  name: FluentGpu.Animation
+  type: Namespace
+  items:
+  - uid: FluentGpu.Animation.AnimChannel
+    name: AnimChannel
+    type: Enum
+  - uid: FluentGpu.Animation.AnimEngine
+    name: AnimEngine
+    type: Class
+  - uid: FluentGpu.Animation.CaretBlinker
+    name: CaretBlinker
+    type: Class
+  - uid: FluentGpu.Animation.CompositeOp
+    name: CompositeOp
+    type: Enum
+  - uid: FluentGpu.Animation.DrivenClockTable
+    name: DrivenClockTable
+    type: Class
+  - uid: FluentGpu.Animation.IntegrationMode
+    name: IntegrationMode
+    type: Enum
+  - uid: FluentGpu.Animation.InteractionAnimator
+    name: InteractionAnimator
+    type: Class
+  - uid: FluentGpu.Animation.Keyframe
+    name: Keyframe
+    type: Struct
+  - uid: FluentGpu.Animation.MotionSprings
+    name: MotionSprings
+    type: Class
+  - uid: FluentGpu.Animation.RepeatTicker
+    name: RepeatTicker
+    type: Class
+  - uid: FluentGpu.Animation.ScrollAnimator
+    name: ScrollAnimator
+    type: Class
+  - uid: FluentGpu.Animation.SpringParams
+    name: SpringParams
+    type: Struct
+- uid: FluentGpu.Controls
+  name: FluentGpu.Controls
+  type: Namespace
+  items:
+  - uid: FluentGpu.Controls.AnimatedIcon
+    name: AnimatedIcon
+    type: Class
+  - uid: FluentGpu.Controls.AnnotatedScrollBar
+    name: AnnotatedScrollBar
+    type: Class
+  - uid: FluentGpu.Controls.AnnotatedScrollBarScrollKind
+    name: AnnotatedScrollBarScrollKind
+    type: Enum
+  - uid: FluentGpu.Controls.AppBarButton
+    name: AppBarButton
+    type: Class
+  - uid: FluentGpu.Controls.AppBarButton.Style
+    name: AppBarButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.AppBarCommand
+    name: AppBarCommand
+    type: Class
+  - uid: FluentGpu.Controls.AppBarCommandKind
+    name: AppBarCommandKind
+    type: Enum
+  - uid: FluentGpu.Controls.AppBarSeparator
+    name: AppBarSeparator
+    type: Class
+  - uid: FluentGpu.Controls.AppBarToggleButton
+    name: AppBarToggleButton
+    type: Class
+  - uid: FluentGpu.Controls.AutoSuggestBox
+    name: AutoSuggestBox
+    type: Class
+  - uid: FluentGpu.Controls.BackgroundSizing
+    name: BackgroundSizing
+    type: Enum
+  - uid: FluentGpu.Controls.Border
+    name: Border
+    type: Class
+  - uid: FluentGpu.Controls.BreadcrumbBar
+    name: BreadcrumbBar
+    type: Class
+  - uid: FluentGpu.Controls.Button
+    name: Button
+    type: Class
+  - uid: FluentGpu.Controls.Button.Style
+    name: Button.Style
+    type: Class
+  - uid: FluentGpu.Controls.CalendarDatePicker
+    name: CalendarDatePicker
+    type: Class
+  - uid: FluentGpu.Controls.CalendarView
+    name: CalendarView
+    type: Class
+  - uid: FluentGpu.Controls.CalendarViewDisplayMode
+    name: CalendarViewDisplayMode
+    type: Enum
+  - uid: FluentGpu.Controls.CalendarViewSelectionMode
+    name: CalendarViewSelectionMode
+    type: Enum
+  - uid: FluentGpu.Controls.Canvas
+    name: Canvas
+    type: Class
+  - uid: FluentGpu.Controls.CanvasChild
+    name: CanvasChild
+    type: Class
+  - uid: FluentGpu.Controls.CaptionButton
+    name: CaptionButton
+    type: Class
+  - uid: FluentGpu.Controls.CaptionButton.Style
+    name: CaptionButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.CheckBox
+    name: CheckBox
+    type: Class
+  - uid: FluentGpu.Controls.CheckBox.Style
+    name: CheckBox.Style
+    type: Class
+  - uid: FluentGpu.Controls.CheckState
+    name: CheckState
+    type: Enum
+  - uid: FluentGpu.Controls.ColorPicker
+    name: ColorPicker
+    type: Class
+  - uid: FluentGpu.Controls.ColorPicker.Style
+    name: ColorPicker.Style
+    type: Class
+  - uid: FluentGpu.Controls.ComboBox
+    name: ComboBox
+    type: Class
+  - uid: FluentGpu.Controls.CommandBar
+    name: CommandBar
+    type: Class
+  - uid: FluentGpu.Controls.CommandBarButton
+    name: CommandBarButton
+    type: Class
+  - uid: FluentGpu.Controls.CommandBarDisplayMode
+    name: CommandBarDisplayMode
+    type: Enum
+  - uid: FluentGpu.Controls.CommandBarFlyout
+    name: CommandBarFlyout
+    type: Class
+  - uid: FluentGpu.Controls.CommandBarFlyoutShowMode
+    name: CommandBarFlyoutShowMode
+    type: Enum
+  - uid: FluentGpu.Controls.ContentDialog
+    name: ContentDialog
+    type: Class
+  - uid: FluentGpu.Controls.ContentDialog.DefaultBtn
+    name: ContentDialog.DefaultBtn
+    type: Enum
+  - uid: FluentGpu.Controls.ContentDialogResult
+    name: ContentDialogResult
+    type: Enum
+  - uid: FluentGpu.Controls.ControlMotion
+    name: ControlMotion
+    type: Class
+  - uid: FluentGpu.Controls.CornerJoin
+    name: CornerJoin
+    type: Enum
+  - uid: FluentGpu.Controls.DatePicker
+    name: DatePicker
+    type: Class
+  - uid: FluentGpu.Controls.DismissBehavior
+    name: DismissBehavior
+    type: Enum
+  - uid: FluentGpu.Controls.DropDownButton
+    name: DropDownButton
+    type: Class
+  - uid: FluentGpu.Controls.EditableText
+    name: EditableText
+    type: Class
+  - uid: FluentGpu.Controls.Expander
+    name: Expander
+    type: Class
+  - uid: FluentGpu.Controls.ExpanderTemplateSettings
+    name: ExpanderTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.FlipView
+    name: FlipView
+    type: Class
+  - uid: FluentGpu.Controls.FlyoutButton
+    name: FlyoutButton
+    type: Class
+  - uid: FluentGpu.Controls.FlyoutPlacement
+    name: FlyoutPlacement
+    type: Enum
+  - uid: FluentGpu.Controls.FlyoutPositioner
+    name: FlyoutPositioner
+    type: Class
+  - uid: FluentGpu.Controls.HyperlinkButton
+    name: HyperlinkButton
+    type: Class
+  - uid: FluentGpu.Controls.HyperlinkButton.Style
+    name: HyperlinkButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.IOverlayService
+    name: IOverlayService
+    type: Interface
+  - uid: FluentGpu.Controls.IconButton
+    name: IconButton
+    type: Class
+  - uid: FluentGpu.Controls.IconButton.Style
+    name: IconButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.Icons
+    name: Icons
+    type: Class
+  - uid: FluentGpu.Controls.InfoBadge
+    name: InfoBadge
+    type: Class
+  - uid: FluentGpu.Controls.InfoBadgeSeverity
+    name: InfoBadgeSeverity
+    type: Enum
+  - uid: FluentGpu.Controls.InfoBadgeTemplateSettings
+    name: InfoBadgeTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.InfoBar
+    name: InfoBar
+    type: Class
+  - uid: FluentGpu.Controls.InfoBar.InfoBarTemplateSettings
+    name: InfoBar.InfoBarTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.InfoBarCloseReason
+    name: InfoBarCloseReason
+    type: Enum
+  - uid: FluentGpu.Controls.InfoBarClosedEventArgs
+    name: InfoBarClosedEventArgs
+    type: Class
+  - uid: FluentGpu.Controls.InfoBarClosingEventArgs
+    name: InfoBarClosingEventArgs
+    type: Class
+  - uid: FluentGpu.Controls.InfoBarSeverity
+    name: InfoBarSeverity
+    type: Enum
+  - uid: FluentGpu.Controls.ItemChromeState
+    name: ItemChromeState
+    type: Struct
+  - uid: FluentGpu.Controls.ItemCollectionTransition
+    name: ItemCollectionTransition
+    type: Struct
+  - uid: FluentGpu.Controls.ItemContainer
+    name: ItemContainer
+    type: Class
+  - uid: FluentGpu.Controls.ItemContainerFactory
+    name: ItemContainerFactory
+    type: Delegate
+  - uid: FluentGpu.Controls.ItemContainerTrigger
+    name: ItemContainerTrigger
+    type: Enum
+  - uid: FluentGpu.Controls.ItemsSelectionMode
+    name: ItemsSelectionMode
+    type: Enum
+  - uid: FluentGpu.Controls.ItemsView
+    name: ItemsView
+    type: Class
+  - uid: FluentGpu.Controls.ItemsViewController
+    name: ItemsViewController
+    type: Class
+  - uid: FluentGpu.Controls.MediaPlayerElement
+    name: MediaPlayerElement
+    type: Class
+  - uid: FluentGpu.Controls.MenuBar
+    name: MenuBar
+    type: Class
+  - uid: FluentGpu.Controls.MenuBarItem
+    name: MenuBarItem
+    type: Class
+  - uid: FluentGpu.Controls.MenuFlyout
+    name: MenuFlyout
+    type: Class
+  - uid: FluentGpu.Controls.MenuFlyoutItem
+    name: MenuFlyoutItem
+    type: Struct
+  - uid: FluentGpu.Controls.MenuItemKind
+    name: MenuItemKind
+    type: Enum
+  - uid: FluentGpu.Controls.Nav
+    name: Nav
+    type: Class
+  - uid: FluentGpu.Controls.NavItem
+    name: NavItem
+    type: Class
+  - uid: FluentGpu.Controls.NavPaneClosingArgs
+    name: NavPaneClosingArgs
+    type: Class
+  - uid: FluentGpu.Controls.NavPaneDisplayMode
+    name: NavPaneDisplayMode
+    type: Enum
+  - uid: FluentGpu.Controls.NavigationView
+    name: NavigationView
+    type: Class
+  - uid: FluentGpu.Controls.Navigator
+    name: Navigator
+    type: Class
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    type: Class
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: NumberBox.Style
+    type: Class
+  - uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+    name: NumberBoxSpinButtonPlacementMode
+    type: Enum
+  - uid: FluentGpu.Controls.NumberBoxValidationMode
+    name: NumberBoxValidationMode
+    type: Enum
+  - uid: FluentGpu.Controls.Overlay
+    name: Overlay
+    type: Class
+  - uid: FluentGpu.Controls.OverlayCloseCause
+    name: OverlayCloseCause
+    type: Enum
+  - uid: FluentGpu.Controls.OverlayHandle
+    name: OverlayHandle
+    type: Class
+  - uid: FluentGpu.Controls.OverlayHost
+    name: OverlayHost
+    type: Class
+  - uid: FluentGpu.Controls.OverlayPlacementInfo
+    name: OverlayPlacementInfo
+    type: Struct
+  - uid: FluentGpu.Controls.PageHost
+    name: PageHost
+    type: Class
+  - uid: FluentGpu.Controls.PaneMode
+    name: PaneMode
+    type: Enum
+  - uid: FluentGpu.Controls.PartDelta
+    name: PartDelta
+    type: Struct
+  - uid: FluentGpu.Controls.PasswordBox
+    name: PasswordBox
+    type: Class
+  - uid: FluentGpu.Controls.PasswordRevealMode
+    name: PasswordRevealMode
+    type: Enum
+  - uid: FluentGpu.Controls.PersonPicture
+    name: PersonPicture
+    type: Class
+  - uid: FluentGpu.Controls.PersonPicture.PersonPictureTemplateSettings
+    name: PersonPicture.PersonPictureTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.PipsPager
+    name: PipsPager
+    type: Class
+  - uid: FluentGpu.Controls.PipsPagerButtonVisibility
+    name: PipsPagerButtonVisibility
+    type: Enum
+  - uid: FluentGpu.Controls.Pivot
+    name: Pivot
+    type: Class
+  - uid: FluentGpu.Controls.Popup
+    name: Popup
+    type: Class
+  - uid: FluentGpu.Controls.PopupChrome
+    name: PopupChrome
+    type: Enum
+  - uid: FluentGpu.Controls.PopupOptions
+    name: PopupOptions
+    type: Struct
+  - uid: FluentGpu.Controls.PopupPlacementResult
+    name: PopupPlacementResult
+    type: Struct
+  - uid: FluentGpu.Controls.ProgressBar
+    name: ProgressBar
+    type: Class
+  - uid: FluentGpu.Controls.ProgressBar.ProgressBarTemplateSettings
+    name: ProgressBar.ProgressBarTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.ProgressBarState
+    name: ProgressBarState
+    type: Enum
+  - uid: FluentGpu.Controls.ProgressRing
+    name: ProgressRing
+    type: Class
+  - uid: FluentGpu.Controls.ProgressRing.ProgressRingTemplateSettings
+    name: ProgressRing.ProgressRingTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.RadioButton
+    name: RadioButton
+    type: Class
+  - uid: FluentGpu.Controls.RadioButton.Style
+    name: RadioButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.RadioButtons
+    name: RadioButtons
+    type: Class
+  - uid: FluentGpu.Controls.RatingControl
+    name: RatingControl
+    type: Class
+  - uid: FluentGpu.Controls.RatingControlTemplateSettings
+    name: RatingControlTemplateSettings
+    type: Struct
+  - uid: FluentGpu.Controls.RelativeChild
+    name: RelativeChild
+    type: Class
+  - uid: FluentGpu.Controls.RelativePanel
+    name: RelativePanel
+    type: Class
+  - uid: FluentGpu.Controls.ReorderCrossCommit
+    name: ReorderCrossCommit
+    type: Delegate
+  - uid: FluentGpu.Controls.ReorderList
+    name: ReorderList
+    type: Class
+  - uid: FluentGpu.Controls.ReorderPayload
+    name: ReorderPayload
+    type: Class
+  - uid: FluentGpu.Controls.Reorderable
+    name: Reorderable
+    type: Class
+  - uid: FluentGpu.Controls.RepeatButton
+    name: RepeatButton
+    type: Class
+  - uid: FluentGpu.Controls.RepeatButton.Style
+    name: RepeatButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.RepeatKind
+    name: RepeatKind
+    type: Enum
+  - uid: FluentGpu.Controls.RepeatLayout
+    name: RepeatLayout
+    type: Struct
+  - uid: FluentGpu.Controls.Repeater
+    name: Repeater
+    type: Class
+  - uid: FluentGpu.Controls.RichTextBlock
+    name: RichTextBlock
+    type: Class
+  - uid: FluentGpu.Controls.RichTextBlock.Options
+    name: RichTextBlock.Options
+    type: Struct
+  - uid: FluentGpu.Controls.Route
+    name: Route
+    type: Class
+  - uid: FluentGpu.Controls.ScrollBar
+    name: ScrollBar
+    type: Class
+  - uid: FluentGpu.Controls.ScrollBar.Style
+    name: ScrollBar.Style
+    type: Class
+  - uid: FluentGpu.Controls.SelectionModel
+    name: SelectionModel
+    type: Class
+  - uid: FluentGpu.Controls.SelectorBar
+    name: SelectorBar
+    type: Class
+  - uid: FluentGpu.Controls.SelectorVisual
+    name: SelectorVisual
+    type: Enum
+  - uid: FluentGpu.Controls.SelectorVisuals
+    name: SelectorVisuals
+    type: Class
+  - uid: FluentGpu.Controls.Slider
+    name: Slider
+    type: Class
+  - uid: FluentGpu.Controls.Slider.Options
+    name: Slider.Options
+    type: Class
+  - uid: FluentGpu.Controls.Slider.Style
+    name: Slider.Style
+    type: Class
+  - uid: FluentGpu.Controls.Slider.TickPlacement
+    name: Slider.TickPlacement
+    type: Enum
+  - uid: FluentGpu.Controls.SplitButton
+    name: SplitButton
+    type: Class
+  - uid: FluentGpu.Controls.SplitView
+    name: SplitView
+    type: Class
+  - uid: FluentGpu.Controls.SplitViewDisplayMode
+    name: SplitViewDisplayMode
+    type: Enum
+  - uid: FluentGpu.Controls.SplitViewPaneClosingArgs
+    name: SplitViewPaneClosingArgs
+    type: Class
+  - uid: FluentGpu.Controls.SplitViewPanePlacement
+    name: SplitViewPanePlacement
+    type: Enum
+  - uid: FluentGpu.Controls.StateBrush
+    name: StateBrush
+    type: Struct
+  - uid: FluentGpu.Controls.SwipeAction
+    name: SwipeAction
+    type: Class
+  - uid: FluentGpu.Controls.SwipeBehaviorOnInvoked
+    name: SwipeBehaviorOnInvoked
+    type: Enum
+  - uid: FluentGpu.Controls.SwipeControl
+    name: SwipeControl
+    type: Class
+  - uid: FluentGpu.Controls.SwipeMode
+    name: SwipeMode
+    type: Enum
+  - uid: FluentGpu.Controls.TabView
+    name: TabView
+    type: Class
+  - uid: FluentGpu.Controls.TabViewCloseButtonOverlayMode
+    name: TabViewCloseButtonOverlayMode
+    type: Enum
+  - uid: FluentGpu.Controls.TabViewItem
+    name: TabViewItem
+    type: Class
+  - uid: FluentGpu.Controls.TabViewWidthMode
+    name: TabViewWidthMode
+    type: Enum
+  - uid: FluentGpu.Controls.TeachingTip
+    name: TeachingTip
+    type: Class
+  - uid: FluentGpu.Controls.TeachingTip.CloseReason
+    name: TeachingTip.CloseReason
+    type: Enum
+  - uid: FluentGpu.Controls.TeachingTip.ClosingEventArgs
+    name: TeachingTip.ClosingEventArgs
+    type: Class
+  - uid: FluentGpu.Controls.TeachingTip.HeroPlacement
+    name: TeachingTip.HeroPlacement
+    type: Enum
+  - uid: FluentGpu.Controls.TeachingTip.PlacementMode
+    name: TeachingTip.PlacementMode
+    type: Enum
+  - uid: FluentGpu.Controls.TeachingTip.TailVisibilityMode
+    name: TeachingTip.TailVisibilityMode
+    type: Enum
+  - uid: FluentGpu.Controls.TextBlocks
+    name: TextBlocks
+    type: Class
+  - uid: FluentGpu.Controls.TextBox
+    name: TextBox
+    type: Class
+  - uid: FluentGpu.Controls.TextChangeReason
+    name: TextChangeReason
+    type: Enum
+  - uid: FluentGpu.Controls.TimePicker
+    name: TimePicker
+    type: Class
+  - uid: FluentGpu.Controls.TitleBar
+    name: TitleBar
+    type: Class
+  - uid: FluentGpu.Controls.ToggleButton
+    name: ToggleButton
+    type: Class
+  - uid: FluentGpu.Controls.ToggleButton.Style
+    name: ToggleButton.Style
+    type: Class
+  - uid: FluentGpu.Controls.ToggleSplitButton
+    name: ToggleSplitButton
+    type: Class
+  - uid: FluentGpu.Controls.ToggleSwitch
+    name: ToggleSwitch
+    type: Class
+  - uid: FluentGpu.Controls.ToggleSwitch.Style
+    name: ToggleSwitch.Style
+    type: Class
+  - uid: FluentGpu.Controls.ToolTip
+    name: ToolTip
+    type: Class
+  - uid: FluentGpu.Controls.ToolTipPlacementMode
+    name: ToolTipPlacementMode
+    type: Enum
+  - uid: FluentGpu.Controls.TreeNode
+    name: TreeNode
+    type: Class
+  - uid: FluentGpu.Controls.TreeView
+    name: TreeView
+    type: Class
+  - uid: FluentGpu.Controls.Tween
+    name: Tween
+    type: Class
+  - uid: FluentGpu.Controls.VariableSizedWrapGrid
+    name: VariableSizedWrapGrid
+    type: Class
+  - uid: FluentGpu.Controls.Viewbox
+    name: Viewbox
+    type: Class
+  - uid: FluentGpu.Controls.ViewboxStretch
+    name: ViewboxStretch
+    type: Enum
+  - uid: FluentGpu.Controls.ViewboxStretchDirection
+    name: ViewboxStretchDirection
+    type: Enum
+  - uid: FluentGpu.Controls.Virtual
+    name: Virtual
+    type: Class
+  - uid: FluentGpu.Controls.WrapTile
+    name: WrapTile
+    type: Class
+- uid: FluentGpu.Dsl
+  name: FluentGpu.Dsl
+  type: Namespace
+  items:
+  - uid: FluentGpu.Dsl.BoxEl
+    name: BoxEl
+    type: Class
+  - uid: FluentGpu.Dsl.Element
+    name: Element
+    type: Class
+  - uid: FluentGpu.Dsl.Elevation
+    name: Elevation
+    type: Class
+  - uid: FluentGpu.Dsl.GridEl
+    name: GridEl
+    type: Class
+  - uid: FluentGpu.Dsl.IconGlyphs
+    name: IconGlyphs
+    type: Class
+  - uid: FluentGpu.Dsl.ImageEl
+    name: ImageEl
+    type: Class
+  - uid: FluentGpu.Dsl.Modifiers
+    name: Modifiers
+    type: Class
+  - uid: FluentGpu.Dsl.Motion
+    name: Motion
+    type: Class
+  - uid: FluentGpu.Dsl.PolylineStrokeEl
+    name: PolylineStrokeEl
+    type: Class
+  - uid: FluentGpu.Dsl.Radii
+    name: Radii
+    type: Class
+  - uid: FluentGpu.Dsl.ScrollEl
+    name: ScrollEl
+    type: Class
+  - uid: FluentGpu.Dsl.Spacing
+    name: Spacing
+    type: Class
+  - uid: FluentGpu.Dsl.SpanTextEl
+    name: SpanTextEl
+    type: Class
+  - uid: FluentGpu.Dsl.TemplateParts
+    name: TemplateParts
+    type: Class
+  - uid: FluentGpu.Dsl.TemplatePartsExtensions
+    name: TemplatePartsExtensions
+    type: Class
+  - uid: FluentGpu.Dsl.TextEl
+    name: TextEl
+    type: Class
+  - uid: FluentGpu.Dsl.TextTiers
+    name: TextTiers
+    type: Class
+  - uid: FluentGpu.Dsl.Theme
+    name: Theme
+    type: Class
+  - uid: FluentGpu.Dsl.ThemeKind
+    name: ThemeKind
+    type: Enum
+  - uid: FluentGpu.Dsl.Tok
+    name: Tok
+    type: Class
+  - uid: FluentGpu.Dsl.TokenSet
+    name: TokenSet
+    type: Class
+  - uid: FluentGpu.Dsl.Ui
+    name: Ui
+    type: Class
+- uid: FluentGpu.Foundation
+  name: FluentGpu.Foundation
+  type: Namespace
+  items:
+  - uid: FluentGpu.Foundation.AcrylicSpec
+    name: AcrylicSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.Affine2D
+    name: Affine2D
+    type: Struct
+  - uid: FluentGpu.Foundation.ArcSpec
+    name: ArcSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.ArenaAllocator
+    name: ArenaAllocator
+    type: Class
+  - uid: FluentGpu.Foundation.AutomationRole
+    name: AutomationRole
+    type: Enum
+  - uid: FluentGpu.Foundation.BlurHash
+    name: BlurHash
+    type: Class
+  - uid: FluentGpu.Foundation.BrushHandle
+    name: BrushHandle
+    type: Struct
+  - uid: FluentGpu.Foundation.CharEventArgs
+    name: CharEventArgs
+    type: Class
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    type: Struct
+  - uid: FluentGpu.Foundation.CornerRadius4
+    name: CornerRadius4
+    type: Struct
+  - uid: FluentGpu.Foundation.CursorId
+    name: CursorId
+    type: Struct
+  - uid: FluentGpu.Foundation.Diag
+    name: Diag
+    type: Class
+  - uid: FluentGpu.Foundation.DiagScope
+    name: DiagScope
+    type: Struct
+  - uid: FluentGpu.Foundation.DragEventArgs
+    name: DragEventArgs
+    type: Class
+  - uid: FluentGpu.Foundation.DragSession
+    name: DragSession
+    type: Class
+  - uid: FluentGpu.Foundation.DragSource
+    name: DragSource
+    type: Class
+  - uid: FluentGpu.Foundation.DropEffect
+    name: DropEffect
+    type: Enum
+  - uid: FluentGpu.Foundation.DropTargetSpec
+    name: DropTargetSpec
+    type: Class
+  - uid: FluentGpu.Foundation.DynamicTextKind
+    name: DynamicTextKind
+    type: Enum
+  - uid: FluentGpu.Foundation.DynamicsKind
+    name: DynamicsKind
+    type: Enum
+  - uid: FluentGpu.Foundation.Easing
+    name: Easing
+    type: Enum
+  - uid: FluentGpu.Foundation.EasingSpec
+    name: EasingSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.Easings
+    name: Easings
+    type: Class
+  - uid: FluentGpu.Foundation.Edges4
+    name: Edges4
+    type: Struct
+  - uid: FluentGpu.Foundation.EnterExit
+    name: EnterExit
+    type: Struct
+  - uid: FluentGpu.Foundation.FlexAlign
+    name: FlexAlign
+    type: Enum
+  - uid: FluentGpu.Foundation.FlexJustify
+    name: FlexJustify
+    type: Enum
+  - uid: FluentGpu.Foundation.GradientShape
+    name: GradientShape
+    type: Enum
+  - uid: FluentGpu.Foundation.GradientSpec
+    name: GradientSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.GradientStop
+    name: GradientStop
+    type: Struct
+  - uid: FluentGpu.Foundation.Handle
+    name: Handle
+    type: Struct
+  - uid: FluentGpu.Foundation.ImageFit
+    name: ImageFit
+    type: Enum
+  - uid: FluentGpu.Foundation.ImageTransition
+    name: ImageTransition
+    type: Struct
+  - uid: FluentGpu.Foundation.KeyAccelerator
+    name: KeyAccelerator
+    type: Struct
+  - uid: FluentGpu.Foundation.KeyEventArgs
+    name: KeyEventArgs
+    type: Class
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    type: Enum
+  - uid: FluentGpu.Foundation.Keys
+    name: Keys
+    type: Class
+  - uid: FluentGpu.Foundation.LayoutTransition
+    name: LayoutTransition
+    type: Struct
+  - uid: FluentGpu.Foundation.LineStacking
+    name: LineStacking
+    type: Enum
+  - uid: FluentGpu.Foundation.NativeHandle
+    name: NativeHandle
+    type: Struct
+  - uid: FluentGpu.Foundation.NativeHandleKind
+    name: NativeHandleKind
+    type: Enum
+  - uid: FluentGpu.Foundation.NodeFlags
+    name: NodeFlags
+    type: Enum
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    type: Struct
+  - uid: FluentGpu.Foundation.ObjectPool`1
+    name: ObjectPool<T>
+    type: Class
+  - uid: FluentGpu.Foundation.PngWriter
+    name: PngWriter
+    type: Class
+  - uid: FluentGpu.Foundation.Point2
+    name: Point2
+    type: Struct
+  - uid: FluentGpu.Foundation.PointerEventArgs
+    name: PointerEventArgs
+    type: Class
+  - uid: FluentGpu.Foundation.PointerKind
+    name: PointerKind
+    type: Enum
+  - uid: FluentGpu.Foundation.PolylineStrokeSpec
+    name: PolylineStrokeSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.RectF
+    name: RectF
+    type: Struct
+  - uid: FluentGpu.Foundation.ShadowSpec
+    name: ShadowSpec
+    type: Struct
+  - uid: FluentGpu.Foundation.Size2
+    name: Size2
+    type: Struct
+  - uid: FluentGpu.Foundation.SizeAnchor
+    name: SizeAnchor
+    type: Enum
+  - uid: FluentGpu.Foundation.SizeMode
+    name: SizeMode
+    type: Enum
+  - uid: FluentGpu.Foundation.SlabAllocator`1
+    name: SlabAllocator<T>
+    type: Class
+  - uid: FluentGpu.Foundation.SpanRect
+    name: SpanRect
+    type: Struct
+  - uid: FluentGpu.Foundation.SpanRun
+    name: SpanRun
+    type: Class
+  - uid: FluentGpu.Foundation.SpanRunRects
+    name: SpanRunRects
+    type: Class
+  - uid: FluentGpu.Foundation.SpanRunTable
+    name: SpanRunTable
+    type: Class
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    type: Struct
+  - uid: FluentGpu.Foundation.StringId
+    name: StringId
+    type: Struct
+  - uid: FluentGpu.Foundation.StringTable
+    name: StringTable
+    type: Class
+  - uid: FluentGpu.Foundation.TextLineBounds
+    name: TextLineBounds
+    type: Enum
+  - uid: FluentGpu.Foundation.TextSpan
+    name: TextSpan
+    type: Struct
+  - uid: FluentGpu.Foundation.TextTrim
+    name: TextTrim
+    type: Enum
+  - uid: FluentGpu.Foundation.TextWrap
+    name: TextWrap
+    type: Enum
+  - uid: FluentGpu.Foundation.TrackKind
+    name: TrackKind
+    type: Enum
+  - uid: FluentGpu.Foundation.TrackSize
+    name: TrackSize
+    type: Struct
+  - uid: FluentGpu.Foundation.TransitionChannels
+    name: TransitionChannels
+    type: Enum
+  - uid: FluentGpu.Foundation.TransitionDynamics
+    name: TransitionDynamics
+    type: Struct
+  - uid: FluentGpu.Foundation.WheelEventArgs
+    name: WheelEventArgs
+    type: Class
+- uid: FluentGpu.Hooks
+  name: FluentGpu.Hooks
+  type: Namespace
+  items:
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    type: Class
+  - uid: FluentGpu.Hooks.ComponentEl
+    name: ComponentEl
+    type: Class
+  - uid: FluentGpu.Hooks.ContextProviderEl
+    name: ContextProviderEl
+    type: Class
+  - uid: FluentGpu.Hooks.ContextStack
+    name: ContextStack
+    type: Class
+  - uid: FluentGpu.Hooks.Context`1
+    name: Context<T>
+    type: Class
+  - uid: FluentGpu.Hooks.Ctx
+    name: Ctx
+    type: Class
+  - uid: FluentGpu.Hooks.Embed
+    name: Embed
+    type: Class
+  - uid: FluentGpu.Hooks.Flow
+    name: Flow
+    type: Class
+  - uid: FluentGpu.Hooks.ForEl
+    name: ForEl
+    type: Class
+  - uid: FluentGpu.Hooks.FrameClock
+    name: FrameClock
+    type: Class
+  - uid: FluentGpu.Hooks.InputHooks
+    name: InputHooks
+    type: Class
+  - uid: FluentGpu.Hooks.MotionHooks
+    name: MotionHooks
+    type: Class
+  - uid: FluentGpu.Hooks.ReactiveComponent
+    name: ReactiveComponent
+    type: Class
+  - uid: FluentGpu.Hooks.Ref`1
+    name: Ref<T>
+    type: Class
+  - uid: FluentGpu.Hooks.RenderContext
+    name: RenderContext
+    type: Class
+  - uid: FluentGpu.Hooks.ShowEl
+    name: ShowEl
+    type: Class
+  - uid: FluentGpu.Hooks.Viewport
+    name: Viewport
+    type: Class
+- uid: FluentGpu.Hosting
+  name: FluentGpu.Hosting
+  type: Namespace
+  items:
+  - uid: FluentGpu.Hosting.AppHost
+    name: AppHost
+    type: Class
+  - uid: FluentGpu.Hosting.FixedFrameTimeSource
+    name: FixedFrameTimeSource
+    type: Class
+  - uid: FluentGpu.Hosting.FrameDiagnostics
+    name: FrameDiagnostics
+    type: Class
+  - uid: FluentGpu.Hosting.FrameStats
+    name: FrameStats
+    type: Struct
+  - uid: FluentGpu.Hosting.IFrameTimeSource
+    name: IFrameTimeSource
+    type: Interface
+  - uid: FluentGpu.Hosting.ManualFrameTimeSource
+    name: ManualFrameTimeSource
+    type: Class
+  - uid: FluentGpu.Hosting.PopupWindowSlot
+    name: PopupWindowSlot
+    type: Class
+  - uid: FluentGpu.Hosting.StopwatchFrameTimeSource
+    name: StopwatchFrameTimeSource
+    type: Class
+- uid: FluentGpu.Input
+  name: FluentGpu.Input
+  type: Namespace
+  items:
+  - uid: FluentGpu.Input.DragController
+    name: DragController
+    type: Class
+  - uid: FluentGpu.Input.DragDropContext
+    name: DragDropContext
+    type: Class
+  - uid: FluentGpu.Input.FocusDirection
+    name: FocusDirection
+    type: Enum
+  - uid: FluentGpu.Input.InputDispatcher
+    name: InputDispatcher
+    type: Class
+- uid: FluentGpu.Layout
+  name: FluentGpu.Layout
+  type: Namespace
+  items:
+  - uid: FluentGpu.Layout.FlexLayout
+    name: FlexLayout
+    type: Class
+  - uid: FluentGpu.Layout.LayoutInvalidator
+    name: LayoutInvalidator
+    type: Class
+- uid: FluentGpu.Media
+  name: FluentGpu.Media
+  type: Namespace
+  items:
+  - uid: FluentGpu.Media.DecodeOptions
+    name: DecodeOptions
+    type: Class
+  - uid: FluentGpu.Media.DecodeScheduler
+    name: DecodeScheduler
+    type: Class
+  - uid: FluentGpu.Media.DefaultImageFetcher
+    name: DefaultImageFetcher
+    type: Class
+  - uid: FluentGpu.Media.DiskImageCache
+    name: DiskImageCache
+    type: Class
+  - uid: FluentGpu.Media.FetchResult
+    name: FetchResult
+    type: Struct
+  - uid: FluentGpu.Media.IImageCodec
+    name: IImageCodec
+    type: Interface
+  - uid: FluentGpu.Media.IImageFetcher
+    name: IImageFetcher
+    type: Interface
+- uid: FluentGpu.Media.Codecs.Wic
+  name: FluentGpu.Media.Codecs.Wic
+  type: Namespace
+  items:
+  - uid: FluentGpu.Media.Codecs.Wic.WicImageCodec
+    name: WicImageCodec
+    type: Class
+- uid: FluentGpu.Pal
+  name: FluentGpu.Pal
+  type: Namespace
+  items:
+  - uid: FluentGpu.Pal.IClipboard
+    name: IClipboard
+    type: Interface
+  - uid: FluentGpu.Pal.IPlatformApp
+    name: IPlatformApp
+    type: Interface
+  - uid: FluentGpu.Pal.IPlatformLocale
+    name: IPlatformLocale
+    type: Interface
+  - uid: FluentGpu.Pal.IPlatformPopupWindow
+    name: IPlatformPopupWindow
+    type: Interface
+  - uid: FluentGpu.Pal.IPlatformTextInput
+    name: IPlatformTextInput
+    type: Interface
+  - uid: FluentGpu.Pal.IPlatformWindow
+    name: IPlatformWindow
+    type: Interface
+  - uid: FluentGpu.Pal.ITextInputSink
+    name: ITextInputSink
+    type: Interface
+  - uid: FluentGpu.Pal.ImeClause
+    name: ImeClause
+    type: Struct
+  - uid: FluentGpu.Pal.ImeClauseKind
+    name: ImeClauseKind
+    type: Enum
+  - uid: FluentGpu.Pal.InputEvent
+    name: InputEvent
+    type: Struct
+  - uid: FluentGpu.Pal.InputEventRing
+    name: InputEventRing
+    type: Class
+  - uid: FluentGpu.Pal.InputKind
+    name: InputKind
+    type: Enum
+  - uid: FluentGpu.Pal.PopupWindowDesc
+    name: PopupWindowDesc
+    type: Struct
+  - uid: FluentGpu.Pal.SystemParams
+    name: SystemParams
+    type: Class
+  - uid: FluentGpu.Pal.TitleBarHit
+    name: TitleBarHit
+    type: Enum
+  - uid: FluentGpu.Pal.TitleBarRegion
+    name: TitleBarRegion
+    type: Struct
+  - uid: FluentGpu.Pal.WindowDesc
+    name: WindowDesc
+    type: Struct
+  - uid: FluentGpu.Pal.WindowState
+    name: WindowState
+    type: Enum
+- uid: FluentGpu.Pal.Windows
+  name: FluentGpu.Pal.Windows
+  type: Namespace
+  items:
+  - uid: FluentGpu.Pal.Windows.Win32App
+    name: Win32App
+    type: Class
+  - uid: FluentGpu.Pal.Windows.Win32Clipboard
+    name: Win32Clipboard
+    type: Class
+  - uid: FluentGpu.Pal.Windows.Win32PopupWindow
+    name: Win32PopupWindow
+    type: Class
+  - uid: FluentGpu.Pal.Windows.Win32TextInput
+    name: Win32TextInput
+    type: Class
+  - uid: FluentGpu.Pal.Windows.Win32Theme
+    name: Win32Theme
+    type: Class
+  - uid: FluentGpu.Pal.Windows.Win32Window
+    name: Win32Window
+    type: Class
+- uid: FluentGpu.Reconciler
+  name: FluentGpu.Reconciler
+  type: Namespace
+  items:
+  - uid: FluentGpu.Reconciler.TreeReconciler
+    name: TreeReconciler
+    type: Class
+  - uid: FluentGpu.Reconciler.VirtualListEl
+    name: VirtualListEl
+    type: Class
+- uid: FluentGpu.Render
+  name: FluentGpu.Render
+  type: Namespace
+  items:
+  - uid: FluentGpu.Render.AcrylicBackdropMath
+    name: AcrylicBackdropMath
+    type: Class
+  - uid: FluentGpu.Render.ClipCmd
+    name: ClipCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawArcCmd
+    name: DrawArcCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawGlyphRunCmd
+    name: DrawGlyphRunCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawGradientRectCmd
+    name: DrawGradientRectCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawGradientStrokeCmd
+    name: DrawGradientStrokeCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawImageCmd
+    name: DrawImageCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawList
+    name: DrawList
+    type: Class
+  - uid: FluentGpu.Render.DrawOp
+    name: DrawOp
+    type: Enum
+  - uid: FluentGpu.Render.DrawPolylineStrokeCmd
+    name: DrawPolylineStrokeCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawRoundRectStrokeCmd
+    name: DrawRoundRectStrokeCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawShadowCmd
+    name: DrawShadowCmd
+    type: Struct
+  - uid: FluentGpu.Render.DrawTabShapeCmd
+    name: DrawTabShapeCmd
+    type: Struct
+  - uid: FluentGpu.Render.FillKind
+    name: FillKind
+    type: Enum
+  - uid: FluentGpu.Render.FillRoundRectCmd
+    name: FillRoundRectCmd
+    type: Struct
+  - uid: FluentGpu.Render.FocusVisualStyle
+    name: FocusVisualStyle
+    type: Struct
+  - uid: FluentGpu.Render.LayerKind
+    name: LayerKind
+    type: Enum
+  - uid: FluentGpu.Render.PopLayerCmd
+    name: PopLayerCmd
+    type: Struct
+  - uid: FluentGpu.Render.PushLayerCmd
+    name: PushLayerCmd
+    type: Struct
+  - uid: FluentGpu.Render.SceneRecordStats
+    name: SceneRecordStats
+    type: Struct
+  - uid: FluentGpu.Render.SceneRecorder
+    name: SceneRecorder
+    type: Class
+  - uid: FluentGpu.Render.TextEditStyle
+    name: TextEditStyle
+    type: Struct
+- uid: FluentGpu.Rhi
+  name: FluentGpu.Rhi
+  type: Namespace
+  items:
+  - uid: FluentGpu.Rhi.FrameInfo
+    name: FrameInfo
+    type: Struct
+  - uid: FluentGpu.Rhi.IGpuDevice
+    name: IGpuDevice
+    type: Interface
+  - uid: FluentGpu.Rhi.ISwapchain
+    name: ISwapchain
+    type: Interface
+  - uid: FluentGpu.Rhi.SwapchainDesc
+    name: SwapchainDesc
+    type: Struct
+- uid: FluentGpu.Rhi.D3D12
+  name: FluentGpu.Rhi.D3D12
+  type: Namespace
+  items:
+  - uid: FluentGpu.Rhi.D3D12.D3D12Device
+    name: D3D12Device
+    type: Class
+  - uid: FluentGpu.Rhi.D3D12.D3D12Swapchain
+    name: D3D12Swapchain
+    type: Class
+- uid: FluentGpu.Scene
+  name: FluentGpu.Scene
+  type: Namespace
+  items:
+  - uid: FluentGpu.Scene.BrushAnim
+    name: BrushAnim
+    type: Struct
+  - uid: FluentGpu.Scene.ExtentTable
+    name: ExtentTable
+    type: Class
+  - uid: FluentGpu.Scene.FakeImageDecoder
+    name: FakeImageDecoder
+    type: Class
+  - uid: FluentGpu.Scene.GridSpec
+    name: GridSpec
+    type: Struct
+  - uid: FluentGpu.Scene.GridVirtualLayout
+    name: GridVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.GroupedListVirtualLayout
+    name: GroupedListVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.HorizontalGridVirtualLayout
+    name: HorizontalGridVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.IImageDecoder
+    name: IImageDecoder
+    type: Interface
+  - uid: FluentGpu.Scene.IMeasuredVirtualLayout
+    name: IMeasuredVirtualLayout
+    type: Interface
+  - uid: FluentGpu.Scene.ISceneBackend
+    name: ISceneBackend
+    type: Interface
+  - uid: FluentGpu.Scene.IVirtualLayout
+    name: IVirtualLayout
+    type: Interface
+  - uid: FluentGpu.Scene.ImageBinding
+    name: ImageBinding
+    type: Struct
+  - uid: FluentGpu.Scene.ImageCache
+    name: ImageCache
+    type: Class
+  - uid: FluentGpu.Scene.ImageCompleteHandler
+    name: ImageCompleteHandler
+    type: Delegate
+  - uid: FluentGpu.Scene.ImageFailureKind
+    name: ImageFailureKind
+    type: Enum
+  - uid: FluentGpu.Scene.ImageHandle
+    name: ImageHandle
+    type: Struct
+  - uid: FluentGpu.Scene.ImagePriority
+    name: ImagePriority
+    type: Enum
+  - uid: FluentGpu.Scene.ImageReadyHandler
+    name: ImageReadyHandler
+    type: Delegate
+  - uid: FluentGpu.Scene.ImageState
+    name: ImageState
+    type: Enum
+  - uid: FluentGpu.Scene.ImageStatusHandler
+    name: ImageStatusHandler
+    type: Delegate
+  - uid: FluentGpu.Scene.InteractionAnim
+    name: InteractionAnim
+    type: Struct
+  - uid: FluentGpu.Scene.InteractionInfo
+    name: InteractionInfo
+    type: Struct
+  - uid: FluentGpu.Scene.LayoutInput
+    name: LayoutInput
+    type: Struct
+  - uid: FluentGpu.Scene.LinedFlowLayout
+    name: LinedFlowLayout
+    type: Class
+  - uid: FluentGpu.Scene.MeasuredStackVirtualLayout
+    name: MeasuredStackVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.NodePaint
+    name: NodePaint
+    type: Struct
+  - uid: FluentGpu.Scene.SceneStore
+    name: SceneStore
+    type: Class
+  - uid: FluentGpu.Scene.ScrollState
+    name: ScrollState
+    type: Struct
+  - uid: FluentGpu.Scene.SpanningGridVirtualLayout
+    name: SpanningGridVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.StackVirtualLayout
+    name: StackVirtualLayout
+    type: Class
+  - uid: FluentGpu.Scene.TextEditState
+    name: TextEditState
+    type: Struct
+  - uid: FluentGpu.Scene.TextMeasureCache
+    name: TextMeasureCache
+    type: Struct
+  - uid: FluentGpu.Scene.VirtualWindowing
+    name: VirtualWindowing
+    type: Class
+  - uid: FluentGpu.Scene.VisualKind
+    name: VisualKind
+    type: Enum
+- uid: FluentGpu.Signals
+  name: FluentGpu.Signals
+  type: Namespace
+  items:
+  - uid: FluentGpu.Signals.Computation
+    name: Computation
+    type: Class
+  - uid: FluentGpu.Signals.Effect
+    name: Effect
+    type: Class
+  - uid: FluentGpu.Signals.FloatSignal
+    name: FloatSignal
+    type: Class
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal<T>
+    type: Interface
+  - uid: FluentGpu.Signals.ManagedEffect
+    name: ManagedEffect
+    type: Class
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo<T>
+    type: Class
+  - uid: FluentGpu.Signals.Prop
+    name: Prop
+    type: Class
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop<T>
+    type: Struct
+  - uid: FluentGpu.Signals.Reactive
+    name: Reactive
+    type: Class
+  - uid: FluentGpu.Signals.ReactiveRuntime
+    name: ReactiveRuntime
+    type: Class
+  - uid: FluentGpu.Signals.ReactiveScope
+    name: ReactiveScope
+    type: Class
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal<T>
+    type: Class
+- uid: FluentGpu.Text
+  name: FluentGpu.Text
+  type: Namespace
+  items:
+  - uid: FluentGpu.Text.BreakOpp
+    name: BreakOpp
+    type: Struct
+  - uid: FluentGpu.Text.EditDocument
+    name: EditDocument
+    type: Class
+  - uid: FluentGpu.Text.GlyphPlacement
+    name: GlyphPlacement
+    type: Struct
+  - uid: FluentGpu.Text.IAdvanceSource
+    name: IAdvanceSource
+    type: Interface
+  - uid: FluentGpu.Text.IFontSystem
+    name: IFontSystem
+    type: Interface
+  - uid: FluentGpu.Text.ITextItemizer
+    name: ITextItemizer
+    type: Interface
+  - uid: FluentGpu.Text.ItemRun
+    name: ItemRun
+    type: Struct
+  - uid: FluentGpu.Text.LineBreaker
+    name: LineBreaker
+    type: Class
+  - uid: FluentGpu.Text.TextEditCommand
+    name: TextEditCommand
+    type: Enum
+  - uid: FluentGpu.Text.TextEditCore
+    name: TextEditCore
+    type: Class
+  - uid: FluentGpu.Text.TextEditKeymap
+    name: TextEditKeymap
+    type: Class
+  - uid: FluentGpu.Text.TextKeyBinding
+    name: TextKeyBinding
+    type: Struct
+  - uid: FluentGpu.Text.TextMetrics
+    name: TextMetrics
+    type: Struct
+  - uid: FluentGpu.Text.TextSeam
+    name: TextSeam
+    type: Class
+  - uid: FluentGpu.Text.TextStyle
+    name: TextStyle
+    type: Struct
+  - uid: FluentGpu.Text.TextUndoOp
+    name: TextUndoOp
+    type: Struct
+  - uid: FluentGpu.Text.TextUndoStack
+    name: TextUndoStack
+    type: Class
+- uid: FluentGpu.Text.DirectWrite
+  name: FluentGpu.Text.DirectWrite
+  type: Namespace
+  items:
+  - uid: FluentGpu.Text.DirectWrite.DWriteItemizer
+    name: DWriteItemizer
+    type: Class
+  - uid: FluentGpu.Text.DirectWrite.DWriteTextShaper
+    name: DWriteTextShaper
+    type: Class
+  - uid: FluentGpu.Text.DirectWrite.DirectWriteBackend
+    name: DirectWriteBackend
+    type: Class
+  - uid: FluentGpu.Text.DirectWrite.DirectWriteFontSystem
+    name: DirectWriteFontSystem
+    type: Class
+  - uid: FluentGpu.Text.DirectWrite.LaidCluster
+    name: LaidCluster
+    type: Struct
+  - uid: FluentGpu.Text.DirectWrite.LaidGlyph
+    name: LaidGlyph
+    type: Struct
+  - uid: FluentGpu.Text.DirectWrite.LaidLine
+    name: LaidLine
+    type: Struct
+  - uid: FluentGpu.Text.DirectWrite.TextLayoutEngine
+    name: TextLayoutEngine
+    type: Class
+- uid: FluentGpu.Win32.Interop
+  name: FluentGpu.Win32.Interop
+  type: Namespace
+  items:
+  - uid: FluentGpu.Win32.Interop.Win32InteropMarker
+    name: Win32InteropMarker
+    type: Class
+memberLayout: SamePage

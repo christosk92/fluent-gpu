@@ -49,31 +49,125 @@ public readonly record struct TitleBarRegion(RectF RectDip, TitleBarHit Hit);
 /// <paramref name="Button"/>: 0 = left, 1 = right, 2 = middle. <paramref name="Mods"/> is the modifier chord at the
 /// time of the event (pump-captured); <paramref name="IsRepeat"/> = keyboard auto-repeat (lParam bit 30);
 /// <paramref name="TimestampMs"/> = the platform message time (drives double/triple-click detection in the dispatcher).
+/// <paramref name="PointerId"/> identifies the contact (mouse = 0; touch/pen carry the OS pointer id) so the ring
+/// coalesces moves and the dispatcher captures per contact; <paramref name="Pressure"/> is the normalized contact
+/// pressure (mouse = 1; touch/pen report 0..1). WinUI: PointerInputProcessor.cpp / GetPointerInfo POINTER_INFO.
 /// </summary>
 public readonly record struct InputEvent(
     InputKind Kind, Point2 PositionPx, int Button, int KeyCode, float ScrollDelta = 0f,
     KeyModifiers Mods = KeyModifiers.None, PointerKind Pointer = PointerKind.Mouse,
-    bool IsRepeat = false, uint TimestampMs = 0);
+    bool IsRepeat = false, uint TimestampMs = 0, uint PointerId = 0, float Pressure = 1f);
 
-/// <summary>Drained by the host each frame; the window writes POD events into it (move-coalesced).</summary>
+/// <summary>
+/// Drained by the host each frame (drain-to-empty, single contiguous span — <c>AppHost.RunFrame</c> Clears, the window
+/// writes, then the dispatcher consumes the whole <see cref="Drain"/> span). Fixed-capacity slab: never allocates after
+/// construction. A <see cref="InputKind.PointerMove"/> whose previous unconsumed move for the SAME <see cref="InputEvent.PointerId"/>
+/// is still in the slab overwrites it in place (the dispatcher only needs the latest position per contact between frames —
+/// WinUI's <c>GetPointerFrameInfoHistory</c> OS-side coalescing); Down/Up/Key/Char/Cancel never coalesce; consecutive
+/// <see cref="InputKind.Wheel"/> events at the same position accumulate <see cref="InputEvent.ScrollDelta"/> (matching the
+/// dispatcher's per-event accumulation into the scroll target). On slab overflow of a non-coalescible event the OLDEST
+/// pending move is dropped (or, if none, the incoming event is dropped) — bounded, zero-growth.
+/// </summary>
 public sealed class InputEventRing
 {
-    private InputEvent[] _buf = new InputEvent[64];
+    private const int Capacity = 512;
+    /// <summary>Distinct concurrent <see cref="InputEvent.PointerId"/>s tracked between drains: mouse (0) + the 10-contact
+    /// capture cap + the reserved NC-synthesis id, with headroom. An id past this many is simply not coalesced (correct,
+    /// just an extra slot used) — never grows.</summary>
+    private const int IdSlots = 16;
+
+    private readonly InputEvent[] _buf = new InputEvent[Capacity];
     private int _count;
+
+    // Per-id last-pending-move bookkeeping: a fixed open-addressed table mapping an arbitrary uint id → a small slot,
+    // each slot remembering the index of that id's latest move in _buf (-1 = none). Reset on every Drain/Clear, so it is
+    // allocation-free at steady state.
+    private readonly uint[] _idKey = new uint[IdSlots];      // the id occupying this slot
+    private readonly bool[] _idUsed = new bool[IdSlots];     // slot occupied this frame
+    private readonly int[] _lastMove = new int[IdSlots];     // index in _buf of that id's pending move (-1 = none)
 
     public void Write(in InputEvent e)
     {
-        if (_count == _buf.Length) Array.Resize(ref _buf, _buf.Length * 2);
-        _buf[_count++] = e;
+        if (e.Kind == InputKind.PointerMove)
+        {
+            int slot = IdSlot(e.PointerId);
+            if (slot >= 0 && _lastMove[slot] >= 0)
+            {
+                _buf[_lastMove[slot]] = e;   // coalesce: overwrite this id's pending move in place
+                return;
+            }
+            int idx = Append(in e);
+            if (slot >= 0) _lastMove[slot] = idx;
+            return;
+        }
+
+        if (e.Kind == InputKind.Wheel && _count > 0)
+        {
+            ref InputEvent prev = ref _buf[_count - 1];
+            if (prev.Kind == InputKind.Wheel && prev.PositionPx.Equals(e.PositionPx))
+            {
+                prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta };
+                return;
+            }
+        }
+
+        Append(in e);   // Down/Up/Key/Char/Cancel/window events: never coalesce
     }
 
-    public ReadOnlySpan<InputEvent> Drain()
+    public ReadOnlySpan<InputEvent> Drain() => _buf.AsSpan(0, _count);
+
+    public void Clear()
     {
-        var span = _buf.AsSpan(0, _count);
-        return span;
+        _count = 0;
+        for (int i = 0; i < IdSlots; i++) { _idUsed[i] = false; _lastMove[i] = -1; }
     }
 
-    public void Clear() => _count = 0;
+    private int Append(in InputEvent e)
+    {
+        if (_count == Capacity && !TryEvictOldestMove())
+            return -1;   // slab full of non-coalescible events: drop the incoming one (bounded, never grows)
+        int idx = _count++;
+        _buf[idx] = e;
+        return idx;
+    }
+
+    /// <summary>Overflow relief: drop the OLDEST pending <see cref="InputKind.PointerMove"/>, compacting the slab so the
+    /// freed slot is at the tail. Returns false when no move can be dropped (caller drops the incoming event instead).</summary>
+    private bool TryEvictOldestMove()
+    {
+        int victim = -1;
+        for (int i = 0; i < _count; i++)
+            if (_buf[i].Kind == InputKind.PointerMove) { victim = i; break; }
+        if (victim < 0) return false;
+
+        for (int i = victim; i < _count - 1; i++) _buf[i] = _buf[i + 1];
+        _count--;
+
+        // Indices shifted left by one for everything after the victim — rebuild the per-id pending-move map.
+        for (int s = 0; s < IdSlots; s++)
+        {
+            if (!_idUsed[s]) continue;
+            int m = _lastMove[s];
+            if (m == victim) _lastMove[s] = -1;
+            else if (m > victim) _lastMove[s] = m - 1;
+        }
+        return true;
+    }
+
+    /// <summary>Map an arbitrary pointer id to a fixed slot (open-addressed, linear probe). Returns -1 when the table is
+    /// full this frame — that id's moves then simply do not coalesce (still correct), keeping the path allocation-free.</summary>
+    private int IdSlot(uint id)
+    {
+        int start = (int)(id % IdSlots);
+        for (int p = 0; p < IdSlots; p++)
+        {
+            int s = start + p;
+            if (s >= IdSlots) s -= IdSlots;
+            if (!_idUsed[s]) { _idUsed[s] = true; _idKey[s] = id; _lastMove[s] = -1; return s; }
+            if (_idKey[s] == id) return s;
+        }
+        return -1;
+    }
 }
 
 public interface IPlatformApp : IDisposable

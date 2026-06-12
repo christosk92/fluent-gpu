@@ -1,0 +1,656 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Hosting.PopupWindowSlot
+  commentId: T:FluentGpu.Hosting.PopupWindowSlot
+  id: PopupWindowSlot
+  parent: FluentGpu.Hosting
+  children:
+  - FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  - FluentGpu.Hosting.PopupWindowSlot.DrawList
+  - FluentGpu.Hosting.PopupWindowSlot.Root
+  - FluentGpu.Hosting.PopupWindowSlot.Swapchain
+  - FluentGpu.Hosting.PopupWindowSlot.Token
+  - FluentGpu.Hosting.PopupWindowSlot.Window
+  langs:
+  - csharp
+  - vb
+  name: PopupWindowSlot
+  nameWithType: PopupWindowSlot
+  fullName: FluentGpu.Hosting.PopupWindowSlot
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PopupWindowSlot
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  summary: >-
+    Composition root + the single-UI-thread frame loop. Signals-first: a setState writes a signal that schedules ONLY
+
+    the owning component's render-effect (granular), and a bound high-frequency scalar (slider/scroll) writes a node
+
+    channel directly — a compositor-only frame with no render/reconcile/layout. The host drains the reactive runtime
+
+    once per frame (phase 3), runs (scoped) layout only when a reconcile/layout-bind changed something, then records.
+  example: []
+  syntax:
+    content: public sealed class PopupWindowSlot
+    content.vb: Public NotInheritable Class PopupWindowSlot
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Hosting.PopupWindowSlot.Token
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.Token
+  id: Token
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: Token
+  nameWithType: PopupWindowSlot.Token
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Token
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Token
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public int Token { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property Token As Integer
+  overload: FluentGpu.Hosting.PopupWindowSlot.Token*
+- uid: FluentGpu.Hosting.PopupWindowSlot.Window
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.Window
+  id: Window
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: Window
+  nameWithType: PopupWindowSlot.Window
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Window
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Window
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public IPlatformPopupWindow Window { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Pal.IPlatformPopupWindow
+    content.vb: Public ReadOnly Property Window As IPlatformPopupWindow
+  overload: FluentGpu.Hosting.PopupWindowSlot.Window*
+- uid: FluentGpu.Hosting.PopupWindowSlot.Root
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.Root
+  id: Root
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: Root
+  nameWithType: PopupWindowSlot.Root
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Root
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Root
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  summary: The overlay wrapper node whose subtree renders into this popup window.
+  example: []
+  syntax:
+    content: public NodeHandle Root { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public ReadOnly Property Root As NodeHandle
+  overload: FluentGpu.Hosting.PopupWindowSlot.Root*
+- uid: FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  id: BoundsDip
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: BoundsDip
+  nameWithType: PopupWindowSlot.BoundsDip
+  fullName: FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoundsDip
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  summary: Popup bounds in main-window DIP space (origin = main-window client (0,0)) — the record origin.
+  example: []
+  syntax:
+    content: public RectF BoundsDip { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property BoundsDip As RectF
+  overload: FluentGpu.Hosting.PopupWindowSlot.BoundsDip*
+- uid: FluentGpu.Hosting.PopupWindowSlot.Swapchain
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.Swapchain
+  id: Swapchain
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: Swapchain
+  nameWithType: PopupWindowSlot.Swapchain
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Swapchain
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Swapchain
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  syntax:
+    content: public ISwapchain? Swapchain { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Rhi.ISwapchain
+    content.vb: Public Property Swapchain As ISwapchain
+  overload: FluentGpu.Hosting.PopupWindowSlot.Swapchain*
+- uid: FluentGpu.Hosting.PopupWindowSlot.DrawList
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.DrawList
+  id: DrawList
+  parent: FluentGpu.Hosting.PopupWindowSlot
+  langs:
+  - csharp
+  - vb
+  name: DrawList
+  nameWithType: PopupWindowSlot.DrawList
+  fullName: FluentGpu.Hosting.PopupWindowSlot.DrawList
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Hosting/AppHost.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawList
+    path: ../../src/FluentGpu.Hosting/AppHost.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Hosting
+  namespace: FluentGpu.Hosting
+  summary: The popup's own command stream, re-recorded each frame via <code>SceneRecorder.RecordSubtree</code>.
+  example: []
+  syntax:
+    content: public DrawList DrawList { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Render.DrawList
+    content.vb: Public ReadOnly Property DrawList As DrawList
+  overload: FluentGpu.Hosting.PopupWindowSlot.DrawList*
+references:
+- uid: FluentGpu.Hosting.PopupWindowSlot.DrawList
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.DrawList
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_DrawList
+  name: DrawList
+  nameWithType: PopupWindowSlot.DrawList
+  fullName: FluentGpu.Hosting.PopupWindowSlot.DrawList
+- uid: FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_BoundsDip
+  name: BoundsDip
+  nameWithType: PopupWindowSlot.BoundsDip
+  fullName: FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+- uid: FluentGpu.Hosting.PopupWindowSlot.Window
+  commentId: P:FluentGpu.Hosting.PopupWindowSlot.Window
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_Window
+  name: Window
+  nameWithType: PopupWindowSlot.Window
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Window
+- uid: FluentGpu.Hosting
+  commentId: N:FluentGpu.Hosting
+  href: FluentGpu.html
+  name: FluentGpu.Hosting
+  nameWithType: FluentGpu.Hosting
+  fullName: FluentGpu.Hosting
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hosting
+    name: Hosting
+    href: FluentGpu.Hosting.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hosting.PopupWindowSlot.Token*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.Token
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_Token
+  name: Token
+  nameWithType: PopupWindowSlot.Token
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Token
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Hosting.PopupWindowSlot.Window*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.Window
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_Window
+  name: Window
+  nameWithType: PopupWindowSlot.Window
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Window
+- uid: FluentGpu.Pal.IPlatformPopupWindow
+  commentId: T:FluentGpu.Pal.IPlatformPopupWindow
+  parent: FluentGpu.Pal
+  href: FluentGpu.Pal.IPlatformPopupWindow.html
+  name: IPlatformPopupWindow
+  nameWithType: IPlatformPopupWindow
+  fullName: FluentGpu.Pal.IPlatformPopupWindow
+- uid: FluentGpu.Pal
+  commentId: N:FluentGpu.Pal
+  href: FluentGpu.html
+  name: FluentGpu.Pal
+  nameWithType: FluentGpu.Pal
+  fullName: FluentGpu.Pal
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Pal
+    name: Pal
+    href: FluentGpu.Pal.html
+- uid: FluentGpu.Hosting.PopupWindowSlot.Root*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.Root
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_Root
+  name: Root
+  nameWithType: PopupWindowSlot.Root
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Root
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Hosting.PopupWindowSlot.BoundsDip*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_BoundsDip
+  name: BoundsDip
+  nameWithType: PopupWindowSlot.BoundsDip
+  fullName: FluentGpu.Hosting.PopupWindowSlot.BoundsDip
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Hosting.PopupWindowSlot.Swapchain*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.Swapchain
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_Swapchain
+  name: Swapchain
+  nameWithType: PopupWindowSlot.Swapchain
+  fullName: FluentGpu.Hosting.PopupWindowSlot.Swapchain
+- uid: FluentGpu.Rhi.ISwapchain
+  commentId: T:FluentGpu.Rhi.ISwapchain
+  parent: FluentGpu.Rhi
+  href: FluentGpu.Rhi.ISwapchain.html
+  name: ISwapchain
+  nameWithType: ISwapchain
+  fullName: FluentGpu.Rhi.ISwapchain
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+- uid: FluentGpu.Hosting.PopupWindowSlot.DrawList*
+  commentId: Overload:FluentGpu.Hosting.PopupWindowSlot.DrawList
+  href: FluentGpu.Hosting.PopupWindowSlot.html#FluentGpu_Hosting_PopupWindowSlot_DrawList
+  name: DrawList
+  nameWithType: PopupWindowSlot.DrawList
+  fullName: FluentGpu.Hosting.PopupWindowSlot.DrawList
+- uid: FluentGpu.Render.DrawList
+  commentId: T:FluentGpu.Render.DrawList
+  parent: FluentGpu.Render
+  href: FluentGpu.Render.DrawList.html
+  name: DrawList
+  nameWithType: DrawList
+  fullName: FluentGpu.Render.DrawList
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html

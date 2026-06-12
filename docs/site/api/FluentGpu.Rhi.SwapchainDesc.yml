@@ -1,0 +1,490 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Rhi.SwapchainDesc
+  commentId: T:FluentGpu.Rhi.SwapchainDesc
+  id: SwapchainDesc
+  parent: FluentGpu.Rhi
+  children:
+  - FluentGpu.Rhi.SwapchainDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.Size2)
+  - FluentGpu.Rhi.SwapchainDesc.PresentTarget
+  - FluentGpu.Rhi.SwapchainDesc.SizePx
+  langs:
+  - csharp
+  - vb
+  name: SwapchainDesc
+  nameWithType: SwapchainDesc
+  fullName: FluentGpu.Rhi.SwapchainDesc
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwapchainDesc
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: 'public readonly record struct SwapchainDesc : IEquatable<SwapchainDesc>'
+    content.vb: Public Structure SwapchainDesc Implements IEquatable(Of SwapchainDesc)
+  implements:
+  - System.IEquatable{FluentGpu.Rhi.SwapchainDesc}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Rhi.SwapchainDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.Size2)
+  commentId: M:FluentGpu.Rhi.SwapchainDesc.#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.Size2)
+  id: '#ctor(FluentGpu.Foundation.NativeHandle,FluentGpu.Foundation.Size2)'
+  parent: FluentGpu.Rhi.SwapchainDesc
+  langs:
+  - csharp
+  - vb
+  name: SwapchainDesc(NativeHandle, Size2)
+  nameWithType: SwapchainDesc.SwapchainDesc(NativeHandle, Size2)
+  fullName: FluentGpu.Rhi.SwapchainDesc.SwapchainDesc(FluentGpu.Foundation.NativeHandle, FluentGpu.Foundation.Size2)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: public SwapchainDesc(NativeHandle PresentTarget, Size2 SizePx)
+    parameters:
+    - id: PresentTarget
+      type: FluentGpu.Foundation.NativeHandle
+    - id: SizePx
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Sub New(PresentTarget As NativeHandle, SizePx As Size2)
+  overload: FluentGpu.Rhi.SwapchainDesc.#ctor*
+  nameWithType.vb: SwapchainDesc.New(NativeHandle, Size2)
+  fullName.vb: FluentGpu.Rhi.SwapchainDesc.New(FluentGpu.Foundation.NativeHandle, FluentGpu.Foundation.Size2)
+  name.vb: New(NativeHandle, Size2)
+- uid: FluentGpu.Rhi.SwapchainDesc.PresentTarget
+  commentId: P:FluentGpu.Rhi.SwapchainDesc.PresentTarget
+  id: PresentTarget
+  parent: FluentGpu.Rhi.SwapchainDesc
+  langs:
+  - csharp
+  - vb
+  name: PresentTarget
+  nameWithType: SwapchainDesc.PresentTarget
+  fullName: FluentGpu.Rhi.SwapchainDesc.PresentTarget
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PresentTarget
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: public NativeHandle PresentTarget { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.NativeHandle
+    content.vb: Public Property PresentTarget As NativeHandle
+  overload: FluentGpu.Rhi.SwapchainDesc.PresentTarget*
+- uid: FluentGpu.Rhi.SwapchainDesc.SizePx
+  commentId: P:FluentGpu.Rhi.SwapchainDesc.SizePx
+  id: SizePx
+  parent: FluentGpu.Rhi.SwapchainDesc
+  langs:
+  - csharp
+  - vb
+  name: SizePx
+  nameWithType: SwapchainDesc.SizePx
+  fullName: FluentGpu.Rhi.SwapchainDesc.SizePx
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Rhi/Rhi.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizePx
+    path: ../../src/FluentGpu.Rhi/Rhi.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Rhi
+  namespace: FluentGpu.Rhi
+  syntax:
+    content: public Size2 SizePx { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Property SizePx As Size2
+  overload: FluentGpu.Rhi.SwapchainDesc.SizePx*
+references:
+- uid: FluentGpu.Rhi
+  commentId: N:FluentGpu.Rhi
+  href: FluentGpu.html
+  name: FluentGpu.Rhi
+  nameWithType: FluentGpu.Rhi
+  fullName: FluentGpu.Rhi
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Rhi
+    name: Rhi
+    href: FluentGpu.Rhi.html
+- uid: System.IEquatable{FluentGpu.Rhi.SwapchainDesc}
+  commentId: T:System.IEquatable{FluentGpu.Rhi.SwapchainDesc}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<SwapchainDesc>
+  nameWithType: IEquatable<SwapchainDesc>
+  fullName: System.IEquatable<FluentGpu.Rhi.SwapchainDesc>
+  nameWithType.vb: IEquatable(Of SwapchainDesc)
+  fullName.vb: System.IEquatable(Of FluentGpu.Rhi.SwapchainDesc)
+  name.vb: IEquatable(Of SwapchainDesc)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Rhi.SwapchainDesc
+    name: SwapchainDesc
+    href: FluentGpu.Rhi.SwapchainDesc.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Rhi.SwapchainDesc
+    name: SwapchainDesc
+    href: FluentGpu.Rhi.SwapchainDesc.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Rhi.SwapchainDesc.#ctor*
+  commentId: Overload:FluentGpu.Rhi.SwapchainDesc.#ctor
+  href: FluentGpu.Rhi.SwapchainDesc.html#FluentGpu_Rhi_SwapchainDesc__ctor_FluentGpu_Foundation_NativeHandle_FluentGpu_Foundation_Size2_
+  name: SwapchainDesc
+  nameWithType: SwapchainDesc.SwapchainDesc
+  fullName: FluentGpu.Rhi.SwapchainDesc.SwapchainDesc
+  nameWithType.vb: SwapchainDesc.New
+  fullName.vb: FluentGpu.Rhi.SwapchainDesc.New
+  name.vb: New
+- uid: FluentGpu.Foundation.NativeHandle
+  commentId: T:FluentGpu.Foundation.NativeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NativeHandle.html
+  name: NativeHandle
+  nameWithType: NativeHandle
+  fullName: FluentGpu.Foundation.NativeHandle
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Rhi.SwapchainDesc.PresentTarget*
+  commentId: Overload:FluentGpu.Rhi.SwapchainDesc.PresentTarget
+  href: FluentGpu.Rhi.SwapchainDesc.html#FluentGpu_Rhi_SwapchainDesc_PresentTarget
+  name: PresentTarget
+  nameWithType: SwapchainDesc.PresentTarget
+  fullName: FluentGpu.Rhi.SwapchainDesc.PresentTarget
+- uid: FluentGpu.Rhi.SwapchainDesc.SizePx*
+  commentId: Overload:FluentGpu.Rhi.SwapchainDesc.SizePx
+  href: FluentGpu.Rhi.SwapchainDesc.html#FluentGpu_Rhi_SwapchainDesc_SizePx
+  name: SizePx
+  nameWithType: SwapchainDesc.SizePx
+  fullName: FluentGpu.Rhi.SwapchainDesc.SizePx

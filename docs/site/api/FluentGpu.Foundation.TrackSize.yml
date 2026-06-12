@@ -1,0 +1,603 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TrackSize
+  commentId: T:FluentGpu.Foundation.TrackSize
+  id: TrackSize
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TrackSize.#ctor(FluentGpu.Foundation.TrackKind,System.Single)
+  - FluentGpu.Foundation.TrackSize.Auto
+  - FluentGpu.Foundation.TrackSize.Kind
+  - FluentGpu.Foundation.TrackSize.Px(System.Single)
+  - FluentGpu.Foundation.TrackSize.Star(System.Single)
+  - FluentGpu.Foundation.TrackSize.Value
+  langs:
+  - csharp
+  - vb
+  name: TrackSize
+  nameWithType: TrackSize
+  fullName: FluentGpu.Foundation.TrackSize
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TrackSize
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: 'public readonly record struct TrackSize : IEquatable<TrackSize>'
+    content.vb: Public Structure TrackSize Implements IEquatable(Of TrackSize)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.TrackSize}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.TrackSize.#ctor(FluentGpu.Foundation.TrackKind,System.Single)
+  commentId: M:FluentGpu.Foundation.TrackSize.#ctor(FluentGpu.Foundation.TrackKind,System.Single)
+  id: '#ctor(FluentGpu.Foundation.TrackKind,System.Single)'
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: TrackSize(TrackKind, float)
+  nameWithType: TrackSize.TrackSize(TrackKind, float)
+  fullName: FluentGpu.Foundation.TrackSize.TrackSize(FluentGpu.Foundation.TrackKind, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public TrackSize(TrackKind Kind, float Value)
+    parameters:
+    - id: Kind
+      type: FluentGpu.Foundation.TrackKind
+    - id: Value
+      type: System.Single
+    content.vb: Public Sub New(Kind As TrackKind, Value As Single)
+  overload: FluentGpu.Foundation.TrackSize.#ctor*
+  nameWithType.vb: TrackSize.New(TrackKind, Single)
+  fullName.vb: FluentGpu.Foundation.TrackSize.New(FluentGpu.Foundation.TrackKind, Single)
+  name.vb: New(TrackKind, Single)
+- uid: FluentGpu.Foundation.TrackSize.Kind
+  commentId: P:FluentGpu.Foundation.TrackSize.Kind
+  id: Kind
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: TrackSize.Kind
+  fullName: FluentGpu.Foundation.TrackSize.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public TrackKind Kind { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TrackKind
+    content.vb: Public Property Kind As TrackKind
+  overload: FluentGpu.Foundation.TrackSize.Kind*
+- uid: FluentGpu.Foundation.TrackSize.Value
+  commentId: P:FluentGpu.Foundation.TrackSize.Value
+  id: Value
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: TrackSize.Value
+  fullName: FluentGpu.Foundation.TrackSize.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Value { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Value As Single
+  overload: FluentGpu.Foundation.TrackSize.Value*
+- uid: FluentGpu.Foundation.TrackSize.Px(System.Single)
+  commentId: M:FluentGpu.Foundation.TrackSize.Px(System.Single)
+  id: Px(System.Single)
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: Px(float)
+  nameWithType: TrackSize.Px(float)
+  fullName: FluentGpu.Foundation.TrackSize.Px(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Px
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A fixed-width track (px / DIP).
+  example: []
+  syntax:
+    content: public static TrackSize Px(float v)
+    parameters:
+    - id: v
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.TrackSize
+    content.vb: Public Shared Function Px(v As Single) As TrackSize
+  overload: FluentGpu.Foundation.TrackSize.Px*
+  nameWithType.vb: TrackSize.Px(Single)
+  fullName.vb: FluentGpu.Foundation.TrackSize.Px(Single)
+  name.vb: Px(Single)
+- uid: FluentGpu.Foundation.TrackSize.Star(System.Single)
+  commentId: M:FluentGpu.Foundation.TrackSize.Star(System.Single)
+  id: Star(System.Single)
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: Star(float)
+  nameWithType: TrackSize.Star(float)
+  fullName: FluentGpu.Foundation.TrackSize.Star(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Star
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: 'A fractional (fr) track: shares the remaining space by <code class="paramref">weight</code>.'
+  example: []
+  syntax:
+    content: public static TrackSize Star(float weight = 1)
+    parameters:
+    - id: weight
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.TrackSize
+    content.vb: Public Shared Function Star(weight As Single = 1) As TrackSize
+  overload: FluentGpu.Foundation.TrackSize.Star*
+  nameWithType.vb: TrackSize.Star(Single)
+  fullName.vb: FluentGpu.Foundation.TrackSize.Star(Single)
+  name.vb: Star(Single)
+- uid: FluentGpu.Foundation.TrackSize.Auto
+  commentId: P:FluentGpu.Foundation.TrackSize.Auto
+  id: Auto
+  parent: FluentGpu.Foundation.TrackSize
+  langs:
+  - csharp
+  - vb
+  name: Auto
+  nameWithType: TrackSize.Auto
+  fullName: FluentGpu.Foundation.TrackSize.Auto
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/TrackSize.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Auto
+    path: ../../src/FluentGpu.Foundation/TrackSize.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: A track sized to its widest cell content.
+  example: []
+  syntax:
+    content: public static TrackSize Auto { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TrackSize
+    content.vb: Public Shared ReadOnly Property Auto As TrackSize
+  overload: FluentGpu.Foundation.TrackSize.Auto*
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.TrackSize}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.TrackSize}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<TrackSize>
+  nameWithType: IEquatable<TrackSize>
+  fullName: System.IEquatable<FluentGpu.Foundation.TrackSize>
+  nameWithType.vb: IEquatable(Of TrackSize)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.TrackSize)
+  name.vb: IEquatable(Of TrackSize)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.TrackSize
+    name: TrackSize
+    href: FluentGpu.Foundation.TrackSize.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.TrackSize
+    name: TrackSize
+    href: FluentGpu.Foundation.TrackSize.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.TrackSize.#ctor*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.#ctor
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize__ctor_FluentGpu_Foundation_TrackKind_System_Single_
+  name: TrackSize
+  nameWithType: TrackSize.TrackSize
+  fullName: FluentGpu.Foundation.TrackSize.TrackSize
+  nameWithType.vb: TrackSize.New
+  fullName.vb: FluentGpu.Foundation.TrackSize.New
+  name.vb: New
+- uid: FluentGpu.Foundation.TrackKind
+  commentId: T:FluentGpu.Foundation.TrackKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TrackKind.html
+  name: TrackKind
+  nameWithType: TrackKind
+  fullName: FluentGpu.Foundation.TrackKind
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.TrackSize.Kind*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.Kind
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize_Kind
+  name: Kind
+  nameWithType: TrackSize.Kind
+  fullName: FluentGpu.Foundation.TrackSize.Kind
+- uid: FluentGpu.Foundation.TrackSize.Value*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.Value
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize_Value
+  name: Value
+  nameWithType: TrackSize.Value
+  fullName: FluentGpu.Foundation.TrackSize.Value
+- uid: FluentGpu.Foundation.TrackSize.Px*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.Px
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize_Px_System_Single_
+  name: Px
+  nameWithType: TrackSize.Px
+  fullName: FluentGpu.Foundation.TrackSize.Px
+- uid: FluentGpu.Foundation.TrackSize
+  commentId: T:FluentGpu.Foundation.TrackSize
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TrackSize.html
+  name: TrackSize
+  nameWithType: TrackSize
+  fullName: FluentGpu.Foundation.TrackSize
+- uid: FluentGpu.Foundation.TrackSize.Star*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.Star
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize_Star_System_Single_
+  name: Star
+  nameWithType: TrackSize.Star
+  fullName: FluentGpu.Foundation.TrackSize.Star
+- uid: FluentGpu.Foundation.TrackSize.Auto*
+  commentId: Overload:FluentGpu.Foundation.TrackSize.Auto
+  href: FluentGpu.Foundation.TrackSize.html#FluentGpu_Foundation_TrackSize_Auto
+  name: Auto
+  nameWithType: TrackSize.Auto
+  fullName: FluentGpu.Foundation.TrackSize.Auto

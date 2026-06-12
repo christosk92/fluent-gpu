@@ -67,10 +67,11 @@ public static partial class Win32Theme
     }
 
     /// <summary>Dark titlebar + the Mica system backdrop (Windows 11). Mica shows through transparent client pixels.
-    /// <paramref name="customFrame"/> = the engine draws the titlebar (WindowDesc.CustomFrame): the frame is extended
-    /// by only a 1px top sliver — the Windows Terminal recipe — because the -1 sheet-of-glass makes DWM composite its
-    /// OWN caption buttons over the client (the "double min/max/close" bug); the Mica backdrop still fills the whole
-    /// window from DWMWA_SYSTEMBACKDROP_TYPE alone (Terminal's custom-frame Mica proves the -1 isn't needed for it).</summary>
+    /// <paramref name="customFrame"/> = the engine draws the titlebar (WindowDesc.CustomFrame): the frame extension is
+    /// ZERO — the Windows Terminal Mica rule (`_useMica ? 0`). Any non-zero margin lets DWM paint caption visuals over
+    /// the client (a -1 sheet-of-glass composites its OWN min/max/close — the "double caption buttons" bug; even a 1px
+    /// sliver draws a DWM strip and re-anchors the Win11 snap flyout off the extended frame). The Mica backdrop fills
+    /// the whole window from DWMWA_SYSTEMBACKDROP_TYPE alone — no frame extension needed.</summary>
     public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false)
     {
         int d = dark ? 1 : 0;
@@ -80,8 +81,9 @@ public static partial class Win32Theme
 
         if (customFrame)
         {
-            // 1px top extension: keeps the DWM top border/shadow seam without re-summoning the system caption buttons.
-            MARGINS m = new() { cyTopHeight = 1 };
+            // All-zero margins (Terminal's Mica case): DWM owns no caption visuals; snap flyout anchors purely from
+            // the engine's WM_NCHITTEST regions.
+            MARGINS m = new();
             DwmExtendFrameIntoClientArea(hwnd, in m);
         }
         else if (mica)

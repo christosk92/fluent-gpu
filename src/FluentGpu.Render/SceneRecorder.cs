@@ -80,7 +80,7 @@ public static class SceneRecorder
         int skipCount = skipRoots.Length;
         if (hasGhost) skips[skipCount++] = ghost;
 
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skips[..skipCount], ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skips[..skipCount], ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -88,7 +88,7 @@ public static class SceneRecorder
         for (int i = 0; i < scene.OrphanCount; i++)
         {
             var o = scene.OrphanAt(i, out float px, out float py);
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, skipRoots, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skipRoots, ref stats);
         }
 
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
@@ -101,7 +101,7 @@ public static class SceneRecorder
             ref NodePaint gp = ref scene.Paint(ghost);
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
-                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
         }
         return stats.ToStats();
     }
@@ -131,7 +131,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator();
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, default, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
         return stats.ToStats();
     }
 
@@ -154,12 +154,17 @@ public static class SceneRecorder
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
+                             float parentScaleX, float parentScaleY, bool parentInMotion, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
         stats.NodesVisited++;
+        // Motion gate for glyph snapping: a transform write this frame (scroll/fling/drag/FLIP/sticky — every motion
+        // writer marks TransformDirty; the host clears the bits right after record) means this subtree is mid-motion.
+        // Its glyph runs skip the device-grid baseline snap and ride sub-pixel WITH their plates (no 1px shear against
+        // the smoothly-translating fill), then re-snap crisp on the settle frame the host queues after the last write.
+        bool inMotion = parentInMotion || (flags & NodeFlags.TransformDirty) != 0;
 
         ref RectF b = ref scene.Bounds(node);
         ref NodePaint p = ref scene.Paint(node);
@@ -367,7 +372,7 @@ public static class SceneRecorder
                     dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
                         (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                         li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                        world, opacity, key, spanRunId);
+                        world, opacity, key, spanRunId, inMotion: inMotion);
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
                 // text seam published the laid bar rects on the run at measure (SpanRunRects — link bands are input's;
@@ -427,7 +432,7 @@ public static class SceneRecorder
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, li.TextStyle.SizeDip, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, key | 0x1, spanRunId, forceColor: true);
+                            world, opacity, key | 0x1, spanRunId, forceColor: true, inMotion: inMotion);
                         dl.PopClip(key | 0x1);
                     }
 
@@ -455,9 +460,22 @@ public static class SceneRecorder
             }
             case VisualKind.Image:
             {
-                bool ready = images is not null && images.StateOf(new ImageHandle(p.ImageId)) == ImageState.Ready;
-                float crossFade = images is not null ? images.CrossFadeOf(new ImageHandle(p.ImageId)) : 1f;
-                dl.DrawImage(local, p.Corners, p.ImageId, ready, p.Fill, world, opacity, crossFade, key);
+                var ih = new ImageHandle(p.ImageId);
+                bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
+                float crossFade = images is not null ? images.CrossFadeOf(ih) : 1f;
+
+                // Content fit (CSS object-fit): map the decoded source into the layout box per ImageFit. Only meaningful
+                // when ready and the source dimensions are known (the placeholder is a flat fill that already covers the
+                // box). While loading, draw the whole box (UV 0,0,1,1) — fit doesn't matter for a flat tint.
+                RectF drawRect = local;
+                RectF uv = new RectF(0f, 0f, 1f, 1f);
+                if (ready && images is not null)
+                {
+                    var (srcW, srcH) = images.SizeOf(ih);
+                    (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH);
+                }
+
+                dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, crossFade, key);
                 break;
             }
             case VisualKind.PolylineStroke:
@@ -488,12 +506,12 @@ public static class SceneRecorder
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
         {
             if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
-            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
+            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, skipRoots, ref stats);
         }
         if (anyPinned)
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
                 if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
-                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, skipRoots, ref stats);
+                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, skipRoots, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a
@@ -677,6 +695,36 @@ public static class SceneRecorder
         for (var n = node; !n.IsNull; n = scene.Parent(n))
             if ((scene.Flags(n) & NodeFlags.Disabled) != 0) return true;
         return false;
+    }
+
+    /// <summary>Map a decoded source (<paramref name="srcW"/>×<paramref name="srcH"/> px) into <paramref name="box"/>
+    /// per <paramref name="fit"/> — returns the draw quad (node-local) and the 0..1 source UV sub-rect. <c>Cover</c>
+    /// crops via a centered UV inset (quad = box); <c>Contain</c>/<c>None</c> shrink the quad and center it; <c>Fill</c>
+    /// (and unknown / zero source) keeps the whole texture stretched to the box. Pure — also the golden-test entry point.</summary>
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH)
+    {
+        RectF drawRect = box;
+        RectF uv = new RectF(0f, 0f, 1f, 1f);
+        if (fit == ImageFit.Fill || srcW <= 0 || srcH <= 0 || box.W <= 0f || box.H <= 0f) return (drawRect, uv);
+
+        float srcAR = (float)srcW / srcH, boxAR = box.W / box.H;
+        switch (fit)
+        {
+            case ImageFit.Cover:
+                if (boxAR > srcAR) { float uh = srcAR / boxAR; uv = new RectF(0f, (1f - uh) * 0.5f, 1f, uh); }
+                else if (boxAR < srcAR) { float uw = boxAR / srcAR; uv = new RectF((1f - uw) * 0.5f, 0f, uw, 1f); }
+                break;
+            case ImageFit.Contain:
+                if (boxAR > srcAR) { float w2 = box.H * srcAR; drawRect = new RectF(box.X + (box.W - w2) * 0.5f, box.Y, w2, box.H); }
+                else if (boxAR < srcAR) { float h2 = box.W / srcAR; drawRect = new RectF(box.X, box.Y + (box.H - h2) * 0.5f, box.W, h2); }
+                break;
+            case ImageFit.None:
+                float dw = MathF.Min(srcW, box.W), dh = MathF.Min(srcH, box.H);
+                drawRect = new RectF(box.X + (box.W - dw) * 0.5f, box.Y + (box.H - dh) * 0.5f, dw, dh);
+                uv = new RectF((1f - dw / srcW) * 0.5f, (1f - dh / srcH) * 0.5f, dw / srcW, dh / srcH);
+                break;
+        }
+        return (drawRect, uv);
     }
 
     private static NodeFlags NearestInteractiveStateFlags(SceneStore scene, NodeHandle node)

@@ -1,0 +1,205 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  id: IReadSignal`1
+  parent: FluentGpu.Signals
+  children:
+  - FluentGpu.Signals.IReadSignal`1.Peek
+  - FluentGpu.Signals.IReadSignal`1.Value
+  langs:
+  - csharp
+  - vb
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  type: Interface
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Signal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IReadSignal
+    path: ../../src/FluentGpu.Foundation/Signals/Signal.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: Read-only view of a reactive value (a <xref href="FluentGpu.Signals.Signal%601" data-throw-if-not-resolved="false"></xref> or a <xref href="FluentGpu.Signals.Memo%601" data-throw-if-not-resolved="false"></xref>).
+  example: []
+  syntax:
+    content: public interface IReadSignal<out T>
+    typeParameters:
+    - id: T
+    content.vb: Public Interface IReadSignal(Of Out T)
+  derivedClasses:
+  - FluentGpu.Signals.FloatSignal
+  - FluentGpu.Signals.Memo`1
+  - FluentGpu.Signals.Signal`1
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+- uid: FluentGpu.Signals.IReadSignal`1.Value
+  commentId: P:FluentGpu.Signals.IReadSignal`1.Value
+  id: Value
+  parent: FluentGpu.Signals.IReadSignal`1
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: IReadSignal<T>.Value
+  fullName: FluentGpu.Signals.IReadSignal<T>.Value
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Signal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Foundation/Signals/Signal.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: Read the value AND subscribe the current computation (if any).
+  example: []
+  syntax:
+    content: T Value { get; }
+    parameters: []
+    return:
+      type: '{T}'
+    content.vb: ReadOnly Property Value As T
+  overload: FluentGpu.Signals.IReadSignal`1.Value*
+  nameWithType.vb: IReadSignal(Of T).Value
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Value
+- uid: FluentGpu.Signals.IReadSignal`1.Peek
+  commentId: M:FluentGpu.Signals.IReadSignal`1.Peek
+  id: Peek
+  parent: FluentGpu.Signals.IReadSignal`1
+  langs:
+  - csharp
+  - vb
+  name: Peek()
+  nameWithType: IReadSignal<T>.Peek()
+  fullName: FluentGpu.Signals.IReadSignal<T>.Peek()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/Signal.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Peek
+    path: ../../src/FluentGpu.Foundation/Signals/Signal.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: Read without subscribing.
+  example: []
+  syntax:
+    content: T Peek()
+    return:
+      type: '{T}'
+    content.vb: Function Peek() As T
+  overload: FluentGpu.Signals.IReadSignal`1.Peek*
+  nameWithType.vb: IReadSignal(Of T).Peek()
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Peek()
+references:
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Memo`1
+  commentId: T:FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: FluentGpu.Signals.IReadSignal`1.Value*
+  commentId: Overload:FluentGpu.Signals.IReadSignal`1.Value
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Value
+  name: Value
+  nameWithType: IReadSignal<T>.Value
+  fullName: FluentGpu.Signals.IReadSignal<T>.Value
+  nameWithType.vb: IReadSignal(Of T).Value
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Value
+- uid: '{T}'
+  commentId: '!:T'
+  definition: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: T
+  name: T
+  nameWithType: T
+  fullName: T
+- uid: FluentGpu.Signals.IReadSignal`1.Peek*
+  commentId: Overload:FluentGpu.Signals.IReadSignal`1.Peek
+  href: FluentGpu.Signals.IReadSignal-1.html#FluentGpu_Signals_IReadSignal_1_Peek
+  name: Peek
+  nameWithType: IReadSignal<T>.Peek
+  fullName: FluentGpu.Signals.IReadSignal<T>.Peek
+  nameWithType.vb: IReadSignal(Of T).Peek
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T).Peek

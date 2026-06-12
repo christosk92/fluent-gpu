@@ -1,0 +1,798 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.TransitionDynamics
+  commentId: T:FluentGpu.Foundation.TransitionDynamics
+  id: TransitionDynamics
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.TransitionDynamics.#ctor(FluentGpu.Foundation.DynamicsKind,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  - FluentGpu.Foundation.TransitionDynamics.DampingRatio
+  - FluentGpu.Foundation.TransitionDynamics.Default
+  - FluentGpu.Foundation.TransitionDynamics.DurationMs
+  - FluentGpu.Foundation.TransitionDynamics.Easing
+  - FluentGpu.Foundation.TransitionDynamics.Kind
+  - FluentGpu.Foundation.TransitionDynamics.Response
+  - FluentGpu.Foundation.TransitionDynamics.Spring(System.Single,System.Single)
+  - FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.Easing)
+  - FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.EasingSpec)
+  langs:
+  - csharp
+  - vb
+  name: TransitionDynamics
+  nameWithType: TransitionDynamics
+  fullName: FluentGpu.Foundation.TransitionDynamics
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TransitionDynamics
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The dynamics of a transition. Springs are the default (interruptible, jump-free retarget): <code>Response</code> ≈ the
+
+    settle time in seconds, <code>DampingRatio</code> 1 = critical (no overshoot), &lt;1 = bouncy. A tween is opt-in:
+
+    fixed <code>DurationMs</code> + <code>Easing</code> (an <xref href="FluentGpu.Foundation.EasingSpec" data-throw-if-not-resolved="false"></xref>, so authored WinUI KeySplines are expressible;
+
+    a default spec is normalized by the engine to <xref href="FluentGpu.Foundation.Easing.FluentDecelerate" data-throw-if-not-resolved="false"></xref>). Stored as scalars
+
+    (not the AnimEngine's <code>SpringParams</code>) so the spec can live in Foundation; the engine converts at seed time.
+
+    A <code>default</code> value (all zero) is normalized by the engine to the spring defaults.
+  example: []
+  syntax:
+    content: 'public readonly record struct TransitionDynamics : IEquatable<TransitionDynamics>'
+    content.vb: Public Structure TransitionDynamics Implements IEquatable(Of TransitionDynamics)
+  implements:
+  - System.IEquatable{FluentGpu.Foundation.TransitionDynamics}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Foundation.TransitionDynamics.#ctor(FluentGpu.Foundation.DynamicsKind,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  commentId: M:FluentGpu.Foundation.TransitionDynamics.#ctor(FluentGpu.Foundation.DynamicsKind,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec)
+  id: '#ctor(FluentGpu.Foundation.DynamicsKind,System.Single,System.Single,System.Single,FluentGpu.Foundation.EasingSpec)'
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: TransitionDynamics(DynamicsKind, float, float, float, EasingSpec)
+  nameWithType: TransitionDynamics.TransitionDynamics(DynamicsKind, float, float, float, EasingSpec)
+  fullName: FluentGpu.Foundation.TransitionDynamics.TransitionDynamics(FluentGpu.Foundation.DynamicsKind, float, float, float, FluentGpu.Foundation.EasingSpec)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    The dynamics of a transition. Springs are the default (interruptible, jump-free retarget): <code>Response</code> ≈ the
+
+    settle time in seconds, <code>DampingRatio</code> 1 = critical (no overshoot), &lt;1 = bouncy. A tween is opt-in:
+
+    fixed <code>DurationMs</code> + <code>Easing</code> (an <xref href="FluentGpu.Foundation.EasingSpec" data-throw-if-not-resolved="false"></xref>, so authored WinUI KeySplines are expressible;
+
+    a default spec is normalized by the engine to <xref href="FluentGpu.Foundation.Easing.FluentDecelerate" data-throw-if-not-resolved="false"></xref>). Stored as scalars
+
+    (not the AnimEngine's <code>SpringParams</code>) so the spec can live in Foundation; the engine converts at seed time.
+
+    A <code>default</code> value (all zero) is normalized by the engine to the spring defaults.
+  example: []
+  syntax:
+    content: public TransitionDynamics(DynamicsKind Kind = DynamicsKind.Spring, float Response = 0.3, float DampingRatio = 0.85, float DurationMs = 0, EasingSpec Easing = default)
+    parameters:
+    - id: Kind
+      type: FluentGpu.Foundation.DynamicsKind
+    - id: Response
+      type: System.Single
+    - id: DampingRatio
+      type: System.Single
+    - id: DurationMs
+      type: System.Single
+    - id: Easing
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Sub New(Kind As DynamicsKind = DynamicsKind.Spring, Response As Single = 0.3, DampingRatio As Single = 0.85, DurationMs As Single = 0, Easing As EasingSpec = Nothing)
+  overload: FluentGpu.Foundation.TransitionDynamics.#ctor*
+  nameWithType.vb: TransitionDynamics.New(DynamicsKind, Single, Single, Single, EasingSpec)
+  fullName.vb: FluentGpu.Foundation.TransitionDynamics.New(FluentGpu.Foundation.DynamicsKind, Single, Single, Single, FluentGpu.Foundation.EasingSpec)
+  name.vb: New(DynamicsKind, Single, Single, Single, EasingSpec)
+- uid: FluentGpu.Foundation.TransitionDynamics.Kind
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.Kind
+  id: Kind
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Kind
+  nameWithType: TransitionDynamics.Kind
+  fullName: FluentGpu.Foundation.TransitionDynamics.Kind
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Kind
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public DynamicsKind Kind { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.DynamicsKind
+    content.vb: Public Property Kind As DynamicsKind
+  overload: FluentGpu.Foundation.TransitionDynamics.Kind*
+- uid: FluentGpu.Foundation.TransitionDynamics.Response
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.Response
+  id: Response
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Response
+  nameWithType: TransitionDynamics.Response
+  fullName: FluentGpu.Foundation.TransitionDynamics.Response
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Response
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float Response { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Response As Single
+  overload: FluentGpu.Foundation.TransitionDynamics.Response*
+- uid: FluentGpu.Foundation.TransitionDynamics.DampingRatio
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.DampingRatio
+  id: DampingRatio
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: DampingRatio
+  nameWithType: TransitionDynamics.DampingRatio
+  fullName: FluentGpu.Foundation.TransitionDynamics.DampingRatio
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DampingRatio
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float DampingRatio { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DampingRatio As Single
+  overload: FluentGpu.Foundation.TransitionDynamics.DampingRatio*
+- uid: FluentGpu.Foundation.TransitionDynamics.DurationMs
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.DurationMs
+  id: DurationMs
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: DurationMs
+  nameWithType: TransitionDynamics.DurationMs
+  fullName: FluentGpu.Foundation.TransitionDynamics.DurationMs
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DurationMs
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 55
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public float DurationMs { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property DurationMs As Single
+  overload: FluentGpu.Foundation.TransitionDynamics.DurationMs*
+- uid: FluentGpu.Foundation.TransitionDynamics.Easing
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.Easing
+  id: Easing
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Easing
+  nameWithType: TransitionDynamics.Easing
+  fullName: FluentGpu.Foundation.TransitionDynamics.Easing
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Easing
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public EasingSpec Easing { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.EasingSpec
+    content.vb: Public Property Easing As EasingSpec
+  overload: FluentGpu.Foundation.TransitionDynamics.Easing*
+- uid: FluentGpu.Foundation.TransitionDynamics.Spring(System.Single,System.Single)
+  commentId: M:FluentGpu.Foundation.TransitionDynamics.Spring(System.Single,System.Single)
+  id: Spring(System.Single,System.Single)
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Spring(float, float)
+  nameWithType: TransitionDynamics.Spring(float, float)
+  fullName: FluentGpu.Foundation.TransitionDynamics.Spring(float, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Spring
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static TransitionDynamics Spring(float response = 0.3, float dampingRatio = 0.85)
+    parameters:
+    - id: response
+      type: System.Single
+    - id: dampingRatio
+      type: System.Single
+    return:
+      type: FluentGpu.Foundation.TransitionDynamics
+    content.vb: Public Shared Function Spring(response As Single = 0.3, dampingRatio As Single = 0.85) As TransitionDynamics
+  overload: FluentGpu.Foundation.TransitionDynamics.Spring*
+  nameWithType.vb: TransitionDynamics.Spring(Single, Single)
+  fullName.vb: FluentGpu.Foundation.TransitionDynamics.Spring(Single, Single)
+  name.vb: Spring(Single, Single)
+- uid: FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.Easing)
+  commentId: M:FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.Easing)
+  id: Tween(System.Single,FluentGpu.Foundation.Easing)
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Tween(float, Easing)
+  nameWithType: TransitionDynamics.Tween(float, Easing)
+  fullName: FluentGpu.Foundation.TransitionDynamics.Tween(float, FluentGpu.Foundation.Easing)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tween
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static TransitionDynamics Tween(float durationMs, Easing easing = Easing.FluentDecelerate)
+    parameters:
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.Easing
+    return:
+      type: FluentGpu.Foundation.TransitionDynamics
+    content.vb: Public Shared Function Tween(durationMs As Single, easing As Easing = Easing.FluentDecelerate) As TransitionDynamics
+  overload: FluentGpu.Foundation.TransitionDynamics.Tween*
+  nameWithType.vb: TransitionDynamics.Tween(Single, Easing)
+  fullName.vb: FluentGpu.Foundation.TransitionDynamics.Tween(Single, FluentGpu.Foundation.Easing)
+  name.vb: Tween(Single, Easing)
+- uid: FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.EasingSpec)
+  commentId: M:FluentGpu.Foundation.TransitionDynamics.Tween(System.Single,FluentGpu.Foundation.EasingSpec)
+  id: Tween(System.Single,FluentGpu.Foundation.EasingSpec)
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Tween(float, EasingSpec)
+  nameWithType: TransitionDynamics.Tween(float, EasingSpec)
+  fullName: FluentGpu.Foundation.TransitionDynamics.Tween(float, FluentGpu.Foundation.EasingSpec)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Tween
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static TransitionDynamics Tween(float durationMs, EasingSpec easing)
+    parameters:
+    - id: durationMs
+      type: System.Single
+    - id: easing
+      type: FluentGpu.Foundation.EasingSpec
+    return:
+      type: FluentGpu.Foundation.TransitionDynamics
+    content.vb: Public Shared Function Tween(durationMs As Single, easing As EasingSpec) As TransitionDynamics
+  overload: FluentGpu.Foundation.TransitionDynamics.Tween*
+  nameWithType.vb: TransitionDynamics.Tween(Single, EasingSpec)
+  fullName.vb: FluentGpu.Foundation.TransitionDynamics.Tween(Single, FluentGpu.Foundation.EasingSpec)
+  name.vb: Tween(Single, EasingSpec)
+- uid: FluentGpu.Foundation.TransitionDynamics.Default
+  commentId: P:FluentGpu.Foundation.TransitionDynamics.Default
+  id: Default
+  parent: FluentGpu.Foundation.TransitionDynamics
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: TransitionDynamics.Default
+  fullName: FluentGpu.Foundation.TransitionDynamics.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/LayoutTransition.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Foundation/LayoutTransition.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static TransitionDynamics Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.TransitionDynamics
+    content.vb: Public Shared ReadOnly Property [Default] As TransitionDynamics
+  overload: FluentGpu.Foundation.TransitionDynamics.Default*
+references:
+- uid: FluentGpu.Foundation.EasingSpec
+  commentId: T:FluentGpu.Foundation.EasingSpec
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.EasingSpec.html
+  name: EasingSpec
+  nameWithType: EasingSpec
+  fullName: FluentGpu.Foundation.EasingSpec
+- uid: FluentGpu.Foundation.Easing.FluentDecelerate
+  commentId: F:FluentGpu.Foundation.Easing.FluentDecelerate
+  href: FluentGpu.Foundation.Easing.html#FluentGpu_Foundation_Easing_FluentDecelerate
+  name: FluentDecelerate
+  nameWithType: Easing.FluentDecelerate
+  fullName: FluentGpu.Foundation.Easing.FluentDecelerate
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.IEquatable{FluentGpu.Foundation.TransitionDynamics}
+  commentId: T:System.IEquatable{FluentGpu.Foundation.TransitionDynamics}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<TransitionDynamics>
+  nameWithType: IEquatable<TransitionDynamics>
+  fullName: System.IEquatable<FluentGpu.Foundation.TransitionDynamics>
+  nameWithType.vb: IEquatable(Of TransitionDynamics)
+  fullName.vb: System.IEquatable(Of FluentGpu.Foundation.TransitionDynamics)
+  name.vb: IEquatable(Of TransitionDynamics)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Foundation.TransitionDynamics
+    name: TransitionDynamics
+    href: FluentGpu.Foundation.TransitionDynamics.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Foundation.TransitionDynamics
+    name: TransitionDynamics
+    href: FluentGpu.Foundation.TransitionDynamics.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Foundation.TransitionDynamics.#ctor*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.#ctor
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics__ctor_FluentGpu_Foundation_DynamicsKind_System_Single_System_Single_System_Single_FluentGpu_Foundation_EasingSpec_
+  name: TransitionDynamics
+  nameWithType: TransitionDynamics.TransitionDynamics
+  fullName: FluentGpu.Foundation.TransitionDynamics.TransitionDynamics
+  nameWithType.vb: TransitionDynamics.New
+  fullName.vb: FluentGpu.Foundation.TransitionDynamics.New
+  name.vb: New
+- uid: FluentGpu.Foundation.DynamicsKind
+  commentId: T:FluentGpu.Foundation.DynamicsKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DynamicsKind.html
+  name: DynamicsKind
+  nameWithType: DynamicsKind
+  fullName: FluentGpu.Foundation.DynamicsKind
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.TransitionDynamics.Kind*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Kind
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Kind
+  name: Kind
+  nameWithType: TransitionDynamics.Kind
+  fullName: FluentGpu.Foundation.TransitionDynamics.Kind
+- uid: FluentGpu.Foundation.TransitionDynamics.Response*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Response
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Response
+  name: Response
+  nameWithType: TransitionDynamics.Response
+  fullName: FluentGpu.Foundation.TransitionDynamics.Response
+- uid: FluentGpu.Foundation.TransitionDynamics.DampingRatio*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.DampingRatio
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_DampingRatio
+  name: DampingRatio
+  nameWithType: TransitionDynamics.DampingRatio
+  fullName: FluentGpu.Foundation.TransitionDynamics.DampingRatio
+- uid: FluentGpu.Foundation.TransitionDynamics.DurationMs*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.DurationMs
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_DurationMs
+  name: DurationMs
+  nameWithType: TransitionDynamics.DurationMs
+  fullName: FluentGpu.Foundation.TransitionDynamics.DurationMs
+- uid: FluentGpu.Foundation.TransitionDynamics.Easing*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Easing
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Easing
+  name: Easing
+  nameWithType: TransitionDynamics.Easing
+  fullName: FluentGpu.Foundation.TransitionDynamics.Easing
+- uid: FluentGpu.Foundation.TransitionDynamics.Spring*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Spring
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Spring_System_Single_System_Single_
+  name: Spring
+  nameWithType: TransitionDynamics.Spring
+  fullName: FluentGpu.Foundation.TransitionDynamics.Spring
+- uid: FluentGpu.Foundation.TransitionDynamics
+  commentId: T:FluentGpu.Foundation.TransitionDynamics
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.TransitionDynamics.html
+  name: TransitionDynamics
+  nameWithType: TransitionDynamics
+  fullName: FluentGpu.Foundation.TransitionDynamics
+- uid: FluentGpu.Foundation.TransitionDynamics.Tween*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Tween
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Tween_System_Single_FluentGpu_Foundation_Easing_
+  name: Tween
+  nameWithType: TransitionDynamics.Tween
+  fullName: FluentGpu.Foundation.TransitionDynamics.Tween
+- uid: FluentGpu.Foundation.Easing
+  commentId: T:FluentGpu.Foundation.Easing
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Easing.html
+  name: Easing
+  nameWithType: Easing
+  fullName: FluentGpu.Foundation.Easing
+- uid: FluentGpu.Foundation.TransitionDynamics.Default*
+  commentId: Overload:FluentGpu.Foundation.TransitionDynamics.Default
+  href: FluentGpu.Foundation.TransitionDynamics.html#FluentGpu_Foundation_TransitionDynamics_Default
+  name: Default
+  nameWithType: TransitionDynamics.Default
+  fullName: FluentGpu.Foundation.TransitionDynamics.Default

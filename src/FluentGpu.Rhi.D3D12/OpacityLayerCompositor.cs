@@ -94,6 +94,7 @@ float4 PSMain(V i) : SV_Target { return gSrc.Sample(gSamp, i.uv) * prm.x; }   //
         ID3D12DescriptorHeap* rhp; Check(_device->CreateDescriptorHeap(&rh, __uuidof<ID3D12DescriptorHeap>(), (void**)&rhp), "OpacityLayer.RtvHeap");
         _rtvHeap = rhp;
         _rtvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        D3D12MemoryDiagnostics.Track(_rtvHeap, "OpacityLayer.RtvHeap", (ulong)rh.NumDescriptors * _rtvInc);
 
         D3D12_DESCRIPTOR_HEAP_DESC sh = default;
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -102,6 +103,7 @@ float4 PSMain(V i) : SV_Target { return gSrc.Sample(gSamp, i.uv) * prm.x; }   //
         ID3D12DescriptorHeap* shp; Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "OpacityLayer.SrvHeap");
         _srvHeap = shp;
         _srvInc = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        D3D12MemoryDiagnostics.Track(_srvHeap, "OpacityLayer.SrvHeap", (ulong)sh.NumDescriptors * _srvInc);
     }
 
     private void BuildPipeline()
@@ -390,8 +392,8 @@ float4 PSMain(V i) : SV_Target { return gSrc.Sample(gSamp, i.uv) * prm.x; }   //
             _retired[i].Res->Release();
         }
         _retired.Clear();
-        if (_rtvHeap != null) _rtvHeap->Release();
-        if (_srvHeap != null) _srvHeap->Release();
+        if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "OpacityLayer.RtvHeap"); _rtvHeap->Release(); }
+        if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "OpacityLayer.SrvHeap"); _srvHeap->Release(); }
         if (_pso != null) _pso->Release();
         if (_root != null) _root->Release();
     }

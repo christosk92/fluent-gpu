@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Namespace FluentGpu.Dsl | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Namespace FluentGpu.Dsl | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Dsl">
+
+  <h1 id="FluentGpu_Dsl" data-uid="FluentGpu.Dsl" class="text-break">Namespace FluentGpu.Dsl</h1>
+  <div class="markdown level0 summary"></div>
+  <div class="markdown level0 conceptual"></div>
+  <div class="markdown level0 remarks"></div>
+
+    <h3 id="classes">
+Classes
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+      <dd><p>A box: container/layout node and/or a filled, optionally-clickable surface (VStack/HStack/Button/Box).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Element.html">Element</a></dt>
+      <dd><p>Immutable description of a UI node (the &quot;virtual DOM&quot;). Cheap to build, never touches the scene directly.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Elevation.html">Elevation</a></dt>
+      <dd><p>Fluent elevation presets — the engine's ANALYTIC drop shadows standing in for WinUI's ThemeShadow Z-depth model
+(we own every pixel; documented visual-equivalent to the DComp shadow). WinUI elevates popups by Z translation —
+base depth 32 + 8 per nested tier (ElevationHelper.cpp:19-21 s_elevationBaseDepth/s_elevationIterativeDepth) — and
+the design maps the popup bands to three depth CLASSES: ToolTip (lightest, depth-16 class) &lt; Flyout/Menu
+(depth-32 class) &lt; Dialog (depth-128 class). The preset blur/offset/alpha values keep the engine's existing
+visual scale; the CLASS a control uses is the contract: ToolTip → <a class="xref" href="FluentGpu.Dsl.Elevation.html#FluentGpu_Dsl_Elevation_Tooltip">Tooltip</a>;
+Flyout/MenuFlyout/CommandBarFlyout/TeachingTip → <a class="xref" href="FluentGpu.Dsl.Elevation.html#FluentGpu_Dsl_Elevation_Flyout">Flyout</a>; ContentDialog → <a class="xref" href="FluentGpu.Dsl.Elevation.html#FluentGpu_Dsl_Elevation_Dialog">Dialog</a>.
+Use via <code>.Elevate(Elevation.Card)</code> (Modifiers) or <code>Ui.Card(...)</code> which carries <a class="xref" href="FluentGpu.Dsl.Elevation.html#FluentGpu_Dsl_Elevation_Card">Card</a> by default.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.GridEl.html">GridEl</a></dt>
+      <dd><p>A CSS-Grid container: column tracks (Pixel/Star/Auto) + gaps; children auto-flow row-major into cells. Rows take
+<a class="xref" href="FluentGpu.Dsl.GridEl.html#FluentGpu_Dsl_GridEl_RowHeight">RowHeight</a> (or the tallest cell when NaN). True tracks — every cell in a column shares its width
+(unlike nested-flex faking). Width-aware: resolves inside a ScrollView. (layout.md §7.)</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.IconGlyphs.html">IconGlyphs</a></dt>
+      <dd><p>Segoe Fluent glyph codepoints shared across LAYERS (a control and the engine recorder), so every
+consumer renders literally the same icon. Control-local glyphs stay at their call sites (or
+<code>Controls.Icons</code>); promote one here only when a layer below Controls needs it — today the scrollbar
+arrows, drawn both by the ScrollBar/AnnotatedScrollBar templates and by the engine's overlay scrollbar
+(<code>SceneRecorder.EmitScrollbar</code>).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.ImageEl.html">ImageEl</a></dt>
+      <dd><p>An async image (album art): shows <a class="xref" href="FluentGpu.Dsl.ImageEl.html#FluentGpu_Dsl_ImageEl_Placeholder">Placeholder</a> until the decode lands, then the bitmap. Decode is
+off-thread + cached + residency-pinned while on screen (see <code>ImageCache</code>).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Modifiers.html">Modifiers</a></dt>
+      <dd><p>Fluent per-element style overrides (React/Compose/WinUI-style): <code>Button(&quot;x&quot;, onClick).Background(c).Rounded(8)</code>.
+Each returns a record <code>with</code>-copy, so any default style is overrideable inline without forking the control.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Motion.html">Motion</a></dt>
+      <dd><p>The real Fluent 2 / WinUI motion durations + entrance metrics (durations only — the easing curves live in
+FluentGpu.Foundation.Easing, selected by the Hooks-layer motion helpers, since Dsl does not reference Animation).
+Canonical WinUI names (the motion audit's correction): ControlFaster = 83ms (BrushTransition, hover/press),
+ControlFast = 167ms (ControlFastAnimationDuration — knob travel, settle), ControlNormal = 250ms
+(ControlNormalAnimationDuration — reposition / pane motion).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.PolylineStrokeEl.html">PolylineStrokeEl</a></dt>
+      <dd><p>A text run. FontFamily selects the face — a system family name (&quot;Segoe UI&quot;,
+&quot;Segoe Fluent Icons&quot;) or a custom file as <code>&quot;path/to.ttf#Family Name&quot;</code> (the WinUI syntax). Null = the theme
+body font. Combine with an icon-font family + a private-use glyph to render icons (see <code>Ui.Icon</code>).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Radii.html">Radii</a></dt>
+      <dd><p>The WinUI Fluent corner-radius ramp (ControlCornerRadius / OverlayCornerRadius + the SelectorBar pill).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.ScrollEl.html">ScrollEl</a></dt>
+      <dd><p>A clipping, scrolling viewport over a single (possibly oversized) content child. Scroll is layout-free
+(layout.md §6): layout arranges the content at the content-box origin and publishes <code>ContentSize</code>; the
+<code>-ScrollOffset</code> translation is the content's <code>LocalTransform</code>, written by Input on wheel/drag.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Spacing.html">Spacing</a></dt>
+      <dd><p>The WinUI Gallery spacing rhythm (page gutters, card spacing, internal padding, stack gaps).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.SpanTextEl.html">SpanTextEl</a></dt>
+      <dd><p>A rich-text PARAGRAPH of typed inline runs (rtb-01 — the WinUI <code>TextBlock.Inlines</code>/RichTextBlock paragraph
+model: Run/Bold/Hyperlink): the spans concatenate and shape as ONE flow (one wrap pass — a styled word never
+re-flows independently of its sentence). Per-span weight/size/family/color/underline/strikethrough overlay the
+base style here; a span with <code>OnClick</code> is a HYPERLINK — the engine resolves the Hand cursor over its laid
+rects and fires the action on click (RichTextBlock.cpp:2995 / TextBlock.cpp:3488 SetCursor(MouseCursorHand));
+accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
+No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+      <dd><p>Lightweight template-part styling — the FluentGpu equivalent of CSS <code>::part</code> / WinUI lightweight styling,
+signals-native. A control names its internal template parts (<code>public const string PartHeader = &quot;Header&quot;;</code> …)
+and routes each built part element through <a class="xref" href="FluentGpu.Dsl.TemplatePartsExtensions.html#FluentGpu_Dsl_TemplatePartsExtensions_Apply__1_FluentGpu_Dsl_TemplateParts_System_String___0_">Apply&lt;T&gt;(TemplateParts?, string, T)</a>; app code layers ANY
+element props onto any part with a <code>with</code> expression:</p>
+<pre><code class="lang-csharp">Parts = new()
+{
+    [Expander.PartHeader] = b =&gt; b with
+    {
+        StickyTop = 8f,                                    // CSS position:sticky, top: 8px
+        OnPinned  = p =&gt; stuck.Value = p,                  // the :stuck observable
+        Fill = stuck.Value ? Tok.FillSolidBase : b.Fill,   // restyle ANYTHING off the signal
+        BrushTransitionMs = Motion.ControlFast,            // …and the swap cross-fades
+    },
+}</code></pre>
+<p>Contract (apply order): control defaults → part modifier → the control RE-ASSERTS its mechanics-critical props
+(click handlers, reflow specs, ref captures — chained via <a class="xref" href="FluentGpu.Dsl.TemplateParts.html#FluentGpu_Dsl_TemplateParts_Chain__1_System_Action___0__System_Action___0__">Chain&lt;T&gt;(Action&lt;T&gt;?, Action&lt;T&gt;?)</a>, never clobbered), so a modifier
+can restyle everything but break nothing. Modifier rules: a PURE <code>with</code>-copy of its input; reading a signal
+inside one subscribes the OWNING CONTROL (modifiers run inside its Render — that's the granular :stuck restyle
+loop); never WRITE a signal in a modifier; no per-frame-hot reads (use <code>FillBind</code>/<code>TransformBind</code> for
+those); type-preserving (a modifier that changes the record type is ignored — parts style, content SLOTS like
+<code>Content</code>/<code>HeaderContent</code> restructure); avoid reshaping <code>Children</code> (structural reconcile).</p>
+<p>List-UNIFORM (content-independent) item-chrome modifiers are cached apply-once via the parts epoch
+(<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">TryApplyCached(string, Element, out Element)</a>); per-item CONTENT differences use the PartDelta value seam (SelectorVisuals.cs),
+never a per-item modifier in a recycled scroll path.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.TemplatePartsExtensions.html">TemplatePartsExtensions</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.TextEl.html">TextEl</a></dt>
+      <dd></dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.TextTiers.html">TextTiers</a></dt>
+      <dd><p>Color-tier modifiers for any TextEl: <code>Ui.Body(&quot;x&quot;).Secondary()</code>.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Theme.html">Theme</a></dt>
+      <dd><p>Back-compat facade over the semantic token table (<a class="xref" href="FluentGpu.Dsl.Tok.html">Tok</a>). The flat names here mirror what existing call
+sites use; each forwards to the active <a class="xref" href="FluentGpu.Dsl.TokenSet.html">TokenSet</a>, so a theme swap (<a class="xref" href="FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_">Use(ThemeKind)</a>) re-themes them
+too. New code should prefer <a class="xref" href="FluentGpu.Dsl.Tok.html">Tok</a> / <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.type">Type</a> directly. The host still injects the OS accent +
+Mica background through the <a class="xref" href="FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_Accent">Accent</a>/<a class="xref" href="FluentGpu.Dsl.Theme.html#FluentGpu_Dsl_Theme_WindowBackground">WindowBackground</a> setters.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Tok.html">Tok</a></dt>
+      <dd><p>The active design-token table + the theme switch. Author UI reads tokens via the static getters (e.g.
+<code>Tok.FillCardDefault</code>); they resolve against <a class="xref" href="FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_T">T</a> at zero per-read cost. <a class="xref" href="FluentGpu.Dsl.Tok.html#FluentGpu_Dsl_Tok_Use_FluentGpu_Dsl_ThemeKind_">Use(ThemeKind)</a> re-themes
+the whole app with one pointer write. The OS accent + Mica window background are mutable overrides on top of the set,
+so they survive a theme swap and let the host inject the live system accent at startup.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.TokenSet.html">TokenSet</a></dt>
+      <dd><p>An immutable, baked palette of every semantic Fluent brush for one theme (mirrors WinUI's *_themeresources). Built
+once per theme; never mutated. Read through <a class="xref" href="FluentGpu.Dsl.Tok.html">Tok</a>, which swaps the active set with a single pointer write.</p>
+</dd>
+    </dl>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.Ui.html">Ui</a></dt>
+      <dd><p>Fluent C# markup. <code>using static FluentGpu.Dsl.Ui;</code> to author trees as expressions.</p>
+</dd>
+    </dl>
+    <h3 id="enums">
+Enums
+</h3>
+    <dl class="jumplist">
+      <dt><a class="xref" href="FluentGpu.Dsl.ThemeKind.html">ThemeKind</a></dt>
+      <dd></dd>
+    </dl>
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

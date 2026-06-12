@@ -83,6 +83,10 @@ public sealed class EditableText : Component
     public Action<bool>? OnFocusChanged;     // focus gained(true)/lost(false): NumberBox validate-on-blur / open-Compact
     public Func<string, string>? Sanitize;   // applied after every user edit (numeric/hex clamp); null = free text
     public float Width = 120f;
+    /// <summary>LIVE width (DIP) — overrides <see cref="Width"/> when set. Component plain fields freeze at mount,
+    /// so a field whose width must track runtime layout (the titlebar search box giving way as the window narrows)
+    /// subscribes here; the Render read re-renders this component when the value moves.</summary>
+    public IReadSignal<float>? WidthSignal;
     public float Height = 32f;
     public float FontSize = 14f;
     public ColorF Foreground = Tok.TextPrimary;
@@ -255,6 +259,9 @@ public sealed class EditableText : Component
         _core.IsReadOnly = IsReadOnly;
         _core.AcceptsReturn = AcceptsReturn;
 
+        // Effective width: the live signal (subscribed — a write re-renders this field) over the frozen mount value.
+        float width = WidthSignal?.Value ?? Width;
+
         // The visible text node. TextBind/ColorBind read the SIGNAL + the display epoch, so a keystroke (signal write)
         // or a doc-only change (epoch bump) updates exactly this node — no component re-render. The bind evaluation is
         // also where an EXTERNAL signal write folds back into the document (SyncFromSignal).
@@ -266,7 +273,7 @@ public sealed class EditableText : Component
             // re-render clobber, fixed at the reconciler.
             DisabledColor = DisabledForeground,
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
-            Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,   // wrap width = content box (padding 10+6)
+            Width = AcceptsReturn ? MathF.Max(8f, width - 16f) : float.NaN,   // wrap width = content box (padding 10+6)
             Text = Prop.Of(BindDisplay),
             Color = Prop.Of(BindColor),
         };
@@ -275,7 +282,7 @@ public sealed class EditableText : Component
         textEl = Parts.Apply(PartText, textEl) with
         {
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
-            Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,
+            Width = AcceptsReturn ? MathF.Max(8f, width - 16f) : float.NaN,
             Text = Prop.Of(BindDisplay),
             Color = Prop.Of(BindColor),
         };
@@ -326,7 +333,7 @@ public sealed class EditableText : Component
         var content = new BoxEl
         {
             Direction = 0,
-            Width = Width,
+            Width = width,
             Height = Height,
             AlignItems = FlexAlign.Stretch,
             Children = rowChildren.ToArray(),
@@ -340,7 +347,7 @@ public sealed class EditableText : Component
         if (focused && IsEnabled && !Chromeless)
             children.Add(new BoxEl
             {
-                Width = Width, Height = 2f, OffsetY = Height - 2f,
+                Width = width, Height = 2f, OffsetY = Height - 2f,
                 Fill = Tok.AccentDefault, Corners = CornerRadius4.All(0f),
             });
 
@@ -349,7 +356,7 @@ public sealed class EditableText : Component
         var root = new BoxEl
         {
             ZStack = true,
-            Width = Width,
+            Width = width,
             Height = Height,
             // Chromeless (editable-ComboBox part): square — the composer's outer box rounds + clips (ClipToBounds
             // follows the rounded corners, so the interaction fills below stay inside the shared shape).

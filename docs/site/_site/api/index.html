@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>API reference | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="API reference | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/api/index.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="api-reference">API reference</h1>
+
+<p>The pages under <code>api/</code> are <strong>generated</strong>, not hand-written. <code>docfx metadata</code> reads the engine projects and their XML
+doc comments and emits the YAML this section is built from. The conceptual guides — <a href="../app-authors/index.html">App authors</a>
+and <a href="../engine-contributors/index.html">Engine contributors</a> — explain <em>how</em> to use the surface; this reference is the
+exhaustive <em>what</em>. If you arrived here looking for &quot;how do I…&quot;, the conceptual docs are faster.</p>
+<pre><code class="lang-text">docfx metadata docs/site/docfx.json     # regenerate api/*.yml before building the site
+</code></pre>
+<p>The set of projects this reference covers, and the <code>net10.0</code> target it builds against, is pinned in
+<a href="../docfx.json"><code>docs/site/docfx.json</code></a> (the <code>metadata.src.files</code> list). Adding a project to that list is what makes it
+appear here.</p>
+<h2 id="how-the-api-is-grouped-public--contributor--internal">How the API is grouped (Public / Contributor / Internal)</h2>
+<p>The solution (<a href="../../../src/FluentGpu.slnx"><code>src/FluentGpu.slnx</code></a>) is ~29 projects. They split into three concentric
+rings, and the ring tells you what you are <em>expected</em> to touch:</p>
+<ul>
+<li><strong>Public</strong> — what app authors call. You build a whole app out of this ring and rarely look further.</li>
+<li><strong>Contributor</strong> — the engine internals you extend when you change behavior. One owner per artifact (see
+<a href="../../../design/subsystems/README.md">the contract-ownership map</a>); edit the owner, reference it elsewhere.</li>
+<li><strong>Internal</strong> — backend plumbing <em>behind</em> the seams (the real Windows leaves). You read it to understand a backend;
+you rarely call it directly.</li>
+</ul>
+<p>The split is a <em>reading</em> aid, not an access-modifier boundary — the assemblies form a strict <strong>acyclic</strong> graph
+(canonically owned by <a href="../../../design/foundations.md"><code>design/foundations.md</code></a>), and an assembly may reference only
+those below it. The full where-to-change-what routing table lives in the
+<a href="../engine-contributors/contributor-map.html">contributor map</a> and the guide's
+<a href="../../guide/README.md#-agent--file--ownership-map-where-to-change-what">file &amp; ownership map</a>; the precedence authority
+for every cross-cutting contract is <a href="../../../design/SPEC-INDEX.md"><code>SPEC-INDEX.md</code></a>.</p>
+<h2 id="public-api--what-app-authors-call">Public API — what app authors call</h2>
+<p>This is the ring the <a href="../app-authors/index.html#60-second-cheat-sheet">60-second cheat sheet</a> imports. The four
+namespaces a typical app <code>using</code>s are <code>FluentGpu</code> (the entry point), <code>FluentGpu.Hooks</code>, <code>FluentGpu.Signals</code>, and
+<code>static FluentGpu.Dsl.Ui</code> — plus <code>FluentGpu.Controls</code> for the control set.</p>
+<table>
+<thead>
+<tr>
+<th>Assembly</th>
+<th>Headline namespace(s)</th>
+<th>What it gives you</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FluentGpu.Dsl</code></td>
+<td><code>FluentGpu.Dsl</code></td>
+<td>The immutable element records (<code>Element</code>, <code>BoxEl</code>/<code>TextEl</code>/<code>ImageEl</code>/<code>ScrollEl</code>) and the <code>Ui.*</code> builders (<code>VStack</code>/<code>HStack</code>/<code>Text</code>/<code>Heading</code>/<code>Icon</code>/<code>ScrollView</code>/<code>Image</code>/<code>Grid</code>), the fluent <code>Modifiers</code>, and the theme tokens (<code>Tok</code>, <code>Theme</code>, <code>Radii</code>).</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Hooks</code></td>
+<td><code>FluentGpu.Hooks</code></td>
+<td><code>Component</code> and <code>ReactiveComponent</code>, the state/effect/motion hooks surfaced as <code>protected</code> methods (<code>UseState</code>, <code>UseSignal</code>, <code>UseFloatSignal</code>, <code>UseComputed</code>, <code>UseEffect</code>, <code>UseSpring</code>, …), <code>Flow.For</code>/<code>Flow.Show</code>, <code>Ctx</code>, and <code>Embed</code>.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Controls</code></td>
+<td><code>FluentGpu.Controls</code></td>
+<td>The Fluent control kit — <code>Button</code>, <code>Slider</code>, <code>CheckBox</code>, <code>ToggleSwitch</code>, <code>ComboBox</code>, <code>TextBox</code>, <code>NavigationView</code>, <code>TabView</code>, <code>Virtual</code>, <code>ItemsView</code>, and ~70 more. Controls are <strong>pure composition</strong> over the rings below — they add no opcode, column, PAL seam, or hook.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Hosting</code></td>
+<td><code>FluentGpu.Hosting</code></td>
+<td><code>AppHost</code> — the single-UI-thread frame loop you normally drive through <code>FluentApp.Run</code> — and the per-frame <code>FrameStats</code> (<code>Rendered</code>, <code>ComponentsRendered</code>, <code>HotPhaseAllocBytes</code>, …) you assert on in tests.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Foundation</code></td>
+<td><code>FluentGpu.Signals</code>, <code>FluentGpu.Foundation</code></td>
+<td>The signals reactive core (<code>Signal&lt;T&gt;</code>, <code>FloatSignal</code>, <code>Memo&lt;T&gt;</code>, <code>Effect</code>) and the unified bindable channel <code>Prop&lt;T&gt;</code> / <code>Prop.Of</code> — plus the shared value types (<code>ColorF</code>, <code>Affine2D</code>, geometry, <code>Edges4</code>).</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Media</code></td>
+<td><code>FluentGpu.Media</code></td>
+<td>The async image pipeline surface — <code>IImageFetcher</code>, <code>IImageCodec</code>, the <code>DecodeScheduler</code>/disk-cache machinery behind <code>Ui.Image</code>.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Namespace gotcha (verified in source):</strong> <code>Signal&lt;T&gt;</code> and <code>Prop&lt;T&gt;</code> live <em>physically</em> under the
+<code>FluentGpu.Foundation</code> assembly (<code>src/FluentGpu.Foundation/Signals/</code>), but they are declared in the namespace
+<strong><code>FluentGpu.Signals</code></strong> — so you author them with <code>using FluentGpu.Signals;</code>. Likewise the batteries-included
+<code>FluentApp.Run</code> is in the <strong><code>FluentGpu</code></strong> namespace but ships from the <code>FluentGpu.WindowsApp</code> app project (see the
+<a href="#excluded-from-api-metadata-the-apps-and-the-verification-harness">Excluded</a> note below), so it does not appear in
+this generated reference.</p>
+</blockquote>
+<p>The one entry point, for orientation (<code>src/FluentGpu.WindowsApp/FluentApp.cs</code>):</p>
+<pre><code class="lang-csharp">namespace FluentGpu;
+
+public static class FluentApp
+{
+    public static void Run(Func&lt;Component&gt; root, string title = &quot;FluentGpu&quot;, int width = 800, int height = 600,
+                           bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false);
+}
+</code></pre>
+<h2 id="contributor-api--engine-internals-you-extend">Contributor API — engine internals you extend</h2>
+<p>The ring you edit when you change <em>how the engine behaves</em>. Each assembly has a headline type that is one stage of the
+single mechanism the engine is built on (a signal write → re-run the computations that read it → reconcile → layout →
+record). The full reasoning is in <a href="../engine-contributors/index.html">Contributing to the engine</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Assembly</th>
+<th>Headline type</th>
+<th>What it owns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FluentGpu.Foundation</code></td>
+<td><code>ReactiveCore</code> (<code>Reactive</code>/<code>Computation</code>/<code>ReactiveRuntime</code>)</td>
+<td>The Solid/Preact-style reactivity graph — set→notify→flush. The notify path must stay allocation-free.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Scene</code></td>
+<td><code>SceneStore</code> (<code>: ISceneBackend</code>)</td>
+<td>The retained struct-of-arrays RenderNode tree, its parallel columns, the 3-axis dirty flags, <code>ImageCache</code>, and the <code>VirtualLayout</code> participant.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Layout</code></td>
+<td><code>FlexLayout</code>, <code>LayoutInvalidator</code></td>
+<td>Flexbox + grid measure/arrange over the SoA columns; <code>Run</code> (full tree) vs <code>RunSubtree</code> (the scoped relayout) and the boundary walk that stops it.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Render</code></td>
+<td><code>SceneRecorder</code></td>
+<td>Phase 8 (record): walk the retained scene and emit the POD <code>DrawList</code> — local-space geometry + world transform, so transform/opacity animate without relayout or re-record.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Reconciler</code></td>
+<td><code>TreeReconciler</code></td>
+<td>The heart — render-effects, the keyed positional+type diff, <code>Prop&lt;T&gt;</code> binding wiring, <code>Flow.For</code>/<code>Flow.Show</code> boundaries, context, <code>VirtualListEl</code>. <code>ConsumeReconciled()</code>/<code>ConsumeRenderCount()</code> prove granularity.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Rhi</code></td>
+<td><code>IGpuDevice</code> (+ <code>ISwapchain</code>, <code>ICommandEncoder</code>)</td>
+<td>The GPU seam every render backend implements — POD descs, <code>SubmitDrawList</code>, <code>DeviceLostToken</code>.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Pal</code></td>
+<td><code>IPlatformApp</code>, <code>IPlatformWindow</code></td>
+<td>The platform seam — windowing (<code>WindowDesc</code>, <code>NativeHandle</code>), the input/window event stream, and the system-service seams.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Text</code></td>
+<td><code>IFontSystem</code></td>
+<td>The text seam — itemize/shape/raster/measure. The Yoga measure bridge feeds the same advances the GPU glyph path renders.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Input</code></td>
+<td><code>InputDispatcher</code></td>
+<td>Input dispatch + routing over the PAL event stream (hit-test, focus, gestures).</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Animation</code></td>
+<td><code>AnimEngine</code></td>
+<td>The authored timeline/keyframe/easing machinery the motion hooks and control motion drive.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Authority, not duplication.</strong> These types <em>implement</em> contracts that are specified once in the design corpus. Do
+not restate a struct shape, an enum, or a seam in code or docs — reference the owner. The DrawList opcode shapes are
+owned by <a href="../../../design/subsystems/gpu-renderer.md"><code>gpu-renderer.md</code></a>, the scene columns by
+<a href="../../../design/subsystems/scene-memory.md"><code>scene-memory.md</code></a>, the reconciler/hooks/signals model by
+<a href="../../../design/subsystems/reconciler-hooks.md"><code>reconciler-hooks.md</code> §0bis</a>, and the threading model by
+<a href="../../../design/subsystems/threading-render-seam.md"><code>threading-render-seam.md</code></a>. The map from each artifact to its
+one owner is <a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code> §2</a>.</p>
+</blockquote>
+<h2 id="internal-api--backends-source-generators-accessibility-codecs">Internal API — backends, source generators, accessibility, codecs</h2>
+<p>The leaves <em>behind</em> the seams. They are included in this reference because the real Windows backends are useful to read,
+but app authors never call them and contributors touch them only when changing a backend.</p>
+<table>
+<thead>
+<tr>
+<th>Assembly</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FluentGpu.Rhi.D3D12</code></td>
+<td>The Direct3D 12 RHI leaf — flip-model swap chain, the DirectComposition present tree, the rounded-rect/gradient/glyph pipelines.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Text.DirectWrite</code></td>
+<td>The DirectWrite text backend — the same design advances and line-break math the GPU glyph path uses, so measured wrap matches rendered wrap.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Pal.Windows</code></td>
+<td>Win32 windowing + theme — the custom frame, Mica/Acrylic material, accent pickup (<code>Win32App</code>, <code>Win32Window</code>, <code>Win32Theme</code>).</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Win32.Interop</code></td>
+<td>The shared Win32/COM interop layer the Windows backends bind through.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Media.Codecs.Wic</code></td>
+<td>The WIC image codec (<code>IImageCodec</code> leaf) the real image pipeline decodes with.</td>
+</tr>
+<tr>
+<td><code>FluentGpu.Accessibility.Uia</code></td>
+<td>The UI Automation accessibility integration (the <code>IA11yBackend</code> Windows leaf).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Source generators and analyzers are intentionally absent from this reference.</strong> The two tooling projects —
+<code>FluentGpu.SourceGen</code> and <code>FluentGpu.Interop.SourceGen</code> — run at <em>build</em> time (they emit <code>ApplyToScene</code>, <code>DiffProps</code>,
+the hook-deps lowering, the COM vtables, and the <code>FGCOM*</code>/<code>WGPU*</code> analyzers) and expose no useful runtime surface, so
+they are not in <code>docfx.json</code>'s metadata list. Their contracts live in
+<a href="../../../design/subsystems/dsl-aot.md"><code>dsl-aot.md</code></a> and <a href="../../../design/subsystems/com-interop.md"><code>com-interop.md</code></a>.</p>
+<h2 id="excluded-from-api-metadata-the-apps-and-the-verification-harness">Excluded from API metadata: the apps and the verification harness</h2>
+<p>A few projects in the solution are deliberately <strong>not</strong> generated into this reference, because they are applications or
+test-only seams, not library surface:</p>
+<ul>
+<li><strong><code>FluentGpu.VerticalSlice</code></strong> — the headless golden-check harness (<code>dotnet run</code> here prints <code>ALL CHECKS PASSED</code>). It
+is an <em>app</em>, not a library, but its source is the most-cited code in the conceptual docs: every engine claim is
+anchored to a <code>Check(...)</code> in <code>src/FluentGpu.VerticalSlice/Program.cs</code>. See
+<a href="../engine-contributors/index.html#the-golden-rule-verify-with-the-headless-harness-before-claiming-done">Engine contributors → verify with the harness</a>.</li>
+<li><strong><code>FluentGpu.WindowsApp</code></strong> — the gallery app (and the home of <code>FluentApp.Run</code>). It is where every control's verified,
+copy-pasteable snippet lives, but it is an application, so it carries no API metadata.</li>
+<li><strong>The headless seams</strong> — <code>FluentGpu.Rhi.Headless</code>, <code>FluentGpu.Pal.Headless</code>, <code>FluentGpu.Text.Headless</code> — plus
+<code>FluentGpu.Rhi.Gdi</code>. These are test/CI backends behind the same seams the real leaves implement; they exist so the
+harness can record the DrawList and assert <em>what was drawn</em> without a GPU or window. No public surface worth
+publishing.</li>
+</ul>
+<p>Because <code>FluentApp.Run</code> ships from the excluded gallery app, the entry point you call first is <strong>documented in the
+guides, not generated here</strong> — the canonical signature and behavior are in
+<a href="../app-authors/index.html#60-second-cheat-sheet">getting-started</a> and at the top of this page.</p>
+<h2 id="generated-from-xml-doc-comments-generatedocumentationfile">Generated from XML doc comments (<code>GenerateDocumentationFile</code>)</h2>
+<p>Everything in <code>api/</code> comes from the engine's own <code>///</code> comments. The solution-wide baseline
+(<a href="../../../src/Directory.Build.props"><code>src/Directory.Build.props</code></a>) turns this on for <em>every</em> project and silences the
+&quot;missing doc comment&quot; warning, so building the solution produces the XML files <code>docfx metadata</code> consumes:</p>
+<pre><code class="lang-xml">&lt;!-- src/Directory.Build.props --&gt;
+&lt;GenerateDocumentationFile&gt;true&lt;/GenerateDocumentationFile&gt;
+&lt;NoWarn&gt;$(NoWarn);CS1591&lt;/NoWarn&gt;
+</code></pre>
+<p>What this means in practice:</p>
+<ul>
+<li><strong>Improving the reference = improving the <code>///</code> comments in <code>src/</code>.</strong> There is no separate prose to maintain for the
+generated pages; edit the doc comment on the type or member and regenerate. Many of the most useful summaries already
+live there — e.g. <code>Prop&lt;T&gt;</code>'s comment in <code>src/FluentGpu.Foundation/Signals/Prop.cs</code> documents the static-vs-thunk-vs-
+signal-direct discrimination, and <code>Component</code>'s hook methods in <code>src/FluentGpu.Hooks/Component.cs</code> document each
+hook's subscribe semantics.</li>
+<li><strong><code>CS1591</code> is suppressed, not satisfied.</strong> A member with no doc comment still generates an (empty-summary) entry; it
+is not a build error. Treat an empty summary in the rendered reference as a doc gap to fill at the source, not a
+reason the page is broken.</li>
+<li><strong>Regenerate after touching public surface.</strong> <code>docfx metadata docs/site/docfx.json</code> re-reads the projects; the site
+build (<code>docfx build</code> / the full <code>docfx docs/site/docfx.json</code>) then renders <code>api/*.yml</code> alongside this <code>index.md</code>.</li>
+</ul>
+<h2 id="where-to-go-from-here">Where to go from here</h2>
+<ul>
+<li><strong>Build a UI →</strong> <a href="../app-authors/index.html">App authors</a> · the <a href="../../guide/reactivity.md">signals model</a> (the most
+important read) · <a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a> ·
+<a href="../../guide/pitfalls.md">pitfalls</a>.</li>
+<li><strong>Change the engine →</strong> <a href="../engine-contributors/index.html">Engine contributors</a> · the
+<a href="../engine-contributors/contributor-map.html">contributor map</a> (where to change what) ·
+<a href="../engine-contributors/reconciler-and-scene.html">reconciler &amp; scene</a>.</li>
+<li><strong>Architecture canon →</strong> <a href="../../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a> (precedence authority) ·
+<a href="../../../design/subsystems/README.md"><code>subsystems/README.md</code></a> (contract-ownership map) ·
+<a href="../../../design/architecture-spec.md"><code>architecture-spec.md</code></a> (the end-to-end engine).</li>
+</ul>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

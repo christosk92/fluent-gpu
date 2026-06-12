@@ -111,13 +111,30 @@ public sealed class AppHost : IDisposable
     // UI-thread bytes + ticks per frame segment (GetAllocatedBytesForCurrentThread deltas) and the process-wide
     // allocation total, so scroll-time churn can be pinned to a phase (or to a worker thread) without a profiler.
     private static readonly bool s_allocDiag = Diag.EnvFlag("FG_ALLOC_DIAG");
+    // Append-only segment ids: existing numbering 0..9 is STABLE; SegDynText/SegPublish are the two new tail segments
+    // (alloc-05: the dynamic-text update + frame-stat publish costs previously hid in "untracked").
     private const int SegPump = 0, SegDispatch = 1, SegFlip = 2, SegFlush = 3, SegLayout = 4, SegAnim = 5,
-                      SegImages = 6, SegRecord = 7, SegSubmit = 8, SegEffects = 9, SegCount = 10;
-    private static readonly string[] s_segNames = ["pump", "dispatch", "flip", "flush", "layout", "anim", "images", "record", "submit", "effects"];
+                      SegImages = 6, SegRecord = 7, SegSubmit = 8, SegEffects = 9, SegDynText = 10, SegPublish = 11, SegCount = 12;
+    private static readonly string[] s_segNames = ["pump", "dispatch", "flip", "flush", "layout", "anim", "images", "record", "submit", "effects", "dyntext", "publish"];
     private readonly long[] _segBytes = new long[SegCount];
     private readonly long[] _segTicks = new long[SegCount];
     private long _diagUiBytes, _diagProcStart, _diagWindowStart;
     private int _diagFrames;
+    private System.Text.StringBuilder? _diagSb;   // reused across reports (one alloc, not new-per-report) — FG_ALLOC_DIAG only
+
+    // ── FG_WAKE_DIAG=1 / FG_MEM_DIAG=1 / FG_ALLOC_TYPES=1: opt-in diagnostics tools (each behind its own cached flag; nothing when off) ──
+    private static readonly bool s_wakeDiag = Diag.EnvFlag("FG_WAKE_DIAG");
+    private static readonly bool s_memDiag = Diag.EnvFlag("FG_MEM_DIAG");
+    // The AllocTypeProfiler listener is constructed by the app layer (FluentApp.Run); the host only drives its
+    // once-per-second report on the frame cadence (no extra timer thread). Reads are no-ops when not started.
+    private static readonly bool s_allocTypes = Diag.EnvFlag("FG_ALLOC_TYPES");
+    private readonly WakeDiagnostics? _wakeDiag;
+    private readonly MemCensus? _memCensus;
+
+    /// <summary>MemCensus GPU-residency hook (FluentApp wires <c>D3D12Device.DiagResourceTotals</c>); headless leaves null.</summary>
+    public Func<(long bytes, int count)>? GpuResources { get; set; }
+    /// <summary>MemCensus GPU one-line detail hook (glyph/texture-store summary); headless leaves null.</summary>
+    public Func<string>? GpuDetail { get; set; }
 
     private long Probe(int seg, long sinceBytes, long sinceTicks)
     {
@@ -148,7 +165,8 @@ public sealed class AppHost : IDisposable
         double untracked = (_diagUiBytes - segSum) / sec / 1024.0;
         double other = total - ui;
 
-        var sb = new System.Text.StringBuilder(256);
+        var sb = _diagSb ??= new System.Text.StringBuilder(256);
+        sb.Clear();
         sb.Append(CultureInfo.InvariantCulture, $"[allocdiag] total {total:0.0} KB/s | ui {ui:0.0} | other {other:0.0} | untracked {untracked:0.0} | frames {_diagFrames}");
         for (int i = 0; i < SegCount; i++)
         {
@@ -171,6 +189,7 @@ public sealed class AppHost : IDisposable
     private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
     private bool _needFullLayout = true;     // first frame / resize / DPI / root structural change
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
+    private bool _wasMinimized;              // previous frame's minimize state — the restore EDGE forces a repaint
     private bool _inPaint;
     private Size2 _lastSize;
     private float _lastScale;
@@ -180,21 +199,99 @@ public sealed class AppHost : IDisposable
     private double _fps;
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
+    // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
+    // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
+    // granularity) and the StringId it interned to (the host holds ONE ref per cached id). When a kind's quantized
+    // value is unchanged we reuse the cached id with no ToString and no Intern — so a jittering readout that rounds to
+    // the same number produces zero string churn and burns no new ids; when ALL five are unchanged the per-node scan
+    // is skipped entirely. Sentinel _dynTextQuant=long.MinValue ⇒ "not computed yet" (first frame always interns).
+    private readonly long[] _dynTextQuant = InitDynTextQuant();
+    private readonly StringId[] _dynTextId = new StringId[6];
+    private static long[] InitDynTextQuant() { var a = new long[6]; Array.Fill(a, long.MinValue); return a; }
     private static ColorF Clear => Theme.WindowBackground;
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
+
+    /// <summary>The input dispatcher. Exposed for the validation.md §12.6 arena-determinism gate (the harness attaches a
+    /// gesture-arena recorder to <c>Input.Arena</c> and reads the resolution trace after a scripted sequence). The
+    /// dispatcher's hot APIs are already public; the arena seam it surfaces is <c>internal</c> to the Input assembly.</summary>
+    public InputDispatcher Input => _dispatcher;
     public FrameStats LastStats { get; private set; }
-    public bool HasActiveWork => _frameNeeded || _runtime.HasPending || _scene.HasDynamicText || _anim.HasActive
-        || _interact.HasActive || _scrollAnim.HasActive || _repeat.HasActive || _caretBlinker.HasActive || _scene.HasBrushAnims
-        || _images.PendingCount > 0 || _images.HasActiveCrossfades || _scene.OrphanCount > 0
-        || _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork   // E5: ghost spring easing / edge auto-scroll
-        || _dispatcher.Drag.IsActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
+    public bool HasActiveWork => ComputeWakeReasons() != WakeReasons.None;
+
+    /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
+    /// running another frame. Computes the wake mask ONCE and paces by it:
+    /// <list type="bullet">
+    /// <item>None ⇒ -1: fully idle, block until an input/paint message arrives (0% CPU).</item>
+    /// <item>minimized ⇒ -1 (regardless of the mask): a minimized window paints nothing; only the restore message matters.</item>
+    /// <item>DynamicText is the ONLY set bit ⇒ 100: the on-screen fps/draw-count HUD is a READOUT, not an animation —
+    ///   a 10 Hz refresh is imperceptible and idles the CPU at ~0% instead of running record+present at the display rate.</item>
+    /// <item>otherwise ⇒ 0: real animation/scroll/decode/drag work in flight — pace at the display rate (present-throttled).</item>
+    /// </list>
+    /// <c>WaitForWork</c> returns EARLY on any input message, so responsiveness is identical at every timeout. One
+    /// consequence is honest: when the HUD is the only wake source its own fps line then reads the throttled cadence
+    /// (~10), and it reports the real frame rate again the instant anything else animates.</summary>
+    public int RecommendedWaitMs()
+    {
+        if (IsMinimized) { MaybeTrimOnIdle(); return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
+        WakeReasons r = ComputeWakeReasons();
+        if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
+        if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
+        return 0;                                   // active work: present-throttled display-rate pacing
+    }
+
+    // Slow idle-cadence slab tail-trim (mem-02): the SoA columns only grow; when the loop has been fully idle for a
+    // while, give the high-water tail back to the GC ONCE per cadence (the realloc is cheap and amortized — only when
+    // genuinely idle, never on an active frame). 0 = "never trimmed yet".
+    private long _lastTrimTicks;
+    private static readonly long TrimIdleCadenceTicks = (long)(30.0 * Stopwatch.Frequency);   // ~30s between attempts
+    private void MaybeTrimOnIdle()
+    {
+        long now = Stopwatch.GetTimestamp();
+        if (_lastTrimTicks != 0 && now - _lastTrimTicks < TrimIdleCadenceTicks) return;
+        _lastTrimTicks = now;
+        _scene.TrimExcessCapacity();   // no-op (returns 0) unless the slab is a mostly-empty high-water tail past the floor
+    }
+
+    /// <summary>The bitmask form of <see cref="HasActiveWork"/>: one bit per OR-term, semantically identical (the
+    /// boolean is just <c>!= None</c>). Every term is an O(1) read (ImageCache.PendingCount/HasActiveCrossfades were
+    /// made O(1) so this never scans). Drives FG_WAKE_DIAG attribution; otherwise as cheap as the original chain.</summary>
+    private WakeReasons ComputeWakeReasons()
+    {
+        WakeReasons r = WakeReasons.None;
+        if (_frameNeeded) r |= WakeReasons.FrameNeeded;
+        if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
+        if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
+        if (_anim.HasActive) r |= WakeReasons.Anim;
+        if (_interact.HasActive) r |= WakeReasons.Interact;
+        if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
+        if (_repeat.HasActive) r |= WakeReasons.Repeat;
+        if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
+        if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
+        if (_images.PendingCount > 0) r |= WakeReasons.ImagesPending;
+        if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
+        if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
+        if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
+        if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
+        return r;
+    }
 
     /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
     public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
 
     public ImageCache Images => _images;
+
+    // Census accessors (read by MemCensus / CensusSnapshot — same assembly): the subsystems Scene/Animation/Images
+    // already expose are reused; these surface the rest. All passive O(1) reads.
+    internal StringTable Strings => _strings;
+    internal TreeReconciler Reconciler => _reconciler;
+    internal int InteractionAnimatorCensus => _interact.ActiveCount;
+    internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
+
+    /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
+    /// instant (for tests / census). An O(1) recompute of the same terms.</summary>
+    public WakeReasons CurrentWakeReasons => ComputeWakeReasons();
 
     /// <summary>The focused-editor caret-blink ticker (phase 7). Text-input controls Focus/Blur/ResetBlink it.</summary>
     public CaretBlinker CaretBlinker => _caretBlinker;
@@ -257,11 +354,14 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnScrollArmed = _scrollAnim.Arm;
         _dispatcher.OnScrollHover = _scrollAnim.Hover;
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
+        _scrollAnim.ScrollWrite = _dispatcher.WriteScrollOffset;   // Fling integrator writes absolute offsets through the Input chokepoint
+        _dispatcher.OnFlingStarted = SeedScrollFling;              // touch-up flick → friction-decay inertia in phase 7
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
         _dispatcher.OnRepeatResumed = _repeat.Resume;   // re-entered → fresh initial delay, no immediate re-fire
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
+        _inputHooks.PointerVelocity = () => _dispatcher.PointerVelocity;        // cross-axis swipe controls snap on real flick speed
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
@@ -322,6 +422,10 @@ public sealed class AppHost : IDisposable
         _inputHooks.ClosePopupWindow = ClosePopupWindow;
 
         _reconciler.Anim = _anim;
+        // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
+        // so the AnimEngine layout-transition spec + the ScrollAnimator conscious-bar timers (both keyed by node index,
+        // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
+        _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
         _images.SetPixelSink(_device.UploadImage);
@@ -337,7 +441,22 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
 
-        _window.PaintRequested = () => Paint(0);
+        // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
+        // hover/press transitions while the frame loop idles). Paint with keepAlive so the device skips its
+        // frame-latency throttle wait — otherwise each fires a full vblank-class stall inline on the WndProc thread
+        // (the drag-start / live-resize hitch). Live resize still paints synchronously; it just no longer blocks.
+        _window.PaintRequested = () => Paint(0, keepAlive: true);
+
+        // Opt-in diagnostics tools (constructed only when their flag is set; the host tick paths short-circuit otherwise).
+        if (s_wakeDiag) _wakeDiag = new WakeDiagnostics();
+        if (s_memDiag)
+        {
+            double sec = 5.0;
+            string? raw = Environment.GetEnvironmentVariable("FG_MEM_DIAG_SEC");
+            if (!string.IsNullOrWhiteSpace(raw) && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) && parsed > 0)
+                sec = parsed;
+            _memCensus = new MemCensus(this, sec);
+        }
 
         // Mount the root component as a reactive render-effect (initial render builds the scene).
         _reconciler.MountRoot(_root);
@@ -347,6 +466,19 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) _frameAfterPaint = true;
         else _frameNeeded = true;
+    }
+
+    /// <summary>Wired to <see cref="InputDispatcher.OnFlingStarted"/>: a touch pan released with a flick speed hands its
+    /// offset-space velocity here. Seed the viewport's <see cref="ScrollState.FlingVelocity"/> + <c>ScrollMode=Fling</c>
+    /// and arm the <see cref="ScrollAnimator"/> so phase 7 friction-decays it (and <c>WakeReasons.ScrollAnim</c> keeps
+    /// frames coming until it settles). 0-alloc: a cached method group, two field writes on a ref.</summary>
+    private void SeedScrollFling(NodeHandle node, float velocityPxPerS)
+    {
+        if (node.IsNull || !_scene.IsLive(node) || !_scene.HasScroll(node)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(node);
+        sc.FlingVelocity = velocityPxPerS;
+        sc.ScrollMode = 1;   // ScrollAnimator Fling mode
+        _scrollAnim.Arm(node);
     }
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
@@ -362,6 +494,33 @@ public sealed class AppHost : IDisposable
         int clicks = _dispatcher.Dispatch(_ring.Drain());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
 
+        // Minimize gate: a minimized window paints nothing — but the pump+dispatch above MUST run so the restore
+        // message lands (RecommendedWaitMs blocks indefinitely while minimized, so the loop only wakes on a message).
+        // Skip Paint entirely (no record/submit/present), BEFORE the image-pump early-out below; the restore EDGE
+        // forces a frame so the first visible frame paints immediately. Headless never reports Minimized (its State
+        // defaults to Normal and nothing here flips it), so the headless path is unaffected.
+        bool minimized = IsMinimized;
+        if (_wasMinimized && !minimized) _frameNeeded = true;   // restored: repaint now
+        _wasMinimized = minimized;
+        if (minimized)
+        {
+            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+            // Awake-but-skipped: counts toward _framesRun + _framesMinimized (rendered:false), the wake-diag's
+            // "frames spent minimized" signal. wake is recomputed here since the s_wakeDiag snapshot is below.
+            if (_wakeDiag is not null) { _wakeDiag.Record(ComputeWakeReasons(), awake: true, rendered: false, reconciled: false, laidOut: false, minimized: true); _wakeDiag.MaybeReport(); }
+            if (_memCensus is not null) _memCensus.MaybeReport();
+            if (s_allocTypes) AllocTypeProfiler.MaybeReport();
+            if (s_allocDiag)
+            {
+                _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
+                DiagMaybeReport();
+            }
+            return LastStats;
+        }
+
+        // Wake attribution: snapshot the mask at the idle decision point (before the image pump can flip _frameNeeded).
+        WakeReasons wake = s_wakeDiag ? ComputeWakeReasons() : WakeReasons.None;
+
         if (!HasActiveWork)
         {
             int completed = _images.Pump();
@@ -369,6 +528,9 @@ public sealed class AppHost : IDisposable
             if (completed == 0)
             {
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsMinimized); _wakeDiag.MaybeReport(); }
+                if (_memCensus is not null) _memCensus.MaybeReport();
+                if (s_allocTypes) AllocTypeProfiler.MaybeReport();
                 if (s_allocDiag)
                 {
                     _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
@@ -377,14 +539,31 @@ public sealed class AppHost : IDisposable
                 return LastStats;
             }
             _frameNeeded = true;
+            if (s_wakeDiag) wake = ComputeWakeReasons();   // a completed decode forced this paint → re-attribute (now FrameNeeded)
         }
 
         if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
-        return Paint(clicks);
+        FrameStats painted = Paint(clicks);
+        if (_wakeDiag is not null)
+        {
+            // Awake frame: classify reconciled/layout-only/record-only from FrameStats (Rendered = reconciled||layoutNeeded).
+            _wakeDiag.Record(wake, awake: true, rendered: painted.Rendered, reconciled: painted.ComponentsRendered > 0,
+                             laidOut: painted.Rendered, minimized: IsMinimized);
+            _wakeDiag.MaybeReport();
+        }
+        if (_memCensus is not null) _memCensus.MaybeReport();
+        if (s_allocTypes) AllocTypeProfiler.MaybeReport();
+        return painted;
     }
 
-    /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.</summary>
-    public FrameStats Paint(int clicks = 0)
+    /// <summary>True when the host window is minimized (PAL <see cref="Pal.WindowState.Minimized"/>) — frames run
+    /// while minimized are wasted work the wake diagnostics surface.</summary>
+    private bool IsMinimized => _window.State == FluentGpu.Pal.WindowState.Minimized;
+
+    /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.
+    /// <paramref name="keepAlive"/> marks a repaint fired synchronously from inside an OS modal move/size loop: the submit
+    /// skips the device's frame-latency throttle so the WndProc thread isn't blocked up to a vblank.</summary>
+    public FrameStats Paint(int clicks = 0, bool keepAlive = false)
     {
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
@@ -473,16 +652,33 @@ public sealed class AppHost : IDisposable
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
             _dispatcher.Drag.Tick(dtMs);                       // 7 E5 ghost: spring-lag easing + re-pin over the scrolled origin
+            _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
+
+            // Scroll re-realize catch-up (phase 7.6): the fling/smooth scroll animators above advanced the content's
+            // -ScrollOffset transform AFTER this frame's pre-layout ReRealizeVirtuals, so a fast fling would record the
+            // viewport translated PAST the realized rows — the leading edge draws through (FG_PROBE=scroll-flicker).
+            // Re-realize for the just-advanced offset + scoped relayout the newly mounted rows so the recorded frame's
+            // realized window matches the offset it draws. No-op on steady frames (ReRealizeVirtuals returns false when
+            // nothing is VirtualRangeDirty); bounded to 2 passes like the cold realize edge in the layout block above.
+            for (int scrollPass = 0; scrollPass < 2 && _reconciler.ReRealizeVirtuals(); scrollPass++)
+            {
+                if (_runtime.HasPending) _runtime.Flush();   // bound-slot rebinds (RowBind) for the newly realized rows
+                _reconciler.ConsumeReconciled();
+                reconciled = true;                           // this frame DID realize+relayout — keep FrameStats.Rendered honest
+                _invalidator.RunDirty(layoutSize);
+                _scene.ClearLayoutDirty();
+            }
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),
             // selected glyphs = TextOnAccentFillColorSelectedTextBrush, caret = the text foreground.
             var textEdit = new TextEditStyle(Tok.AccentSelectedTextBackground, Tok.TextOnAccentSelectedText, Tok.TextPrimary);
             UpdateDynamicDiagnosticsText();
+            if (s_allocDiag) { db = Probe(SegDynText, db, dt0); dt0 = Stopwatch.GetTimestamp(); }   // alloc-05: dyntext interning was untracked
             // Out-of-bounds popup subtrees render into their OWN popup windows — exclude them from the main pass
             // (they stay in the one SceneStore for layout/hit-test; only their pixels move).
             _popupSkipRoots.Clear();
@@ -492,7 +688,11 @@ public sealed class AppHost : IDisposable
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots)); // 8 record
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
+            // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
+            // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
+            if (_scene.AnyTransformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
+            if (keepAlive) _device.SuppressLatencyWaitOnce();   // modal-loop repaint: don't block the WndProc thread on vblank
             _device.SubmitDrawList(_drawList.Bytes, _drawList.SortKeys,
                 new FrameInfo(_window.ClientSizePx, _window.Scale, Clear)); // 10 submit
             _swapchain.Present();                              // 11 present
@@ -501,7 +701,7 @@ public sealed class AppHost : IDisposable
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
-            if (s_allocDiag) Probe(SegEffects, db, dt0);
+            if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             UpdateFrameTiming(frameStart);
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
@@ -515,6 +715,7 @@ public sealed class AppHost : IDisposable
             };
             PublishFrameStats(LastStats);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
+            if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;
         }
         finally
@@ -778,13 +979,35 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    /// <summary>Settle timeout: a wedged exit track (one that never reaches its end) would keep its orphan LIVE,
+    /// pinning OrphanCount &gt; 0 and so keeping the wake loop running forever. Reclaim every settled orphan (no tracks)
+    /// as before, and FORCE-reclaim any orphan older than this even if it still has tracks. Healthy exit animations
+    /// settle in &lt;1s, so the backstop never fires in a well-behaved run.</summary>
+    private const long OrphanSettleTimeoutMs = 2000;
     private void ReclaimSettledOrphans()
     {
+        long nowTicks = _scene.OrphanCount > 0 ? Stopwatch.GetTimestamp() : 0;
         for (int i = _scene.OrphanCount - 1; i >= 0; i--)
         {
             var o = _scene.OrphanAt(i, out _, out _);
-            if (!_anim.HasTracks(o)) _scene.ReclaimOrphan(o);
+            if (!_anim.HasTracks(o)) { _scene.ReclaimOrphan(o); continue; }
+            double ageMs = (nowTicks - _scene.OrphanEnqueuedTicks(i)) * 1000.0 / Stopwatch.Frequency;
+            if (ageMs >= OrphanSettleTimeoutMs)
+            {
+                Diag.Event("scene", $"orphan-backstop force-reclaim age={ageMs:0}ms (wedged exit track)");
+                _scene.ReclaimOrphan(o);
+            }
         }
+    }
+
+    /// <summary>Slot-free fan-out (wired to <see cref="SceneStore.OnFreeIndex"/>): drop every INDEX-keyed per-node row
+    /// the engine subsystems hold so a freed slot leaves nothing for the next node reusing that index to inherit. The
+    /// gen-checked-handle side-tables (in-flight anim tracks, the interaction/scroll armed sets) self-prune at their next
+    /// tick and are deliberately untouched here.</summary>
+    private void OnSceneSlotFreed(int index)
+    {
+        _anim.ClearForIndex(index);
+        _scrollAnim.ClearForIndex(index);
     }
 
     private void UpdateFrameTiming(long frameStart)
@@ -814,18 +1037,66 @@ public sealed class AppHost : IDisposable
         if (elapsed > 0.0001) _fps = intervals / elapsed;
     }
 
+    // Sentinel quant for the "--" (no data yet) display — distinct from any real value so it interns "--" exactly once.
+    private const long DynTextNoData = long.MinValue + 1;
+    // Cached resolve delegate (one alloc, not new-per-frame): returns the per-kind cached id with NO Intern.
+    private Func<DynamicTextKind, StringId>? _dynTextResolve;
+    // Last-seen scene dynamic-text registration epoch: a node (un)mounted/swapped since the last rewrite has no
+    // resolved id yet, so the per-node pass must run even when no displayed value moved this frame.
+    private int _dynTextEpochSeen = -1;
+
+    /// <summary>Refresh the retained HUD text slots (FPS / draw counts / frame ms) WITHOUT re-rendering or relayout —
+    /// intern-on-change: each kind is quantized to its DISPLAY granularity and re-stringified+interned only when that
+    /// quantized value actually changes (a steady or same-rounding readout costs nothing and burns no ids). When no
+    /// kind changed this frame the per-node UpdateDynamicText scan is skipped entirely (the scene already holds the
+    /// right ids).</summary>
     private void UpdateDynamicDiagnosticsText()
     {
         if (!_scene.HasDynamicText) return;
-        _scene.UpdateDynamicText(kind => _strings.Intern(kind switch
+        bool registrationChanged = _scene.DynamicTextEpoch != _dynTextEpochSeen;
+        _dynTextEpochSeen = _scene.DynamicTextEpoch;
+        bool anyChanged = false;
+        // Only the kinds the HUD can show have a quant; recompute each and re-intern on change. All read LastStats /
+        // _fps / _frameMs at the SAME point the prior code's resolve lambda did (the previous frame's stats — this runs
+        // before LastStats is reassigned), so the displayed values are unchanged frame-for-frame.
+        anyChanged |= RefreshDynText(DynamicTextKind.FrameFps);
+        anyChanged |= RefreshDynText(DynamicTextKind.FrameCommandCount);
+        anyChanged |= RefreshDynText(DynamicTextKind.FrameDrawCount);
+        anyChanged |= RefreshDynText(DynamicTextKind.FrameCullCount);
+        anyChanged |= RefreshDynText(DynamicTextKind.FrameMs);
+        if (!anyChanged && !registrationChanged) return;   // nothing moved a display unit and no node (un)mounted → no per-node rewrite, no id churn
+
+        _scene.UpdateDynamicText(_dynTextResolve ??= kind => _dynTextId[(int)kind]);
+    }
+
+    /// <summary>Quantize one HUD kind to its display unit; on a change, stringify+intern the new value, hold a host ref
+    /// on the new id, drop the host ref on the old, and cache both. Returns true iff the cached id changed.</summary>
+    private bool RefreshDynText(DynamicTextKind kind)
+    {
+        int k = (int)kind;
+        long quant = kind switch
         {
-            DynamicTextKind.FrameFps => _fps <= 0.0 ? "--" : _fps.ToString("0", CultureInfo.InvariantCulture),
-            DynamicTextKind.FrameCommandCount => LastStats.DrawCommandCount.ToString(CultureInfo.InvariantCulture),
-            DynamicTextKind.FrameDrawCount => LastStats.DrawNodeCount.ToString(CultureInfo.InvariantCulture),
-            DynamicTextKind.FrameCullCount => LastStats.CulledNodeCount.ToString(CultureInfo.InvariantCulture),
-            DynamicTextKind.FrameMs => _frameMs <= 0.0 ? "--" : _frameMs.ToString("0.0", CultureInfo.InvariantCulture),
-            _ => "",
-        }));
+            DynamicTextKind.FrameFps => _fps <= 0.0 ? DynTextNoData : (long)Math.Round(_fps, MidpointRounding.AwayFromZero),
+            DynamicTextKind.FrameCommandCount => LastStats.DrawCommandCount,
+            DynamicTextKind.FrameDrawCount => LastStats.DrawNodeCount,
+            DynamicTextKind.FrameCullCount => LastStats.CulledNodeCount,
+            DynamicTextKind.FrameMs => _frameMs <= 0.0 ? DynTextNoData : (long)Math.Round(_frameMs * 10.0, MidpointRounding.AwayFromZero),
+            _ => DynTextNoData,
+        };
+        if (quant == _dynTextQuant[k]) return false;   // same display unit → reuse the cached id, no ToString/Intern
+
+        string s = kind switch
+        {
+            DynamicTextKind.FrameFps => quant == DynTextNoData ? "--" : _fps.ToString("0", CultureInfo.InvariantCulture),
+            DynamicTextKind.FrameMs => quant == DynTextNoData ? "--" : _frameMs.ToString("0.0", CultureInfo.InvariantCulture),
+            _ => quant.ToString(CultureInfo.InvariantCulture),
+        };
+        StringId next = _strings.Intern(s);
+        _strings.AddRef(next);                 // host-held ref: the cached id stays alive across frames
+        _strings.Release(_dynTextId[k]);       // drop the prior cached value's host ref (no-op for id 0 / first frame)
+        _dynTextId[k] = next;
+        _dynTextQuant[k] = quant;
+        return true;
     }
 
     private void DrainLayoutEffects()
@@ -913,6 +1184,22 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        // mem-05: the ctor mirrored this host's app.OpenUri onto the shared InputHooks.Current.Default channel (static
+        // HyperlinkButton factories reach the seam there). Release it so a disposed host's IPlatformApp graph is
+        // collectable — but ONLY if this host's delegate is still installed (Target == our _app): a later-constructed
+        // host may have overwritten it (last-wins), and clearing that would break the live host's hyperlinks.
+        var def = InputHooks.Current.Default;
+        if (def.OpenUri is { } cur && ReferenceEquals(cur.Target, _app)) def.OpenUri = null;
+
+        // Symmetry for the intern-on-change HUD cache: each cached id holds one host AddRef (RefreshDynText), so a
+        // disposed HUD-bearing host must drop them or it pins ≤5 ids on the shared interner per disposed host.
+        for (int i = 0; i < _dynTextId.Length; i++)
+        {
+            if (_dynTextId[i].IsEmpty) continue;
+            _strings.Release(_dynTextId[i]);
+            _dynTextId[i] = default;
+        }
+
         for (int i = _popupWindows.Count - 1; i >= 0; i--)
         {
             _popupWindows[i].Swapchain?.Dispose();

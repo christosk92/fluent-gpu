@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Theming and tokens | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Theming and tokens | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/app-authors/theming.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="theming-and-tokens">Theming and tokens</h1>
+
+<p>FluentGpu ships a faithful Fluent (WinUI) light/dark palette as a flat table of <strong>semantic tokens</strong> —
+<code>Tok.FillCardDefault</code>, <code>Tok.StrokeControlDefault</code>, <code>Tok.TextPrimary</code>, <code>Tok.AccentDefault</code>, and the rest. You
+read tokens; you do not hard-code colors. A theme swap is then <strong>one pointer write</strong> that re-points the whole
+app at the other palette, and the host injects the real OS accent and the Mica window background for you at
+startup.</p>
+<p>This page is the app-author guide to that surface — the families, how to switch themes, how the accent and
+window background are injected, the typeface facade, and the radius/spacing tokens. The token <em>table itself</em>
+(<code>src/FluentGpu.Dsl/Tokens.cs</code>) is the source of truth for the exact values; this page links every family back
+to it rather than restating numbers.</p>
+<blockquote>
+<p>Prerequisite: the signals mental model in <strong><a href="signals-components-and-bindings.html">signals, components &amp; bindings</a></strong>
+and the element/control surface in
+<strong><a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a></strong>. Theming layers on top of both.</p>
+</blockquote>
+<h2 id="read-semantic-tokens-never-hard-code-colors-tok">Read semantic tokens, never hard-code colors (<code>Tok.*</code>)</h2>
+<p>Every brush an app needs is a static getter on <code>Tok</code> (<code>src/FluentGpu.Dsl/Tokens.cs</code>). Use them as <code>Fill</code>,
+<code>BorderColor</code>, text <code>Color</code>, etc. — never an inline <code>ColorF</code>:</p>
+<pre><code class="lang-csharp">using FluentGpu.Dsl;             // Tok, Radii, Theme
+using static FluentGpu.Dsl.Ui;
+
+new BoxEl
+{
+    Padding = Edges4.All(14), Corners = Radii.OverlayAll,
+    Fill = Tok.FillCardDefault,                       // card surface
+    BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+    HoverFill = Tok.FillCardSecondary,                // hover state
+    Children =
+    [
+        BodyStrong(&quot;Now playing&quot;),
+        Caption(&quot;Aria Vance — Solar Drift&quot;).Secondary(),   // .Secondary() == Tok.TextSecondary
+    ],
+};
+</code></pre>
+<p>Why this matters: a token resolves to the value for whichever theme is currently active, so the <em>same</em> element
+description renders correctly in light and dark. Hard-code a <code>ColorF</code> and it is frozen — it looks wrong in the
+other theme, and a theme swap can't fix it. This is the single most common theming bug:</p>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Colors look wrong across themes</td>
+<td>Hard-coded <code>ColorF</code> instead of tokens</td>
+<td>Read <code>Tok.*</code> (<code>Tok.TextPrimary</code>, <code>Tok.FillCardDefault</code>); they follow <code>Tok.Use(theme)</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>(From <strong><a href="../../guide/pitfalls.md">pitfalls</a></strong> → <em>Layout &amp; visuals</em>.)</p>
+<p>The terse type-ramp helpers already do this for you — <code>Ui.Body</code>, <code>Ui.BodyStrong</code>, <code>Ui.Caption</code>,
+<code>Ui.Heading</code>, … default their <code>Color</code> to the right text token, and the tier modifiers
+(<code>.Secondary()</code>, <code>.Tertiary()</code>, <code>.Accent()</code>, <code>.OnAccent()</code>) swap to the sibling token without you naming a
+color. Prefer them over <code>new TextEl(...) { Color = … }</code> whenever a ramp tier fits. (See the type ramp in
+<strong><a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a></strong>.)</p>
+<h2 id="the-token-families">The token families</h2>
+<p><code>Tok</code> is organized into families. Each getter forwards to the active <code>TokenSet</code> (the immutable baked palette
+for one theme) at zero per-read cost. The full list with WinUI provenance lives in <code>Tokens.cs</code>; the common
+ones, by job:</p>
+<p><strong>Fills</strong> — control backgrounds and layered surfaces, cheapest (most translucent) first:</p>
+<pre><code class="lang-csharp">Tok.FillControlDefault / Secondary / Tertiary / Disabled   // button/control body + hover/pressed/disabled
+Tok.FillSubtleSecondary / FillSubtleTertiary               // &quot;subtle&quot; button hover/pressed (transparent at rest)
+Tok.FillCardDefault / FillCardSecondary                    // card surface + hover
+Tok.FillLayerDefault                                        // flyout / expander body
+Tok.FillSolidBase / FillSolidBaseAlt                        // page background / pane (opaque)
+Tok.FillControlStrong                                       // slider rail, scrollbar thumb (the strong fill)
+Tok.FillSmoke                                               // dialog / overlay scrim
+</code></pre>
+<p><strong>Strokes</strong> — control, card, divider, and surface borders:</p>
+<pre><code class="lang-csharp">Tok.StrokeControlDefault / StrokeControlSecondary
+Tok.StrokeCardDefault                                       // card ring (used with BorderWidth = 1f)
+Tok.StrokeDividerDefault                                    // hairline divider
+Tok.StrokeControlStrongDefault                              // checkbox/radio/toggle outer ring
+</code></pre>
+<p><strong>Text</strong> — the foreground hierarchy:</p>
+<pre><code class="lang-csharp">Tok.TextPrimary / TextSecondary / TextTertiary / TextDisabled
+Tok.TextOnAccentPrimary                                     // text drawn ON an accent fill
+</code></pre>
+<p><strong>Accent</strong> — the system/brand accent, in both <em>fill</em> and <em>text</em> forms (they differ — see
+<a href="#injecting-the-os-accent-and-window-background-toksetaccent--toksetwindowbackground">Injecting the OS accent</a>):</p>
+<pre><code class="lang-csharp">Tok.AccentDefault / AccentSecondary / AccentTertiary        // accent FILL (button, selection bar)
+Tok.AccentSubtle                                            // accent @ ~16% (nav selection, info tint)
+Tok.AccentTextPrimary / AccentTextSecondary / AccentTextTertiary   // accent TEXT (link labels — readability-adjusted, solid)
+</code></pre>
+<p><strong>Control elevation</strong> — the signature Fluent gradient borders (assembled from the stroke tokens; pass to a
+<code>BoxEl.BorderBrush</code>, which renders a gradient stroke). These are theme-aware <code>GradientSpec</code>s, allocated at
+reconcile time, not per frame:</p>
+<pre><code class="lang-csharp">Tok.ControlElevationBorder          // WinUI ControlElevationBorderBrush — the standard control border
+Tok.AccentControlElevationBorder    // accent buttons / checked toggles
+Tok.CircleElevationBorder           // circular knobs/glyphs (toggle knob, radio glyph)
+</code></pre>
+<p><strong>Focus</strong> — the two-tone focus ring:</p>
+<pre><code class="lang-csharp">Tok.FocusOuter   // outer stroke
+Tok.FocusInner   // inner stroke
+Tok.FocusThickness   // == 2f (a const)
+</code></pre>
+<p><strong>Scroll thumb</strong> and <strong>acrylic</strong>:</p>
+<pre><code class="lang-csharp">Tok.ScrollThumb           // overlay scrollbar thumb (folds into FillControlStrong)
+Tok.AcrylicFlyout         // the default transient-surface acrylic (AcrylicSpec) for flyout-family surfaces
+</code></pre>
+<p>There are more — a full severity palette (<code>Tok.SystemFillCritical/Caution/Success/Attention</code> + their
+<code>*Background</code> tints for InfoBar/InfoBadge), text-control chrome (<code>Tok.TextControlHeaderForeground</code>,
+<code>Tok.FillControlInputActive</code>), caption-button reds, and a hero gradient (<code>Tok.HeroGradientTop/Bottom</code>). Open
+<code>Tokens.cs</code> and search the family comment when you need one; each token carries its WinUI key and the exact
+light/dark value in a comment.</p>
+<p>The hero in the gallery is a good worked example of accent-fed gradient tokens:</p>
+<pre><code class="lang-csharp">// src/FluentGpu.WindowsApp/Home.cs — the gradient hero header
+new BoxEl
+{
+    Height = 200, Direction = 1, Justify = FlexJustify.End,
+    Gradient = LinearGradient(118f,
+        new GradientStop(0f, Tok.HeroGradientTop),       // accent-tinted top
+        new GradientStop(1f, Tok.HeroGradientBottom)),   // fades to the window base
+    Corners = new(Radii.Overlay, 0f, 0f, 0f),
+    Children = [ /* … */ ],
+};
+</code></pre>
+<h2 id="switching-themes-tokusethemekind--one-pointer-write">Switching themes (<code>Tok.Use(ThemeKind)</code> — one pointer write)</h2>
+<p><code>ThemeKind</code> is <code>Light</code> or <code>Dark</code>. <code>Tok.Use</code> swaps the active <code>TokenSet</code> with a single field write — there are
+no per-token updates, no allocation, no scan of the tree:</p>
+<pre><code class="lang-csharp">Tok.Use(ThemeKind.Dark);    // every Tok.* now resolves against the dark palette
+Tok.Use(ThemeKind.Light);   // …and now the light palette
+</code></pre>
+<p>That swap re-themes <em>future</em> reads. The honest caveat — and it is load-bearing — is <strong>when</strong> those reads
+happen. Tokens are resolved at element <strong>construction</strong>, baked into the immutable <code>Element</code> records and into
+each control's <code>Style</code> record. So switching the theme only reaches the screen once the affected components
+<strong>re-render and reconstruct their elements</strong> with the new token values. From the engine source
+(<code>src/FluentGpu.Dsl/Element.cs</code>, the <code>TextEl.Color</code> default):</p>
+<blockquote>
+<p>Defaults to the live theme's <code>TextFillColorPrimary</code> … resolved at element <strong>construction</strong>. NOTE: a runtime
+<code>Tok.Use</code> switch does not itself re-render — the theme is set at startup today; a live theme switcher must
+force a full re-render or every construction-resolved color (this default, control <code>Style</code> records) goes
+stale.</p>
+</blockquote>
+<p>Practically:</p>
+<ul>
+<li><strong>Set the theme at startup</strong>, before your first render, and it just works — every element constructs against
+the right palette. This is the common case.</li>
+<li><strong>A live in-app theme toggle</strong> must call <code>Tok.Use(...)</code> <em>and</em> trigger a re-render of everything that reads
+tokens. The simplest reliable way is to drive it off state high enough that the affected subtree re-renders
+(e.g. flip a root-level <code>UseState</code>/signal that your shell reads, so the whole content subtree reconstructs).
+A <code>ColorF</code> already baked into a still-mounted node will not retroactively change — that is the same &quot;snaps
+back / goes stale&quot; shape as the cross-theme pitfall above, and it is by design: the reconciler does not walk
+live nodes rewriting colors.</li>
+</ul>
+<blockquote>
+<p>Engine internals: the theming subsystem models a theme swap as <em>consumers re-render → derived brushes
+re-derive against the new <code>ThemeKind</code></em>, and a color change is always <strong>PaintDirty, never LayoutDirty</strong> (a
+color can't change a measured size). See <strong><a href="#engine-internals-the-theming-subsystem">Engine internals</a></strong>.</p>
+</blockquote>
+<h2 id="injecting-the-os-accent-and-window-background-toksetaccent--toksetwindowbackground">Injecting the OS accent and window background (<code>Tok.SetAccent</code> / <code>Tok.SetWindowBackground</code>)</h2>
+<p>Two values sit <em>on top of</em> the baked palette as mutable overrides, so they survive a theme swap and let the
+host inject live system state:</p>
+<pre><code class="lang-csharp">Tok.SetAccent(osAccentColor);     // inject the OS accent (or a brand/global override)
+Tok.SetAccent(null);              // clear the override → revert to the theme's default accent
+Tok.SetWindowBackground(color);   // the window base (Mica → Transparent, see below)
+</code></pre>
+<p><code>SetAccent</code> is special: it doesn't just replace <code>Tok.AccentDefault</code>. <strong>Every accent-derived token recomputes</strong>
+from the injected color — the secondary/tertiary fills (by reducing alpha), <code>AccentSubtle</code>, the hero gradient
+top, the severity <em>Attention</em> fill, <strong>and</strong> the accent <em>text</em> shades. The accent-text recompute is not a simple
+alpha reduction: link/label text is shaded (lightened in dark, darkened in light) toward the WinUI accent-text
+ramp so it stays readable and <strong>solid</strong> — a translucent link would be wrong. With no override, the exact baked
+WinUI default values are used.</p>
+<p>The fill-vs-text split is the reason there are two accent families. <code>Tok.AccentDefault</code> is the <strong>fill</strong> (button
+background, selection bar). <code>Tok.AccentTextPrimary</code> is the <strong>text</strong> shade used for hyperlink/accent labels —
+distinct, and readability-adjusted. Use the text tokens for accent <em>text</em>, the fill tokens for accent
+<em>surfaces</em>. (The harness verifies a <code>HyperlinkButton</code> uses <code>AccentTextPrimary</code>, not <code>AccentDefault</code>, and that
+it tracks an override.)</p>
+<p>A self-contained override example, straight from the engine harness
+(<code>src/FluentGpu.VerticalSlice/Program.cs</code>):</p>
+<pre><code class="lang-csharp">Tok.SetAccent(ColorF.FromRgba(0xE0, 0x40, 0x40));   // developer/OS override (red) — all accent tokens go red
+// … draw …
+Tok.SetAccent(null);                                 // clear the override (revert to theme default)
+</code></pre>
+<p>Just like <code>Tok.Use</code>, an accent or window-background change only reaches pixels through a re-render of the
+elements that read those tokens — set them before first render at startup, or force a re-render if you change
+them live.</p>
+<h2 id="how-fluentapprun-wires-accent--mica-for-you">How <code>FluentApp.Run</code> wires accent + Mica for you</h2>
+<p>If you start your app with <code>FluentApp.Run(() =&gt; new App())</code>, you do <strong>not</strong> call <code>SetAccent</code> /
+<code>SetWindowBackground</code> yourself — the batteries-included entry point reads the real OS state and injects it
+before your first frame. From <code>src/FluentGpu.WindowsApp/FluentApp.cs</code>:</p>
+<pre><code class="lang-csharp">// Inside FluentApp.Run — paraphrased:
+if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);   // OS accent (Light2 shade)
+else if (Win32Theme.Accent() is { } b)  Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);   // fallback to base accent
+Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame);       // dark titlebar + Mica backdrop
+if (mica) Theme.WindowBackground = ColorF.Transparent;                                     // let Mica show through
+</code></pre>
+<p>What that does, in token terms:</p>
+<ul>
+<li><code>Theme.Accent = …</code> forwards to <code>Tok.SetAccent(...)</code> (see the <a href="#typefaces-and-the-theme-back-compat-facade">facade</a>
+below), so the live Windows <em>Settings → Colors</em> accent feeds every accent token. It reads
+<code>SystemAccentColorLight2</code> (the lighter shade WinUI uses for the dark-theme accent fill), falling back to the
+base accent / DWM colorization color.</li>
+<li><code>ApplyWindowMaterial(...)</code> turns on the Windows 11 Mica system backdrop (and the dark titlebar).</li>
+<li><code>Theme.WindowBackground = ColorF.Transparent</code> forwards to <code>Tok.SetWindowBackground(...)</code>. Mica is a system
+backdrop that composites <em>behind</em> transparent client pixels, so the window base must be transparent for it to
+show. That is why the override exists: the engine sets the window background to transparent so Mica reads
+through.</li>
+</ul>
+<p><code>FluentApp.Run</code> takes a <code>bool mica = true</code> parameter; pass <code>mica: false</code> for an opaque window (the backdrop
+becomes acrylic and the window background stays opaque). The accent injection happens either way.</p>
+<blockquote>
+<p>Note: <code>FluentApp.Run</code> does not set the <em>theme kind</em> for you — light vs dark is your call (<code>Tok.Use(...)</code>).
+The Mica/titlebar wiring above passes <code>Theme.Dark</code> (the current kind) through to the DWM dark-mode attribute,
+so set your theme before <code>Run</code> if you want the OS titlebar to match.</p>
+</blockquote>
+<h2 id="typefaces-and-the-theme-back-compat-facade">Typefaces and the <code>Theme</code> back-compat facade</h2>
+<p>Typefaces live on <code>Theme</code> (the facade), as two plain fields you can assign at startup:</p>
+<pre><code class="lang-csharp">Theme.BodyFont = &quot;Segoe UI&quot;;              // default text face for every run
+Theme.IconFont = &quot;Segoe Fluent Icons&quot;;    // symbol face for Icon()/IconButton/NavigationView glyphs
+</code></pre>
+<p><code>BodyFont</code> is the default family for text runs; <code>IconFont</code> is the glyph face used by <code>Ui.Icon</code>, <code>IconButton</code>,
+and the navigation chrome. (Any single run can still override its family with <code>.Font(&quot;Consolas&quot;)</code> — see the
+typography section of <strong><a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a></strong>.)</p>
+<p><strong><code>Theme</code> is a small back-compat facade over <code>Tok</code></strong> (<code>src/FluentGpu.Dsl/Theme.cs</code>). Its flat names forward to
+the active <code>TokenSet</code>, so a <code>Tok.Use</code> swap re-themes them too. The mapping is one-to-one:</p>
+<table>
+<thead>
+<tr>
+<th><code>Theme</code> (facade)</th>
+<th>Forwards to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Theme.Dark</code> (get/set <code>bool</code>)</td>
+<td><code>Tok.Theme == Dark</code> / <code>Tok.Use(...)</code></td>
+</tr>
+<tr>
+<td><code>Theme.Accent</code> (get/set)</td>
+<td><code>Tok.AccentDefault</code> / <code>Tok.SetAccent(...)</code></td>
+</tr>
+<tr>
+<td><code>Theme.WindowBackground</code> (get/set)</td>
+<td><code>Tok.WindowBackground</code> / <code>Tok.SetWindowBackground(...)</code></td>
+</tr>
+<tr>
+<td><code>Theme.ControlFill</code> / <code>ControlFillHover</code> / <code>ControlFillPressed</code></td>
+<td><code>Tok.FillControl{Default,Secondary,Tertiary}</code></td>
+</tr>
+<tr>
+<td><code>Theme.ControlBorder</code></td>
+<td><code>Tok.StrokeControlSecondary</code></td>
+</tr>
+<tr>
+<td><code>Theme.ControlText</code> / <code>WindowText</code></td>
+<td><code>Tok.TextPrimary</code></td>
+</tr>
+<tr>
+<td><code>Theme.AccentText</code></td>
+<td><code>Tok.TextOnAccentPrimary</code></td>
+</tr>
+</tbody>
+</table>
+<p>You will see <code>Theme.*</code> across the gallery (<code>Theme.WindowText</code>, <code>Theme.ControlFill</code>, <code>Theme.Accent</code> are common
+in <code>GalleryPages.cs</code>) and it is fully supported. <strong>New code should prefer <code>Tok.*</code> directly</strong> — it exposes the
+full semantic table; the facade is a convenience subset kept for existing call sites and for the host's
+accent/Mica setters.</p>
+<h2 id="radii-and-spacing-tokens">Radii and spacing tokens</h2>
+<p>Corner radii are the WinUI Fluent ramp, on <code>Radii</code> (<code>src/FluentGpu.Dsl/Radii.cs</code>):</p>
+<pre><code class="lang-csharp">Radii.Control   // 4px  — buttons, inputs, small controls (ControlCornerRadius)
+Radii.Overlay   // 8px  — cards, flyouts, dialogs, expanders (OverlayCornerRadius)
+Radii.Pill      // 16px — pills, badges, the SelectorBar
+</code></pre>
+<p>Each has a prebaked <code>CornerRadius4</code> so you don't build one per element, plus helpers for the common shapes:</p>
+<pre><code class="lang-csharp">Corners = Radii.ControlAll;            // CornerRadius4.All(4)
+Corners = Radii.OverlayAll;            // CornerRadius4.All(8)  — the usual card
+Corners = Radii.PillAll;               // CornerRadius4.All(16)
+Corners = Radii.Circle(40f);           // a 40px tile → radius 20 (a full circle)
+Corners = Radii.OverlayTop;            // top corners only (card flush to a footer)
+Corners = Radii.OverlayBottom;         // bottom corners only
+</code></pre>
+<p>The selector tab in the gallery shows the pill radius in context:</p>
+<pre><code class="lang-csharp">// src/FluentGpu.WindowsApp/Home.cs — a SelectorBar tab
+new BoxEl
+{
+    Direction = 0, Gap = 6, AlignItems = FlexAlign.Center, Padding = new Edges4(14, 6, 14, 6),
+    Corners = Radii.PillAll, OnClick = () =&gt; onSelect(tag),
+    Fill = sel ? Tok.AccentSubtle : Tok.FillSubtleTransparent,
+    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+    Children =
+    [
+        Icon(glyph, 14f).Foreground(sel ? Tok.AccentDefault : Tok.TextSecondary),
+        new TextEl(label) { Size = 14f, Color = sel ? Tok.TextPrimary : Tok.TextSecondary },
+    ],
+};
+</code></pre>
+<p><strong>Spacing</strong> is the WinUI Gallery spacing rhythm, on <code>Spacing</code> (<code>src/FluentGpu.Dsl/Spacing.cs</code>) — named <code>const float</code> DIP values for page gutters, card spacing, internal padding, and stack gaps:</p>
+<pre><code class="lang-csharp">Spacing.PageWide    // 36f — desktop page gutter (the NavigationView content margin)
+Spacing.PageNarrow  // 16f — narrow layout
+Spacing.Card        // 12f — between cards in a grid
+Spacing.Inner       // 16f — card / panel internal padding
+Spacing.StackS / StackM / StackL   // 4f / 8f / 12f — stack gaps
+
+Spacing.PagePadWide    // Edges4(36, 24, 36, 36) — the page padding shape
+Spacing.PagePadNarrow  // Edges4.All(16)
+Spacing.CardPad        // Edges4.All(16) — card internal padding
+</code></pre>
+<p>Use them on the layout props you already know — <code>Gap</code> (inter-child spacing) and <code>Padding</code> / <code>Margin</code> (an
+<code>Edges4</code>). The built-in <code>Card</code> builder already pads with <code>Spacing.CardPad</code> and gaps with <code>Spacing.StackM</code>, so a
+plain <code>Card(...)</code> is on-rhythm for free:</p>
+<pre><code class="lang-csharp">new BoxEl
+{
+    Direction = 1, Gap = Spacing.StackM, Padding = Spacing.CardPad,
+    Children = [ /* … */ ],
+};
+</code></pre>
+<p>Sizes are device-independent pixels (DIP) and the host scales by monitor DPI. You will also see literal DIP
+across the gallery (<code>Gap = 16f</code>, <code>Padding = Edges4.All(24)</code>) — both are fine; reach for <code>Spacing.*</code> when you
+want the values to match the Fluent rhythm without memorizing them.</p>
+<h2 id="engine-internals-the-theming-subsystem">Engine internals: the theming subsystem</h2>
+<p>How tokens, the live system accent, and album-art-derived dynamic color all converge on a single brush handle —
+the three-tier <code>BrushDeriver</code>, the <code>Context&lt;uint&gt;</code> epoch reactivity for OS color changes, derived-brush
+eviction safety, and the recolor cross-fade — is the engine's job, not the app author's. If you are changing
+those internals (not just building an app), read the subsystem design:</p>
+<ul>
+<li><strong><a href="../../../design/subsystems/theming.md">Theming subsystem design</a></strong> — the authoritative engine spec (three
+brush tiers, <code>Palette</code>, <code>BrushDeriver</code>, OS reactivity, eviction, where each piece lands in the 13-phase
+loop, and the macOS boundary).</li>
+<li><strong><a href="../../../design/SPEC-INDEX.md">Design corpus index</a></strong> — the precedence authority for cross-cutting
+contracts.</li>
+</ul>
+<p>For app work, the token surface on this page is everything you need.</p>
+<hr>
+<p>Next: <strong><a href="../../guide/components-elements-layout.md">components, elements &amp; layout</a></strong> for the full element/control
+catalog, or <strong><a href="../../guide/pitfalls.md">pitfalls</a></strong> for the symptom → cause → fix table (including the
+hard-coded-color trap).</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

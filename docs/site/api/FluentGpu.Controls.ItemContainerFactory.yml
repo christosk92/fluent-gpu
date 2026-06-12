@@ -1,0 +1,282 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemContainerFactory
+  commentId: T:FluentGpu.Controls.ItemContainerFactory
+  id: ItemContainerFactory
+  parent: FluentGpu.Controls
+  children: []
+  langs:
+  - csharp
+  - vb
+  name: ItemContainerFactory
+  nameWithType: ItemContainerFactory
+  fullName: FluentGpu.Controls.ItemContainerFactory
+  type: Delegate
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemContainerFactory
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Custom item-container factory — the E11-L4 SKIN seam: the List/Grid presets + TreeView supply their WinUI item
+
+    chrome (ListViewItemPresenter / GridView dual-border / TreeViewItem row) around the engine's ONE selection + keyboard
+
+    substrate. The returned BoxEl must wire <code class="paramref">onInteraction</code> (press/Enter/Space → the selector) and
+
+    <code class="paramref">onFocusChanged</code> (keyboard-current tracking), and should be <code>Focusable</code> so the engine focus
+
+    ring lands on items. Null ⇒ the default WinUI <xref href="FluentGpu.Controls.ItemContainer" data-throw-if-not-resolved="false"></xref> chrome.
+  example: []
+  syntax:
+    content: public delegate BoxEl ItemContainerFactory(int index, Element content, ItemChromeState state, Action<ItemContainerTrigger, KeyModifiers> onInteraction, Action<bool> onFocusChanged)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: content
+      type: FluentGpu.Dsl.Element
+    - id: state
+      type: FluentGpu.Controls.ItemChromeState
+    - id: onInteraction
+      type: System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+    - id: onFocusChanged
+      type: System.Action{System.Boolean}
+    return:
+      type: FluentGpu.Dsl.BoxEl
+    content.vb: Public Delegate Function ItemContainerFactory(index As Integer, content As Element, state As ItemChromeState, onInteraction As Action(Of ItemContainerTrigger, KeyModifiers), onFocusChanged As Action(Of Boolean)) As BoxEl
+references:
+- uid: FluentGpu.Controls.ItemContainer
+  commentId: T:FluentGpu.Controls.ItemContainer
+  href: FluentGpu.Controls.ItemContainer.html
+  name: ItemContainer
+  nameWithType: ItemContainer
+  fullName: FluentGpu.Controls.ItemContainer
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Controls.ItemChromeState
+  commentId: T:FluentGpu.Controls.ItemChromeState
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.ItemChromeState.html
+  name: ItemChromeState
+  nameWithType: ItemChromeState
+  fullName: FluentGpu.Controls.ItemChromeState
+- uid: System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+  commentId: T:System.Action{FluentGpu.Controls.ItemContainerTrigger,FluentGpu.Foundation.KeyModifiers}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<ItemContainerTrigger, KeyModifiers>
+  nameWithType: Action<ItemContainerTrigger, KeyModifiers>
+  fullName: System.Action<FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers>
+  nameWithType.vb: Action(Of ItemContainerTrigger, KeyModifiers)
+  fullName.vb: System.Action(Of FluentGpu.Controls.ItemContainerTrigger, FluentGpu.Foundation.KeyModifiers)
+  name.vb: Action(Of ItemContainerTrigger, KeyModifiers)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: FluentGpu.Controls.ItemContainerTrigger
+    name: ItemContainerTrigger
+    href: FluentGpu.Controls.ItemContainerTrigger.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.ItemContainerTrigger
+    name: ItemContainerTrigger
+    href: FluentGpu.Controls.ItemContainerTrigger.html
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Foundation.KeyModifiers
+    name: KeyModifiers
+    href: FluentGpu.Foundation.KeyModifiers.html
+  - name: )
+- uid: System.Action{System.Boolean}
+  commentId: T:System.Action{System.Boolean}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<bool>
+  nameWithType: Action<bool>
+  fullName: System.Action<bool>
+  nameWithType.vb: Action(Of Boolean)
+  fullName.vb: System.Action(Of Boolean)
+  name.vb: Action(Of Boolean)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Dsl.BoxEl
+  commentId: T:FluentGpu.Dsl.BoxEl
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.BoxEl.html
+  name: BoxEl
+  nameWithType: BoxEl
+  fullName: FluentGpu.Dsl.BoxEl
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )

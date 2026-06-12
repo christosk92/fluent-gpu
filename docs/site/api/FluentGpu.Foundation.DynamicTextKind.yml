@@ -1,0 +1,222 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.DynamicTextKind
+  commentId: T:FluentGpu.Foundation.DynamicTextKind
+  id: DynamicTextKind
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.DynamicTextKind.FrameCommandCount
+  - FluentGpu.Foundation.DynamicTextKind.FrameCullCount
+  - FluentGpu.Foundation.DynamicTextKind.FrameDrawCount
+  - FluentGpu.Foundation.DynamicTextKind.FrameFps
+  - FluentGpu.Foundation.DynamicTextKind.FrameMs
+  - FluentGpu.Foundation.DynamicTextKind.None
+  langs:
+  - csharp
+  - vb
+  name: DynamicTextKind
+  nameWithType: DynamicTextKind
+  fullName: FluentGpu.Foundation.DynamicTextKind
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DynamicTextKind
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 3
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Retained text slots whose contents are refreshed by the host without re-rendering or relayout.
+  example: []
+  syntax:
+    content: 'public enum DynamicTextKind : byte'
+    content.vb: Public Enum DynamicTextKind As Byte
+- uid: FluentGpu.Foundation.DynamicTextKind.None
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.None
+  id: None
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: DynamicTextKind.None
+  fullName: FluentGpu.Foundation.DynamicTextKind.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 5
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+- uid: FluentGpu.Foundation.DynamicTextKind.FrameFps
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.FrameFps
+  id: FrameFps
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: FrameFps
+  nameWithType: DynamicTextKind.FrameFps
+  fullName: FluentGpu.Foundation.DynamicTextKind.FrameFps
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameFps
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 6
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FrameFps = 1
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+- uid: FluentGpu.Foundation.DynamicTextKind.FrameCommandCount
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.FrameCommandCount
+  id: FrameCommandCount
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: FrameCommandCount
+  nameWithType: DynamicTextKind.FrameCommandCount
+  fullName: FluentGpu.Foundation.DynamicTextKind.FrameCommandCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameCommandCount
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FrameCommandCount = 2
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+- uid: FluentGpu.Foundation.DynamicTextKind.FrameDrawCount
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.FrameDrawCount
+  id: FrameDrawCount
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: FrameDrawCount
+  nameWithType: DynamicTextKind.FrameDrawCount
+  fullName: FluentGpu.Foundation.DynamicTextKind.FrameDrawCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameDrawCount
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 8
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FrameDrawCount = 3
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+- uid: FluentGpu.Foundation.DynamicTextKind.FrameCullCount
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.FrameCullCount
+  id: FrameCullCount
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: FrameCullCount
+  nameWithType: DynamicTextKind.FrameCullCount
+  fullName: FluentGpu.Foundation.DynamicTextKind.FrameCullCount
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameCullCount
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FrameCullCount = 4
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+- uid: FluentGpu.Foundation.DynamicTextKind.FrameMs
+  commentId: F:FluentGpu.Foundation.DynamicTextKind.FrameMs
+  id: FrameMs
+  parent: FluentGpu.Foundation.DynamicTextKind
+  langs:
+  - csharp
+  - vb
+  name: FrameMs
+  nameWithType: DynamicTextKind.FrameMs
+  fullName: FluentGpu.Foundation.DynamicTextKind.FrameMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/DynamicTextKind.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FrameMs
+    path: ../../src/FluentGpu.Foundation/DynamicTextKind.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: FrameMs = 5
+    return:
+      type: FluentGpu.Foundation.DynamicTextKind
+references:
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.DynamicTextKind
+  commentId: T:FluentGpu.Foundation.DynamicTextKind
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.DynamicTextKind.html
+  name: DynamicTextKind
+  nameWithType: DynamicTextKind
+  fullName: FluentGpu.Foundation.DynamicTextKind

@@ -1,0 +1,558 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Layout.FlexLayout
+  commentId: T:FluentGpu.Layout.FlexLayout
+  id: FlexLayout
+  parent: FluentGpu.Layout
+  children:
+  - FluentGpu.Layout.FlexLayout.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Text.IFontSystem)
+  - FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  - FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Size2)
+  - FluentGpu.Layout.FlexLayout.RunSubtree(FluentGpu.Foundation.NodeHandle)
+  langs:
+  - csharp
+  - vb
+  name: FlexLayout
+  nameWithType: FlexLayout
+  fullName: FluentGpu.Layout.FlexLayout
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Layout/FlexLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexLayout
+    path: ../../src/FluentGpu.Layout/FlexLayout.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Layout
+  namespace: FluentGpu.Layout
+  summary: >-
+    Flexbox layout over the SoA scene columns. Two descents: Measure (bottom-up — content/basis base sizes, honoring
+
+    explicit size + min/max + text content) then Arrange (top-down — distribute free space by flex-grow/shrink,
+
+    position by justify-content, align the cross axis by align-items/align-self incl. stretch, applying margins).
+
+    Direction 0 = row (main = X), 1 = column (main = Y). Wrap / grid / absolute positioning are the remaining layout work.
+  example: []
+  syntax:
+    content: public sealed class FlexLayout
+    content.vb: Public NotInheritable Class FlexLayout
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Layout.FlexLayout.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Text.IFontSystem)
+  commentId: M:FluentGpu.Layout.FlexLayout.#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Text.IFontSystem)
+  id: '#ctor(FluentGpu.Scene.SceneStore,FluentGpu.Text.IFontSystem)'
+  parent: FluentGpu.Layout.FlexLayout
+  langs:
+  - csharp
+  - vb
+  name: FlexLayout(SceneStore, IFontSystem)
+  nameWithType: FlexLayout.FlexLayout(SceneStore, IFontSystem)
+  fullName: FluentGpu.Layout.FlexLayout.FlexLayout(FluentGpu.Scene.SceneStore, FluentGpu.Text.IFontSystem)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Layout/FlexLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Layout/FlexLayout.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Layout
+  namespace: FluentGpu.Layout
+  syntax:
+    content: public FlexLayout(SceneStore scene, IFontSystem fonts)
+    parameters:
+    - id: scene
+      type: FluentGpu.Scene.SceneStore
+    - id: fonts
+      type: FluentGpu.Text.IFontSystem
+    content.vb: Public Sub New(scene As SceneStore, fonts As IFontSystem)
+  overload: FluentGpu.Layout.FlexLayout.#ctor*
+  nameWithType.vb: FlexLayout.New(SceneStore, IFontSystem)
+  fullName.vb: FluentGpu.Layout.FlexLayout.New(FluentGpu.Scene.SceneStore, FluentGpu.Text.IFontSystem)
+  name.vb: New(SceneStore, IFontSystem)
+- uid: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  id: Run(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Layout.FlexLayout
+  langs:
+  - csharp
+  - vb
+  name: Run(NodeHandle)
+  nameWithType: FlexLayout.Run(NodeHandle)
+  fullName: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Layout/FlexLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Run
+    path: ../../src/FluentGpu.Layout/FlexLayout.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Layout
+  namespace: FluentGpu.Layout
+  syntax:
+    content: public void Run(NodeHandle root)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub Run(root As NodeHandle)
+  overload: FluentGpu.Layout.FlexLayout.Run*
+- uid: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Size2)
+  commentId: M:FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Size2)
+  id: Run(FluentGpu.Foundation.NodeHandle,FluentGpu.Foundation.Size2)
+  parent: FluentGpu.Layout.FlexLayout
+  langs:
+  - csharp
+  - vb
+  name: Run(NodeHandle, Size2)
+  nameWithType: FlexLayout.Run(NodeHandle, Size2)
+  fullName: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle, FluentGpu.Foundation.Size2)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Layout/FlexLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Run
+    path: ../../src/FluentGpu.Layout/FlexLayout.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Layout
+  namespace: FluentGpu.Layout
+  summary: >-
+    Lay out the root to FILL the window (the conventional top-level behavior) — an auto-sized root takes
+        the full client area; an explicitly-sized root keeps its size. The slice's direct <xref href="FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)" data-throw-if-not-resolved="false"></xref>
+        keeps content-sizing for golden flexbox checks.
+  example: []
+  syntax:
+    content: public void Run(NodeHandle root, Size2 window)
+    parameters:
+    - id: root
+      type: FluentGpu.Foundation.NodeHandle
+    - id: window
+      type: FluentGpu.Foundation.Size2
+    content.vb: Public Sub Run(root As NodeHandle, window As Size2)
+  overload: FluentGpu.Layout.FlexLayout.Run*
+- uid: FluentGpu.Layout.FlexLayout.RunSubtree(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Layout.FlexLayout.RunSubtree(FluentGpu.Foundation.NodeHandle)
+  id: RunSubtree(FluentGpu.Foundation.NodeHandle)
+  parent: FluentGpu.Layout.FlexLayout
+  langs:
+  - csharp
+  - vb
+  name: RunSubtree(NodeHandle)
+  nameWithType: FlexLayout.RunSubtree(NodeHandle)
+  fullName: FluentGpu.Layout.FlexLayout.RunSubtree(FluentGpu.Foundation.NodeHandle)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Layout/FlexLayout.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RunSubtree
+    path: ../../src/FluentGpu.Layout/FlexLayout.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Layout
+  namespace: FluentGpu.Layout
+  summary: >-
+    Re-solve ONLY the subtree rooted at <code class="paramref">node</code> against its current Bounds (or its
+        LayoutInput size if set — a SizeMode.Relayout animation writes the interpolated width there each tick). The parent
+        already placed this node, so this cannot propagate upward — a scoped, per-frame-affordable relayout for live reflow.
+  example: []
+  syntax:
+    content: public void RunSubtree(NodeHandle node)
+    parameters:
+    - id: node
+      type: FluentGpu.Foundation.NodeHandle
+    content.vb: Public Sub RunSubtree(node As NodeHandle)
+  overload: FluentGpu.Layout.FlexLayout.RunSubtree*
+references:
+- uid: FluentGpu.Layout
+  commentId: N:FluentGpu.Layout
+  href: FluentGpu.html
+  name: FluentGpu.Layout
+  nameWithType: FluentGpu.Layout
+  fullName: FluentGpu.Layout
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Layout
+    name: Layout
+    href: FluentGpu.Layout.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Layout
+    name: Layout
+    href: FluentGpu.Layout.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Layout.FlexLayout.#ctor*
+  commentId: Overload:FluentGpu.Layout.FlexLayout.#ctor
+  href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout__ctor_FluentGpu_Scene_SceneStore_FluentGpu_Text_IFontSystem_
+  name: FlexLayout
+  nameWithType: FlexLayout.FlexLayout
+  fullName: FluentGpu.Layout.FlexLayout.FlexLayout
+  nameWithType.vb: FlexLayout.New
+  fullName.vb: FluentGpu.Layout.FlexLayout.New
+  name.vb: New
+- uid: FluentGpu.Scene.SceneStore
+  commentId: T:FluentGpu.Scene.SceneStore
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.SceneStore.html
+  name: SceneStore
+  nameWithType: SceneStore
+  fullName: FluentGpu.Scene.SceneStore
+- uid: FluentGpu.Text.IFontSystem
+  commentId: T:FluentGpu.Text.IFontSystem
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.IFontSystem.html
+  name: IFontSystem
+  nameWithType: IFontSystem
+  fullName: FluentGpu.Text.IFontSystem
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Layout.FlexLayout.Run*
+  commentId: Overload:FluentGpu.Layout.FlexLayout.Run
+  href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout_Run_FluentGpu_Foundation_NodeHandle_
+  name: Run
+  nameWithType: FlexLayout.Run
+  fullName: FluentGpu.Layout.FlexLayout.Run
+- uid: FluentGpu.Foundation.NodeHandle
+  commentId: T:FluentGpu.Foundation.NodeHandle
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.NodeHandle.html
+  name: NodeHandle
+  nameWithType: NodeHandle
+  fullName: FluentGpu.Foundation.NodeHandle
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  commentId: M:FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout_Run_FluentGpu_Foundation_NodeHandle_
+  name: Run(NodeHandle)
+  nameWithType: FlexLayout.Run(NodeHandle)
+  fullName: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+  spec.csharp:
+  - uid: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+    name: Run
+    href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout_Run_FluentGpu_Foundation_NodeHandle_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Layout.FlexLayout.Run(FluentGpu.Foundation.NodeHandle)
+    name: Run
+    href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout_Run_FluentGpu_Foundation_NodeHandle_
+  - name: (
+  - uid: FluentGpu.Foundation.NodeHandle
+    name: NodeHandle
+    href: FluentGpu.Foundation.NodeHandle.html
+  - name: )
+- uid: FluentGpu.Foundation.Size2
+  commentId: T:FluentGpu.Foundation.Size2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Size2.html
+  name: Size2
+  nameWithType: Size2
+  fullName: FluentGpu.Foundation.Size2
+- uid: FluentGpu.Layout.FlexLayout.RunSubtree*
+  commentId: Overload:FluentGpu.Layout.FlexLayout.RunSubtree
+  href: FluentGpu.Layout.FlexLayout.html#FluentGpu_Layout_FlexLayout_RunSubtree_FluentGpu_Foundation_NodeHandle_
+  name: RunSubtree
+  nameWithType: FlexLayout.RunSubtree
+  fullName: FluentGpu.Layout.FlexLayout.RunSubtree

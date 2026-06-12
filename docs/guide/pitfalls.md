@@ -28,6 +28,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | Whole app re-renders on one interaction | State lives too high (at the root), so the root's render-effect runs | Move state down into the component that owns it; or bind the hot value instead of `setState`. |
 | List with thousands of items is slow / leaks nodes | Not virtualized, or no stable `keyOf` | Use `Virtual.List`/`Repeater.ItemsRepeater` with `keyOf: i => stableId`. Only the window is realized; rows recycle. |
 | Scroll re-realizes/relayouts every frame | (rare) something marks the viewport dirty each frame | In-window scroll is transform-only by design; check you aren't re-rendering the list component each frame (move its state out / bind it). |
+| A virtualized list/grid allocates on every scroll frame (`HotPhaseAllocBytes > 0`) | A per-item closure or a per-item `TemplateParts` modifier is rebuilt on each realize; or a `PartDelta` lambda calls `new`/`Animate`/LINQ per item | Vary per-item chrome through `PartDelta` VALUES only (pure-value lambda, no allocation); keep the skin on the `ContainerFactory`/`SelectorVisual` seam; per-item structure uses `Opacity=0`/`Width=0` invisible-part flips, never add/remove children. See [control-fidelity §6](./control-fidelity.md#6-template-parts--one-generic-door-no-styling-knobs). |
 
 ## Layout & visuals
 

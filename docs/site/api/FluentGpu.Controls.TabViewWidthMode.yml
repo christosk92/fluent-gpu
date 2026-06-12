@@ -1,0 +1,145 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.TabViewWidthMode
+  commentId: T:FluentGpu.Controls.TabViewWidthMode
+  id: TabViewWidthMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.TabViewWidthMode.Compact
+  - FluentGpu.Controls.TabViewWidthMode.Equal
+  - FluentGpu.Controls.TabViewWidthMode.SizeToContent
+  langs:
+  - csharp
+  - vb
+  name: TabViewWidthMode
+  nameWithType: TabViewWidthMode
+  fullName: FluentGpu.Controls.TabViewWidthMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TabViewWidthMode
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>TabViewWidthMode</code> (TabView.idl:6-11) — how tab headers size. Default Equal: every tab gets
+        clamp(available/count, 100, 240) (TabView.cpp:1180-1228; TabViewItemMinWidth/MaxWidth,
+        TabView_themeresources.xaml:243-244). SizeToContent: intrinsic. Compact: unselected tabs collapse to icon-only
+        (TabViewItem.cpp:284-295; TabView.xaml:484-490).
+  example: []
+  syntax:
+    content: 'public enum TabViewWidthMode : byte'
+    content.vb: Public Enum TabViewWidthMode As Byte
+- uid: FluentGpu.Controls.TabViewWidthMode.Equal
+  commentId: F:FluentGpu.Controls.TabViewWidthMode.Equal
+  id: Equal
+  parent: FluentGpu.Controls.TabViewWidthMode
+  langs:
+  - csharp
+  - vb
+  name: Equal
+  nameWithType: TabViewWidthMode.Equal
+  fullName: FluentGpu.Controls.TabViewWidthMode.Equal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Equal
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Equal = 0
+    return:
+      type: FluentGpu.Controls.TabViewWidthMode
+- uid: FluentGpu.Controls.TabViewWidthMode.SizeToContent
+  commentId: F:FluentGpu.Controls.TabViewWidthMode.SizeToContent
+  id: SizeToContent
+  parent: FluentGpu.Controls.TabViewWidthMode
+  langs:
+  - csharp
+  - vb
+  name: SizeToContent
+  nameWithType: TabViewWidthMode.SizeToContent
+  fullName: FluentGpu.Controls.TabViewWidthMode.SizeToContent
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SizeToContent
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: SizeToContent = 1
+    return:
+      type: FluentGpu.Controls.TabViewWidthMode
+- uid: FluentGpu.Controls.TabViewWidthMode.Compact
+  commentId: F:FluentGpu.Controls.TabViewWidthMode.Compact
+  id: Compact
+  parent: FluentGpu.Controls.TabViewWidthMode
+  langs:
+  - csharp
+  - vb
+  name: Compact
+  nameWithType: TabViewWidthMode.Compact
+  fullName: FluentGpu.Controls.TabViewWidthMode.Compact
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/TabView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Compact
+    path: ../../src/FluentGpu.Controls/TabView.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Compact = 2
+    return:
+      type: FluentGpu.Controls.TabViewWidthMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.TabViewWidthMode
+  commentId: T:FluentGpu.Controls.TabViewWidthMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TabViewWidthMode.html
+  name: TabViewWidthMode
+  nameWithType: TabViewWidthMode
+  fullName: FluentGpu.Controls.TabViewWidthMode

@@ -1,0 +1,671 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Foundation.SpanRunTable
+  commentId: T:FluentGpu.Foundation.SpanRunTable
+  id: SpanRunTable
+  parent: FluentGpu.Foundation
+  children:
+  - FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+  - FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  - FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+  - FluentGpu.Foundation.SpanRunTable.Resolve(System.Int32)
+  - FluentGpu.Foundation.SpanRunTable.Shared
+  langs:
+  - csharp
+  - vb
+  name: SpanRunTable
+  nameWithType: SpanRunTable
+  fullName: FluentGpu.Foundation.SpanRunTable
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpanRunTable
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Process-wide registry of span runs — the interner-style side channel that lets the multi-run style overlay ride an
+
+    <code>int</code> through the POD pipeline (<code>TextStyle.SpanRunId</code> → DrawList <code>DrawGlyphRunCmd.SpanRunId</code>) the way
+
+    strings ride <xref href="FluentGpu.Foundation.StringId" data-throw-if-not-resolved="false"></xref> through <xref href="FluentGpu.Foundation.StringTable" data-throw-if-not-resolved="false"></xref>.
+
+
+    <p><b>Seam-safe (threading-render-seam.md §9, the StringTable discipline):</b> chunked backing store — chunks are
+
+    allocated once and never moved; a release-store of the count publishes each new slot, the reader acquire-loads the
+
+    count before indexing. The UI thread is the single writer (reconciler, at element-change time — never in frame
+
+    phases 6–13); the render-side glyph path resolves the previous frame's ids concurrently.</p>
+
+
+    <p><b>Static <xref href="FluentGpu.Foundation.SpanRunTable.Shared" data-throw-if-not-resolved="false"></xref> (deliberate):</b> unlike <xref href="FluentGpu.Foundation.StringTable" data-throw-if-not-resolved="false"></xref> (host-instanced and threaded
+
+    through every constructor), the render-side consumer reaches a span run only through the POD id baked in the draw
+
+    stream — there is no host seam to hand an instance through. One process = one UI thread = one writer, ids burn
+
+    monotonically and are never reused, so a process-global table is safe by the same argument that makes the ids safe.</p>
+
+
+    <p><b>Reclamation:</b> owners (the scene's span-text side-table) pair <xref href="FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)" data-throw-if-not-resolved="false"></xref>/<xref href="FluentGpu.Foundation.SpanRunTable.Release(System.Int32)" data-throw-if-not-resolved="false"></xref>;
+
+    a run whose count hits 0 has its slot cleared after a creation-distance quarantine (≥ <xref href="FluentGpu.Foundation.SpanRunTable.QuarantineDistance" data-throw-if-not-resolved="false"></xref>
+
+    newer runs registered — far beyond the in-flight frame depth at any realistic churn), so a draw list recorded just
+
+    before the release still resolves. A cleared id resolves null → consumers fall back to the base style. Ids are
+
+    never reused.</p>
+  example: []
+  syntax:
+    content: public sealed class SpanRunTable
+    content.vb: Public NotInheritable Class SpanRunTable
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Foundation.SpanRunTable.Shared
+  commentId: F:FluentGpu.Foundation.SpanRunTable.Shared
+  id: Shared
+  parent: FluentGpu.Foundation.SpanRunTable
+  langs:
+  - csharp
+  - vb
+  name: Shared
+  nameWithType: SpanRunTable.Shared
+  fullName: FluentGpu.Foundation.SpanRunTable.Shared
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shared
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 99
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  syntax:
+    content: public static readonly SpanRunTable Shared
+    return:
+      type: FluentGpu.Foundation.SpanRunTable
+    content.vb: Public Shared ReadOnly [Shared] As SpanRunTable
+- uid: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  commentId: M:FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  id: Create(FluentGpu.Foundation.SpanStyle[])
+  parent: FluentGpu.Foundation.SpanRunTable
+  langs:
+  - csharp
+  - vb
+  name: Create(SpanStyle[])
+  nameWithType: SpanRunTable.Create(SpanStyle[])
+  fullName: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 112
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Register a span run (UI thread). The spans array is taken by reference and must not be mutated after.
+  example: []
+  syntax:
+    content: public int Create(SpanStyle[] spans)
+    parameters:
+    - id: spans
+      type: FluentGpu.Foundation.SpanStyle[]
+    return:
+      type: System.Int32
+    content.vb: Public Function Create(spans As SpanStyle()) As Integer
+  overload: FluentGpu.Foundation.SpanRunTable.Create*
+  nameWithType.vb: SpanRunTable.Create(SpanStyle())
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle())
+  name.vb: Create(SpanStyle())
+- uid: FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+  commentId: M:FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+  id: AddRef(System.Int32)
+  parent: FluentGpu.Foundation.SpanRunTable
+  langs:
+  - csharp
+  - vb
+  name: AddRef(int)
+  nameWithType: SpanRunTable.AddRef(int)
+  fullName: FluentGpu.Foundation.SpanRunTable.AddRef(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AddRef
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 130
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: Take an ownership reference (UI thread; the scene's span-text side-table is the owner).
+  example: []
+  syntax:
+    content: public void AddRef(int id)
+    parameters:
+    - id: id
+      type: System.Int32
+    content.vb: Public Sub AddRef(id As Integer)
+  overload: FluentGpu.Foundation.SpanRunTable.AddRef*
+  nameWithType.vb: SpanRunTable.AddRef(Integer)
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.AddRef(Integer)
+  name.vb: AddRef(Integer)
+- uid: FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+  commentId: M:FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+  id: Release(System.Int32)
+  parent: FluentGpu.Foundation.SpanRunTable
+  langs:
+  - csharp
+  - vb
+  name: Release(int)
+  nameWithType: SpanRunTable.Release(int)
+  fullName: FluentGpu.Foundation.SpanRunTable.Release(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Release
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 138
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Drop an ownership reference (UI thread). The last release schedules the slot clear behind the
+        creation-distance quarantine. Releasing id 0 / an unknown id is a no-op.
+  example: []
+  syntax:
+    content: public void Release(int id)
+    parameters:
+    - id: id
+      type: System.Int32
+    content.vb: Public Sub Release(id As Integer)
+  overload: FluentGpu.Foundation.SpanRunTable.Release*
+  nameWithType.vb: SpanRunTable.Release(Integer)
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.Release(Integer)
+  name.vb: Release(Integer)
+- uid: FluentGpu.Foundation.SpanRunTable.Resolve(System.Int32)
+  commentId: M:FluentGpu.Foundation.SpanRunTable.Resolve(System.Int32)
+  id: Resolve(System.Int32)
+  parent: FluentGpu.Foundation.SpanRunTable
+  langs:
+  - csharp
+  - vb
+  name: Resolve(int)
+  nameWithType: SpanRunTable.Resolve(int)
+  fullName: FluentGpu.Foundation.SpanRunTable.Resolve(int)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/SpanText.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Resolve
+    path: ../../src/FluentGpu.Foundation/SpanText.cs
+    startLine: 150
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Foundation
+  summary: >-
+    Resolve an id to its run, or null (id 0 / reclaimed). Safe from the render thread concurrently with
+        <xref href="FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle%5b%5d)" data-throw-if-not-resolved="false"></xref> (acquire on count, chunks never move).
+  example: []
+  syntax:
+    content: public SpanRun? Resolve(int id)
+    parameters:
+    - id: id
+      type: System.Int32
+    return:
+      type: FluentGpu.Foundation.SpanRun
+    content.vb: Public Function Resolve(id As Integer) As SpanRun
+  overload: FluentGpu.Foundation.SpanRunTable.Resolve*
+  nameWithType.vb: SpanRunTable.Resolve(Integer)
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.Resolve(Integer)
+  name.vb: Resolve(Integer)
+references:
+- uid: FluentGpu.Foundation.StringId
+  commentId: T:FluentGpu.Foundation.StringId
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringId.html
+  name: StringId
+  nameWithType: StringId
+  fullName: FluentGpu.Foundation.StringId
+- uid: FluentGpu.Foundation.StringTable
+  commentId: T:FluentGpu.Foundation.StringTable
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.StringTable.html
+  name: StringTable
+  nameWithType: StringTable
+  fullName: FluentGpu.Foundation.StringTable
+- uid: FluentGpu.Foundation.SpanRunTable.Shared
+  commentId: F:FluentGpu.Foundation.SpanRunTable.Shared
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Shared
+  name: Shared
+  nameWithType: SpanRunTable.Shared
+  fullName: FluentGpu.Foundation.SpanRunTable.Shared
+- uid: FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+  commentId: M:FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+  isExternal: true
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_AddRef_System_Int32_
+  name: AddRef(int)
+  nameWithType: SpanRunTable.AddRef(int)
+  fullName: FluentGpu.Foundation.SpanRunTable.AddRef(int)
+  nameWithType.vb: SpanRunTable.AddRef(Integer)
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.AddRef(Integer)
+  name.vb: AddRef(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+    name: AddRef
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_AddRef_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.SpanRunTable.AddRef(System.Int32)
+    name: AddRef
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_AddRef_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+  commentId: M:FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+  isExternal: true
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Release_System_Int32_
+  name: Release(int)
+  nameWithType: SpanRunTable.Release(int)
+  fullName: FluentGpu.Foundation.SpanRunTable.Release(int)
+  nameWithType.vb: SpanRunTable.Release(Integer)
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.Release(Integer)
+  name.vb: Release(Integer)
+  spec.csharp:
+  - uid: FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+    name: Release
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Release_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: int
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.SpanRunTable.Release(System.Int32)
+    name: Release
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Release_System_Int32_
+  - name: (
+  - uid: System.Int32
+    name: Integer
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.int32
+  - name: )
+- uid: FluentGpu.Foundation.SpanRunTable.QuarantineDistance
+  commentId: F:FluentGpu.Foundation.SpanRunTable.QuarantineDistance
+  name: QuarantineDistance
+  nameWithType: SpanRunTable.QuarantineDistance
+  fullName: FluentGpu.Foundation.SpanRunTable.QuarantineDistance
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Foundation.SpanRunTable
+  commentId: T:FluentGpu.Foundation.SpanRunTable
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SpanRunTable.html
+  name: SpanRunTable
+  nameWithType: SpanRunTable
+  fullName: FluentGpu.Foundation.SpanRunTable
+- uid: FluentGpu.Foundation.SpanRunTable.Create*
+  commentId: Overload:FluentGpu.Foundation.SpanRunTable.Create
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Create_FluentGpu_Foundation_SpanStyle___
+  name: Create
+  nameWithType: SpanRunTable.Create
+  fullName: FluentGpu.Foundation.SpanRunTable.Create
+- uid: FluentGpu.Foundation.SpanStyle[]
+  isExternal: true
+  href: FluentGpu.Foundation.SpanStyle.html
+  name: SpanStyle[]
+  nameWithType: SpanStyle[]
+  fullName: FluentGpu.Foundation.SpanStyle[]
+  nameWithType.vb: SpanStyle()
+  fullName.vb: FluentGpu.Foundation.SpanStyle()
+  name.vb: SpanStyle()
+  spec.csharp:
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: '['
+  - name: ']'
+  spec.vb:
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: (
+  - name: )
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.SpanRunTable.AddRef*
+  commentId: Overload:FluentGpu.Foundation.SpanRunTable.AddRef
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_AddRef_System_Int32_
+  name: AddRef
+  nameWithType: SpanRunTable.AddRef
+  fullName: FluentGpu.Foundation.SpanRunTable.AddRef
+- uid: FluentGpu.Foundation.SpanRunTable.Release*
+  commentId: Overload:FluentGpu.Foundation.SpanRunTable.Release
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Release_System_Int32_
+  name: Release
+  nameWithType: SpanRunTable.Release
+  fullName: FluentGpu.Foundation.SpanRunTable.Release
+- uid: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  commentId: M:FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Create_FluentGpu_Foundation_SpanStyle___
+  name: Create(SpanStyle[])
+  nameWithType: SpanRunTable.Create(SpanStyle[])
+  fullName: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+  nameWithType.vb: SpanRunTable.Create(SpanStyle())
+  fullName.vb: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle())
+  name.vb: Create(SpanStyle())
+  spec.csharp:
+  - uid: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+    name: Create
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Create_FluentGpu_Foundation_SpanStyle___
+  - name: (
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: '['
+  - name: ']'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Foundation.SpanRunTable.Create(FluentGpu.Foundation.SpanStyle[])
+    name: Create
+    href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Create_FluentGpu_Foundation_SpanStyle___
+  - name: (
+  - uid: FluentGpu.Foundation.SpanStyle
+    name: SpanStyle
+    href: FluentGpu.Foundation.SpanStyle.html
+  - name: (
+  - name: )
+  - name: )
+- uid: FluentGpu.Foundation.SpanRunTable.Resolve*
+  commentId: Overload:FluentGpu.Foundation.SpanRunTable.Resolve
+  href: FluentGpu.Foundation.SpanRunTable.html#FluentGpu_Foundation_SpanRunTable_Resolve_System_Int32_
+  name: Resolve
+  nameWithType: SpanRunTable.Resolve
+  fullName: FluentGpu.Foundation.SpanRunTable.Resolve
+- uid: FluentGpu.Foundation.SpanRun
+  commentId: T:FluentGpu.Foundation.SpanRun
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.SpanRun.html
+  name: SpanRun
+  nameWithType: SpanRun
+  fullName: FluentGpu.Foundation.SpanRun

@@ -37,6 +37,22 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
 
     public int WorkerCount => _workers.Length;
     public int Inflight => Volatile.Read(ref _inflight);
+    /// <summary>Live entries in the cancellation map. Bounded by <see cref="Inflight"/>: a tombstone is set only when a
+    /// cancel races a claimed (in-flight) decode, and is reclaimed at that decode's terminal point (Process's finally /
+    /// the Pump drain) — a queued-then-canceled request leaves none. Reaches 0 once all decodes drain. (Census-cadence
+    /// only: <c>ConcurrentDictionary.Count</c> takes the bucket locks, but the map holds at most a handful of entries.)</summary>
+    public int CanceledPending => _canceled.Count;
+    /// <summary>Requests enqueued in the priority lanes but not yet claimed by a worker — O(1) census. NOTE: not
+    /// decremented for a cancel-before-claim id (TryClaim dequeues-and-skips it without a successful claim), so this
+    /// over-counts after queued cancels until those lane entries are skipped — soft-backpressure heuristic only, never
+    /// a drain/idle condition.</summary>
+    public int QueueDepth => Volatile.Read(ref _queued);
+    /// <summary>Pending request descriptors awaiting claim — census of the <c>_reqs</c> map (bucket-locked Count).</summary>
+    public int RequestCount => _reqs.Count;
+
+    // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
+    int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
+    int IImageDecoder.DiagCanceledPending => _canceled.Count;
 
     public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
     {
@@ -63,7 +79,14 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         _signal.Release();
     }
 
-    public void Cancel(int id) { _canceled[id] = 1; _reqs.TryRemove(id, out _); }
+    // Cancel a queued/in-flight decode. If the request is still queued (TryRemove succeeds) the _reqs removal alone
+    // suppresses it — TryClaim will dequeue the lane entry, find _reqs empty, and drop it; NO tombstone is needed, so a
+    // cancel-before-claim leaves nothing behind (this is the bulk of recycled-row cancels under virtualized scroll). The
+    // tombstone is set ONLY when the request was already claimed (TryRemove fails ⇒ a worker owns it and is mid-Process):
+    // then _canceled is the sole channel that aborts the in-flight decode/upload, and that worker reclaims it (Process's
+    // finally / the Pump drain). Invariant: every live _canceled entry maps to one in-flight decode and is reclaimed at
+    // its terminal point — so the map is bounded by Inflight, not by total cancels.
+    public void Cancel(int id) { if (!_reqs.TryRemove(id, out _)) _canceled[id] = 1; }
 
     public void Prioritize(int id, ImagePriority priority)
     {
@@ -84,6 +107,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);
             if (d.Buffer != null) ArrayPool<byte>.Shared.Return(d.Buffer);
+            // This decode is terminal — reclaim any tombstone a cancel set after the worker's finally (the Done was
+            // already queued). The apply above is unchanged: a late cancel does NOT suppress it (today's semantics);
+            // reclaim only bounds the map. Idempotent with Process's finally (a no-op when it already removed the id).
+            _canceled.TryRemove(d.Id, out _);
             drained++;
         }
         int inflight = Volatile.Read(ref _inflight);
@@ -129,34 +156,46 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
 
     private async Task Process(Req req)
     {
-        if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0); return; }
-
-        var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);
-        if (!fetch.Ok)
-        {
-            if (fetch.Buffer != null) ArrayPool<byte>.Shared.Return(fetch.Buffer);
-            Complete(req.Id, false, 0, 0, fetch.Failure, attempts, null, 0);
-            return;
-        }
-        Interlocked.Add(ref _bytesDownloaded, fetch.Length);
-
+        // The worker claimed req.Id exclusively (TryClaim's atomic TryRemove), so this is the single owner of the id for
+        // its whole lifetime. Every in-Process _canceled check above has run by the time control reaches the finally; the
+        // tombstone has discharged its only duty (abort this in-flight decode), so reclaim it here on EVERY exit path
+        // (entry-cancel, fetch-fail, post-fetch-cancel, decode result). A cancel racing in after the finally has no
+        // in-flight decode left to abort and is reclaimed by the Pump drain instead — so no tombstone outlives its decode.
         try
         {
-            if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
+            if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0); return; }
 
-            int cap = req.W * req.H * 4;
-            byte[] dst = ArrayPool<byte>.Shared.Rent(cap);           // POOLED decode buffer (returned in Pump after upload)
-            bool ok; int dw = req.W, dh = req.H;
-            try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
-            catch { ok = false; }
+            var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);
+            if (!fetch.Ok)
+            {
+                if (fetch.Buffer != null) ArrayPool<byte>.Shared.Return(fetch.Buffer);
+                Complete(req.Id, false, 0, 0, fetch.Failure, attempts, null, 0);
+                return;
+            }
+            Interlocked.Add(ref _bytesDownloaded, fetch.Length);
 
-            if (ok && dw > 0 && dh > 0 && dw * dh * 4 <= cap)
-                Complete(req.Id, true, dw, dh, ImageFailureKind.None, attempts, dst, dw * dh * 4);
-            else { ArrayPool<byte>.Shared.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
+            try
+            {
+                if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
+
+                int cap = req.W * req.H * 4;
+                byte[] dst = ArrayPool<byte>.Shared.Rent(cap);           // POOLED decode buffer (returned in Pump after upload)
+                bool ok; int dw = req.W, dh = req.H;
+                try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
+                catch { ok = false; }
+
+                if (ok && dw > 0 && dh > 0 && dw * dh * 4 <= cap)
+                    Complete(req.Id, true, dw, dh, ImageFailureKind.None, attempts, dst, dw * dh * 4);
+                else { ArrayPool<byte>.Shared.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(fetch.Buffer!);            // return the POOLED fetch buffer after decode reads it
+            }
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(fetch.Buffer!);            // return the POOLED fetch buffer after decode reads it
+            _canceled.TryRemove(req.Id, out _);   // reclaim this id's tombstone: its decode is terminal (bounds _canceled by Inflight)
         }
     }
 

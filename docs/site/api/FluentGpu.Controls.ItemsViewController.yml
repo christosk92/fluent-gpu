@@ -1,0 +1,490 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.ItemsViewController
+  commentId: T:FluentGpu.Controls.ItemsViewController
+  id: ItemsViewController
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+  - FluentGpu.Controls.ItemsViewController.ScrollBy(System.Single)
+  - FluentGpu.Controls.ItemsViewController.Selection
+  - FluentGpu.Controls.ItemsViewController.StartBringItemIntoView(System.Int32,System.Single)
+  langs:
+  - csharp
+  - vb
+  name: ItemsViewController
+  nameWithType: ItemsViewController
+  fullName: FluentGpu.Controls.ItemsViewController
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemsViewController
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Imperative handle for an <xref href="FluentGpu.Controls.ItemsView" data-throw-if-not-resolved="false"></xref> (the WinUI methods that live on the control object:
+
+    ItemsView.idl:46-58 — CurrentItemIndex, StartBringItemIntoView, and the selection API via <xref href="FluentGpu.Controls.ItemsViewController.Selection" data-throw-if-not-resolved="false"></xref>).
+
+    Pass one to <code>ItemsView.Create</code>; the component wires it at mount.
+  example: []
+  syntax:
+    content: public sealed class ItemsViewController
+    content.vb: Public NotInheritable Class ItemsViewController
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.ItemsViewController.Selection
+  commentId: P:FluentGpu.Controls.ItemsViewController.Selection
+  id: Selection
+  parent: FluentGpu.Controls.ItemsViewController
+  langs:
+  - csharp
+  - vb
+  name: Selection
+  nameWithType: ItemsViewController.Selection
+  fullName: FluentGpu.Controls.ItemsViewController.Selection
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Selection
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The live selection model — Select/Deselect/IsSelected/SelectAll/DeselectAll/InvertSelection
+        (ItemsView.idl:53-58) are its methods; range-based, so they never realize items.
+  example: []
+  syntax:
+    content: public SelectionModel? Selection { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.SelectionModel
+    content.vb: Public Property Selection As SelectionModel
+  overload: FluentGpu.Controls.ItemsViewController.Selection*
+- uid: FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+  commentId: P:FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+  id: CurrentItemIndex
+  parent: FluentGpu.Controls.ItemsViewController
+  langs:
+  - csharp
+  - vb
+  name: CurrentItemIndex
+  nameWithType: ItemsViewController.CurrentItemIndex
+  fullName: FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CurrentItemIndex
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI <code>CurrentItemIndex</code> (idl:46-47, default −1) — the keyboard-current item.
+  example: []
+  syntax:
+    content: public int CurrentItemIndex { get; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public ReadOnly Property CurrentItemIndex As Integer
+  overload: FluentGpu.Controls.ItemsViewController.CurrentItemIndex*
+- uid: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView(System.Int32,System.Single)
+  commentId: M:FluentGpu.Controls.ItemsViewController.StartBringItemIntoView(System.Int32,System.Single)
+  id: StartBringItemIntoView(System.Int32,System.Single)
+  parent: FluentGpu.Controls.ItemsViewController
+  langs:
+  - csharp
+  - vb
+  name: StartBringItemIntoView(int, float)
+  nameWithType: ItemsViewController.StartBringItemIntoView(int, float)
+  fullName: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView(int, float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StartBringItemIntoView
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>StartBringItemIntoView(index, BringIntoViewOptions)</code> (idl:52): realizes the target by
+        scrolling the virtualized viewport. <code class="paramref">alignmentRatio</code> NaN = minimal scroll (the default
+        BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
+        ItemsViewInteractions.cpp:1013-1016).
+  example: []
+  syntax:
+    content: public void StartBringItemIntoView(int index, float alignmentRatio = NaN)
+    parameters:
+    - id: index
+      type: System.Int32
+    - id: alignmentRatio
+      type: System.Single
+    content.vb: Public Sub StartBringItemIntoView(index As Integer, alignmentRatio As Single = NaN)
+  overload: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView*
+  nameWithType.vb: ItemsViewController.StartBringItemIntoView(Integer, Single)
+  fullName.vb: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView(Integer, Single)
+  name.vb: StartBringItemIntoView(Integer, Single)
+- uid: FluentGpu.Controls.ItemsViewController.ScrollBy(System.Single)
+  commentId: M:FluentGpu.Controls.ItemsViewController.ScrollBy(System.Single)
+  id: ScrollBy(System.Single)
+  parent: FluentGpu.Controls.ItemsViewController
+  langs:
+  - csharp
+  - vb
+  name: ScrollBy(float)
+  nameWithType: ItemsViewController.ScrollBy(float)
+  fullName: FluentGpu.Controls.ItemsViewController.ScrollBy(float)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/ItemsView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ScrollBy
+    path: ../../src/FluentGpu.Controls/ItemsView.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Nudge the virtualized viewport by <code class="paramref">delta</code> DIP along its scroll axis (clamped).
+        The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
+        the viewport edge (the plan's E5-L3 edge auto-scroll in virtualized lists). No-op for non-virtual hosts.
+  example: []
+  syntax:
+    content: public void ScrollBy(float delta)
+    parameters:
+    - id: delta
+      type: System.Single
+    content.vb: Public Sub ScrollBy(delta As Single)
+  overload: FluentGpu.Controls.ItemsViewController.ScrollBy*
+  nameWithType.vb: ItemsViewController.ScrollBy(Single)
+  fullName.vb: FluentGpu.Controls.ItemsViewController.ScrollBy(Single)
+  name.vb: ScrollBy(Single)
+references:
+- uid: FluentGpu.Controls.ItemsView
+  commentId: T:FluentGpu.Controls.ItemsView
+  href: FluentGpu.Controls.ItemsView.html
+  name: ItemsView
+  nameWithType: ItemsView
+  fullName: FluentGpu.Controls.ItemsView
+- uid: FluentGpu.Controls.ItemsViewController.Selection
+  commentId: P:FluentGpu.Controls.ItemsViewController.Selection
+  href: FluentGpu.Controls.ItemsViewController.html#FluentGpu_Controls_ItemsViewController_Selection
+  name: Selection
+  nameWithType: ItemsViewController.Selection
+  fullName: FluentGpu.Controls.ItemsViewController.Selection
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Controls.ItemsViewController.Selection*
+  commentId: Overload:FluentGpu.Controls.ItemsViewController.Selection
+  href: FluentGpu.Controls.ItemsViewController.html#FluentGpu_Controls_ItemsViewController_Selection
+  name: Selection
+  nameWithType: ItemsViewController.Selection
+  fullName: FluentGpu.Controls.ItemsViewController.Selection
+- uid: FluentGpu.Controls.SelectionModel
+  commentId: T:FluentGpu.Controls.SelectionModel
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SelectionModel.html
+  name: SelectionModel
+  nameWithType: SelectionModel
+  fullName: FluentGpu.Controls.SelectionModel
+- uid: FluentGpu.Controls.ItemsViewController.CurrentItemIndex*
+  commentId: Overload:FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+  href: FluentGpu.Controls.ItemsViewController.html#FluentGpu_Controls_ItemsViewController_CurrentItemIndex
+  name: CurrentItemIndex
+  nameWithType: ItemsViewController.CurrentItemIndex
+  fullName: FluentGpu.Controls.ItemsViewController.CurrentItemIndex
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView*
+  commentId: Overload:FluentGpu.Controls.ItemsViewController.StartBringItemIntoView
+  href: FluentGpu.Controls.ItemsViewController.html#FluentGpu_Controls_ItemsViewController_StartBringItemIntoView_System_Int32_System_Single_
+  name: StartBringItemIntoView
+  nameWithType: ItemsViewController.StartBringItemIntoView
+  fullName: FluentGpu.Controls.ItemsViewController.StartBringItemIntoView
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.ItemsViewController.ScrollBy*
+  commentId: Overload:FluentGpu.Controls.ItemsViewController.ScrollBy
+  href: FluentGpu.Controls.ItemsViewController.html#FluentGpu_Controls_ItemsViewController_ScrollBy_System_Single_
+  name: ScrollBy
+  nameWithType: ItemsViewController.ScrollBy
+  fullName: FluentGpu.Controls.ItemsViewController.ScrollBy

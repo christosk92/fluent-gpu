@@ -60,6 +60,43 @@ public sealed class Ref<T>
     public Ref(T value) => Value = value;
 }
 
+/// <summary>Persistent backing for one <see cref="RenderContext.UseGesture"/> declaration (input-a11y.md §13). Created
+/// once (held in a <see cref="Ref{T}"/> cell), so its <see cref="Register"/> effect delegate + the installed forwarder
+/// are stable instances — the layout-effect registers only at mount / kind-change and the steady render allocates
+/// nothing. The forwarder dispatches to the LATEST <see cref="Handler"/> (overwritten each render), so the call site
+/// may pass a fresh lambda without re-registering.</summary>
+internal sealed class GestureHookState
+{
+    private readonly RenderContext _ctx;
+    private readonly GestureType _kind;
+    public Action<GestureEventArgs>? Handler;
+    public readonly object[] KindDep;            // the layout-effect dep array (stable; identity-equal each render)
+    public readonly Action Register;             // stable effect delegate (installs the forwarder on the current node)
+    private readonly Action<GestureEventArgs> _forward;   // stable forwarder written into the scene column
+    private NodeHandle _registeredNode;           // the node the forwarder is currently installed on (for re-target/cleanup)
+
+    public GestureHookState(RenderContext ctx, GestureType kind)
+    {
+        _ctx = ctx;
+        _kind = kind;
+        KindDep = new object[] { kind };
+        _forward = e => Handler?.Invoke(e);
+        Register = DoRegister;
+    }
+
+    private void DoRegister()
+    {
+        var node = _ctx.HostNode;
+        var scene = _ctx.Scene;
+        if (scene is null || node.IsNull || !scene.IsLive(node)) return;
+        // Re-target: a kind-change effect re-run (or a node swap) clears the prior install before the new one.
+        if (!_registeredNode.IsNull && _registeredNode != node && scene.IsLive(_registeredNode))
+            scene.SetGestureHandler(_registeredNode, _kind, null);
+        scene.SetGestureHandler(node, _kind, _forward);
+        _registeredNode = node;
+    }
+}
+
 /// <summary>
 /// Per-component hook storage (ordered; rules-of-hooks = stable call order). In the signals-first model a component
 /// is a reactive computation (its render-effect); <see cref="UseState"/> is a <see cref="Signal{T}"/> whose only
@@ -247,6 +284,27 @@ public sealed class RenderContext
 
     public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
+
+    /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13 <c>UseGesture</c>). Config-only:
+    /// enrolls a gesture-arena member on <see cref="HostNode"/> (via the <c>SceneStore</c> gesture column — the
+    /// Hooks⇄Input seam) and routes the arena winner's event to <paramref name="handler"/>. No render output, no
+    /// re-render. Zero per-render allocation after mount: the latest handler is stashed in a persistent cell (a field
+    /// write each render) and a STABLE forwarder is installed ONCE via a phase-6.5 layout-effect keyed by the kind (so
+    /// it only (re)registers at mount / kind-change, reading the valid mounted node). The forwarder dispatches to the
+    /// current cell handler, so a fresh lambda each render needs no re-registration. On unmount the freed node drops the
+    /// column (SceneStore); a kind-change re-target clears the prior install.</summary>
+    public void UseGesture(GestureType kind, Action<GestureEventArgs> handler)
+    {
+        // Persistent per-call cell: holds the latest user handler + the once-allocated stable forwarder/effect/cleanup
+        // (so nothing here allocates on a steady re-render — only the handler field is overwritten).
+        var cell = UseRef<GestureHookState?>(null);
+        var st = cell.Value ??= new GestureHookState(this, kind);
+        st.Handler = handler;   // always route to the latest closure (no re-registration needed)
+        // Mount-once registration (re-runs only if the kind changes): install the stable forwarder on the node. The
+        // cached effect/cleanup delegates make this a no-alloc layout-effect on a steady render (the effect closure is
+        // the SAME instance every render, so EffectImpl adds it only when deps change). HostNode is valid at 6.5.
+        UseLayoutEffect(st.Register, st.KindDep);
+    }
 
     /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to the
     /// host's image-status epoch so a ready/failed transition re-renders just this component.</summary>

@@ -1,0 +1,143 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CalendarViewDisplayMode
+  commentId: T:FluentGpu.Controls.CalendarViewDisplayMode
+  id: CalendarViewDisplayMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CalendarViewDisplayMode.Decade
+  - FluentGpu.Controls.CalendarViewDisplayMode.Month
+  - FluentGpu.Controls.CalendarViewDisplayMode.Year
+  langs:
+  - csharp
+  - vb
+  name: CalendarViewDisplayMode
+  nameWithType: CalendarViewDisplayMode
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CalendarViewDisplayMode
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>CalendarViewDisplayMode</code> — the zoom level: Month (day grid) / Year (4-column months) /
+        Decade (4-column years).
+  example: []
+  syntax:
+    content: 'public enum CalendarViewDisplayMode : byte'
+    content.vb: Public Enum CalendarViewDisplayMode As Byte
+- uid: FluentGpu.Controls.CalendarViewDisplayMode.Month
+  commentId: F:FluentGpu.Controls.CalendarViewDisplayMode.Month
+  id: Month
+  parent: FluentGpu.Controls.CalendarViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Month
+  nameWithType: CalendarViewDisplayMode.Month
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode.Month
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Month
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Month = 0
+    return:
+      type: FluentGpu.Controls.CalendarViewDisplayMode
+- uid: FluentGpu.Controls.CalendarViewDisplayMode.Year
+  commentId: F:FluentGpu.Controls.CalendarViewDisplayMode.Year
+  id: Year
+  parent: FluentGpu.Controls.CalendarViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Year
+  nameWithType: CalendarViewDisplayMode.Year
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode.Year
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Year
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Year = 1
+    return:
+      type: FluentGpu.Controls.CalendarViewDisplayMode
+- uid: FluentGpu.Controls.CalendarViewDisplayMode.Decade
+  commentId: F:FluentGpu.Controls.CalendarViewDisplayMode.Decade
+  id: Decade
+  parent: FluentGpu.Controls.CalendarViewDisplayMode
+  langs:
+  - csharp
+  - vb
+  name: Decade
+  nameWithType: CalendarViewDisplayMode.Decade
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode.Decade
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CalendarView.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Decade
+    path: ../../src/FluentGpu.Controls/CalendarView.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Decade = 2
+    return:
+      type: FluentGpu.Controls.CalendarViewDisplayMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.CalendarViewDisplayMode
+  commentId: T:FluentGpu.Controls.CalendarViewDisplayMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CalendarViewDisplayMode.html
+  name: CalendarViewDisplayMode
+  nameWithType: CalendarViewDisplayMode
+  fullName: FluentGpu.Controls.CalendarViewDisplayMode

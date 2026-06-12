@@ -1,0 +1,68 @@
+[wakediag] run 122 rendered 1 | reconciled 1 layout 0 recordOnly 121 | streak 122 idleAgo 1.0s minimized 0 | kept: frameNeeded=1 runtimePending=1 anim=122 | sole: anim=121
+[alloctypes] (sampled via GCAllocationTick ~per-100KB; includes this profiler's own string allocs) top: System.Int32 106.9KB/s | RunGlyph[] 106.5KB/s | TerraFX.Interop.DirectX.DWRITE_SHAPING_TEXT_PROPERTIES[] 102.6KB/s | FluentGpu.Text.GlyphPlacement[] 102.6KB/s
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 242 idleAgo 2.0s minimized 0 | kept: anim=120 | sole: anim=120
+[alloctypes] top: (none)
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=47.8KB/s
+  proc    workingSet=146.4MB
+  scene   live=412 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=82 pendReclaim=0 idHighWater=83
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=18 nodeBindings=2 virtuals=0 providers=6
+  anim    tracks=6 loops=6 transitions=71 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=19 | glyphs=144 runs=61 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 363 idleAgo 3.0s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: System.Int64 103.6KB/s
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 484 idleAgo 4.0s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: (none)
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 605 idleAgo 5.0s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: System.Int32 103.1KB/s
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=45.2KB/s
+  proc    workingSet=146.8MB
+  scene   live=412 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=82 pendReclaim=0 idHighWater=83
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=18 nodeBindings=2 virtuals=0 providers=6
+  anim    tracks=6 loops=6 transitions=71 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=19 | glyphs=144 runs=61 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 725 idleAgo 6.0s minimized 0 | kept: anim=120 | sole: anim=120
+[alloctypes] top: (none)
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 846 idleAgo 7.0s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: System.Int32 102.6KB/s
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 966 idleAgo 8.0s minimized 0 | kept: anim=120 | sole: anim=120
+[alloctypes] top: (none)
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=47.7KB/s
+  proc    workingSet=147.0MB
+  scene   live=412 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=82 pendReclaim=0 idHighWater=83
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=18 nodeBindings=2 virtuals=0 providers=6
+  anim    tracks=6 loops=6 transitions=71 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=19 | glyphs=144 runs=61 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 1087 idleAgo 9.0s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: (none)
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 1207 idleAgo 10.0s minimized 0 | kept: anim=120 | sole: anim=120
+[alloctypes] top: System.Int32 103.7KB/s
+[wakediag] run 120 rendered 0 | reconciled 0 layout 0 recordOnly 120 | streak 1327 idleAgo 11.0s minimized 0 | kept: anim=120 | sole: anim=120
+[alloctypes] top: (none)
+[memcensus]
+  gc      heap=5.3MB committed=5.4MB gen0=1 gen1=1 gen2=1 alloc=45.1KB/s
+  proc    workingSet=147.4MB GROW
+  scene   live=412 cap=512 orphans=0 sticky=0 scroll=2 brush=0
+  strings map=82 pendReclaim=0 idHighWater=83
+  images  count=0 ready=0 pending=0 used=0.0MB
+  decode  inflight=0 canceledPending=0
+  recon   components=18 nodeBindings=2 virtuals=0 providers=6
+  anim    tracks=6 loops=6 transitions=71 interact=0 scroll=0
+  host    popupWindows=0
+  gpu     bytes=27.2MB count=19 | glyphs=144 runs=61 atlasGen=0 quadPool=0 | tex: atlas=0 pooledFree=0 retired=0
+[wakediag] run 121 rendered 0 | reconciled 0 layout 0 recordOnly 121 | streak 1448 idleAgo 12.1s minimized 0 | kept: anim=121 | sole: anim=121
+[alloctypes] top: System.Int32 103.6KB/s

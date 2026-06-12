@@ -1,0 +1,807 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Text.TextEditCommand
+  commentId: T:FluentGpu.Text.TextEditCommand
+  id: TextEditCommand
+  parent: FluentGpu.Text
+  children:
+  - FluentGpu.Text.TextEditCommand.Backspace
+  - FluentGpu.Text.TextEditCommand.Cancel
+  - FluentGpu.Text.TextEditCommand.Commit
+  - FluentGpu.Text.TextEditCommand.Copy
+  - FluentGpu.Text.TextEditCommand.Cut
+  - FluentGpu.Text.TextEditCommand.Delete
+  - FluentGpu.Text.TextEditCommand.DocEnd
+  - FluentGpu.Text.TextEditCommand.DocHome
+  - FluentGpu.Text.TextEditCommand.Down
+  - FluentGpu.Text.TextEditCommand.End
+  - FluentGpu.Text.TextEditCommand.Home
+  - FluentGpu.Text.TextEditCommand.InsertNewline
+  - FluentGpu.Text.TextEditCommand.Left
+  - FluentGpu.Text.TextEditCommand.None
+  - FluentGpu.Text.TextEditCommand.PageDown
+  - FluentGpu.Text.TextEditCommand.PageUp
+  - FluentGpu.Text.TextEditCommand.Paste
+  - FluentGpu.Text.TextEditCommand.Redo
+  - FluentGpu.Text.TextEditCommand.Right
+  - FluentGpu.Text.TextEditCommand.SelectAll
+  - FluentGpu.Text.TextEditCommand.Undo
+  - FluentGpu.Text.TextEditCommand.Up
+  - FluentGpu.Text.TextEditCommand.WordBackspace
+  - FluentGpu.Text.TextEditCommand.WordDelete
+  - FluentGpu.Text.TextEditCommand.WordLeft
+  - FluentGpu.Text.TextEditCommand.WordRight
+  langs:
+  - csharp
+  - vb
+  name: TextEditCommand
+  nameWithType: TextEditCommand
+  fullName: FluentGpu.Text.TextEditCommand
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextEditCommand
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 9
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  summary: >-
+    Editor commands in DOCUMENT terms. <xref href="FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand%2cSystem.Boolean)" data-throw-if-not-resolved="false"></xref> handles every document-order command;
+
+    the vertical/visual ones (Up/Down/Page*) and the seam-touching ones (Copy/Cut/Paste need the clipboard PAL,
+
+    Commit/Cancel are control semantics) intentionally fall through to the control layer.
+  example: []
+  syntax:
+    content: 'public enum TextEditCommand : byte'
+    content.vb: Public Enum TextEditCommand As Byte
+- uid: FluentGpu.Text.TextEditCommand.None
+  commentId: F:FluentGpu.Text.TextEditCommand.None
+  id: None
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: None
+  nameWithType: TextEditCommand.None
+  fullName: FluentGpu.Text.TextEditCommand.None
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: None
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 11
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: None = 0
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.InsertNewline
+  commentId: F:FluentGpu.Text.TextEditCommand.InsertNewline
+  id: InsertNewline
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: InsertNewline
+  nameWithType: TextEditCommand.InsertNewline
+  fullName: FluentGpu.Text.TextEditCommand.InsertNewline
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InsertNewline
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 12
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: InsertNewline = 1
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Backspace
+  commentId: F:FluentGpu.Text.TextEditCommand.Backspace
+  id: Backspace
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Backspace
+  nameWithType: TextEditCommand.Backspace
+  fullName: FluentGpu.Text.TextEditCommand.Backspace
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Backspace
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Backspace = 2
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Delete
+  commentId: F:FluentGpu.Text.TextEditCommand.Delete
+  id: Delete
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Delete
+  nameWithType: TextEditCommand.Delete
+  fullName: FluentGpu.Text.TextEditCommand.Delete
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Delete
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 14
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Delete = 3
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.WordBackspace
+  commentId: F:FluentGpu.Text.TextEditCommand.WordBackspace
+  id: WordBackspace
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: WordBackspace
+  nameWithType: TextEditCommand.WordBackspace
+  fullName: FluentGpu.Text.TextEditCommand.WordBackspace
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WordBackspace
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 15
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: WordBackspace = 4
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.WordDelete
+  commentId: F:FluentGpu.Text.TextEditCommand.WordDelete
+  id: WordDelete
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: WordDelete
+  nameWithType: TextEditCommand.WordDelete
+  fullName: FluentGpu.Text.TextEditCommand.WordDelete
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WordDelete
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: WordDelete = 5
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Left
+  commentId: F:FluentGpu.Text.TextEditCommand.Left
+  id: Left
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Left
+  nameWithType: TextEditCommand.Left
+  fullName: FluentGpu.Text.TextEditCommand.Left
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Left
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 17
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Left = 6
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Right
+  commentId: F:FluentGpu.Text.TextEditCommand.Right
+  id: Right
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Right
+  nameWithType: TextEditCommand.Right
+  fullName: FluentGpu.Text.TextEditCommand.Right
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Right
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Right = 7
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.WordLeft
+  commentId: F:FluentGpu.Text.TextEditCommand.WordLeft
+  id: WordLeft
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: WordLeft
+  nameWithType: TextEditCommand.WordLeft
+  fullName: FluentGpu.Text.TextEditCommand.WordLeft
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WordLeft
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: WordLeft = 8
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.WordRight
+  commentId: F:FluentGpu.Text.TextEditCommand.WordRight
+  id: WordRight
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: WordRight
+  nameWithType: TextEditCommand.WordRight
+  fullName: FluentGpu.Text.TextEditCommand.WordRight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: WordRight
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 20
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: WordRight = 9
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Up
+  commentId: F:FluentGpu.Text.TextEditCommand.Up
+  id: Up
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Up
+  nameWithType: TextEditCommand.Up
+  fullName: FluentGpu.Text.TextEditCommand.Up
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Up
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 21
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Up = 10
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Down
+  commentId: F:FluentGpu.Text.TextEditCommand.Down
+  id: Down
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Down
+  nameWithType: TextEditCommand.Down
+  fullName: FluentGpu.Text.TextEditCommand.Down
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Down
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Down = 11
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Home
+  commentId: F:FluentGpu.Text.TextEditCommand.Home
+  id: Home
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Home
+  nameWithType: TextEditCommand.Home
+  fullName: FluentGpu.Text.TextEditCommand.Home
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Home
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 23
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Home = 12
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.End
+  commentId: F:FluentGpu.Text.TextEditCommand.End
+  id: End
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: TextEditCommand.End
+  fullName: FluentGpu.Text.TextEditCommand.End
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: End = 13
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.DocHome
+  commentId: F:FluentGpu.Text.TextEditCommand.DocHome
+  id: DocHome
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: DocHome
+  nameWithType: TextEditCommand.DocHome
+  fullName: FluentGpu.Text.TextEditCommand.DocHome
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DocHome
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 25
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: DocHome = 14
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.DocEnd
+  commentId: F:FluentGpu.Text.TextEditCommand.DocEnd
+  id: DocEnd
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: DocEnd
+  nameWithType: TextEditCommand.DocEnd
+  fullName: FluentGpu.Text.TextEditCommand.DocEnd
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DocEnd
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 26
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: DocEnd = 15
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.PageUp
+  commentId: F:FluentGpu.Text.TextEditCommand.PageUp
+  id: PageUp
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: PageUp
+  nameWithType: TextEditCommand.PageUp
+  fullName: FluentGpu.Text.TextEditCommand.PageUp
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageUp
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 27
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: PageUp = 16
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.PageDown
+  commentId: F:FluentGpu.Text.TextEditCommand.PageDown
+  id: PageDown
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: PageDown
+  nameWithType: TextEditCommand.PageDown
+  fullName: FluentGpu.Text.TextEditCommand.PageDown
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PageDown
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 28
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: PageDown = 17
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.SelectAll
+  commentId: F:FluentGpu.Text.TextEditCommand.SelectAll
+  id: SelectAll
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: SelectAll
+  nameWithType: TextEditCommand.SelectAll
+  fullName: FluentGpu.Text.TextEditCommand.SelectAll
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectAll
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 29
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: SelectAll = 18
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Copy
+  commentId: F:FluentGpu.Text.TextEditCommand.Copy
+  id: Copy
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Copy
+  nameWithType: TextEditCommand.Copy
+  fullName: FluentGpu.Text.TextEditCommand.Copy
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Copy
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 30
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Copy = 19
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Cut
+  commentId: F:FluentGpu.Text.TextEditCommand.Cut
+  id: Cut
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Cut
+  nameWithType: TextEditCommand.Cut
+  fullName: FluentGpu.Text.TextEditCommand.Cut
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cut
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 31
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Cut = 20
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Paste
+  commentId: F:FluentGpu.Text.TextEditCommand.Paste
+  id: Paste
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Paste
+  nameWithType: TextEditCommand.Paste
+  fullName: FluentGpu.Text.TextEditCommand.Paste
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Paste
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 32
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Paste = 21
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Undo
+  commentId: F:FluentGpu.Text.TextEditCommand.Undo
+  id: Undo
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Undo
+  nameWithType: TextEditCommand.Undo
+  fullName: FluentGpu.Text.TextEditCommand.Undo
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Undo
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 33
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Undo = 22
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Redo
+  commentId: F:FluentGpu.Text.TextEditCommand.Redo
+  id: Redo
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Redo
+  nameWithType: TextEditCommand.Redo
+  fullName: FluentGpu.Text.TextEditCommand.Redo
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Redo
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Redo = 23
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Commit
+  commentId: F:FluentGpu.Text.TextEditCommand.Commit
+  id: Commit
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Commit
+  nameWithType: TextEditCommand.Commit
+  fullName: FluentGpu.Text.TextEditCommand.Commit
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Commit
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 35
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Commit = 24
+    return:
+      type: FluentGpu.Text.TextEditCommand
+- uid: FluentGpu.Text.TextEditCommand.Cancel
+  commentId: F:FluentGpu.Text.TextEditCommand.Cancel
+  id: Cancel
+  parent: FluentGpu.Text.TextEditCommand
+  langs:
+  - csharp
+  - vb
+  name: Cancel
+  nameWithType: TextEditCommand.Cancel
+  fullName: FluentGpu.Text.TextEditCommand.Cancel
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Text/TextEditKeymap.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Cancel
+    path: ../../src/FluentGpu.Text/TextEditKeymap.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Text
+  namespace: FluentGpu.Text
+  syntax:
+    content: Cancel = 25
+    return:
+      type: FluentGpu.Text.TextEditCommand
+references:
+- uid: FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand,System.Boolean)
+  commentId: M:FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand,System.Boolean)
+  isExternal: true
+  href: FluentGpu.Text.TextEditCore.html#FluentGpu_Text_TextEditCore_Apply_FluentGpu_Text_TextEditCommand_System_Boolean_
+  name: Apply(TextEditCommand, bool)
+  nameWithType: TextEditCore.Apply(TextEditCommand, bool)
+  fullName: FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand, bool)
+  nameWithType.vb: TextEditCore.Apply(TextEditCommand, Boolean)
+  fullName.vb: FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand, Boolean)
+  name.vb: Apply(TextEditCommand, Boolean)
+  spec.csharp:
+  - uid: FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand,System.Boolean)
+    name: Apply
+    href: FluentGpu.Text.TextEditCore.html#FluentGpu_Text_TextEditCore_Apply_FluentGpu_Text_TextEditCommand_System_Boolean_
+  - name: (
+  - uid: FluentGpu.Text.TextEditCommand
+    name: TextEditCommand
+    href: FluentGpu.Text.TextEditCommand.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Text.TextEditCore.Apply(FluentGpu.Text.TextEditCommand,System.Boolean)
+    name: Apply
+    href: FluentGpu.Text.TextEditCore.html#FluentGpu_Text_TextEditCore_Apply_FluentGpu_Text_TextEditCommand_System_Boolean_
+  - name: (
+  - uid: FluentGpu.Text.TextEditCommand
+    name: TextEditCommand
+    href: FluentGpu.Text.TextEditCommand.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: )
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Text.TextEditCommand
+  commentId: T:FluentGpu.Text.TextEditCommand
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.TextEditCommand.html
+  name: TextEditCommand
+  nameWithType: TextEditCommand
+  fullName: FluentGpu.Text.TextEditCommand

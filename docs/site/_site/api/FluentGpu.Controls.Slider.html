@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Class Slider | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Class Slider | FluentGpu Developer Docs ">
+      
+      <meta name="description" content="A WinUI 3 Slider. Geometry (Slider_themeresources.xaml): a 4px rail (SliderTrackFill = ControlStrongFillColorDefault, radius 2) with an accent value-fill, and the Fluent thumb — a STATIC 22px ring (the 18px Thumb part + its Border&#39;s −2 margin, lines 169-172 + 198) of ControlSolidFillColorDefault with a 1px ControlElevationBorder, holding the only animated part: the 12px accent inner dot whose storyboards scale it 0.86 at rest / 1.167 on hover / 0.71 on press / 1.167 disabled (lines 204-254). Value-fill and inner dot recolor with the CONTROL-wide PointerOver/Pressed states (AccentFillColorDefault → Secondary → Tertiary; lines 14-17, 24-27). / — the lightweight 0..1 scrub primitives (media seek/volume). Keyboard,   focus visuals and the optional header are included; the value tooltip is not (see ). — the full WinUI-parity control over : arbitrary range, step   snapping, ticks (incl. inline), Header, SmallChange/LargeChange keyboard, and the IsThumbToolTipEnabled   &quot;disambiguation UI&quot; value tooltip with a ThumbToolTipValueConverter-equivalent formatter. Keyboard (KeyPress::Slider::KeyDown, SliderKeyProcess.h:28-71): Left/Down decrease and Right/Up increase by SmallChange, Home/End jump to Minimum/Maximum; PageUp/PageDown move by LargeChange (not in XAML&#39;s KeyPress::Slider — kept per the parity contract, riding the same Slider::Step math, Slider_Partial.cpp:1713-1783). RTL note: WinUI inverts Left/Right by (FlowDirection==RightToLeft) ^ IsDirectionReversed (SliderKeyProcess.h:26); the engine has no FlowDirection yet — the LTR mapping ships now, the inversion lands with the Wave-6 RTL sweep.">
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/new/feat/prop-unification/apiSpec/new?filename=FluentGpu_Controls_Slider.md&amp;value=---%0Auid%3A%20FluentGpu.Controls.Slider%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="FluentGpu.Controls.Slider">
+
+
+
+  <h1 id="FluentGpu_Controls_Slider" data-uid="FluentGpu.Controls.Slider" class="text-break">
+Class Slider  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="FluentGpu.html">FluentGpu</a>.<a class="xref" href="FluentGpu.Controls.html">Controls</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>FluentGpu.Controls.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"><p>A WinUI 3 Slider. Geometry (Slider_themeresources.xaml): a 4px rail (SliderTrackFill = ControlStrongFillColorDefault,
+radius 2) with an accent value-fill, and the Fluent thumb — a STATIC 22px ring (the 18px Thumb part + its Border's
+−2 margin, lines 169-172 + 198) of ControlSolidFillColorDefault with a 1px ControlElevationBorder, holding the only
+animated part: the 12px accent inner dot whose storyboards scale it 0.86 at rest / 1.167 on hover / 0.71 on press /
+1.167 disabled (lines 204-254). Value-fill and inner dot recolor with the CONTROL-wide PointerOver/Pressed states
+(AccentFillColorDefault → Secondary → Tertiary; lines 14-17, 24-27).</p>
+<ul><li><a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Create_System_Single_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_">Create(float, Action&lt;float&gt;, float, float, Style?, bool, string?, TemplateParts?)</a>/<a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Bind_FluentGpu_Signals_FloatSignal_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_">Bind(FloatSignal, Action&lt;float&gt;?, float, float, Style?, bool, string?, TemplateParts?)</a> — the lightweight 0..1 scrub primitives (media seek/volume). Keyboard,
+  focus visuals and the optional header are included; the value tooltip is not (see <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a>).</li><li><a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a> — the full WinUI-parity control over <a class="xref" href="FluentGpu.Controls.Slider.Options.html">Slider.Options</a>: arbitrary range, step
+  snapping, ticks (incl. inline), Header, SmallChange/LargeChange keyboard, and the IsThumbToolTipEnabled
+  "disambiguation UI" value tooltip with a ThumbToolTipValueConverter-equivalent formatter.</li></ul>
+<p>Keyboard (KeyPress::Slider::KeyDown, SliderKeyProcess.h:28-71): Left/Down decrease and Right/Up increase by
+SmallChange, Home/End jump to Minimum/Maximum; PageUp/PageDown move by LargeChange (not in XAML's KeyPress::Slider —
+kept per the parity contract, riding the same Slider::Step math, Slider_Partial.cpp:1713-1783). RTL note: WinUI
+inverts Left/Right by (FlowDirection==RightToLeft) ^ IsDirectionReversed (SliderKeyProcess.h:26); the engine has no
+FlowDirection yet — the LTR mapping ships now, the inversion lands with the Wave-6 RTL sweep.</p>
+</div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static class Slider</code></pre>
+  </div>
+
+
+
+
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Slider</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartContainer" data-uid="FluentGpu.Controls.Slider.PartContainer">
+  PartContainer
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L39"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The interactive full-size track surface (WinUI SliderContainer): the hit target carrying the scrub +
+keyboard (and, on <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a>, tooltip) mechanics. Owned: OnPointerDown, OnDrag, OnKeyDown, Role,
+Children — and on <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a> also OnRealized (track ref, chained) plus the tooltip wiring
+(OnClick/OnHoverMove/OnPointerExit/OnFocusChanged) while the tooltip is enabled.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartContainer = &quot;Container&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartInnerDot" data-uid="FluentGpu.Controls.Slider.PartInnerDot">
+  PartInnerDot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 12px animated accent dot inside the thumb (WinUI SliderInnerThumb — the only animated thumb part).
+Owned: the storyboard scale ramp — ScaleX/ScaleY (the rest/disabled base), HoverScale, PressScale; colors,
+size and durations stay restylable.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartInnerDot = &quot;InnerDot&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartRail" data-uid="FluentGpu.Controls.Slider.PartRail">
+  PartRail
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L42"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The 4px resting rail (WinUI HorizontalTrackRect / VerticalTrackRect). Owned: nothing — pure styling
+(the hover/press fill pins are stock state styling a modifier may override).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartRail = &quot;Rail&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartThumb" data-uid="FluentGpu.Controls.Slider.PartThumb">
+  PartThumb
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L50"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The static 22px thumb ring (WinUI HorizontalThumb / VerticalThumb). Owned: Children (the inner dot),
+OnRealized (the Ranged tooltip anchor, chained), TransformBind on the <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Bind_FluentGpu_Signals_FloatSignal_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_">Bind(FloatSignal, Action&lt;float&gt;?, float, float, Style?, bool, string?, TemplateParts?)</a> path, and the
+value-position OffsetX/OffsetY on the vertical <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a> path.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartThumb = &quot;Thumb&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartTickBar" data-uid="FluentGpu.Controls.Slider.PartTickBar">
+  PartTickBar
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L57"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Every tick bar on <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a> (WinUI TopTickBar/BottomTickBar/HorizontalInlineTickBar — one
+part name, applied to every mounted instance). Owned: Children (the marks sit at value positions).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartTickBar = &quot;TickBar&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_PartValueFill" data-uid="FluentGpu.Controls.Slider.PartValueFill">
+  PartValueFill
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L46"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The accent value fill (WinUI HorizontalDecreaseRect / VerticalDecreaseRect). Owned: the value-position
+geometry — Width (horizontal) / Height+OffsetY (vertical) on the layout paths; Width+TransformBind on the
+signal-bound <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Bind_FluentGpu_Signals_FloatSignal_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_">Bind(FloatSignal, Action&lt;float&gt;?, float, float, Style?, bool, string?, TemplateParts?)</a> path (the grow-from-left math assumes the full track Width).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public const string PartValueFill = &quot;ValueFill&quot;</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="FluentGpu_Controls_Slider_StyleOverride" data-uid="FluentGpu.Controls.Slider.StyleOverride">
+  StyleOverride
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L91"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Slider.Style? StyleOverride</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="FluentGpu_Controls_Slider_DefaultStyle_" data-uid="FluentGpu.Controls.Slider.DefaultStyle*"></a>
+
+  <h3 id="FluentGpu_Controls_Slider_DefaultStyle" data-uid="FluentGpu.Controls.Slider.DefaultStyle">
+  DefaultStyle
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static Slider.Style DefaultStyle { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Style.html">Style</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="FluentGpu_Controls_Slider_Bind_" data-uid="FluentGpu.Controls.Slider.Bind*"></a>
+
+  <h3 id="FluentGpu_Controls_Slider_Bind_FluentGpu_Signals_FloatSignal_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.Slider.Bind(FluentGpu.Signals.FloatSignal,System.Action{System.Single},System.Single,System.Single,FluentGpu.Controls.Slider.Style,System.Boolean,System.String,FluentGpu.Dsl.TemplateParts)">
+  Bind(FloatSignal, Action&lt;float&gt;?, float, float, Style?, bool, string?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L422"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Signals-native slider (the &quot;even better than React&quot; path): the value is a <a class="xref" href="FluentGpu.Signals.FloatSignal.html">FloatSignal</a> bound straight
+to the value-fill's composited ScaleX and the thumb's composited OffsetX. A drag writes the signal, which updates
+exactly those two node transforms on the compositor fast path — <b>zero render, zero reconcile, zero relayout</b>
+per pointer-move (the slider-tank fix). <code class="paramref">onChange</code> is invoked for side effects (e.g. a value
+readout that takes its own scoped re-render); pass null for a purely-visual scrub. Keyboard steps write the
+signal the same compositor-only way. No value tooltip: opening/observing one requires a re-render path, which
+would break this overload's zero-re-render contract — use <a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a> for the WinUI-parity surface.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Bind(FloatSignal value, Action&lt;float&gt;? onChange = null, float width = 200, float height = 24, Slider.Style? style = null, bool isEnabled = true, string? header = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="FluentGpu.Signals.FloatSignal.html">FloatSignal</a></dt>
+    <dd></dd>
+    <dt><code>onChange</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>width</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>header</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Slider_Create_" data-uid="FluentGpu.Controls.Slider.Create*"></a>
+
+  <h3 id="FluentGpu_Controls_Slider_Create_System_Single_System_Action_System_Single__System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_System_String_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.Slider.Create(System.Single,System.Action{System.Single},System.Single,System.Single,FluentGpu.Controls.Slider.Style,System.Boolean,System.String,FluentGpu.Dsl.TemplateParts)">
+  Create(float, Action&lt;float&gt;, float, float, Style?, bool, string?, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L343"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The minimal 0..1 controlled slider (media seek/volume). Press-to-seek + drag-to-scrub with the raw
+<code>x/width</code> mapping, full keyboard (SmallChange 0.01 / LargeChange 0.1 — WinUI's defaults 1/10 re-based from
+its 0–100 default range, Slider_Partial.h:13-15), focus ring at FocusVisualMargin −7,0,−7,0
+(Slider_themeresources.xaml:184), optional <code class="paramref">header</code>. No value tooltip (that lives on
+<a class="xref" href="FluentGpu.Controls.Slider.html#FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_">Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)</a>, the WinUI-parity surface).</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Create(float value, Action&lt;float&gt; onChange, float width = 200, float height = 24, Slider.Style? style = null, bool isEnabled = true, string? header = null, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>onChange</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>width</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>height</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>header</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Slider_FormatThumbValue_" data-uid="FluentGpu.Controls.Slider.FormatThumbValue*"></a>
+
+  <h3 id="FluentGpu_Controls_Slider_FormatThumbValue_System_Single_System_Single_" data-uid="FluentGpu.Controls.Slider.FormatThumbValue(System.Single,System.Single)">
+  FormatThumbValue(float, float)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L213"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The default thumb-tooltip text — DefaultDisambiguationUIConverter (Slider_Partial.cpp:1859-1936): the number of
+decimal places follows StepFrequency's mantissa, capped at 4; the value is rounded to that digit. A continuous
+slider (<code class="paramref">step</code> ≤ 0) formats like WinUI's default StepFrequency = 1 → no decimals.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static string FormatThumbValue(float value, float step)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>step</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="FluentGpu_Controls_Slider_Ranged_" data-uid="FluentGpu.Controls.Slider.Ranged*"></a>
+
+  <h3 id="FluentGpu_Controls_Slider_Ranged_System_Single_System_Action_System_Single__FluentGpu_Controls_Slider_Options_System_Single_System_Single_FluentGpu_Controls_Slider_Style_System_Boolean_FluentGpu_Dsl_TemplateParts_" data-uid="FluentGpu.Controls.Slider.Ranged(System.Single,System.Action{System.Single},FluentGpu.Controls.Slider.Options,System.Single,System.Single,FluentGpu.Controls.Slider.Style,System.Boolean,FluentGpu.Dsl.TemplateParts)">
+  Ranged(float, Action&lt;float&gt;, Options, float, float, Style?, bool, TemplateParts?)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/src/FluentGpu.Controls/Slider.cs/#L321"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>A slider over an arbitrary <a class="xref" href="FluentGpu.Controls.Slider.Options.html#FluentGpu_Controls_Slider_Options_Min">Min</a>..<a class="xref" href="FluentGpu.Controls.Slider.Options.html#FluentGpu_Controls_Slider_Options_Max">Max</a> range, with step snapping, tick
+marks (incl. inline), vertical orientation, Header, the full WinUI keyboard map and the IsThumbToolTipEnabled
+value tooltip. <code class="paramref">value</code> is in range units; <code class="paramref">length</code> is the track length (px) and
+<code class="paramref">thickness</code> the cross size (WinUI SliderHorizontalHeight/SliderVerticalWidth = 32,
+Slider_themeresources.xaml:167-168). Controlled: the caller owns the value.
+Internally a stateful component (the tooltip's overlay lifetime spans re-renders); props are pushed through a
+context provider — the engine's sanctioned prop channel for embedded components.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static BoxEl Ranged(float value, Action&lt;float&gt; onChange, Slider.Options o, float length = 220, float thickness = 32, Slider.Style? style = null, bool isEnabled = true, TemplateParts? parts = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>onChange</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>o</code> <a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Options.html">Options</a></dt>
+    <dd></dd>
+    <dt><code>length</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>thickness</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.single">float</a></dt>
+    <dd></dd>
+    <dt><code>style</code> <a class="xref" href="FluentGpu.Controls.Slider.html">Slider</a>.<a class="xref" href="FluentGpu.Controls.Slider.Style.html">Style</a></dt>
+    <dd></dd>
+    <dt><code>isEnabled</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>parts</code> <a class="xref" href="FluentGpu.Dsl.TemplateParts.html">TemplateParts</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="FluentGpu.Dsl.BoxEl.html">BoxEl</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

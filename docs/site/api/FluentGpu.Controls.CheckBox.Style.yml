@@ -1,0 +1,865 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.CheckBox.Style
+  commentId: T:FluentGpu.Controls.CheckBox.Style
+  id: CheckBox.Style
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.CheckBox.Style.BoxSize
+  - FluentGpu.Controls.CheckBox.Style.ContentGap
+  - FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+  - FluentGpu.Controls.CheckBox.Style.FontSize
+  - FluentGpu.Controls.CheckBox.Style.GlyphFg
+  - FluentGpu.Controls.CheckBox.Style.GlyphSize
+  - FluentGpu.Controls.CheckBox.Style.LabelFg
+  - FluentGpu.Controls.CheckBox.Style.MinHeight
+  - FluentGpu.Controls.CheckBox.Style.MinWidth
+  - FluentGpu.Controls.CheckBox.Style.OffFill
+  - FluentGpu.Controls.CheckBox.Style.OffStroke
+  - FluentGpu.Controls.CheckBox.Style.OnFill
+  - FluentGpu.Controls.CheckBox.Style.OnStroke
+  langs:
+  - csharp
+  - vb
+  name: CheckBox.Style
+  nameWithType: CheckBox.Style
+  fullName: FluentGpu.Controls.CheckBox.Style
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Style
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: 'public sealed record CheckBox.Style : IEquatable<CheckBox.Style>'
+    content.vb: Public NotInheritable Class CheckBox.Style Implements IEquatable(Of CheckBox.Style)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.CheckBox.Style}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.CheckBox.Style.BoxSize
+  commentId: P:FluentGpu.Controls.CheckBox.Style.BoxSize
+  id: BoxSize
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: BoxSize
+  nameWithType: CheckBox.Style.BoxSize
+  fullName: FluentGpu.Controls.CheckBox.Style.BoxSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BoxSize
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float BoxSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property BoxSize As Single
+  overload: FluentGpu.Controls.CheckBox.Style.BoxSize*
+- uid: FluentGpu.Controls.CheckBox.Style.GlyphSize
+  commentId: P:FluentGpu.Controls.CheckBox.Style.GlyphSize
+  id: GlyphSize
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: GlyphSize
+  nameWithType: CheckBox.Style.GlyphSize
+  fullName: FluentGpu.Controls.CheckBox.Style.GlyphSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphSize
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float GlyphSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property GlyphSize As Single
+  overload: FluentGpu.Controls.CheckBox.Style.GlyphSize*
+- uid: FluentGpu.Controls.CheckBox.Style.FontSize
+  commentId: P:FluentGpu.Controls.CheckBox.Style.FontSize
+  id: FontSize
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: FontSize
+  nameWithType: CheckBox.Style.FontSize
+  fullName: FluentGpu.Controls.CheckBox.Style.FontSize
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FontSize
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float FontSize { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property FontSize As Single
+  overload: FluentGpu.Controls.CheckBox.Style.FontSize*
+- uid: FluentGpu.Controls.CheckBox.Style.MinHeight
+  commentId: P:FluentGpu.Controls.CheckBox.Style.MinHeight
+  id: MinHeight
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: MinHeight
+  nameWithType: CheckBox.Style.MinHeight
+  fullName: FluentGpu.Controls.CheckBox.Style.MinHeight
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinHeight
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinHeight { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinHeight As Single
+  overload: FluentGpu.Controls.CheckBox.Style.MinHeight*
+- uid: FluentGpu.Controls.CheckBox.Style.MinWidth
+  commentId: P:FluentGpu.Controls.CheckBox.Style.MinWidth
+  id: MinWidth
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: MinWidth
+  nameWithType: CheckBox.Style.MinWidth
+  fullName: FluentGpu.Controls.CheckBox.Style.MinWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinWidth
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MinWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property MinWidth As Single
+  overload: FluentGpu.Controls.CheckBox.Style.MinWidth*
+- uid: FluentGpu.Controls.CheckBox.Style.ContentGap
+  commentId: P:FluentGpu.Controls.CheckBox.Style.ContentGap
+  id: ContentGap
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: ContentGap
+  nameWithType: CheckBox.Style.ContentGap
+  fullName: FluentGpu.Controls.CheckBox.Style.ContentGap
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ContentGap
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Box→label gap: CheckBoxPadding 8,5,0,0 — the ContentPresenter's left margin off the Auto (20px)
+        glyph column (CheckBox_themeresources.xaml:274/283 + grid columns :598-601).
+  example: []
+  syntax:
+    content: public float ContentGap { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property ContentGap As Single
+  overload: FluentGpu.Controls.CheckBox.Style.ContentGap*
+- uid: FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+  commentId: P:FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+  id: FocusVisualMargin
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: FocusVisualMargin
+  nameWithType: CheckBox.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FocusVisualMargin
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: WinUI CheckBoxFocusVisualMargin −7,−3,−7,−3 (CheckBox_themeresources.xaml:275/293); engine-drawn (E1).
+  example: []
+  syntax:
+    content: public Edges4 FocusVisualMargin { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Property FocusVisualMargin As Edges4
+  overload: FluentGpu.Controls.CheckBox.Style.FocusVisualMargin*
+- uid: FluentGpu.Controls.CheckBox.Style.OffFill
+  commentId: P:FluentGpu.Controls.CheckBox.Style.OffFill
+  id: OffFill
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: OffFill
+  nameWithType: CheckBox.Style.OffFill
+  fullName: FluentGpu.Controls.CheckBox.Style.OffFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffFill
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush OffFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property OffFill As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.OffFill*
+- uid: FluentGpu.Controls.CheckBox.Style.OffStroke
+  commentId: P:FluentGpu.Controls.CheckBox.Style.OffStroke
+  id: OffStroke
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: OffStroke
+  nameWithType: CheckBox.Style.OffStroke
+  fullName: FluentGpu.Controls.CheckBox.Style.OffStroke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OffStroke
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush OffStroke { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property OffStroke As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.OffStroke*
+- uid: FluentGpu.Controls.CheckBox.Style.OnFill
+  commentId: P:FluentGpu.Controls.CheckBox.Style.OnFill
+  id: OnFill
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: OnFill
+  nameWithType: CheckBox.Style.OnFill
+  fullName: FluentGpu.Controls.CheckBox.Style.OnFill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnFill
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 53
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush OnFill { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property OnFill As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.OnFill*
+- uid: FluentGpu.Controls.CheckBox.Style.OnStroke
+  commentId: P:FluentGpu.Controls.CheckBox.Style.OnStroke
+  id: OnStroke
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: OnStroke
+  nameWithType: CheckBox.Style.OnStroke
+  fullName: FluentGpu.Controls.CheckBox.Style.OnStroke
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnStroke
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush OnStroke { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property OnStroke As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.OnStroke*
+- uid: FluentGpu.Controls.CheckBox.Style.GlyphFg
+  commentId: P:FluentGpu.Controls.CheckBox.Style.GlyphFg
+  id: GlyphFg
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: GlyphFg
+  nameWithType: CheckBox.Style.GlyphFg
+  fullName: FluentGpu.Controls.CheckBox.Style.GlyphFg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlyphFg
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush GlyphFg { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property GlyphFg As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.GlyphFg*
+- uid: FluentGpu.Controls.CheckBox.Style.LabelFg
+  commentId: P:FluentGpu.Controls.CheckBox.Style.LabelFg
+  id: LabelFg
+  parent: FluentGpu.Controls.CheckBox.Style
+  langs:
+  - csharp
+  - vb
+  name: LabelFg
+  nameWithType: CheckBox.Style.LabelFg
+  fullName: FluentGpu.Controls.CheckBox.Style.LabelFg
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/CheckBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LabelFg
+    path: ../../src/FluentGpu.Controls/CheckBox.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public StateBrush LabelFg { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.StateBrush
+    content.vb: Public Property LabelFg As StateBrush
+  overload: FluentGpu.Controls.CheckBox.Style.LabelFg*
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.CheckBox.Style}
+  commentId: T:System.IEquatable{FluentGpu.Controls.CheckBox.Style}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<CheckBox.Style>
+  nameWithType: IEquatable<CheckBox.Style>
+  fullName: System.IEquatable<FluentGpu.Controls.CheckBox.Style>
+  nameWithType.vb: IEquatable(Of CheckBox.Style)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.CheckBox.Style)
+  name.vb: IEquatable(Of CheckBox.Style)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.CheckBox
+    name: CheckBox
+    href: FluentGpu.Controls.CheckBox.html
+  - name: .
+  - uid: FluentGpu.Controls.CheckBox.Style
+    name: Style
+    href: FluentGpu.Controls.CheckBox.Style.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.CheckBox
+    name: CheckBox
+    href: FluentGpu.Controls.CheckBox.html
+  - name: .
+  - uid: FluentGpu.Controls.CheckBox.Style
+    name: Style
+    href: FluentGpu.Controls.CheckBox.Style.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.CheckBox.Style.BoxSize*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.BoxSize
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_BoxSize
+  name: BoxSize
+  nameWithType: CheckBox.Style.BoxSize
+  fullName: FluentGpu.Controls.CheckBox.Style.BoxSize
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Controls.CheckBox.Style.GlyphSize*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.GlyphSize
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_GlyphSize
+  name: GlyphSize
+  nameWithType: CheckBox.Style.GlyphSize
+  fullName: FluentGpu.Controls.CheckBox.Style.GlyphSize
+- uid: FluentGpu.Controls.CheckBox.Style.FontSize*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.FontSize
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_FontSize
+  name: FontSize
+  nameWithType: CheckBox.Style.FontSize
+  fullName: FluentGpu.Controls.CheckBox.Style.FontSize
+- uid: FluentGpu.Controls.CheckBox.Style.MinHeight*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.MinHeight
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_MinHeight
+  name: MinHeight
+  nameWithType: CheckBox.Style.MinHeight
+  fullName: FluentGpu.Controls.CheckBox.Style.MinHeight
+- uid: FluentGpu.Controls.CheckBox.Style.MinWidth*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.MinWidth
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_MinWidth
+  name: MinWidth
+  nameWithType: CheckBox.Style.MinWidth
+  fullName: FluentGpu.Controls.CheckBox.Style.MinWidth
+- uid: FluentGpu.Controls.CheckBox.Style.ContentGap*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.ContentGap
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_ContentGap
+  name: ContentGap
+  nameWithType: CheckBox.Style.ContentGap
+  fullName: FluentGpu.Controls.CheckBox.Style.ContentGap
+- uid: FluentGpu.Controls.CheckBox.Style.FocusVisualMargin*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_FocusVisualMargin
+  name: FocusVisualMargin
+  nameWithType: CheckBox.Style.FocusVisualMargin
+  fullName: FluentGpu.Controls.CheckBox.Style.FocusVisualMargin
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Controls.CheckBox.Style.OffFill*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.OffFill
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_OffFill
+  name: OffFill
+  nameWithType: CheckBox.Style.OffFill
+  fullName: FluentGpu.Controls.CheckBox.Style.OffFill
+- uid: FluentGpu.Controls.StateBrush
+  commentId: T:FluentGpu.Controls.StateBrush
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.StateBrush.html
+  name: StateBrush
+  nameWithType: StateBrush
+  fullName: FluentGpu.Controls.StateBrush
+- uid: FluentGpu.Controls.CheckBox.Style.OffStroke*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.OffStroke
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_OffStroke
+  name: OffStroke
+  nameWithType: CheckBox.Style.OffStroke
+  fullName: FluentGpu.Controls.CheckBox.Style.OffStroke
+- uid: FluentGpu.Controls.CheckBox.Style.OnFill*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.OnFill
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_OnFill
+  name: OnFill
+  nameWithType: CheckBox.Style.OnFill
+  fullName: FluentGpu.Controls.CheckBox.Style.OnFill
+- uid: FluentGpu.Controls.CheckBox.Style.OnStroke*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.OnStroke
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_OnStroke
+  name: OnStroke
+  nameWithType: CheckBox.Style.OnStroke
+  fullName: FluentGpu.Controls.CheckBox.Style.OnStroke
+- uid: FluentGpu.Controls.CheckBox.Style.GlyphFg*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.GlyphFg
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_GlyphFg
+  name: GlyphFg
+  nameWithType: CheckBox.Style.GlyphFg
+  fullName: FluentGpu.Controls.CheckBox.Style.GlyphFg
+- uid: FluentGpu.Controls.CheckBox.Style.LabelFg*
+  commentId: Overload:FluentGpu.Controls.CheckBox.Style.LabelFg
+  href: FluentGpu.Controls.CheckBox.Style.html#FluentGpu_Controls_CheckBox_Style_LabelFg
+  name: LabelFg
+  nameWithType: CheckBox.Style.LabelFg
+  fullName: FluentGpu.Controls.CheckBox.Style.LabelFg

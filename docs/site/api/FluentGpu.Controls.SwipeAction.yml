@@ -1,0 +1,662 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SwipeAction
+  commentId: T:FluentGpu.Controls.SwipeAction
+  id: SwipeAction
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SwipeAction.#ctor(System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  - FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  - FluentGpu.Controls.SwipeAction.Color
+  - FluentGpu.Controls.SwipeAction.Glyph
+  - FluentGpu.Controls.SwipeAction.Label
+  - FluentGpu.Controls.SwipeAction.OnInvoked
+  langs:
+  - csharp
+  - vb
+  name: SwipeAction
+  nameWithType: SwipeAction
+  fullName: FluentGpu.Controls.SwipeAction
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwipeAction
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One swipe action (WinUI SwipeItem — SwipeControl.idl:69-91): an icon glyph, a label, an optional custom
+        background <code class="paramref">Color</code> (SwipeItem.Background — flips the content to on-accent text), the
+        <xref href="FluentGpu.Controls.SwipeAction.OnInvoked" data-throw-if-not-resolved="false"></xref> callback (the Invoked event / Command) and <xref href="FluentGpu.Controls.SwipeAction.BehaviorOnInvoked" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public sealed record SwipeAction : IEquatable<SwipeAction>'
+    content.vb: Public NotInheritable Class SwipeAction Implements IEquatable(Of SwipeAction)
+  inheritance:
+  - System.Object
+  implements:
+  - System.IEquatable{FluentGpu.Controls.SwipeAction}
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Controls.SwipeAction.#ctor(System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  commentId: M:FluentGpu.Controls.SwipeAction.#ctor(System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})
+  id: '#ctor(System.String,System.String,System.Nullable{FluentGpu.Foundation.ColorF})'
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: SwipeAction(string, string, ColorF?)
+  nameWithType: SwipeAction.SwipeAction(string, string, ColorF?)
+  fullName: FluentGpu.Controls.SwipeAction.SwipeAction(string, string, FluentGpu.Foundation.ColorF?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One swipe action (WinUI SwipeItem — SwipeControl.idl:69-91): an icon glyph, a label, an optional custom
+        background <code class="paramref">Color</code> (SwipeItem.Background — flips the content to on-accent text), the
+        <xref href="FluentGpu.Controls.SwipeAction.OnInvoked" data-throw-if-not-resolved="false"></xref> callback (the Invoked event / Command) and <xref href="FluentGpu.Controls.SwipeAction.BehaviorOnInvoked" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: public SwipeAction(string Glyph, string Label, ColorF? Color = null)
+    parameters:
+    - id: Glyph
+      type: System.String
+    - id: Label
+      type: System.String
+    - id: Color
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Sub New(Glyph As String, Label As String, Color As ColorF? = Nothing)
+  overload: FluentGpu.Controls.SwipeAction.#ctor*
+  nameWithType.vb: SwipeAction.New(String, String, ColorF?)
+  fullName.vb: FluentGpu.Controls.SwipeAction.New(String, String, FluentGpu.Foundation.ColorF?)
+  name.vb: New(String, String, ColorF?)
+- uid: FluentGpu.Controls.SwipeAction.Glyph
+  commentId: P:FluentGpu.Controls.SwipeAction.Glyph
+  id: Glyph
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: Glyph
+  nameWithType: SwipeAction.Glyph
+  fullName: FluentGpu.Controls.SwipeAction.Glyph
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Glyph
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Glyph { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Glyph As String
+  overload: FluentGpu.Controls.SwipeAction.Glyph*
+- uid: FluentGpu.Controls.SwipeAction.Label
+  commentId: P:FluentGpu.Controls.SwipeAction.Label
+  id: Label
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: Label
+  nameWithType: SwipeAction.Label
+  fullName: FluentGpu.Controls.SwipeAction.Label
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Label
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Label { get; init; }
+    parameters: []
+    return:
+      type: System.String
+    content.vb: Public Property Label As String
+  overload: FluentGpu.Controls.SwipeAction.Label*
+- uid: FluentGpu.Controls.SwipeAction.Color
+  commentId: P:FluentGpu.Controls.SwipeAction.Color
+  id: Color
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: Color
+  nameWithType: SwipeAction.Color
+  fullName: FluentGpu.Controls.SwipeAction.Color
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Color
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 18
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public ColorF? Color { get; init; }
+    parameters: []
+    return:
+      type: System.Nullable{FluentGpu.Foundation.ColorF}
+    content.vb: Public Property Color As ColorF?
+  overload: FluentGpu.Controls.SwipeAction.Color*
+- uid: FluentGpu.Controls.SwipeAction.OnInvoked
+  commentId: P:FluentGpu.Controls.SwipeAction.OnInvoked
+  id: OnInvoked
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: OnInvoked
+  nameWithType: SwipeAction.OnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.OnInvoked
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnInvoked
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 22
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI SwipeItem.Invoked (SwipeControl.idl:84): raised on tap (OnItemTapped, SwipeItem.cpp:110-125)
+        or, for an Execute side, when the opened swipe commits (IdleStateEntered, SwipeControl.cpp:209-218).
+  example: []
+  syntax:
+    content: public Action? OnInvoked { get; init; }
+    parameters: []
+    return:
+      type: System.Action
+    content.vb: Public Property OnInvoked As Action
+  overload: FluentGpu.Controls.SwipeAction.OnInvoked*
+- uid: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  commentId: P:FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  id: BehaviorOnInvoked
+  parent: FluentGpu.Controls.SwipeAction
+  langs:
+  - csharp
+  - vb
+  name: BehaviorOnInvoked
+  nameWithType: SwipeAction.BehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: BehaviorOnInvoked
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 24
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Default Auto (SwipeControl.idl:81-82) — closes after the invoke unless RemainOpen.
+  example: []
+  syntax:
+    content: public SwipeBehaviorOnInvoked BehaviorOnInvoked { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.SwipeBehaviorOnInvoked
+    content.vb: Public Property BehaviorOnInvoked As SwipeBehaviorOnInvoked
+  overload: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked*
+references:
+- uid: FluentGpu.Controls.SwipeAction.OnInvoked
+  commentId: P:FluentGpu.Controls.SwipeAction.OnInvoked
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_OnInvoked
+  name: OnInvoked
+  nameWithType: SwipeAction.OnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.OnInvoked
+- uid: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  commentId: P:FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_BehaviorOnInvoked
+  name: BehaviorOnInvoked
+  nameWithType: SwipeAction.BehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.IEquatable{FluentGpu.Controls.SwipeAction}
+  commentId: T:System.IEquatable{FluentGpu.Controls.SwipeAction}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<SwipeAction>
+  nameWithType: IEquatable<SwipeAction>
+  fullName: System.IEquatable<FluentGpu.Controls.SwipeAction>
+  nameWithType.vb: IEquatable(Of SwipeAction)
+  fullName.vb: System.IEquatable(Of FluentGpu.Controls.SwipeAction)
+  name.vb: IEquatable(Of SwipeAction)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Controls.SwipeAction
+    name: SwipeAction
+    href: FluentGpu.Controls.SwipeAction.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Controls.SwipeAction
+    name: SwipeAction
+    href: FluentGpu.Controls.SwipeAction.html
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.SwipeAction.#ctor*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.#ctor
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction__ctor_System_String_System_String_System_Nullable_FluentGpu_Foundation_ColorF__
+  name: SwipeAction
+  nameWithType: SwipeAction.SwipeAction
+  fullName: FluentGpu.Controls.SwipeAction.SwipeAction
+  nameWithType.vb: SwipeAction.New
+  fullName.vb: FluentGpu.Controls.SwipeAction.New
+  name.vb: New
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: System.Nullable{FluentGpu.Foundation.ColorF}
+  commentId: T:System.Nullable{FluentGpu.Foundation.ColorF}
+  parent: System
+  definition: System.Nullable`1
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF?
+  nameWithType: ColorF?
+  fullName: FluentGpu.Foundation.ColorF?
+  spec.csharp:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+  spec.vb:
+  - uid: FluentGpu.Foundation.ColorF
+    name: ColorF
+    href: FluentGpu.Foundation.ColorF.html
+  - name: '?'
+- uid: System.Nullable`1
+  commentId: T:System.Nullable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  name: Nullable<T>
+  nameWithType: Nullable<T>
+  fullName: System.Nullable<T>
+  nameWithType.vb: Nullable(Of T)
+  fullName.vb: System.Nullable(Of T)
+  name.vb: Nullable(Of T)
+  spec.csharp:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Nullable`1
+    name: Nullable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.nullable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.SwipeAction.Glyph*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.Glyph
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_Glyph
+  name: Glyph
+  nameWithType: SwipeAction.Glyph
+  fullName: FluentGpu.Controls.SwipeAction.Glyph
+- uid: FluentGpu.Controls.SwipeAction.Label*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.Label
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_Label
+  name: Label
+  nameWithType: SwipeAction.Label
+  fullName: FluentGpu.Controls.SwipeAction.Label
+- uid: FluentGpu.Controls.SwipeAction.Color*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.Color
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_Color
+  name: Color
+  nameWithType: SwipeAction.Color
+  fullName: FluentGpu.Controls.SwipeAction.Color
+- uid: FluentGpu.Controls.SwipeAction.OnInvoked*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.OnInvoked
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_OnInvoked
+  name: OnInvoked
+  nameWithType: SwipeAction.OnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.OnInvoked
+- uid: System.Action
+  commentId: T:System.Action
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action
+  name: Action
+  nameWithType: Action
+  fullName: System.Action
+- uid: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked*
+  commentId: Overload:FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+  href: FluentGpu.Controls.SwipeAction.html#FluentGpu_Controls_SwipeAction_BehaviorOnInvoked
+  name: BehaviorOnInvoked
+  nameWithType: SwipeAction.BehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeAction.BehaviorOnInvoked
+- uid: FluentGpu.Controls.SwipeBehaviorOnInvoked
+  commentId: T:FluentGpu.Controls.SwipeBehaviorOnInvoked
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SwipeBehaviorOnInvoked.html
+  name: SwipeBehaviorOnInvoked
+  nameWithType: SwipeBehaviorOnInvoked
+  fullName: FluentGpu.Controls.SwipeBehaviorOnInvoked

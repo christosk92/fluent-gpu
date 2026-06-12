@@ -1,0 +1,428 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Animation.MotionSprings
+  commentId: T:FluentGpu.Animation.MotionSprings
+  id: MotionSprings
+  parent: FluentGpu.Animation
+  children:
+  - FluentGpu.Animation.MotionSprings.NavPill
+  - FluentGpu.Animation.MotionSprings.PartSettle
+  - FluentGpu.Animation.MotionSprings.SelectorPill
+  langs:
+  - csharp
+  - vb
+  name: MotionSprings
+  nameWithType: MotionSprings
+  fullName: FluentGpu.Animation.MotionSprings
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Animation/Motion.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MotionSprings
+    path: ../../src/FluentGpu.Animation/Motion.cs
+    startLine: 10
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: >-
+    The WinUI/Fluent-2 motion vocabulary as named presets, so controls share ONE set of spring/duration constants
+
+    instead of inlining response/damping pairs. Durations: ControlFaster = 83ms (brush transitions, hover/press),
+
+    ControlFast = 167ms (knob travel, settle animations), ControlNormal = 250ms (reposition, pane motion).
+
+    The composition-spring presets match the WinUI indicator/selection-pill feel (slight overshoot, fast settle).
+  example: []
+  syntax:
+    content: public static class MotionSprings
+    content.vb: Public Module MotionSprings
+  inheritance:
+  - System.Object
+  inheritedMembers:
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.MemberwiseClone
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Animation.MotionSprings.NavPill
+  commentId: P:FluentGpu.Animation.MotionSprings.NavPill
+  id: NavPill
+  parent: FluentGpu.Animation.MotionSprings
+  langs:
+  - csharp
+  - vb
+  name: NavPill
+  nameWithType: MotionSprings.NavPill
+  fullName: FluentGpu.Animation.MotionSprings.NavPill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/Motion.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NavPill
+    path: ../../src/FluentGpu.Animation/Motion.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: 'The NavigationView selection-pill vertical slide (WinUI composition spring: snappy, faint overshoot).'
+  example: []
+  syntax:
+    content: public static SpringParams NavPill { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.SpringParams
+    content.vb: Public Shared ReadOnly Property NavPill As SpringParams
+  overload: FluentGpu.Animation.MotionSprings.NavPill*
+- uid: FluentGpu.Animation.MotionSprings.SelectorPill
+  commentId: P:FluentGpu.Animation.MotionSprings.SelectorPill
+  id: SelectorPill
+  parent: FluentGpu.Animation.MotionSprings
+  langs:
+  - csharp
+  - vb
+  name: SelectorPill
+  nameWithType: MotionSprings.SelectorPill
+  fullName: FluentGpu.Animation.MotionSprings.SelectorPill
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/Motion.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SelectorPill
+    path: ../../src/FluentGpu.Animation/Motion.cs
+    startLine: 16
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: The SelectorBar underline/pill slide between items.
+  example: []
+  syntax:
+    content: public static SpringParams SelectorPill { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.SpringParams
+    content.vb: Public Shared ReadOnly Property SelectorPill As SpringParams
+  overload: FluentGpu.Animation.MotionSprings.SelectorPill*
+- uid: FluentGpu.Animation.MotionSprings.PartSettle
+  commentId: P:FluentGpu.Animation.MotionSprings.PartSettle
+  id: PartSettle
+  parent: FluentGpu.Animation.MotionSprings
+  langs:
+  - csharp
+  - vb
+  name: PartSettle
+  nameWithType: MotionSprings.PartSettle
+  fullName: FluentGpu.Animation.MotionSprings.PartSettle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Animation/Motion.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSettle
+    path: ../../src/FluentGpu.Animation/Motion.cs
+    startLine: 19
+  assemblies:
+  - FluentGpu.Animation
+  namespace: FluentGpu.Animation
+  summary: A snappy critically-damped settle for small template parts (knobs, chevrons).
+  example: []
+  syntax:
+    content: public static SpringParams PartSettle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Animation.SpringParams
+    content.vb: Public Shared ReadOnly Property PartSettle As SpringParams
+  overload: FluentGpu.Animation.MotionSprings.PartSettle*
+references:
+- uid: FluentGpu.Animation
+  commentId: N:FluentGpu.Animation
+  href: FluentGpu.html
+  name: FluentGpu.Animation
+  nameWithType: FluentGpu.Animation
+  fullName: FluentGpu.Animation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Animation
+    name: Animation
+    href: FluentGpu.Animation.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.MemberwiseClone
+  commentId: M:System.Object.MemberwiseClone
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  name: MemberwiseClone()
+  nameWithType: object.MemberwiseClone()
+  fullName: object.MemberwiseClone()
+  nameWithType.vb: Object.MemberwiseClone()
+  fullName.vb: Object.MemberwiseClone()
+  spec.csharp:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.MemberwiseClone
+    name: MemberwiseClone
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Animation.MotionSprings.NavPill*
+  commentId: Overload:FluentGpu.Animation.MotionSprings.NavPill
+  href: FluentGpu.Animation.MotionSprings.html#FluentGpu_Animation_MotionSprings_NavPill
+  name: NavPill
+  nameWithType: MotionSprings.NavPill
+  fullName: FluentGpu.Animation.MotionSprings.NavPill
+- uid: FluentGpu.Animation.SpringParams
+  commentId: T:FluentGpu.Animation.SpringParams
+  parent: FluentGpu.Animation
+  href: FluentGpu.Animation.SpringParams.html
+  name: SpringParams
+  nameWithType: SpringParams
+  fullName: FluentGpu.Animation.SpringParams
+- uid: FluentGpu.Animation.MotionSprings.SelectorPill*
+  commentId: Overload:FluentGpu.Animation.MotionSprings.SelectorPill
+  href: FluentGpu.Animation.MotionSprings.html#FluentGpu_Animation_MotionSprings_SelectorPill
+  name: SelectorPill
+  nameWithType: MotionSprings.SelectorPill
+  fullName: FluentGpu.Animation.MotionSprings.SelectorPill
+- uid: FluentGpu.Animation.MotionSprings.PartSettle*
+  commentId: Overload:FluentGpu.Animation.MotionSprings.PartSettle
+  href: FluentGpu.Animation.MotionSprings.html#FluentGpu_Animation_MotionSprings_PartSettle
+  name: PartSettle
+  nameWithType: MotionSprings.PartSettle
+  fullName: FluentGpu.Animation.MotionSprings.PartSettle

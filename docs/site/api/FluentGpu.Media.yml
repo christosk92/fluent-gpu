@@ -1,0 +1,92 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  id: FluentGpu.Media
+  children:
+  - FluentGpu.Media.DecodeOptions
+  - FluentGpu.Media.DecodeScheduler
+  - FluentGpu.Media.DefaultImageFetcher
+  - FluentGpu.Media.DiskImageCache
+  - FluentGpu.Media.FetchResult
+  - FluentGpu.Media.IImageCodec
+  - FluentGpu.Media.IImageFetcher
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  type: Namespace
+  assemblies:
+  - FluentGpu.Media
+references:
+- uid: FluentGpu.Media.DecodeScheduler
+  commentId: T:FluentGpu.Media.DecodeScheduler
+  href: FluentGpu.Media.DecodeScheduler.html
+  name: DecodeScheduler
+  nameWithType: DecodeScheduler
+  fullName: FluentGpu.Media.DecodeScheduler
+- uid: FluentGpu.Media.DefaultImageFetcher
+  commentId: T:FluentGpu.Media.DefaultImageFetcher
+  href: FluentGpu.Media.DefaultImageFetcher.html
+  name: DefaultImageFetcher
+  nameWithType: DefaultImageFetcher
+  fullName: FluentGpu.Media.DefaultImageFetcher
+- uid: FluentGpu.Media.DiskImageCache
+  commentId: T:FluentGpu.Media.DiskImageCache
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.DiskImageCache.html
+  name: DiskImageCache
+  nameWithType: DiskImageCache
+  fullName: FluentGpu.Media.DiskImageCache
+- uid: FluentGpu.Media.IImageCodec
+  commentId: T:FluentGpu.Media.IImageCodec
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.IImageCodec.html
+  name: IImageCodec
+  nameWithType: IImageCodec
+  fullName: FluentGpu.Media.IImageCodec
+- uid: FluentGpu.Media.FetchResult
+  commentId: T:FluentGpu.Media.FetchResult
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.FetchResult.html
+  name: FetchResult
+  nameWithType: FetchResult
+  fullName: FluentGpu.Media.FetchResult
+- uid: FluentGpu.Media.IImageFetcher
+  commentId: T:FluentGpu.Media.IImageFetcher
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.IImageFetcher.html
+  name: IImageFetcher
+  nameWithType: IImageFetcher
+  fullName: FluentGpu.Media.IImageFetcher
+- uid: FluentGpu.Media.DecodeOptions
+  commentId: T:FluentGpu.Media.DecodeOptions
+  parent: FluentGpu.Media
+  href: FluentGpu.Media.DecodeOptions.html
+  name: DecodeOptions
+  nameWithType: DecodeOptions
+  fullName: FluentGpu.Media.DecodeOptions
+- uid: FluentGpu.Media
+  commentId: N:FluentGpu.Media
+  href: FluentGpu.html
+  name: FluentGpu.Media
+  nameWithType: FluentGpu.Media
+  fullName: FluentGpu.Media
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Media
+    name: Media
+    href: FluentGpu.Media.html

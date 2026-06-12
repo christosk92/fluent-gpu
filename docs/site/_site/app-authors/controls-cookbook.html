@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Controls cookbook | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Controls cookbook | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/app-authors/controls-cookbook.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="controls-cookbook">Controls cookbook</h1>
+
+<p>Recipes for the controls in <code>FluentGpu.Controls</code>, grounded in the real surface and the verified gallery snippets.
+Every example here mirrors code that ships and runs in the control gallery (<code>src/FluentGpu.WindowsApp/*</code>).</p>
+<p>This page is task-oriented. For the model behind it — how a change reaches pixels through a signal, and the three
+update paths — read the guide first: <strong><a href="../../guide/reactivity.md">reactivity</a></strong> and
+<strong><a href="../../guide/components-elements-layout.md">elements, layout, controls &amp; theming</a></strong>. For the parts contract and the
+honest WinUI-fidelity notes, see <strong><a href="../../guide/control-fidelity.md">control fidelity</a></strong>. When something misbehaves,
+<strong><a href="../../guide/pitfalls.md">pitfalls</a></strong> is the symptom → cause → fix table.</p>
+<blockquote>
+<p>Authoring imports for every snippet on this page:</p>
+<pre><code class="lang-csharp">using FluentGpu.Controls;                 // Button, Slider, ComboBox, …
+using FluentGpu.Dsl;                       // BoxEl, TextEl, Tok, TemplateParts, Edges4, ColorF
+using FluentGpu.Hooks;                     // Component, UseState, UseContext, Embed
+using FluentGpu.Signals;                   // Signal&lt;T&gt;, FloatSignal, Prop
+using static FluentGpu.Dsl.Ui;             // VStack, HStack, Card, Icon, …
+</code></pre>
+</blockquote>
+<h2 id="how-controls-work">How controls work</h2>
+<p>Three facts cover almost everything you'll do with the controls layer.</p>
+<p><strong>Most controls are element-returning factories; a few are <code>Component</code>s.</strong> <code>Button</code>, <code>Slider</code>, <code>CheckBox</code>,
+<code>ToggleSwitch</code>, <code>IconButton</code>, <code>RadioButton</code>, <code>ScrollBar</code> and the rest expose <strong>static factory methods</strong> you call inside
+<code>Render()</code> — they return an <code>Element</code> (usually a <code>BoxEl</code>) you drop into your tree. A control that needs cross-render
+state of its own (an open popup, a hovered preview, a tooltip overlay) is a <code>Component</code> whose factory wraps it in
+<code>Embed.Comp</code> for you: <code>ComboBox</code>, <code>RatingControl</code>, <code>ColorPicker</code>, <code>NumberBox</code>, <code>DropDownButton</code>, <code>SplitButton</code>,
+<code>DatePicker</code>, <code>TimePicker</code>, <code>CalendarView</code>. You still just call <code>.Create(...)</code>; the wrapping is internal. The practical
+consequence is the universal rule from <a href="../../guide/pitfalls.md">pitfalls</a>: <strong>a control's runtime-changeable inputs flow
+through signals</strong>, not constructor args — pass a <code>Signal&lt;int&gt;</code>/<code>FloatSignal</code> for a value a page reads back, and the
+control updates without you re-creating it.</p>
+<p><strong>Every control has a <code>Style</code> record + a global override, and reads theme tokens by default.</strong> A control's resting,
+hover, pressed and disabled colours all resolve from <code>Tok.*</code> in its computed default style, so it themes correctly out
+of the box. Three ways to change the look, cheapest first:</p>
+<pre><code class="lang-csharp">// 1) Per-instance: pass a Style (or `with`-tweak the default).
+var green = Button.AccentStyle with
+{
+    Background      = ColorF.FromRgba(0x10, 0x7C, 0x10),
+    Foreground      = ColorF.FromRgba(255, 255, 255),
+    CornerRadius    = 6f,
+    HoverBackground = ColorF.FromRgba(0x16, 0x95, 0x16),
+};
+Button.Accent(&quot;Save&quot;, OnSave, green);
+
+// 2) Global: replace the default style for ALL instances (set once at startup).
+Button.AccentStyleOverride = green;          // every Button.Accent now uses it
+Slider.StyleOverride       = mySliderStyle;
+
+// 3) Ad-hoc: chain a modifier — a `with`-copy of that one instance, no Style fork.
+Button.Accent(&quot;OK&quot;, OnOk).Rounded(20);
+</code></pre>
+<p>Modifiers (<code>.Background</code>, <code>.Rounded</code>, <code>.Pad</code>, <code>.Foreground</code>, <code>.Alpha</code>, …) return a <code>with</code>-copy of the returned element,
+so <code>Button.Accent(...).Rounded(20)</code> tweaks that one button without disturbing the default style. To restyle a control's
+<strong>internals</strong> (its rail, its chevron, its check square) there is exactly one door — <code>TemplateParts</code> — covered in
+<a href="#restyling-a-controls-internals-with-templateparts">Restyling a control's internals</a> at the end.</p>
+<p>Read <code>Tok.*</code> for colours; never hard-code (<code>Tok.AccentDefault</code>, <code>Tok.TextPrimary</code>, <code>Tok.FillCardDefault</code>,
+<code>Tok.StrokeControlDefault</code>). They follow <code>Tok.Use(theme)</code> and the injected OS accent.</p>
+<hr>
+<h2 id="buttons--commands">Buttons &amp; commands</h2>
+<p><code>Button.Accent</code> is the primary (accent-filled) button; <code>Button.Standard</code> is the neutral one. Both take a label and an
+<code>Action</code>. Hover/press visual states are automatic — the renderer drives them; there is no extra wiring.</p>
+<pre><code class="lang-csharp">var (clicks, setClicks) = UseState(0);
+
+HStack(8,
+    Button.Standard(&quot;Standard&quot;, () =&gt; setClicks(clicks + 1)),
+    Button.Accent(&quot;Accent&quot;, () =&gt; setClicks(clicks + 1)))
+</code></pre>
+<p><strong>Disabled</strong> is a logical state, not handler-nulling: pass <code>isEnabled: false</code>. The engine gate stops hit-test, focus
+and keyboard, and the resting fill/foreground swap to the WinUI disabled tokens.</p>
+<pre><code class="lang-csharp">Button.Standard(&quot;Disabled&quot;, () =&gt; { }, isEnabled: false)
+</code></pre>
+<p><strong>A custom accent style</strong> — <code>with</code>-tweak <code>Button.AccentStyle</code> (the green Save button above is the gallery's
+<code>ButtonsPage</code> example). The <code>Style</code> record carries the full WinUI 4-state matrix (<code>Background</code>/<code>HoverBackground</code>/
+<code>PressedBackground</code>/<code>DisabledBackground</code>, the matching foregrounds, and <code>BorderBrush</code> as a gradient), plus geometry
+(<code>CornerRadius</code>, <code>Padding</code>, <code>MinHeight</code>, <code>FontSize</code>) — restyle as much or as little as you like.</p>
+<p><strong>IconButton</strong> is the compact glyph/transport button (a rounded square, a 16px glyph, subtle fills). Pass a glyph
+const from <code>Icons</code> and a click handler:</p>
+<pre><code class="lang-csharp">HStack(8,
+    IconButton.Create(Icons.Previous, OnPrev),
+    IconButton.Create(Icons.Play, OnPlay,
+        IconButton.DefaultStyle with { Size = 44f, Foreground = Tok.AccentDefault }),
+    IconButton.Create(Icons.Next, OnNext),
+    IconButton.Create(Icons.More, OnMore))
+</code></pre>
+<p><strong>ToggleButton</strong> is a controlled two- or three-state toggle (accent-filled when on). You own the state; pass it back in
+each render. The two-arg overload is two-state; the <code>CheckState</code> overload cycles Unchecked → Checked → Indeterminate.</p>
+<pre><code class="lang-csharp">// Two-state
+var (on, setOn) = UseState(false);
+ToggleButton.Create(on ? &quot;On&quot; : &quot;Off&quot;, on, () =&gt; setOn(!on))
+
+// Three-state (clicks cycle through the indeterminate look)
+var (tri, setTri) = UseState(CheckState.Unchecked);
+ToggleButton.Create($&quot;{tri}&quot;, tri, setTri)
+</code></pre>
+<hr>
+<h2 id="dropdownbutton-splitbutton-hyperlinkbutton-repeatbutton">DropDownButton, SplitButton, HyperlinkButton, RepeatButton</h2>
+<p>These four round out the WinUI button family. The menu items for the first two are <code>MenuFlyoutItem</code> records
+(<code>Label</code>, optional <code>Glyph</code>, <code>Enabled</code>, <code>Invoke</code>), with <code>MenuFlyoutItem.Separator</code> for a divider.</p>
+<p><strong>DropDownButton</strong> opens a <code>MenuFlyout</code> of choices on click. The third positional argument is an optional <strong>leading</strong>
+glyph (the chevron is drawn automatically):</p>
+<pre><code class="lang-csharp">var (pick, setPick) = UseState(&quot;—&quot;);
+var items = new List&lt;MenuFlyoutItem&gt;
+{
+    new(&quot;Small&quot;,  Icons.Tag, true, () =&gt; setPick(&quot;Small&quot;)),
+    new(&quot;Medium&quot;, Icons.Tag, true, () =&gt; setPick(&quot;Medium&quot;)),
+    new(&quot;Large&quot;,  Icons.Tag, true, () =&gt; setPick(&quot;Large&quot;)),
+    MenuFlyoutItem.Separator,
+    new(&quot;Disabled&quot;, Icons.Cancel, false, null),
+};
+
+DropDownButton.Create(&quot;Sizes&quot;, items, Icons.Font)
+</code></pre>
+<p><strong>SplitButton</strong> is a two-part button: a primary action plus a dropdown of related choices. The first <code>Action</code> is the
+primary invoke; the list is the dropdown. (There is also a <code>ToggleSplitButton</code> whose primary part toggles on/off,
+taking a <code>Signal&lt;bool&gt;</code>.)</p>
+<pre><code class="lang-csharp">var (msg, setMsg) = UseState(&quot;—&quot;);
+var items = new List&lt;MenuFlyoutItem&gt;
+{
+    new(&quot;Paste as text&quot;, Icons.Document, true, () =&gt; setMsg(&quot;Paste as text&quot;)),
+    new(&quot;Paste special&quot;, Icons.Document, true, () =&gt; setMsg(&quot;Paste special&quot;)),
+};
+
+SplitButton.Create(&quot;Paste&quot;, () =&gt; setMsg(&quot;Paste (primary)&quot;), items, Icons.Document)
+</code></pre>
+<p><strong>HyperlinkButton</strong> is accent-coloured link text with a hand cursor. The click-handler form raises Click; the
+<code>navigateUri</code> form additionally launches the OS default handler after Click (through the PAL <code>OpenUri</code> seam — headless
+hosts record the URI instead of launching):</p>
+<pre><code class="lang-csharp">// Click-handler form:
+HyperlinkButton.Create(&quot;Open the design docs&quot;, () =&gt; setClicks(clicks + 1))
+
+// NavigateUri form (opens in the default browser):
+HyperlinkButton.Create(&quot;fluent-gpu on GitHub&quot;, &quot;https://github.com/christosk92/fluent-gpu&quot;)
+</code></pre>
+<p><strong>RepeatButton</strong> raises Click repeatedly while held (WinUI defaults: 500 ms delay, then a 33 ms interval; a held Space
+arms the same timer). Same <code>Create(label, onClick)</code> shape — the auto-repeat is the whole control:</p>
+<pre><code class="lang-csharp">var (count, setCount) = UseState(0);
+
+HStack(8,
+    RepeatButton.Create(&quot;–&quot;, () =&gt; setCount(count - 1)),
+    RepeatButton.Create(&quot;+&quot;, () =&gt; setCount(count + 1)))
+</code></pre>
+<hr>
+<h2 id="selection-checkbox-radiobutton-toggleswitch">Selection: CheckBox, RadioButton, ToggleSwitch</h2>
+<p><strong>CheckBox</strong> is controlled — you own the state. The <code>bool</code> overload is two-state; the <code>CheckState</code> overload is
+three-state and cycles Unchecked → Checked → Indeterminate on click.</p>
+<pre><code class="lang-csharp">// Two-state
+var (a, setA) = UseState(false);
+CheckBox.Create(&quot;I agree&quot;, a, () =&gt; setA(!a))
+
+// Three-state
+var (tri, setTri) = UseState(CheckState.Indeterminate);
+CheckBox.Create(&quot;Mixed&quot;, tri, setTri)
+</code></pre>
+<p><strong>Select-all</strong> is just the parent reflecting its children — derive the parent's <code>CheckState</code> from the child flags and
+let its click set them all. This is the gallery's <code>CheckBoxControlPage</code> recipe verbatim:</p>
+<pre><code class="lang-csharp">var (c1, setC1) = UseState(true);
+var (c2, setC2) = UseState(false);
+var parent = c1 &amp;&amp; c2 ? CheckState.Checked
+           : c1 || c2 ? CheckState.Indeterminate
+           : CheckState.Unchecked;
+void ToggleAll() { bool all = !(c1 &amp;&amp; c2); setC1(all); setC2(all); }
+
+VStack(4,
+    CheckBox.Create(&quot;Select all&quot;, parent, _ =&gt; ToggleAll()),
+    CheckBox.Create(&quot;Option A&quot;, c1, () =&gt; setC1(!c1)),
+    CheckBox.Create(&quot;Option B&quot;, c2, () =&gt; setC2(!c2)))
+</code></pre>
+<p><strong>RadioButton.Group</strong> is the easy path for a mutually-exclusive set: pass the option labels, the selected index, and an
+<code>Action&lt;int&gt;</code> (single radios exist via <code>RadioButton.Create</code>, but a group handles the roving focus and exclusivity for
+you). <code>horizontal: true</code> lays them in a row.</p>
+<pre><code class="lang-csharp">static readonly string[] Options = { &quot;Small&quot;, &quot;Medium&quot;, &quot;Large&quot; };
+var (sel, setSel) = UseState(1);
+
+RadioButton.Group(Options, sel, setSel)
+</code></pre>
+<p><strong>ToggleSwitch</strong> is a controlled on/off switch (drag-to-toggle and tap both work). Optional <code>header</code> and
+<code>onContent</code>/<code>offContent</code> side labels:</p>
+<pre><code class="lang-csharp">// Simple
+var (a, setA) = UseState(true);
+ToggleSwitch.Create(a, () =&gt; setA(!a))
+
+// With header + On/Off content
+ToggleSwitch.Create(b, () =&gt; setB(!b),
+    header: &quot;Wi-Fi&quot;, onContent: &quot;Connected&quot;, offContent: &quot;Disconnected&quot;)
+</code></pre>
+<hr>
+<h2 id="value-inputs-slider-scrollbar-ratingcontrol-colorpicker-numberbox">Value inputs: Slider, ScrollBar, RatingControl, ColorPicker, NumberBox</h2>
+<h3 id="slider--prefer-bind-for-scrubbers">Slider — prefer <code>Bind</code> for scrubbers</h3>
+<p>The Slider has three factories, and <strong>which one you pick is a performance decision</strong>:</p>
+<ul>
+<li><strong><code>Slider.Bind(FloatSignal value, …)</code></strong> — the signals-native, 0..1 hot path. A drag writes the <code>FloatSignal</code>, which
+updates only the value-fill's and thumb's composited transforms on the compositor fast path: <strong>zero render, zero
+reconcile, zero relayout per pointer-move.</strong> This is the slider-tank fix. Use it for media seek and volume.</li>
+<li><strong><code>Slider.Create(float value, Action&lt;float&gt; onChange, …)</code></strong> — the controlled (React-style) 0..1 variant. Each move
+calls <code>onChange</code>, which re-renders the owning component. Fine for low-frequency use; it will tank FPS if dragged hard.</li>
+<li><strong><code>Slider.Ranged(float value, Action&lt;float&gt; onChange, Slider.Options o, …)</code></strong> — the full WinUI-parity control over an
+arbitrary range, with step snapping, ticks, vertical orientation, a header, the full keyboard map and the thumb value
+tooltip.</li>
+</ul>
+<pre><code class="lang-csharp">// Hot path: bind a FloatSignal — drags update the thumb/track via compositor
+// bindings, with NO component re-render per move.
+var basic = UseFloatSignal(0.4f);
+Slider.Bind(basic)
+
+// Ranged (0–100), controlled
+var (range, setRange) = UseState(50f);
+Slider.Ranged(range, setRange, new Slider.Options { Min = 0, Max = 100 })
+
+// Ticks + step snapping (step 10)
+Slider.Ranged(ticks, setTicks,
+    new Slider.Options { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
+
+// Vertical
+Slider.Ranged(vert, setVert,
+    new Slider.Options { Min = 0, Max = 100, Vertical = true }, length: 160f)
+</code></pre>
+<p>Reading the bound value elsewhere stays compositor-cheap too — drive a readout off the same signal with a bound text
+prop so only the text node updates:</p>
+<pre><code class="lang-csharp">var basic = UseFloatSignal(0.4f);
+VStack(8,
+    Slider.Bind(basic),
+    new TextEl(&quot;&quot;) { Text = Prop.Of(() =&gt; $&quot;{basic.Value:0.00}&quot;) });   // no page re-render per move
+</code></pre>
+<p>If a slider drag tanks FPS, the cause is almost always <code>Slider.Create</code> (a <code>setState</code> per move) — switch to
+<code>Slider.Bind</code>. See <a href="../../guide/pitfalls.md">pitfalls → Dragging a slider tanks FPS</a>.</p>
+<h3 id="scrollbar">ScrollBar</h3>
+<p>A standalone scrollbar thumb: <code>fraction</code> is the page size (0..1), <code>position</code> is the normalized scroll position, and
+<code>onScroll</code> reports the new position. (Most scrolling uses <code>Ui.ScrollView</code>, which clips and offsets by a transform with
+no relayout — this control is the bare bar.)</p>
+<pre><code class="lang-csharp">var (pos, setPos) = UseState(0f);
+ScrollBar.Create(0.3f, pos, setPos, 160f, ScrollBar.DefaultStyle with { ThumbWidth = 10f })
+</code></pre>
+<h3 id="ratingcontrol">RatingControl</h3>
+<p>A row of stars set by click or press-and-sweep. The value is a caller-owned <code>FloatSignal</code> (so a page can read it);
+<code>-1</code> means unset. <code>readOnly: true</code> shows a fixed rating with no interaction.</p>
+<pre><code class="lang-csharp">var val = UseFloatSignal(3f);
+RatingControl.Create(val)
+
+// Read-only
+RatingControl.Create(UseFloatSignal(4f), readOnly: true)
+</code></pre>
+<h3 id="colorpicker">ColorPicker</h3>
+<p>A saturation/value spectrum, hue rail, optional alpha rail, preview swatch and Hex/R/G/B fields. The selected colour is
+a caller <code>Signal&lt;ColorF&gt;</code>. Because it's a signal, you can drive a preview swatch off it with a compositor-only fill
+binding — no re-render while dragging:</p>
+<pre><code class="lang-csharp">var color = UseSignal(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
+
+VStack(6,
+    ColorPicker.Create(color, alphaEnabled: true),
+    // The swatch rides a compositor-only fill binding:
+    new BoxEl { Width = 96, Height = 40, Corners = Radii.ControlAll, Fill = color });
+</code></pre>
+<h3 id="numberbox">NumberBox</h3>
+<p>An editable numeric field. The value is a caller <code>Signal&lt;double&gt;</code> (<code>NaN</code> = cleared); range, step sizes, a spin-button
+placement, expression evaluation and a custom formatter are all parameters.</p>
+<pre><code class="lang-csharp">// Plain numeric field (no spinners — the WinUI default)
+var qty = UseSignal(1.0);
+NumberBox.Create(value: qty, minimum: 0, maximum: 99)
+
+// Inline up/down spinners + Ctrl-expression evaluation
+NumberBox.Create(
+    value: qty, smallChange: 1, largeChange: 10,
+    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Inline,
+    acceptsExpression: true)
+</code></pre>
+<hr>
+<h2 id="pickers--combos-combobox-calendarview-datepicker-timepicker">Pickers &amp; combos: ComboBox, CalendarView, DatePicker, TimePicker</h2>
+<p><strong>ComboBox</strong> is a closed field that opens a dropdown list. Selection is a caller <code>Signal&lt;int&gt;</code> (the <strong>selected index</strong>)
+so a page can read it. Pass the items and the index signal:</p>
+<pre><code class="lang-csharp">static readonly string[] Fonts = { &quot;Segoe UI&quot;, &quot;Cascadia Code&quot;, &quot;Arial&quot;, &quot;Calibri&quot;, &quot;Consolas&quot;, &quot;Georgia&quot; };
+var sel = UseSignal(0);
+
+ComboBox.Create(Fonts, sel, placeholder: &quot;Pick a font&quot;)
+</code></pre>
+<p><strong>Editable ComboBox</strong> adds search-as-you-type, auto-complete and a custom-text path. Pass <code>editable: true</code> and a
+<code>Signal&lt;string&gt;</code> for the live text alongside the index signal:</p>
+<pre><code class="lang-csharp">var editSel  = UseSignal(-1);
+var editText = UseSignal(&quot;&quot;);
+
+ComboBox.Create(Fonts, editSel, editable: true, text: editText, placeholder: &quot;Type or pick&quot;)
+</code></pre>
+<p><strong>CalendarView</strong> shows a full month and lets the user pick a date. The parameterless <code>Create()</code> owns its displayed
+month and selected day internally; the <code>Create(Signal&lt;DateOnly?&gt; selectedDate, …)</code> overload binds the selection to a
+signal and accepts min/max dates, the selection mode, first-day-of-week and display mode. The bordered box is the WinUI
+<code>CalendarViewBorder</code> chrome:</p>
+<pre><code class="lang-csharp">new BoxEl
+{
+    Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
+    Children = [CalendarView.Create()],
+}
+</code></pre>
+<p><strong>DatePicker</strong> picks a date with month/day/year columns. The selection is a <code>Signal&lt;DateOnly?&gt;</code>. Each column can be
+hidden (<code>dayVisible</code>/<code>monthVisible</code>/<code>yearVisible</code>) and the year range constrained (<code>minYear</code>/<code>maxYear</code>):</p>
+<pre><code class="lang-csharp">var date = UseSignal&lt;DateOnly?&gt;(null);
+
+DatePicker.Create(date)                                   // all three columns
+DatePicker.Create(noYear, yearVisible: false)             // hide the year column
+DatePicker.Create(ranged, minYear: 2020, maxYear: 2030)   // constrain the year range
+</code></pre>
+<p><strong>TimePicker</strong> picks a time with hour/minute/AM-PM columns. The parameterless <code>Create()</code> owns its state; the
+<code>Create(Signal&lt;TimeOnly?&gt; selectedTime, …)</code> overload binds it and accepts a <code>clockIdentifier</code> and <code>minuteIncrement</code>.
+(There's also <strong>CalendarDatePicker</strong> — a field that drops a <code>CalendarView</code> in a light-dismiss flyout, taking a
+<code>Signal&lt;DateOnly?&gt; date</code>.)</p>
+<pre><code class="lang-csharp">TimePicker.Create()
+</code></pre>
+<hr>
+<h2 id="text-input-textbox-passwordbox-autosuggestbox">Text input: TextBox, PasswordBox, AutoSuggestBox</h2>
+<p><strong>TextBox</strong> is a single-line field (multi-line with <code>acceptsReturn: true</code>). Two-way text is a <code>Signal&lt;string&gt;</code>; an
+optional <code>header</code>/<code>description</code>, <code>maxLength</code>, <code>isReadOnly</code> and an <code>onCommit</code> (Enter) callback round it out. Type to
+edit; Enter commits, Esc cancels.</p>
+<pre><code class="lang-csharp">// Simplest
+TextBox.Create(&quot;Enter your name&quot;)
+
+// Header + description
+TextBox.Create(&quot;you@example.com&quot;, 280f, &quot;Email&quot;,
+    description: &quot;We'll only use this to contact you.&quot;)
+
+// Two-way text with an Enter commit, and a live readout that does NOT re-render the page
+var text = UseSignal(&quot;&quot;);
+var (committed, setCommitted) = UseState(&quot;—&quot;);
+VStack(4,
+    TextBox.Create(&quot;Type, then press Enter&quot;, 280f, text: text, onCommit: setCommitted),
+    new TextEl(&quot;&quot;) { Text = text });          // compositor-only text binding — no re-render per keystroke
+</code></pre>
+<p>Other useful TextBox parameters from the gallery: <code>maxLength: 12</code> (with a live <code>text.Value.Length</code> readout),
+<code>isReadOnly: true</code>, and <code>beforeTextChanging: s =&gt; s.All(char.IsAsciiDigit)</code> (the gate receives the proposed full text;
+returning false rejects the insertion — typing, paste, IME).</p>
+<p><strong>PasswordBox</strong> masks its content. <code>revealMode</code> is <code>Peek</code> (default — press-and-hold eye while typing), <code>Hidden</code> or
+<code>Visible</code>; <code>passwordChar</code> overrides the mask glyph; the live value is a <code>Signal&lt;string&gt;</code> via <code>password:</code> for validation.</p>
+<pre><code class="lang-csharp">PasswordBox.Create()                                                  // Peek reveal, default mask
+PasswordBox.Create(&quot;Password&quot;, 280f, &quot;Password&quot;)                      // with a header
+PasswordBox.Create(&quot;Enter your PIN&quot;, 280f, passwordChar: '#')         // custom mask glyph
+
+// Validate on PasswordChanged
+var pw = UseSignal(&quot;&quot;);
+PasswordBox.Create(&quot;At least 8 characters&quot;, 280f, maxLength: 16, password: pw)
+</code></pre>
+<p><strong>AutoSuggestBox</strong> offers a filtered list as the user types. Pass the suggestion source and a placeholder;
+<code>onSuggestionChosen</code> (arrow-key or row click) and <code>onQuerySubmitted</code> (Enter, search button, or row click) are the
+events. <code>queryIcon: null</code> drops the search button; <code>textChanged: (q, reason) =&gt; …</code> carries the WinUI change reason
+(debounced 150 ms).</p>
+<pre><code class="lang-csharp">string[] fruits = { &quot;Apple&quot;, &quot;Apricot&quot;, &quot;Banana&quot;, &quot;Blueberry&quot;, &quot;Cherry&quot;,
+                    &quot;Grape&quot;, &quot;Mango&quot;, &quot;Orange&quot;, &quot;Peach&quot;, &quot;Pear&quot; };
+
+AutoSuggestBox.Create(fruits, &quot;Search fruits&quot;)
+
+// With events
+AutoSuggestBox.Create(fruits, &quot;Type a fruit, then press Enter&quot;,
+    onSuggestionChosen: setChosen,
+    onQuerySubmitted:   setQuery)
+</code></pre>
+<hr>
+<h2 id="restyling-a-controls-internals-with-templateparts">Restyling a control's internals with TemplateParts</h2>
+<p>When the <code>Style</code> record and modifiers aren't enough — you need to recolour a control's <strong>rail</strong>, its <strong>chevron</strong>, its
+<strong>check square</strong>, its <strong>thumb</strong> — there is exactly <strong>one</strong> generic door: <code>TemplateParts</code>. It is the CSS <code>::part</code> /
+WinUI lightweight-styling analogue, signals-native. New per-control styling knobs are banned by design; if a prop's
+only job is to restyle one template part, it must be a Parts modifier instead.</p>
+<p>Each control exports <code>PartXxx</code> name consts and accepts a trailing <code>TemplateParts? parts</code>. You layer <strong>any element
+props</strong> onto a named part with a <code>with</code> expression. For <code>BoxEl</code> parts use the object-initializer indexer; for a
+non-<code>BoxEl</code> part (a <code>TextEl</code> glyph, a stroke mark) use <code>Set&lt;T&gt;</code>:</p>
+<pre><code class="lang-csharp">var parts = new TemplateParts
+{
+    // A BoxEl part: recolour the slider rail and round it harder.
+    [Slider.PartRail] = b =&gt; b with { Fill = Tok.FillControlStrong, Corners = CornerRadius4.All(4f) },
+};
+// A TextEl part: restyle the combo's chevron glyph.
+parts.Set&lt;TextEl&gt;(ComboBox.PartChevron, t =&gt; t with { Color = Tok.AccentDefault });
+
+Slider.Bind(volume, parts: parts);
+ComboBox.Create(items, sel, parts: parts);
+</code></pre>
+<p>The contract (from <a href="../../guide/control-fidelity.md">control fidelity §6</a>):</p>
+<ul>
+<li>A modifier is a <strong>pure <code>with</code>-copy</strong> of its input — never write a signal inside one (reads are fine; a read
+subscribes the owning control to that granular restyle).</li>
+<li>It is <strong>type-preserving</strong>: a modifier that changes the record type is ignored. Parts <em>style</em>; content <strong>slots</strong>
+(<code>Content</code>, <code>HeaderContent</code>) <em>restructure</em>.</li>
+<li>The control <strong>re-asserts its mechanics-critical props after your modifier</strong> — toggle clicks, value-position geometry,
+ref captures, the scrub handlers. Each part const's doc lists exactly what it owns. So you can restyle everything and
+break nothing, but you cannot, say, steal the value-position transform off a slider's thumb.</li>
+<li>For per-frame-hot values, set a <strong>bound prop</strong> (<code>Fill</code>/<code>Transform</code> as a <code>Func</code>/signal), not a static value.</li>
+<li><strong>Do not</strong> put a per-item <code>TemplateParts</code> modifier in a recycled scroll path — that's the banned virtualization
+hazard. Per-item variation goes through the <code>PartDelta</code> value seam instead (see the collections docs in
+<a href="../../guide/components-elements-layout.md">components-elements-layout</a>).</li>
+</ul>
+<p>The part vocabulary is per control — e.g. <code>Slider.PartContainer/PartRail/PartValueFill/PartThumb/PartInnerDot/PartTickBar</code>,
+<code>ComboBox.PartField/PartChevron/PartItemRow/PartItemPill</code>, <code>CheckBox.PartRoot/PartBox/PartMark/PartLabel</code>,
+<code>ToggleSwitch.PartRoot/PartTrack/PartKnobHost/PartKnob/…</code>. Open the control source to see its consts and their owned-prop
+notes.</p>
+<hr>
+<h2 id="where-each-controls-verified-snippet-lives-in-the-gallery">Where each control's verified snippet lives in the gallery</h2>
+<p>Every recipe above is mined from a runnable gallery page — read these for the full, compiling context (each builds its
+demo with <code>ControlExample.Build(title, body, output:, code:)</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Control(s)</th>
+<th>Gallery page (<code>src/FluentGpu.WindowsApp/…</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Button, IconButton, ToggleButton (extended demos)</td>
+<td><code>GalleryPages.cs</code> → <code>ButtonsPage</code></td>
+</tr>
+<tr>
+<td>Button (standard/accent/disabled)</td>
+<td><code>ControlGalleryPages.cs</code> → <code>ButtonControlPage</code></td>
+</tr>
+<tr>
+<td>DropDownButton</td>
+<td><code>ControlGalleryPages.cs</code> → <code>DropDownButtonControlPage</code></td>
+</tr>
+<tr>
+<td>SplitButton, ToggleSplitButton</td>
+<td><code>ControlGalleryPages.cs</code> → <code>SplitButtonControlPage</code>, <code>ToggleSplitButtonControlPage</code></td>
+</tr>
+<tr>
+<td>HyperlinkButton</td>
+<td><code>ControlGalleryPages.cs</code> → <code>HyperlinkButtonControlPage</code></td>
+</tr>
+<tr>
+<td>RepeatButton</td>
+<td><code>ControlGalleryPages.cs</code> → <code>RepeatButtonControlPage</code></td>
+</tr>
+<tr>
+<td>ToggleButton</td>
+<td><code>ControlGalleryPages.cs</code> → <code>ToggleButtonControlPage</code></td>
+</tr>
+<tr>
+<td>CheckBox (+ select-all)</td>
+<td><code>ControlGalleryPages.cs</code> → <code>CheckBoxControlPage</code></td>
+</tr>
+<tr>
+<td>RadioButton.Group</td>
+<td><code>ControlGalleryPages.cs</code> → <code>RadioButtonControlPage</code></td>
+</tr>
+<tr>
+<td>ToggleSwitch</td>
+<td><code>ControlGalleryPages.cs</code> → <code>ToggleSwitchControlPage</code></td>
+</tr>
+<tr>
+<td>Slider (Bind/Ranged/ticks/vertical)</td>
+<td><code>ControlGalleryPages.cs</code> → <code>SliderControlPage</code></td>
+</tr>
+<tr>
+<td>Slider.Create + ScrollBar (controlled demos)</td>
+<td><code>GalleryPages.cs</code> → <code>InputsPage</code></td>
+</tr>
+<tr>
+<td>RatingControl</td>
+<td><code>ControlGalleryPages.cs</code> → <code>RatingControlControlPage</code></td>
+</tr>
+<tr>
+<td>ColorPicker</td>
+<td><code>ControlGalleryPages.cs</code> → <code>ColorPickerControlPage</code></td>
+</tr>
+<tr>
+<td>ComboBox (+ editable)</td>
+<td><code>ControlGalleryPages.cs</code> → <code>ComboBoxControlPage</code></td>
+</tr>
+<tr>
+<td>TextBox</td>
+<td><code>TextPages.cs</code> → <code>TextBoxPage</code></td>
+</tr>
+<tr>
+<td>PasswordBox</td>
+<td><code>TextPages.cs</code> → <code>PasswordBoxPage</code></td>
+</tr>
+<tr>
+<td>AutoSuggestBox</td>
+<td><code>TextPages.cs</code> → <code>AutoSuggestBoxPage</code></td>
+</tr>
+<tr>
+<td>CalendarView, DatePicker, TimePicker, CalendarDatePicker</td>
+<td><code>DateTimePages.cs</code></td>
+</tr>
+<tr>
+<td>MenuBar, AppBarButton (MenuFlyoutItem usage)</td>
+<td><code>CollectionsMenusPages.cs</code></td>
+</tr>
+</tbody>
+</table>
+<p>For the control catalog's deeper design notes and the honest WinUI-fidelity scorecard, see
+<a href="../../guide/control-fidelity.md">control fidelity</a> and the
+<a href="../../guide/winui-control-parity-audit.md">WinUI control parity audit</a>. The architecture/canon authority lives in the
+design corpus (<a href="../../../design/SPEC-INDEX.md">SPEC-INDEX</a>).</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

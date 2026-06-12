@@ -604,6 +604,7 @@ internal sealed class RangedSlider : Component
         void OpenTip()
         {
             if (!tooltipEnabled) return;
+            if (Diag.Enabled) Diag.Event("sliderTip", $"OpenTip phase={tipPhase.Peek()} open={tip.Value is { IsOpen: true }}");
             if (tip.Value is { IsOpen: true }) { if (tipPhase.Peek() != 2) tipPhase.Value = 2; return; }
             tipPhase.Value = 2;
             tip.Value = svc.Open(
@@ -615,6 +616,7 @@ internal sealed class RangedSlider : Component
 
         void CloseTip()
         {
+            if (Diag.Enabled) Diag.Event("sliderTip", $"CloseTip phase={tipPhase.Peek()} open={tip.Value is { IsOpen: true }}");
             if (tip.Value is { IsOpen: true } h) h.Close();
             tip.Value = null;
             if (tipPhase.Peek() != 0) tipPhase.Value = 0;
@@ -668,12 +670,14 @@ internal sealed class RangedSlider : Component
             float main = o.Vertical ? p.Y : p.X;
             float cross = o.Vertical ? p.X : p.Y;
             bool overThumb = MathF.Abs(main - cMain) <= half && MathF.Abs(cross - thickness * 0.5f) <= half;
+            if (Diag.Enabled) Diag.Event("sliderTip", $"hoverMove p=({p.X:0.#},{p.Y:0.#}) overThumb={overThumb} phase={tipPhase.Peek()}");
             if (overThumb) { if (tipPhase.Peek() == 0) tipPhase.Value = 1; }
             else if (tipPhase.Peek() == 1) tipPhase.Value = 0;
         }
 
         void Exit()
         {
+            if (Diag.Enabled) Diag.Event("sliderTip", $"pointerExit pressed={TrackPressed()} phase={tipPhase.Peek()}");
             // The tooltip stays visible while the slider is pressed — capture keeps the drag alive outside the bounds
             // (Slider_Partial.cpp:454-472); otherwise pointer-leave cancels a pending open / closes an open bubble.
             if (!TrackPressed()) CloseTip();
@@ -880,10 +884,14 @@ internal sealed class RangedSlider : Component
             ],
         };
 
-        return clock is null ? withHeader : new BoxEl
+        // STABLE root shape: the wrapper always exists, so arming/disarming the hover clock only appends/removes the
+        // trailing zero-size child — the track subtree at child 0 is never reshaped by the in-place differ. (The old
+        // conditional wrap morphed rail→track nodes in place on every phase flip, leaving stale OffsetY transforms
+        // that flapped the hover arm and restarted the tooltip delay forever — the "hover jiggle + tooltip freeze".)
+        return new BoxEl
         {
             Direction = 1,
-            Children = [withHeader, clock],
+            Children = clock is null ? [withHeader] : [withHeader, clock],
         };
     }
 }

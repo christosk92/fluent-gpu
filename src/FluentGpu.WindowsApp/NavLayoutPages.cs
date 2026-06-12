@@ -121,25 +121,38 @@ sealed class TabViewPage : Component
     static readonly string[] Tabs = { "Document 1", "Document 2", "Document 3" };
     public override Element Render()
     {
+        // The "+" appends a new tab, mirroring the WinUI Gallery's TabView_AddButtonClick (TabViewPage.xaml.cs:51-54
+        // → CreateNewTab: Header "Document {n}", Symbol.Document). A render-stable counter keeps the numbering
+        // monotonic across re-renders (Render() re-runs but the control seeds its list once at mount).
+        var nextDoc = UseRef(Tabs.Length + 1);
+        Func<TabViewItem?> addDoc = () => new TabViewItem { Header = $"Document {nextDoc.Value++}", Icon = Icons.Document };
+
         // Template-parts restyle: a tinted strip + larger tab labels (selection mechanics untouched).
         var parts = new TemplateParts { [TabView.PartStrip] = s => s with { Fill = Tok.FillSolidBaseAlt } };
         parts.Set<TextEl>(TabView.PartTabLabel, t => t with { Size = 14f });
 
         return GalleryPage.Shell("TabView",
             "Displays a set of tabs and their content — for managing multiple documents or pages.",
-            ControlExample.Build("A TabView", Frame(TabView.Create(Tabs)),
+            ControlExample.Build("A TabView", Frame(TabView.Create(Tabs, onAddTabButtonClick: addDoc)),
+                description: "The \"+\" adds a new document tab; tabs reflow smoothly as they are added or closed.",
                 code: """
                 static readonly string[] Tabs = { "Document 1", "Document 2", "Document 3" };
+                var nextDoc = UseRef(Tabs.Length + 1);   // monotonic numbering across re-renders
 
-                TabView.Create(Tabs)
+                TabView.Create(Tabs,
+                    onAddTabButtonClick: () => new TabViewItem { Header = $"Document {nextDoc.Value++}", Icon = Icons.Document })
                 """),
-            ControlExample.Build("Restyling tabs with template parts", Frame(Embed.Comp(() => new TabView { Tabs = Tabs, Parts = parts })),
+            ControlExample.Build("Restyling tabs with template parts", Frame(Embed.Comp(() => new TabView { Tabs = Tabs, Parts = parts, OnAddTabButtonClick = addDoc })),
                 description: "Template parts restyle the strip and tab labels without re-templating the control.",
                 code: """
                 var parts = new TemplateParts { [TabView.PartStrip] = s => s with { Fill = Tok.FillSolidBaseAlt } };
                 parts.Set<TextEl>(TabView.PartTabLabel, t => t with { Size = 14f });
 
-                Embed.Comp(() => new TabView { Tabs = Tabs, Parts = parts })
+                Embed.Comp(() => new TabView
+                {
+                    Tabs = Tabs, Parts = parts,
+                    OnAddTabButtonClick = () => new TabViewItem { Header = $"Document {nextDoc.Value++}", Icon = Icons.Document },
+                })
                 """));
     }
 

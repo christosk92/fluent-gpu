@@ -1,0 +1,2053 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.AutoSuggestBox
+  commentId: T:FluentGpu.Controls.AutoSuggestBox
+  id: AutoSuggestBox
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.AutoSuggestBox.Create(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Single,FluentGpu.Signals.Signal{System.String},System.Action{System.String},System.Action{System.String},System.Action{System.String},System.String,System.Single,System.Single,System.Action{System.String,FluentGpu.Controls.TextChangeReason},System.Boolean,FluentGpu.Dsl.TemplateParts)
+  - FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  - FluentGpu.Controls.AutoSuggestBox.IconFontSize
+  - FluentGpu.Controls.AutoSuggestBox.ItemMinHeight
+  - FluentGpu.Controls.AutoSuggestBox.MaxHeight
+  - FluentGpu.Controls.AutoSuggestBox.MaxPopupHeight
+  - FluentGpu.Controls.AutoSuggestBox.OnQuerySubmitted
+  - FluentGpu.Controls.AutoSuggestBox.OnSuggestionChosen
+  - FluentGpu.Controls.AutoSuggestBox.OnTextChanged
+  - FluentGpu.Controls.AutoSuggestBox.PartQueryButton
+  - FluentGpu.Controls.AutoSuggestBox.PartQueryIcon
+  - FluentGpu.Controls.AutoSuggestBox.PartRoot
+  - FluentGpu.Controls.AutoSuggestBox.PartSuggestionItem
+  - FluentGpu.Controls.AutoSuggestBox.PartSuggestionsList
+  - FluentGpu.Controls.AutoSuggestBox.Parts
+  - FluentGpu.Controls.AutoSuggestBox.Placeholder
+  - FluentGpu.Controls.AutoSuggestBox.QueryButtonHeight
+  - FluentGpu.Controls.AutoSuggestBox.QueryButtonLeftMargin
+  - FluentGpu.Controls.AutoSuggestBox.QueryButtonWidth
+  - FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  - FluentGpu.Controls.AutoSuggestBox.Render
+  - FluentGpu.Controls.AutoSuggestBox.RightButtonMargin
+  - FluentGpu.Controls.AutoSuggestBox.Suggestions
+  - FluentGpu.Controls.AutoSuggestBox.Text
+  - FluentGpu.Controls.AutoSuggestBox.TextChanged
+  - FluentGpu.Controls.AutoSuggestBox.TextChangedDebounceMs
+  - FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  - FluentGpu.Controls.AutoSuggestBox.Width
+  langs:
+  - csharp
+  - vb
+  name: AutoSuggestBox
+  nameWithType: AutoSuggestBox
+  fullName: FluentGpu.Controls.AutoSuggestBox
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AutoSuggestBox
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    A WinUI AutoSuggestBox: an <xref href="FluentGpu.Controls.EditableText" data-throw-if-not-resolved="false"></xref> field whose filtered suggestions are hosted in a light-dismiss
+
+    <b>popup</b> (an anchored overlay), not inline — so the list floats over content instead of reflowing the page and
+
+    auto-flips above the box when there is no room below (same plumbing as <xref href="FluentGpu.Controls.ComboBox" data-throw-if-not-resolved="false"></xref>).
+
+
+    <p>
+
+    The list is opened iff the query is non-empty and there is at least one match (WinUI <code>UpdateSuggestionListVisibility</code>:
+
+    open iff <code>maxHeight &gt; 0 ∧ count &gt; 0</code>), driven from a <code>UseEffect</code> keyed on the query so the open/close runs
+
+    after the render commits (no side effects in render). The popup body is wrapped in its own <xref href="FluentGpu.Hooks.Embed.Comp%60%601(System.Func%7b%60%600%7d)" data-throw-if-not-resolved="false"></xref>
+
+    <xref href="FluentGpu.Controls.SuggestionsList" data-throw-if-not-resolved="false"></xref> Component that subscribes to the shared query/highlight <xref href="FluentGpu.Signals.Signal%601" data-throw-if-not-resolved="false"></xref>s, so it
+
+    RE-FILTERS on every keystroke — an overlay content thunk is otherwise a one-shot snapshot (only re-evaluated when the
+
+    OverlayHost version bumps on open/close).
+
+    </p>
+
+    <p>
+
+    <b>TextChanged + reason (AutoSuggestBox_Partial.cpp OnTextBoxTextChanged :451–503).</b> EVERY text change — user
+
+    edit, programmatic restore, suggestion preview — Stop()+Start()s the 150ms timer (<code>s_textChangedEventTimerDuration</code>
+
+    = 1500000 ticks) carrying the change's <xref href="FluentGpu.Controls.TextChangeReason" data-throw-if-not-resolved="false"></xref> (cpp:464), so the public <xref href="FluentGpu.Controls.AutoSuggestBox.TextChanged" data-throw-if-not-resolved="false"></xref>
+
+    fires once typing pauses, with the LAST reason. Only <code>UserInput</code> changes cache <code>m_userTypedText</code>, reset the
+
+    keyboard cursor and update the list visibility (cpp:477–496). Set <xref href="FluentGpu.Controls.AutoSuggestBox.DebounceMs" data-throw-if-not-resolved="false"></xref>=0 to fire synchronously.
+
+    </p>
+
+    <p>
+
+    <b>SuggestionChosen + arrow preview (cpp OnSuggestionSelectionChanged :2298–2411).</b> Moving the suggestion-list
+
+    selection (arrow keys, row click) raises <code>SuggestionChosen</code> for the newly selected item; when
+
+    <xref href="FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect" data-throw-if-not-resolved="false"></xref> (default true, cpp:2366–2381) the item text is also previewed into the field with
+
+    reason <xref href="FluentGpu.Controls.TextChangeReason.SuggestionChosen" data-throw-if-not-resolved="false"></xref> (cpp:2380). Stepping PAST either end restores the user-typed
+
+    text with reason <code>ProgrammaticChange</code> and clears the selection (cpp:1101/1109). Enter submits the query
+
+    (QueryText = the field text, ChosenSuggestion = the highlighted item) WITHOUT re-raising SuggestionChosen
+
+    (cpp:1149–1160 + SubmitQuery :857–878). A row click runs SelectionChanged → SuggestionChosen → QuerySubmitted
+
+    sequentially (cpp OnListViewItemClick :2413–2437). Escape restores the typed text and closes (cpp:634–643).
+
+    </p>
+
+    <p>
+
+    <b>Corner-joining (WinUI <code>AutoSuggestBoxHelper::UpdateCornerRadius</code> / <code>KeepInteriorCornersSquare=true</code>).</b> While
+
+    the list is open the field squares the corners that abut the popup so the field+list read as one piece. WinUI squares the
+
+    field BOTTOM (open-down) or TOP (open-up) and the matching popup edge; we square the field bottom corners (open-down — the
+
+    dominant case) here. The popup-surface corner squaring is host-owned: <xref href="FluentGpu.Controls.FlyoutSurface" data-throw-if-not-resolved="false"></xref> already receives the
+
+    <xref href="FluentGpu.Controls.CornerJoin" data-throw-if-not-resolved="false"></xref> from <xref href="FluentGpu.Controls.FlyoutPositioner" data-throw-if-not-resolved="false"></xref> on its <xref href="FluentGpu.Controls.OverlayEntry" data-throw-if-not-resolved="false"></xref> but currently renders
+
+    <code>Radii.OverlayAll</code> unconditionally — see the deferred note in the task report (cannot be fixed from this file).
+
+    </p>
+  example: []
+  syntax:
+    content: 'public sealed class AutoSuggestBox : Component'
+    content.vb: Public NotInheritable Class AutoSuggestBox Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.AutoSuggestBox.ItemMinHeight
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.ItemMinHeight
+  id: ItemMinHeight
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: ItemMinHeight
+  nameWithType: AutoSuggestBox.ItemMinHeight
+  fullName: FluentGpu.Controls.AutoSuggestBox.ItemMinHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ItemMinHeight
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float ItemMinHeight = 40
+    return:
+      type: System.Single
+    content.vb: Public Const ItemMinHeight As Single = 40
+- uid: FluentGpu.Controls.AutoSuggestBox.IconFontSize
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.IconFontSize
+  id: IconFontSize
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: IconFontSize
+  nameWithType: AutoSuggestBox.IconFontSize
+  fullName: FluentGpu.Controls.AutoSuggestBox.IconFontSize
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IconFontSize
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float IconFontSize = 12
+    return:
+      type: System.Single
+    content.vb: Public Const IconFontSize As Single = 12
+- uid: FluentGpu.Controls.AutoSuggestBox.MaxPopupHeight
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.MaxPopupHeight
+  id: MaxPopupHeight
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: MaxPopupHeight
+  nameWithType: AutoSuggestBox.MaxPopupHeight
+  fullName: FluentGpu.Controls.AutoSuggestBox.MaxPopupHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxPopupHeight
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float MaxPopupHeight = 374
+    return:
+      type: System.Single
+    content.vb: Public Const MaxPopupHeight As Single = 374
+- uid: FluentGpu.Controls.AutoSuggestBox.RightButtonMargin
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.RightButtonMargin
+  id: RightButtonMargin
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: RightButtonMargin
+  nameWithType: AutoSuggestBox.RightButtonMargin
+  fullName: FluentGpu.Controls.AutoSuggestBox.RightButtonMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: RightButtonMargin
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float RightButtonMargin = 4
+    return:
+      type: System.Single
+    content.vb: Public Const RightButtonMargin As Single = 4
+- uid: FluentGpu.Controls.AutoSuggestBox.QueryButtonWidth
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.QueryButtonWidth
+  id: QueryButtonWidth
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: QueryButtonWidth
+  nameWithType: AutoSuggestBox.QueryButtonWidth
+  fullName: FluentGpu.Controls.AutoSuggestBox.QueryButtonWidth
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueryButtonWidth
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float QueryButtonWidth = 32
+    return:
+      type: System.Single
+    content.vb: Public Const QueryButtonWidth As Single = 32
+- uid: FluentGpu.Controls.AutoSuggestBox.QueryButtonHeight
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.QueryButtonHeight
+  id: QueryButtonHeight
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: QueryButtonHeight
+  nameWithType: AutoSuggestBox.QueryButtonHeight
+  fullName: FluentGpu.Controls.AutoSuggestBox.QueryButtonHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueryButtonHeight
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float QueryButtonHeight = 28
+    return:
+      type: System.Single
+    content.vb: Public Const QueryButtonHeight As Single = 28
+- uid: FluentGpu.Controls.AutoSuggestBox.QueryButtonLeftMargin
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.QueryButtonLeftMargin
+  id: QueryButtonLeftMargin
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: QueryButtonLeftMargin
+  nameWithType: AutoSuggestBox.QueryButtonLeftMargin
+  fullName: FluentGpu.Controls.AutoSuggestBox.QueryButtonLeftMargin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueryButtonLeftMargin
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float QueryButtonLeftMargin = 2
+    return:
+      type: System.Single
+    content.vb: Public Const QueryButtonLeftMargin As Single = 2
+- uid: FluentGpu.Controls.AutoSuggestBox.TextChangedDebounceMs
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.TextChangedDebounceMs
+  id: TextChangedDebounceMs
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: TextChangedDebounceMs
+  nameWithType: AutoSuggestBox.TextChangedDebounceMs
+  fullName: FluentGpu.Controls.AutoSuggestBox.TextChangedDebounceMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextChangedDebounceMs
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public const float TextChangedDebounceMs = 150
+    return:
+      type: System.Single
+    content.vb: Public Const TextChangedDebounceMs As Single = 150
+- uid: FluentGpu.Controls.AutoSuggestBox.PartRoot
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.PartRoot
+  id: PartRoot
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: PartRoot
+  nameWithType: AutoSuggestBox.PartRoot
+  fullName: FluentGpu.Controls.AutoSuggestBox.PartRoot
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartRoot
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 73
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The field surface root (the chrome + popup anchor). Owned: OnKeyDown (the Up/Down suggestion nav),
+        Role, Children, OnRealized (the anchor capture, chained). The open-state corner squaring (KeepInteriorCornersSquare)
+        is recomputed per render BEFORE the modifier — override Corners to opt out.
+  example: []
+  syntax:
+    content: public const string PartRoot = "Root"
+    return:
+      type: System.String
+    content.vb: Public Const PartRoot As String = "Root"
+- uid: FluentGpu.Controls.AutoSuggestBox.PartQueryButton
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.PartQueryButton
+  id: PartQueryButton
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: PartQueryButton
+  nameWithType: AutoSuggestBox.PartQueryButton
+  fullName: FluentGpu.Controls.AutoSuggestBox.PartQueryButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartQueryButton
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 76
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The query-button plate (WinUI QueryButton — the INNER presenter that carries the TextControlButton
+        chrome; the fixed 32×28 outer slot is not a part). Owned: OnClick (submit), Role.
+  example: []
+  syntax:
+    content: public const string PartQueryButton = "QueryButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartQueryButton As String = "QueryButton"
+- uid: FluentGpu.Controls.AutoSuggestBox.PartQueryIcon
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.PartQueryIcon
+  id: PartQueryIcon
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: PartQueryIcon
+  nameWithType: AutoSuggestBox.PartQueryIcon
+  fullName: FluentGpu.Controls.AutoSuggestBox.PartQueryIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartQueryIcon
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 79
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The query glyph (a TextEl — use <code>Parts.Set&lt;TextEl&gt;</code>; the glyph STRING is the
+        <xref href="FluentGpu.Controls.AutoSuggestBox.QueryIcon" data-throw-if-not-resolved="false"></xref> prop). Owned: none.
+  example: []
+  syntax:
+    content: public const string PartQueryIcon = "QueryIcon"
+    return:
+      type: System.String
+    content.vb: Public Const PartQueryIcon As String = "QueryIcon"
+- uid: FluentGpu.Controls.AutoSuggestBox.PartSuggestionsList
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.PartSuggestionsList
+  id: PartSuggestionsList
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: PartSuggestionsList
+  nameWithType: AutoSuggestBox.PartSuggestionsList
+  fullName: FluentGpu.Controls.AutoSuggestBox.PartSuggestionsList
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSuggestionsList
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The popup scroll host (WinUI SuggestionsList; a ScrollEl — use <code>Parts.Set&lt;ScrollEl&gt;</code>).
+        Owned: Content (the row column), ContentSized (the size-to-rows mechanic). Modifiers run inside the popup
+        body's render, so they re-evaluate per keystroke.
+  example: []
+  syntax:
+    content: public const string PartSuggestionsList = "SuggestionsList"
+    return:
+      type: System.String
+    content.vb: Public Const PartSuggestionsList As String = "SuggestionsList"
+- uid: FluentGpu.Controls.AutoSuggestBox.PartSuggestionItem
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.PartSuggestionItem
+  id: PartSuggestionItem
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: PartSuggestionItem
+  nameWithType: AutoSuggestBox.PartSuggestionItem
+  fullName: FluentGpu.Controls.AutoSuggestBox.PartSuggestionItem
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSuggestionItem
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    EVERY suggestion row plate (a repeated part — the popup list is built per render, NOT
+        virtualized/recycled). Owned: OnClick (choose + submit), Role. The keyboard-cursor/selected Fill is recomputed
+        per render BEFORE the modifier.
+  example: []
+  syntax:
+    content: public const string PartSuggestionItem = "SuggestionItem"
+    return:
+      type: System.String
+    content.vb: Public Const PartSuggestionItem As String = "SuggestionItem"
+- uid: FluentGpu.Controls.AutoSuggestBox.Parts
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.Parts
+  id: Parts
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: AutoSuggestBox.Parts
+  fullName: FluentGpu.Controls.AutoSuggestBox.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 91
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract. The inner field chrome is the composed <xref href="FluentGpu.Controls.EditableText" data-throw-if-not-resolved="false"></xref>'s
+        own (not forwarded — its part names would collide with this control's).
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.AutoSuggestBox.Suggestions
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.Suggestions
+  id: Suggestions
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Suggestions
+  nameWithType: AutoSuggestBox.Suggestions
+  fullName: FluentGpu.Controls.AutoSuggestBox.Suggestions
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Suggestions
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public IReadOnlyList<string> Suggestions
+    return:
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    content.vb: Public Suggestions As IReadOnlyList(Of String)
+- uid: FluentGpu.Controls.AutoSuggestBox.Placeholder
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.Placeholder
+  id: Placeholder
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Placeholder
+  nameWithType: AutoSuggestBox.Placeholder
+  fullName: FluentGpu.Controls.AutoSuggestBox.Placeholder
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Placeholder
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 94
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string Placeholder
+    return:
+      type: System.String
+    content.vb: Public Placeholder As String
+- uid: FluentGpu.Controls.AutoSuggestBox.Width
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.Width
+  id: Width
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: AutoSuggestBox.Width
+  fullName: FluentGpu.Controls.AutoSuggestBox.Width
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 95
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Width
+    return:
+      type: System.Single
+    content.vb: Public Width As Single
+- uid: FluentGpu.Controls.AutoSuggestBox.Text
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.Text
+  id: Text
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: AutoSuggestBox.Text
+  fullName: FluentGpu.Controls.AutoSuggestBox.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 96
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Signal<string>? Text
+    return:
+      type: FluentGpu.Signals.Signal{System.String}
+    content.vb: Public Text As Signal(Of String)
+- uid: FluentGpu.Controls.AutoSuggestBox.OnTextChanged
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.OnTextChanged
+  id: OnTextChanged
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: OnTextChanged
+  nameWithType: AutoSuggestBox.OnTextChanged
+  fullName: FluentGpu.Controls.AutoSuggestBox.OnTextChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnTextChanged
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 97
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<string>? OnTextChanged
+    return:
+      type: System.Action{System.String}
+    content.vb: Public OnTextChanged As Action(Of String)
+- uid: FluentGpu.Controls.AutoSuggestBox.TextChanged
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.TextChanged
+  id: TextChanged
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: TextChanged
+  nameWithType: AutoSuggestBox.TextChanged
+  fullName: FluentGpu.Controls.AutoSuggestBox.TextChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextChanged
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 100
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>TextChanged</code> with <code>AutoSuggestBoxTextChangedEventArgs.Reason</code> (debounced 150ms;
+        raised for EVERY change — UserInput / ProgrammaticChange / SuggestionChosen, cpp:451–469).
+  example: []
+  syntax:
+    content: public Action<string, TextChangeReason>? TextChanged
+    return:
+      type: System.Action{System.String,FluentGpu.Controls.TextChangeReason}
+    content.vb: Public TextChanged As Action(Of String, TextChangeReason)
+- uid: FluentGpu.Controls.AutoSuggestBox.OnSuggestionChosen
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.OnSuggestionChosen
+  id: OnSuggestionChosen
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: OnSuggestionChosen
+  nameWithType: AutoSuggestBox.OnSuggestionChosen
+  fullName: FluentGpu.Controls.AutoSuggestBox.OnSuggestionChosen
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnSuggestionChosen
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 101
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<string>? OnSuggestionChosen
+    return:
+      type: System.Action{System.String}
+    content.vb: Public OnSuggestionChosen As Action(Of String)
+- uid: FluentGpu.Controls.AutoSuggestBox.OnQuerySubmitted
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.OnQuerySubmitted
+  id: OnQuerySubmitted
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: OnQuerySubmitted
+  nameWithType: AutoSuggestBox.OnQuerySubmitted
+  fullName: FluentGpu.Controls.AutoSuggestBox.OnQuerySubmitted
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnQuerySubmitted
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 102
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<string>? OnQuerySubmitted
+    return:
+      type: System.Action{System.String}
+    content.vb: Public OnQuerySubmitted As Action(Of String)
+- uid: FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  id: QueryIcon
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: QueryIcon
+  nameWithType: AutoSuggestBox.QueryIcon
+  fullName: FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: QueryIcon
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 103
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? QueryIcon
+    return:
+      type: System.String
+    content.vb: Public QueryIcon As String
+- uid: FluentGpu.Controls.AutoSuggestBox.MaxHeight
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.MaxHeight
+  id: MaxHeight
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: MaxHeight
+  nameWithType: AutoSuggestBox.MaxHeight
+  fullName: FluentGpu.Controls.AutoSuggestBox.MaxHeight
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxHeight
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 104
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float MaxHeight
+    return:
+      type: System.Single
+    content.vb: Public MaxHeight As Single
+- uid: FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  id: DebounceMs
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: DebounceMs
+  nameWithType: AutoSuggestBox.DebounceMs
+  fullName: FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DebounceMs
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 105
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float DebounceMs
+    return:
+      type: System.Single
+    content.vb: Public DebounceMs As Single
+- uid: FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  id: UpdateTextOnSelect
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: UpdateTextOnSelect
+  nameWithType: AutoSuggestBox.UpdateTextOnSelect
+  fullName: FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: UpdateTextOnSelect
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 109
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>UpdateTextOnSelect</code> (default true): arrow-cycling previews the highlighted item's text into
+        the field (reason SuggestionChosen); false leaves the field text untouched while cycling — SuggestionChosen
+        still fires per selection change (cpp:2361–2398 gates only the text write, :2367).
+  example: []
+  syntax:
+    content: public bool UpdateTextOnSelect
+    return:
+      type: System.Boolean
+    content.vb: Public UpdateTextOnSelect As Boolean
+- uid: FluentGpu.Controls.AutoSuggestBox.Create(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Single,FluentGpu.Signals.Signal{System.String},System.Action{System.String},System.Action{System.String},System.Action{System.String},System.String,System.Single,System.Single,System.Action{System.String,FluentGpu.Controls.TextChangeReason},System.Boolean,FluentGpu.Dsl.TemplateParts)
+  commentId: M:FluentGpu.Controls.AutoSuggestBox.Create(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Single,FluentGpu.Signals.Signal{System.String},System.Action{System.String},System.Action{System.String},System.Action{System.String},System.String,System.Single,System.Single,System.Action{System.String,FluentGpu.Controls.TextChangeReason},System.Boolean,FluentGpu.Dsl.TemplateParts)
+  id: Create(System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Single,FluentGpu.Signals.Signal{System.String},System.Action{System.String},System.Action{System.String},System.Action{System.String},System.String,System.Single,System.Single,System.Action{System.String,FluentGpu.Controls.TextChangeReason},System.Boolean,FluentGpu.Dsl.TemplateParts)
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Create(IReadOnlyList<string>, string, float, Signal<string>?, Action<string>?, Action<string>?, Action<string>?, string?, float, float, Action<string, TextChangeReason>?, bool, TemplateParts?)
+  nameWithType: AutoSuggestBox.Create(IReadOnlyList<string>, string, float, Signal<string>?, Action<string>?, Action<string>?, Action<string>?, string?, float, float, Action<string, TextChangeReason>?, bool, TemplateParts?)
+  fullName: FluentGpu.Controls.AutoSuggestBox.Create(System.Collections.Generic.IReadOnlyList<string>, string, float, FluentGpu.Signals.Signal<string>?, System.Action<string>?, System.Action<string>?, System.Action<string>?, string?, float, float, System.Action<string, FluentGpu.Controls.TextChangeReason>?, bool, FluentGpu.Dsl.TemplateParts?)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 111
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static Element Create(IReadOnlyList<string> suggestions, string placeholder = "Search", float width = 280, Signal<string>? text = null, Action<string>? onTextChanged = null, Action<string>? onSuggestionChosen = null, Action<string>? onQuerySubmitted = null, string? queryIcon = "", float maxPopupHeight = 374, float debounceMs = 150, Action<string, TextChangeReason>? textChanged = null, bool updateTextOnSelect = true, TemplateParts? parts = null)
+    parameters:
+    - id: suggestions
+      type: System.Collections.Generic.IReadOnlyList{System.String}
+    - id: placeholder
+      type: System.String
+    - id: width
+      type: System.Single
+    - id: text
+      type: FluentGpu.Signals.Signal{System.String}
+    - id: onTextChanged
+      type: System.Action{System.String}
+    - id: onSuggestionChosen
+      type: System.Action{System.String}
+    - id: onQuerySubmitted
+      type: System.Action{System.String}
+    - id: queryIcon
+      type: System.String
+    - id: maxPopupHeight
+      type: System.Single
+    - id: debounceMs
+      type: System.Single
+    - id: textChanged
+      type: System.Action{System.String,FluentGpu.Controls.TextChangeReason}
+    - id: updateTextOnSelect
+      type: System.Boolean
+    - id: parts
+      type: FluentGpu.Dsl.TemplateParts
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(suggestions As IReadOnlyList(Of String), placeholder As String = "Search", width As Single = 280, text As Signal(Of String) = Nothing, onTextChanged As Action(Of String) = Nothing, onSuggestionChosen As Action(Of String) = Nothing, onQuerySubmitted As Action(Of String) = Nothing, queryIcon As String = "", maxPopupHeight As Single = 374, debounceMs As Single = 150, textChanged As Action(Of String, TextChangeReason) = Nothing, updateTextOnSelect As Boolean = True, parts As TemplateParts = Nothing) As Element
+  overload: FluentGpu.Controls.AutoSuggestBox.Create*
+  nameWithType.vb: AutoSuggestBox.Create(IReadOnlyList(Of String), String, Single, Signal(Of String), Action(Of String), Action(Of String), Action(Of String), String, Single, Single, Action(Of String, TextChangeReason), Boolean, TemplateParts)
+  fullName.vb: FluentGpu.Controls.AutoSuggestBox.Create(System.Collections.Generic.IReadOnlyList(Of String), String, Single, FluentGpu.Signals.Signal(Of String), System.Action(Of String), System.Action(Of String), System.Action(Of String), String, Single, Single, System.Action(Of String, FluentGpu.Controls.TextChangeReason), Boolean, FluentGpu.Dsl.TemplateParts)
+  name.vb: Create(IReadOnlyList(Of String), String, Single, Signal(Of String), Action(Of String), Action(Of String), Action(Of String), String, Single, Single, Action(Of String, TextChangeReason), Boolean, TemplateParts)
+- uid: FluentGpu.Controls.AutoSuggestBox.Render
+  commentId: M:FluentGpu.Controls.AutoSuggestBox.Render
+  id: Render
+  parent: FluentGpu.Controls.AutoSuggestBox
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: AutoSuggestBox.Render()
+  fullName: FluentGpu.Controls.AutoSuggestBox.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/AutoSuggestBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/AutoSuggestBox.cs
+    startLine: 147
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.AutoSuggestBox.Render*
+references:
+- uid: FluentGpu.Controls.EditableText
+  commentId: T:FluentGpu.Controls.EditableText
+  href: FluentGpu.Controls.EditableText.html
+  name: EditableText
+  nameWithType: EditableText
+  fullName: FluentGpu.Controls.EditableText
+- uid: FluentGpu.Controls.ComboBox
+  commentId: T:FluentGpu.Controls.ComboBox
+  href: FluentGpu.Controls.ComboBox.html
+  name: ComboBox
+  nameWithType: ComboBox
+  fullName: FluentGpu.Controls.ComboBox
+- uid: FluentGpu.Hooks.Embed.Comp``1(System.Func{``0})
+  commentId: M:FluentGpu.Hooks.Embed.Comp``1(System.Func{``0})
+  isExternal: true
+  href: FluentGpu.Hooks.Embed.html#FluentGpu_Hooks_Embed_Comp__1_System_Func___0__
+  name: Comp<T>(Func<T>)
+  nameWithType: Embed.Comp<T>(Func<T>)
+  fullName: FluentGpu.Hooks.Embed.Comp<T>(System.Func<T>)
+  nameWithType.vb: Embed.Comp(Of T)(Func(Of T))
+  fullName.vb: FluentGpu.Hooks.Embed.Comp(Of T)(System.Func(Of T))
+  name.vb: Comp(Of T)(Func(Of T))
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Embed.Comp``1(System.Func{``0})
+    name: Comp
+    href: FluentGpu.Hooks.Embed.html#FluentGpu_Hooks_Embed_Comp__1_System_Func___0__
+  - name: <
+  - name: T
+  - name: '>'
+  - name: (
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: <
+  - name: T
+  - name: '>'
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Embed.Comp``1(System.Func{``0})
+    name: Comp
+    href: FluentGpu.Hooks.Embed.html#FluentGpu_Hooks_Embed_Comp__1_System_Func___0__
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: (
+  - uid: System.Func`1
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+  - name: )
+- uid: FluentGpu.Controls.SuggestionsList
+  commentId: T:FluentGpu.Controls.SuggestionsList
+  name: SuggestionsList
+  nameWithType: SuggestionsList
+  fullName: FluentGpu.Controls.SuggestionsList
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Controls.TextChangeReason
+  commentId: T:FluentGpu.Controls.TextChangeReason
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.TextChangeReason.html
+  name: TextChangeReason
+  nameWithType: TextChangeReason
+  fullName: FluentGpu.Controls.TextChangeReason
+- uid: FluentGpu.Controls.AutoSuggestBox.TextChanged
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.TextChanged
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_TextChanged
+  name: TextChanged
+  nameWithType: AutoSuggestBox.TextChanged
+  fullName: FluentGpu.Controls.AutoSuggestBox.TextChanged
+- uid: FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.DebounceMs
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_DebounceMs
+  name: DebounceMs
+  nameWithType: AutoSuggestBox.DebounceMs
+  fullName: FluentGpu.Controls.AutoSuggestBox.DebounceMs
+- uid: FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_UpdateTextOnSelect
+  name: UpdateTextOnSelect
+  nameWithType: AutoSuggestBox.UpdateTextOnSelect
+  fullName: FluentGpu.Controls.AutoSuggestBox.UpdateTextOnSelect
+- uid: FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  commentId: F:FluentGpu.Controls.TextChangeReason.SuggestionChosen
+  href: FluentGpu.Controls.TextChangeReason.html#FluentGpu_Controls_TextChangeReason_SuggestionChosen
+  name: SuggestionChosen
+  nameWithType: TextChangeReason.SuggestionChosen
+  fullName: FluentGpu.Controls.TextChangeReason.SuggestionChosen
+- uid: FluentGpu.Controls.FlyoutSurface
+  commentId: T:FluentGpu.Controls.FlyoutSurface
+  name: FlyoutSurface
+  nameWithType: FlyoutSurface
+  fullName: FluentGpu.Controls.FlyoutSurface
+- uid: FluentGpu.Controls.CornerJoin
+  commentId: T:FluentGpu.Controls.CornerJoin
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.CornerJoin.html
+  name: CornerJoin
+  nameWithType: CornerJoin
+  fullName: FluentGpu.Controls.CornerJoin
+- uid: FluentGpu.Controls.FlyoutPositioner
+  commentId: T:FluentGpu.Controls.FlyoutPositioner
+  href: FluentGpu.Controls.FlyoutPositioner.html
+  name: FlyoutPositioner
+  nameWithType: FlyoutPositioner
+  fullName: FluentGpu.Controls.FlyoutPositioner
+- uid: FluentGpu.Controls.OverlayEntry
+  commentId: T:FluentGpu.Controls.OverlayEntry
+  name: OverlayEntry
+  nameWithType: OverlayEntry
+  fullName: FluentGpu.Controls.OverlayEntry
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  commentId: F:FluentGpu.Controls.AutoSuggestBox.QueryIcon
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_QueryIcon
+  name: QueryIcon
+  nameWithType: AutoSuggestBox.QueryIcon
+  fullName: FluentGpu.Controls.AutoSuggestBox.QueryIcon
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: System.Collections.Generic.IReadOnlyList{System.String}
+  commentId: T:System.Collections.Generic.IReadOnlyList{System.String}
+  parent: System.Collections.Generic
+  definition: System.Collections.Generic.IReadOnlyList`1
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<string>
+  nameWithType: IReadOnlyList<string>
+  fullName: System.Collections.Generic.IReadOnlyList<string>
+  nameWithType.vb: IReadOnlyList(Of String)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of String)
+  name.vb: IReadOnlyList(Of String)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Collections.Generic.IReadOnlyList`1
+  commentId: T:System.Collections.Generic.IReadOnlyList`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  name: IReadOnlyList<T>
+  nameWithType: IReadOnlyList<T>
+  fullName: System.Collections.Generic.IReadOnlyList<T>
+  nameWithType.vb: IReadOnlyList(Of T)
+  fullName.vb: System.Collections.Generic.IReadOnlyList(Of T)
+  name.vb: IReadOnlyList(Of T)
+  spec.csharp:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Collections.Generic.IReadOnlyList`1
+    name: IReadOnlyList
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic.ireadonlylist-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Collections.Generic
+  commentId: N:System.Collections.Generic
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System.Collections.Generic
+  nameWithType: System.Collections.Generic
+  fullName: System.Collections.Generic
+  spec.csharp:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+  spec.vb:
+  - uid: System
+    name: System
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system
+  - name: .
+  - uid: System.Collections
+    name: Collections
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections
+  - name: .
+  - uid: System.Collections.Generic
+    name: Generic
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.collections.generic
+- uid: FluentGpu.Signals.Signal{System.String}
+  commentId: T:FluentGpu.Signals.Signal{System.String}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<string>
+  nameWithType: Signal<string>
+  fullName: FluentGpu.Signals.Signal<string>
+  nameWithType.vb: Signal(Of String)
+  fullName.vb: FluentGpu.Signals.Signal(Of String)
+  name.vb: Signal(Of String)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Action{System.String}
+  commentId: T:System.Action{System.String}
+  parent: System
+  definition: System.Action`1
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<string>
+  nameWithType: Action<string>
+  fullName: System.Action<string>
+  nameWithType.vb: Action(Of String)
+  fullName.vb: System.Action(Of String)
+  name.vb: Action(Of String)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Action`1
+  commentId: T:System.Action`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-1
+  name: Action<T>
+  nameWithType: Action<T>
+  fullName: System.Action<T>
+  nameWithType.vb: Action(Of T)
+  fullName.vb: System.Action(Of T)
+  name.vb: Action(Of T)
+  spec.csharp:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`1
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System.Action{System.String,FluentGpu.Controls.TextChangeReason}
+  commentId: T:System.Action{System.String,FluentGpu.Controls.TextChangeReason}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<string, TextChangeReason>
+  nameWithType: Action<string, TextChangeReason>
+  fullName: System.Action<string, FluentGpu.Controls.TextChangeReason>
+  nameWithType.vb: Action(Of String, TextChangeReason)
+  fullName.vb: System.Action(Of String, FluentGpu.Controls.TextChangeReason)
+  name.vb: Action(Of String, TextChangeReason)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.TextChangeReason
+    name: TextChangeReason
+    href: FluentGpu.Controls.TextChangeReason.html
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: FluentGpu.Controls.TextChangeReason
+    name: TextChangeReason
+    href: FluentGpu.Controls.TextChangeReason.html
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.AutoSuggestBox.Create*
+  commentId: Overload:FluentGpu.Controls.AutoSuggestBox.Create
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_Create_System_Collections_Generic_IReadOnlyList_System_String__System_String_System_Single_FluentGpu_Signals_Signal_System_String__System_Action_System_String__System_Action_System_String__System_Action_System_String__System_String_System_Single_System_Single_System_Action_System_String_FluentGpu_Controls_TextChangeReason__System_Boolean_FluentGpu_Dsl_TemplateParts_
+  name: Create
+  nameWithType: AutoSuggestBox.Create
+  fullName: FluentGpu.Controls.AutoSuggestBox.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.AutoSuggestBox.Render*
+  commentId: Overload:FluentGpu.Controls.AutoSuggestBox.Render
+  href: FluentGpu.Controls.AutoSuggestBox.html#FluentGpu_Controls_AutoSuggestBox_Render
+  name: Render
+  nameWithType: AutoSuggestBox.Render
+  fullName: FluentGpu.Controls.AutoSuggestBox.Render

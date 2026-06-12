@@ -37,6 +37,9 @@ public abstract class Component
     protected void PrefetchImage(string src, int decodePx) => Context.PrefetchImage(src, decodePx);
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
+    /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
+    /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>
+    protected void UseGesture(GestureType kind, Action<GestureEventArgs> handler) => Context.UseGesture(kind, handler);
 
     /// <summary>
     /// True for run-once (signals-native) components: the reconciler runs their body untracked, so the render-effect

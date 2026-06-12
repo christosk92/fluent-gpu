@@ -94,6 +94,7 @@ public sealed class DropDownButton : Component
             children.Add(Parts.Apply(PartIcon, new TextEl(g)
             {
                 Size = 14f, Color = restFg, FontFamily = Theme.IconFont,
+                Margin = new Edges4(0, 0, 8, 0),                                 // icon→content spacing 8 (WinUI inline icon+text gap; mirrors TabView icon Margin)
                 HoverColor = Tok.TextPrimary, PressedColor = Tok.TextSecondary, DisabledColor = Tok.TextDisabled,  // ButtonForeground ramp
             }));
         if (Label.Length > 0)

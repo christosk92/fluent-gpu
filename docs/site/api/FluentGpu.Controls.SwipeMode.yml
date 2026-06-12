@@ -1,0 +1,116 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.SwipeMode
+  commentId: T:FluentGpu.Controls.SwipeMode
+  id: SwipeMode
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.SwipeMode.Execute
+  - FluentGpu.Controls.SwipeMode.Reveal
+  langs:
+  - csharp
+  - vb
+  name: SwipeMode
+  nameWithType: SwipeMode
+  fullName: FluentGpu.Controls.SwipeMode
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SwipeMode
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>SwipeMode</code> (SwipeControl.idl:20-24): Reveal = resting tappable action buttons; Execute = ONE
+        item stretched to the control width that auto-invokes when the swipe opens past the threshold.
+  example: []
+  syntax:
+    content: 'public enum SwipeMode : byte'
+    content.vb: Public Enum SwipeMode As Byte
+- uid: FluentGpu.Controls.SwipeMode.Reveal
+  commentId: F:FluentGpu.Controls.SwipeMode.Reveal
+  id: Reveal
+  parent: FluentGpu.Controls.SwipeMode
+  langs:
+  - csharp
+  - vb
+  name: Reveal
+  nameWithType: SwipeMode.Reveal
+  fullName: FluentGpu.Controls.SwipeMode.Reveal
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Reveal
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Reveal = 0
+    return:
+      type: FluentGpu.Controls.SwipeMode
+- uid: FluentGpu.Controls.SwipeMode.Execute
+  commentId: F:FluentGpu.Controls.SwipeMode.Execute
+  id: Execute
+  parent: FluentGpu.Controls.SwipeMode
+  langs:
+  - csharp
+  - vb
+  name: Execute
+  nameWithType: SwipeMode.Execute
+  fullName: FluentGpu.Controls.SwipeMode.Execute
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/SwipeControl.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Execute
+    path: ../../src/FluentGpu.Controls/SwipeControl.cs
+    startLine: 13
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Execute = 1
+    return:
+      type: FluentGpu.Controls.SwipeMode
+references:
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.SwipeMode
+  commentId: T:FluentGpu.Controls.SwipeMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.SwipeMode.html
+  name: SwipeMode
+  nameWithType: SwipeMode
+  fullName: FluentGpu.Controls.SwipeMode

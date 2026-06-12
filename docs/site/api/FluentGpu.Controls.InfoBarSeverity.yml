@@ -1,0 +1,182 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.InfoBarSeverity
+  commentId: T:FluentGpu.Controls.InfoBarSeverity
+  id: InfoBarSeverity
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.InfoBarSeverity.Error
+  - FluentGpu.Controls.InfoBarSeverity.Informational
+  - FluentGpu.Controls.InfoBarSeverity.Success
+  - FluentGpu.Controls.InfoBarSeverity.Warning
+  langs:
+  - csharp
+  - vb
+  name: InfoBarSeverity
+  nameWithType: InfoBarSeverity
+  fullName: FluentGpu.Controls.InfoBarSeverity
+  type: Enum
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: InfoBarSeverity
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The status level of an <xref href="FluentGpu.Controls.InfoBar" data-throw-if-not-resolved="false"></xref>, which selects its standard icon glyph and severity color
+        (WinUI InfoBarSeverity). Default is <xref href="FluentGpu.Controls.InfoBarSeverity.Informational" data-throw-if-not-resolved="false"></xref>.
+  example: []
+  syntax:
+    content: 'public enum InfoBarSeverity : byte'
+    content.vb: Public Enum InfoBarSeverity As Byte
+- uid: FluentGpu.Controls.InfoBarSeverity.Informational
+  commentId: F:FluentGpu.Controls.InfoBarSeverity.Informational
+  id: Informational
+  parent: FluentGpu.Controls.InfoBarSeverity
+  langs:
+  - csharp
+  - vb
+  name: Informational
+  nameWithType: InfoBarSeverity.Informational
+  fullName: FluentGpu.Controls.InfoBarSeverity.Informational
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Informational
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Informational = 0
+    return:
+      type: FluentGpu.Controls.InfoBarSeverity
+- uid: FluentGpu.Controls.InfoBarSeverity.Success
+  commentId: F:FluentGpu.Controls.InfoBarSeverity.Success
+  id: Success
+  parent: FluentGpu.Controls.InfoBarSeverity
+  langs:
+  - csharp
+  - vb
+  name: Success
+  nameWithType: InfoBarSeverity.Success
+  fullName: FluentGpu.Controls.InfoBarSeverity.Success
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Success
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Success = 1
+    return:
+      type: FluentGpu.Controls.InfoBarSeverity
+- uid: FluentGpu.Controls.InfoBarSeverity.Warning
+  commentId: F:FluentGpu.Controls.InfoBarSeverity.Warning
+  id: Warning
+  parent: FluentGpu.Controls.InfoBarSeverity
+  langs:
+  - csharp
+  - vb
+  name: Warning
+  nameWithType: InfoBarSeverity.Warning
+  fullName: FluentGpu.Controls.InfoBarSeverity.Warning
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Warning
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Warning = 2
+    return:
+      type: FluentGpu.Controls.InfoBarSeverity
+- uid: FluentGpu.Controls.InfoBarSeverity.Error
+  commentId: F:FluentGpu.Controls.InfoBarSeverity.Error
+  id: Error
+  parent: FluentGpu.Controls.InfoBarSeverity
+  langs:
+  - csharp
+  - vb
+  name: Error
+  nameWithType: InfoBarSeverity.Error
+  fullName: FluentGpu.Controls.InfoBarSeverity.Error
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/InfoBar.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Error
+    path: ../../src/FluentGpu.Controls/InfoBar.cs
+    startLine: 7
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: Error = 3
+    return:
+      type: FluentGpu.Controls.InfoBarSeverity
+references:
+- uid: FluentGpu.Controls.InfoBar
+  commentId: T:FluentGpu.Controls.InfoBar
+  href: FluentGpu.Controls.InfoBar.html
+  name: InfoBar
+  nameWithType: InfoBar
+  fullName: FluentGpu.Controls.InfoBar
+- uid: FluentGpu.Controls.InfoBarSeverity.Informational
+  commentId: F:FluentGpu.Controls.InfoBarSeverity.Informational
+  href: FluentGpu.Controls.InfoBarSeverity.html#FluentGpu_Controls_InfoBarSeverity_Informational
+  name: Informational
+  nameWithType: InfoBarSeverity.Informational
+  fullName: FluentGpu.Controls.InfoBarSeverity.Informational
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: FluentGpu.Controls.InfoBarSeverity
+  commentId: T:FluentGpu.Controls.InfoBarSeverity
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.InfoBarSeverity.html
+  name: InfoBarSeverity
+  nameWithType: InfoBarSeverity
+  fullName: FluentGpu.Controls.InfoBarSeverity

@@ -1,0 +1,202 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  id: FluentGpu.Signals
+  children:
+  - FluentGpu.Signals.Computation
+  - FluentGpu.Signals.Effect
+  - FluentGpu.Signals.FloatSignal
+  - FluentGpu.Signals.IReadSignal`1
+  - FluentGpu.Signals.ManagedEffect
+  - FluentGpu.Signals.Memo`1
+  - FluentGpu.Signals.Prop
+  - FluentGpu.Signals.Prop`1
+  - FluentGpu.Signals.Reactive
+  - FluentGpu.Signals.ReactiveRuntime
+  - FluentGpu.Signals.ReactiveScope
+  - FluentGpu.Signals.Signal`1
+  langs:
+  - csharp
+  - vb
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  type: Namespace
+  assemblies:
+  - FluentGpu.Foundation
+references:
+- uid: FluentGpu.Signals.Effect
+  commentId: T:FluentGpu.Signals.Effect
+  href: FluentGpu.Signals.Effect.html
+  name: Effect
+  nameWithType: Effect
+  fullName: FluentGpu.Signals.Effect
+- uid: FluentGpu.Signals.ManagedEffect
+  commentId: T:FluentGpu.Signals.ManagedEffect
+  href: FluentGpu.Signals.ManagedEffect.html
+  name: ManagedEffect
+  nameWithType: ManagedEffect
+  fullName: FluentGpu.Signals.ManagedEffect
+- uid: FluentGpu.Signals.Memo`1
+  commentId: T:FluentGpu.Signals.Memo`1
+  href: FluentGpu.Signals.Memo-1.html
+  name: Memo<T>
+  nameWithType: Memo<T>
+  fullName: FluentGpu.Signals.Memo<T>
+  nameWithType.vb: Memo(Of T)
+  fullName.vb: FluentGpu.Signals.Memo(Of T)
+  name.vb: Memo(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Memo`1
+    name: Memo
+    href: FluentGpu.Signals.Memo-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Prop
+  commentId: T:FluentGpu.Signals.Prop
+  href: FluentGpu.Signals.Prop.html
+  name: Prop
+  nameWithType: Prop
+  fullName: FluentGpu.Signals.Prop
+- uid: FluentGpu.Signals.Prop`1
+  commentId: T:FluentGpu.Signals.Prop`1
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Prop-1.html
+  name: Prop<T>
+  nameWithType: Prop<T>
+  fullName: FluentGpu.Signals.Prop<T>
+  nameWithType.vb: Prop(Of T)
+  fullName.vb: FluentGpu.Signals.Prop(Of T)
+  name.vb: Prop(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Prop`1
+    name: Prop
+    href: FluentGpu.Signals.Prop-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Reactive
+  commentId: T:FluentGpu.Signals.Reactive
+  href: FluentGpu.Signals.Reactive.html
+  name: Reactive
+  nameWithType: Reactive
+  fullName: FluentGpu.Signals.Reactive
+- uid: FluentGpu.Signals.Computation
+  commentId: T:FluentGpu.Signals.Computation
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Computation.html
+  name: Computation
+  nameWithType: Computation
+  fullName: FluentGpu.Signals.Computation
+- uid: FluentGpu.Signals.ReactiveScope
+  commentId: T:FluentGpu.Signals.ReactiveScope
+  href: FluentGpu.Signals.ReactiveScope.html
+  name: ReactiveScope
+  nameWithType: ReactiveScope
+  fullName: FluentGpu.Signals.ReactiveScope
+- uid: FluentGpu.Signals.ReactiveRuntime
+  commentId: T:FluentGpu.Signals.ReactiveRuntime
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.ReactiveRuntime.html
+  name: ReactiveRuntime
+  nameWithType: ReactiveRuntime
+  fullName: FluentGpu.Signals.ReactiveRuntime
+- uid: FluentGpu.Signals.IReadSignal`1
+  commentId: T:FluentGpu.Signals.IReadSignal`1
+  href: FluentGpu.Signals.IReadSignal-1.html
+  name: IReadSignal<T>
+  nameWithType: IReadSignal<T>
+  fullName: FluentGpu.Signals.IReadSignal<T>
+  nameWithType.vb: IReadSignal(Of T)
+  fullName.vb: FluentGpu.Signals.IReadSignal(Of T)
+  name.vb: IReadSignal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.IReadSignal`1
+    name: IReadSignal
+    href: FluentGpu.Signals.IReadSignal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals.FloatSignal
+  commentId: T:FluentGpu.Signals.FloatSignal
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.FloatSignal.html
+  name: FloatSignal
+  nameWithType: FloatSignal
+  fullName: FluentGpu.Signals.FloatSignal
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html

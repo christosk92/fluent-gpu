@@ -1,0 +1,102 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.ImageCompleteHandler
+  commentId: T:FluentGpu.Scene.ImageCompleteHandler
+  id: ImageCompleteHandler
+  parent: FluentGpu.Scene
+  children: []
+  langs:
+  - csharp
+  - vb
+  name: ImageCompleteHandler
+  nameWithType: ImageCompleteHandler
+  fullName: FluentGpu.Scene.ImageCompleteHandler
+  type: Delegate
+  source:
+    remote:
+      path: src/FluentGpu.Scene/ImageCache.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ImageCompleteHandler
+    path: ../../src/FluentGpu.Scene/ImageCache.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: 'Decode-completion callback: id, success, decoded dims, the failure kind (if any), and the fetch attempt count.'
+  example: []
+  syntax:
+    content: public delegate void ImageCompleteHandler(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts)
+    parameters:
+    - id: id
+      type: System.Int32
+    - id: ok
+      type: System.Boolean
+    - id: w
+      type: System.Int32
+    - id: h
+      type: System.Int32
+    - id: failure
+      type: FluentGpu.Scene.ImageFailureKind
+    - id: attempts
+      type: System.Int32
+    content.vb: Public Delegate Sub ImageCompleteHandler(id As Integer, ok As Boolean, w As Integer, h As Integer, failure As ImageFailureKind, attempts As Integer)
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Scene.ImageFailureKind
+  commentId: T:FluentGpu.Scene.ImageFailureKind
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.ImageFailureKind.html
+  name: ImageFailureKind
+  nameWithType: ImageFailureKind
+  fullName: FluentGpu.Scene.ImageFailureKind
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System

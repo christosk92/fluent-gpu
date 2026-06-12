@@ -1,0 +1,957 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Scene.LayoutInput
+  commentId: T:FluentGpu.Scene.LayoutInput
+  id: LayoutInput
+  parent: FluentGpu.Scene
+  children:
+  - FluentGpu.Scene.LayoutInput.AlignItems
+  - FluentGpu.Scene.LayoutInput.AlignSelf
+  - FluentGpu.Scene.LayoutInput.AspectRatio
+  - FluentGpu.Scene.LayoutInput.Default
+  - FluentGpu.Scene.LayoutInput.Direction
+  - FluentGpu.Scene.LayoutInput.FlexBasis
+  - FluentGpu.Scene.LayoutInput.FlexGrow
+  - FluentGpu.Scene.LayoutInput.FlexShrink
+  - FluentGpu.Scene.LayoutInput.Gap
+  - FluentGpu.Scene.LayoutInput.Height
+  - FluentGpu.Scene.LayoutInput.Justify
+  - FluentGpu.Scene.LayoutInput.Margin
+  - FluentGpu.Scene.LayoutInput.MaxH
+  - FluentGpu.Scene.LayoutInput.MaxW
+  - FluentGpu.Scene.LayoutInput.MinH
+  - FluentGpu.Scene.LayoutInput.MinW
+  - FluentGpu.Scene.LayoutInput.Padding
+  - FluentGpu.Scene.LayoutInput.TextStyle
+  - FluentGpu.Scene.LayoutInput.Width
+  - FluentGpu.Scene.LayoutInput.Wrap
+  langs:
+  - csharp
+  - vb
+  name: LayoutInput
+  nameWithType: LayoutInput
+  fullName: FluentGpu.Scene.LayoutInput
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LayoutInput
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 34
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  summary: 'Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).'
+  example: []
+  syntax:
+    content: public struct LayoutInput
+    content.vb: Public Structure LayoutInput
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Scene.LayoutInput.Direction
+  commentId: F:FluentGpu.Scene.LayoutInput.Direction
+  id: Direction
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Direction
+  nameWithType: LayoutInput.Direction
+  fullName: FluentGpu.Scene.LayoutInput.Direction
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Direction
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 36
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public byte Direction
+    return:
+      type: System.Byte
+    content.vb: Public Direction As Byte
+- uid: FluentGpu.Scene.LayoutInput.Gap
+  commentId: F:FluentGpu.Scene.LayoutInput.Gap
+  id: Gap
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Gap
+  nameWithType: LayoutInput.Gap
+  fullName: FluentGpu.Scene.LayoutInput.Gap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Gap
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 37
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float Gap
+    return:
+      type: System.Single
+    content.vb: Public Gap As Single
+- uid: FluentGpu.Scene.LayoutInput.Padding
+  commentId: F:FluentGpu.Scene.LayoutInput.Padding
+  id: Padding
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Padding
+  nameWithType: LayoutInput.Padding
+  fullName: FluentGpu.Scene.LayoutInput.Padding
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Padding
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 38
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public Edges4 Padding
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Padding As Edges4
+- uid: FluentGpu.Scene.LayoutInput.Margin
+  commentId: F:FluentGpu.Scene.LayoutInput.Margin
+  id: Margin
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Margin
+  nameWithType: LayoutInput.Margin
+  fullName: FluentGpu.Scene.LayoutInput.Margin
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Margin
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 39
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public Edges4 Margin
+    return:
+      type: FluentGpu.Foundation.Edges4
+    content.vb: Public Margin As Edges4
+- uid: FluentGpu.Scene.LayoutInput.Width
+  commentId: F:FluentGpu.Scene.LayoutInput.Width
+  id: Width
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: LayoutInput.Width
+  fullName: FluentGpu.Scene.LayoutInput.Width
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float Width
+    return:
+      type: System.Single
+    content.vb: Public Width As Single
+- uid: FluentGpu.Scene.LayoutInput.Height
+  commentId: F:FluentGpu.Scene.LayoutInput.Height
+  id: Height
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Height
+  nameWithType: LayoutInput.Height
+  fullName: FluentGpu.Scene.LayoutInput.Height
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Height
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 41
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float Height
+    return:
+      type: System.Single
+    content.vb: Public Height As Single
+- uid: FluentGpu.Scene.LayoutInput.AspectRatio
+  commentId: F:FluentGpu.Scene.LayoutInput.AspectRatio
+  id: AspectRatio
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: AspectRatio
+  nameWithType: LayoutInput.AspectRatio
+  fullName: FluentGpu.Scene.LayoutInput.AspectRatio
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AspectRatio
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 42
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float AspectRatio
+    return:
+      type: System.Single
+    content.vb: Public AspectRatio As Single
+- uid: FluentGpu.Scene.LayoutInput.MinW
+  commentId: F:FluentGpu.Scene.LayoutInput.MinW
+  id: MinW
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: MinW
+  nameWithType: LayoutInput.MinW
+  fullName: FluentGpu.Scene.LayoutInput.MinW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MinW
+    return:
+      type: System.Single
+    content.vb: Public MinW As Single
+- uid: FluentGpu.Scene.LayoutInput.MinH
+  commentId: F:FluentGpu.Scene.LayoutInput.MinH
+  id: MinH
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: MinH
+  nameWithType: LayoutInput.MinH
+  fullName: FluentGpu.Scene.LayoutInput.MinH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MinH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MinH
+    return:
+      type: System.Single
+    content.vb: Public MinH As Single
+- uid: FluentGpu.Scene.LayoutInput.MaxW
+  commentId: F:FluentGpu.Scene.LayoutInput.MaxW
+  id: MaxW
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: MaxW
+  nameWithType: LayoutInput.MaxW
+  fullName: FluentGpu.Scene.LayoutInput.MaxW
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxW
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MaxW
+    return:
+      type: System.Single
+    content.vb: Public MaxW As Single
+- uid: FluentGpu.Scene.LayoutInput.MaxH
+  commentId: F:FluentGpu.Scene.LayoutInput.MaxH
+  id: MaxH
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: MaxH
+  nameWithType: LayoutInput.MaxH
+  fullName: FluentGpu.Scene.LayoutInput.MaxH
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: MaxH
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 43
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float MaxH
+    return:
+      type: System.Single
+    content.vb: Public MaxH As Single
+- uid: FluentGpu.Scene.LayoutInput.FlexGrow
+  commentId: F:FluentGpu.Scene.LayoutInput.FlexGrow
+  id: FlexGrow
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: FlexGrow
+  nameWithType: LayoutInput.FlexGrow
+  fullName: FluentGpu.Scene.LayoutInput.FlexGrow
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexGrow
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 45
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float FlexGrow
+    return:
+      type: System.Single
+    content.vb: Public FlexGrow As Single
+- uid: FluentGpu.Scene.LayoutInput.FlexShrink
+  commentId: F:FluentGpu.Scene.LayoutInput.FlexShrink
+  id: FlexShrink
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: FlexShrink
+  nameWithType: LayoutInput.FlexShrink
+  fullName: FluentGpu.Scene.LayoutInput.FlexShrink
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexShrink
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 46
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float FlexShrink
+    return:
+      type: System.Single
+    content.vb: Public FlexShrink As Single
+- uid: FluentGpu.Scene.LayoutInput.FlexBasis
+  commentId: F:FluentGpu.Scene.LayoutInput.FlexBasis
+  id: FlexBasis
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: FlexBasis
+  nameWithType: LayoutInput.FlexBasis
+  fullName: FluentGpu.Scene.LayoutInput.FlexBasis
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: FlexBasis
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public float FlexBasis
+    return:
+      type: System.Single
+    content.vb: Public FlexBasis As Single
+- uid: FluentGpu.Scene.LayoutInput.AlignSelf
+  commentId: F:FluentGpu.Scene.LayoutInput.AlignSelf
+  id: AlignSelf
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: AlignSelf
+  nameWithType: LayoutInput.AlignSelf
+  fullName: FluentGpu.Scene.LayoutInput.AlignSelf
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignSelf
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 48
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public FlexAlign AlignSelf
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public AlignSelf As FlexAlign
+- uid: FluentGpu.Scene.LayoutInput.Justify
+  commentId: F:FluentGpu.Scene.LayoutInput.Justify
+  id: Justify
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Justify
+  nameWithType: LayoutInput.Justify
+  fullName: FluentGpu.Scene.LayoutInput.Justify
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Justify
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 50
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public FlexJustify Justify
+    return:
+      type: FluentGpu.Foundation.FlexJustify
+    content.vb: Public Justify As FlexJustify
+- uid: FluentGpu.Scene.LayoutInput.AlignItems
+  commentId: F:FluentGpu.Scene.LayoutInput.AlignItems
+  id: AlignItems
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: AlignItems
+  nameWithType: LayoutInput.AlignItems
+  fullName: FluentGpu.Scene.LayoutInput.AlignItems
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AlignItems
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public FlexAlign AlignItems
+    return:
+      type: FluentGpu.Foundation.FlexAlign
+    content.vb: Public AlignItems As FlexAlign
+- uid: FluentGpu.Scene.LayoutInput.Wrap
+  commentId: F:FluentGpu.Scene.LayoutInput.Wrap
+  id: Wrap
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Wrap
+  nameWithType: LayoutInput.Wrap
+  fullName: FluentGpu.Scene.LayoutInput.Wrap
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Wrap
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 52
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public bool Wrap
+    return:
+      type: System.Boolean
+    content.vb: Public Wrap As Boolean
+- uid: FluentGpu.Scene.LayoutInput.TextStyle
+  commentId: F:FluentGpu.Scene.LayoutInput.TextStyle
+  id: TextStyle
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: TextStyle
+  nameWithType: LayoutInput.TextStyle
+  fullName: FluentGpu.Scene.LayoutInput.TextStyle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: TextStyle
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public TextStyle TextStyle
+    return:
+      type: FluentGpu.Text.TextStyle
+    content.vb: Public TextStyle As TextStyle
+- uid: FluentGpu.Scene.LayoutInput.Default
+  commentId: P:FluentGpu.Scene.LayoutInput.Default
+  id: Default
+  parent: FluentGpu.Scene.LayoutInput
+  langs:
+  - csharp
+  - vb
+  name: Default
+  nameWithType: LayoutInput.Default
+  fullName: FluentGpu.Scene.LayoutInput.Default
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Scene/Columns.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Default
+    path: ../../src/FluentGpu.Scene/Columns.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Scene
+  namespace: FluentGpu.Scene
+  syntax:
+    content: public static LayoutInput Default { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Scene.LayoutInput
+    content.vb: Public Shared ReadOnly Property [Default] As LayoutInput
+  overload: FluentGpu.Scene.LayoutInput.Default*
+references:
+- uid: FluentGpu.Scene
+  commentId: N:FluentGpu.Scene
+  href: FluentGpu.html
+  name: FluentGpu.Scene
+  nameWithType: FluentGpu.Scene
+  fullName: FluentGpu.Scene
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Scene
+    name: Scene
+    href: FluentGpu.Scene.html
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.Byte
+  commentId: T:System.Byte
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.byte
+  name: byte
+  nameWithType: byte
+  fullName: byte
+  nameWithType.vb: Byte
+  fullName.vb: Byte
+  name.vb: Byte
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Edges4
+  commentId: T:FluentGpu.Foundation.Edges4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Edges4.html
+  name: Edges4
+  nameWithType: Edges4
+  fullName: FluentGpu.Foundation.Edges4
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Foundation.FlexAlign
+  commentId: T:FluentGpu.Foundation.FlexAlign
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexAlign.html
+  name: FlexAlign
+  nameWithType: FlexAlign
+  fullName: FluentGpu.Foundation.FlexAlign
+- uid: FluentGpu.Foundation.FlexJustify
+  commentId: T:FluentGpu.Foundation.FlexJustify
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.FlexJustify.html
+  name: FlexJustify
+  nameWithType: FlexJustify
+  fullName: FluentGpu.Foundation.FlexJustify
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Text.TextStyle
+  commentId: T:FluentGpu.Text.TextStyle
+  parent: FluentGpu.Text
+  href: FluentGpu.Text.TextStyle.html
+  name: TextStyle
+  nameWithType: TextStyle
+  fullName: FluentGpu.Text.TextStyle
+- uid: FluentGpu.Text
+  commentId: N:FluentGpu.Text
+  href: FluentGpu.html
+  name: FluentGpu.Text
+  nameWithType: FluentGpu.Text
+  fullName: FluentGpu.Text
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Text
+    name: Text
+    href: FluentGpu.Text.html
+- uid: FluentGpu.Scene.LayoutInput.Default*
+  commentId: Overload:FluentGpu.Scene.LayoutInput.Default
+  href: FluentGpu.Scene.LayoutInput.html#FluentGpu_Scene_LayoutInput_Default
+  name: Default
+  nameWithType: LayoutInput.Default
+  fullName: FluentGpu.Scene.LayoutInput.Default
+- uid: FluentGpu.Scene.LayoutInput
+  commentId: T:FluentGpu.Scene.LayoutInput
+  parent: FluentGpu.Scene
+  href: FluentGpu.Scene.LayoutInput.html
+  name: LayoutInput
+  nameWithType: LayoutInput
+  fullName: FluentGpu.Scene.LayoutInput

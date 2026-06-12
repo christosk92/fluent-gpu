@@ -1,0 +1,2091 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Controls.NumberBox
+  commentId: T:FluentGpu.Controls.NumberBox
+  id: NumberBox
+  parent: FluentGpu.Controls
+  children:
+  - FluentGpu.Controls.NumberBox.AcceptsExpression
+  - FluentGpu.Controls.NumberBox.Create(FluentGpu.Signals.Signal{System.Double},System.Double,System.Double,System.Double,System.Double,System.Double,FluentGpu.Controls.NumberBoxSpinButtonPlacementMode,FluentGpu.Controls.NumberBoxValidationMode,System.Boolean,System.Boolean,System.String,System.String,System.String,System.Single,System.Func{System.Double,System.String},System.Action{System.Double,System.Double},FluentGpu.Signals.Signal{System.String},System.Func{System.String,System.Nullable{System.Double}},System.Boolean)
+  - FluentGpu.Controls.NumberBox.Create(System.Double,System.Double)
+  - FluentGpu.Controls.NumberBox.CreateWithSpinners(System.Double,System.Double)
+  - FluentGpu.Controls.NumberBox.DefaultStyle
+  - FluentGpu.Controls.NumberBox.Description
+  - FluentGpu.Controls.NumberBox.Formatter
+  - FluentGpu.Controls.NumberBox.GlobalStyle
+  - FluentGpu.Controls.NumberBox.Header
+  - FluentGpu.Controls.NumberBox.Initial
+  - FluentGpu.Controls.NumberBox.IsEnabled
+  - FluentGpu.Controls.NumberBox.IsWrapEnabled
+  - FluentGpu.Controls.NumberBox.LargeChange
+  - FluentGpu.Controls.NumberBox.Maximum
+  - FluentGpu.Controls.NumberBox.Minimum
+  - FluentGpu.Controls.NumberBox.OnValueChanged
+  - FluentGpu.Controls.NumberBox.Parser
+  - FluentGpu.Controls.NumberBox.PartField
+  - FluentGpu.Controls.NumberBox.PartSpinButton
+  - FluentGpu.Controls.NumberBox.PartSpinGlyph
+  - FluentGpu.Controls.NumberBox.Parts
+  - FluentGpu.Controls.NumberBox.PlaceholderText
+  - FluentGpu.Controls.NumberBox.Render
+  - FluentGpu.Controls.NumberBox.SmallChange
+  - FluentGpu.Controls.NumberBox.SpinButtonPlacementMode
+  - FluentGpu.Controls.NumberBox.StyleOverride
+  - FluentGpu.Controls.NumberBox.Text
+  - FluentGpu.Controls.NumberBox.ValidationMode
+  - FluentGpu.Controls.NumberBox.Value
+  - FluentGpu.Controls.NumberBox.Width
+  langs:
+  - csharp
+  - vb
+  name: NumberBox
+  nameWithType: NumberBox
+  fullName: FluentGpu.Controls.NumberBox
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: NumberBox
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 40
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    WinUI <code>NumberBox</code>: an editable numeric <xref href="FluentGpu.Controls.EditableText" data-throw-if-not-resolved="false"></xref> field with an optional spin affix. The numeric
+
+    model is a caller-owned <xref href="FluentGpu.Controls.NumberBox.Value" data-throw-if-not-resolved="false"></xref> signal (<code>double.NaN</code> = cleared); the visible text is derived from it
+
+    through the <xref href="FluentGpu.Controls.NumberBox.Formatter" data-throw-if-not-resolved="false"></xref> and re-parsed on commit. Spin buttons step by <xref href="FluentGpu.Controls.NumberBox.SmallChange" data-throw-if-not-resolved="false"></xref> and are
+
+    <xref href="FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden" data-throw-if-not-resolved="false"></xref> by default. <xref href="FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline" data-throw-if-not-resolved="false"></xref>
+
+    puts the two side-by-side repeat buttons (▲E70E / ▼E70D, NumberBox.xaml:174–175) at the trailing edge of the field;
+
+    <xref href="FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact" data-throw-if-not-resolved="false"></xref> shows the EC8F popup-indicator chevron (NumberBox.xaml:365)
+
+    and opens the up/down buttons in an Overlay popup while focused (the popup auto-opens on focus and closes on blur —
+
+    NumberBox.cpp:414–438; the indicator is a non-interactive TextBlock, not a toggle). Keyboard stepping follows
+
+    OnNumberBoxKeyDown (NumberBox.cpp:533–558): Up/Down = ±SmallChange, PageUp/PageDown = ±LargeChange, handled on key
+
+    DOWN so OS auto-repeat repeats the step. Validation (clamp / revert) runs on Enter and on blur per
+
+    <xref href="FluentGpu.Controls.NumberBox.ValidationMode" data-throw-if-not-resolved="false"></xref>; with <xref href="FluentGpu.Controls.NumberBox.AcceptsExpression" data-throw-if-not-resolved="false"></xref> a typed arithmetic expression is evaluated on
+
+    commit (shunting-yard over + - * / ^ and parentheses — NumberBoxParser port). Mouse-wheel over the field while it
+
+    is focused also steps ±SmallChange and consumes the event before any enclosing viewport scrolls (PointerWheelChanged
+
+    → OnNumberBoxScroll, NumberBox.cpp:40 + :578–597).
+  example: []
+  syntax:
+    content: 'public sealed class NumberBox : Component'
+    content.vb: Public NotInheritable Class NumberBox Inherits Component
+  inheritance:
+  - System.Object
+  - FluentGpu.Hooks.Component
+  inheritedMembers:
+  - FluentGpu.Hooks.Component.Context
+  - FluentGpu.Hooks.Component.RunsOnce
+  - FluentGpu.Hooks.Component.RenderWithHooks
+  - FluentGpu.Hooks.Component.Unmount
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+  extensionMethods:
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  - FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+- uid: FluentGpu.Controls.NumberBox.PartField
+  commentId: F:FluentGpu.Controls.NumberBox.PartField
+  id: PartField
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: PartField
+  nameWithType: NumberBox.PartField
+  fullName: FluentGpu.Controls.NumberBox.PartField
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartField
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 47
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The field row wrapper hosting the InputBox part — the Compact popup's anchor and the
+        Up/Down/PageUp/PageDown stepping host. Owned: OnRealized (anchor capture, chained), OnKeyDown (step keys),
+        Children (the EditableText mount).
+  example: []
+  syntax:
+    content: public const string PartField = "Field"
+    return:
+      type: System.String
+    content.vb: Public Const PartField As String = "Field"
+- uid: FluentGpu.Controls.NumberBox.PartSpinButton
+  commentId: F:FluentGpu.Controls.NumberBox.PartSpinButton
+  id: PartSpinButton
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: PartSpinButton
+  nameWithType: NumberBox.PartSpinButton
+  fullName: FluentGpu.Controls.NumberBox.PartSpinButton
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSpinButton
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 51
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    One spin RepeatButton — applied to BOTH the inline pair (UpSpinButton/DownSpinButton) and the Compact
+        popup pair (PopupUpSpinButton/PopupDownSpinButton), like WinUI's shared spin-button style. The enabled-state
+        fills are computed per render BEFORE the modifier. Owned: OnClick (step), Repeats (auto-repeat), Role.
+  example: []
+  syntax:
+    content: public const string PartSpinButton = "SpinButton"
+    return:
+      type: System.String
+    content.vb: Public Const PartSpinButton As String = "SpinButton"
+- uid: FluentGpu.Controls.NumberBox.PartSpinGlyph
+  commentId: F:FluentGpu.Controls.NumberBox.PartSpinGlyph
+  id: PartSpinGlyph
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: PartSpinGlyph
+  nameWithType: NumberBox.PartSpinGlyph
+  fullName: FluentGpu.Controls.NumberBox.PartSpinGlyph
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PartSpinGlyph
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 54
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The caret glyph TextEl inside each spin button (style via <code>Parts.Set&lt;TextEl&gt;(PartSpinGlyph, …)</code>;
+        the state colors are computed before the modifier). Owned: none.
+  example: []
+  syntax:
+    content: public const string PartSpinGlyph = "SpinGlyph"
+    return:
+      type: System.String
+    content.vb: Public Const PartSpinGlyph As String = "SpinGlyph"
+- uid: FluentGpu.Controls.NumberBox.Value
+  commentId: F:FluentGpu.Controls.NumberBox.Value
+  id: Value
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Value
+  nameWithType: NumberBox.Value
+  fullName: FluentGpu.Controls.NumberBox.Value
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Value
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 56
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Signal<double>? Value
+    return:
+      type: FluentGpu.Signals.Signal{System.Double}
+    content.vb: Public Value As Signal(Of Double)
+- uid: FluentGpu.Controls.NumberBox.Initial
+  commentId: F:FluentGpu.Controls.NumberBox.Initial
+  id: Initial
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Initial
+  nameWithType: NumberBox.Initial
+  fullName: FluentGpu.Controls.NumberBox.Initial
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Initial
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 57
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public double Initial
+    return:
+      type: System.Double
+    content.vb: Public Initial As Double
+- uid: FluentGpu.Controls.NumberBox.Minimum
+  commentId: F:FluentGpu.Controls.NumberBox.Minimum
+  id: Minimum
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Minimum
+  nameWithType: NumberBox.Minimum
+  fullName: FluentGpu.Controls.NumberBox.Minimum
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Minimum
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 58
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public double Minimum
+    return:
+      type: System.Double
+    content.vb: Public Minimum As Double
+- uid: FluentGpu.Controls.NumberBox.Maximum
+  commentId: F:FluentGpu.Controls.NumberBox.Maximum
+  id: Maximum
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Maximum
+  nameWithType: NumberBox.Maximum
+  fullName: FluentGpu.Controls.NumberBox.Maximum
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Maximum
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 59
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public double Maximum
+    return:
+      type: System.Double
+    content.vb: Public Maximum As Double
+- uid: FluentGpu.Controls.NumberBox.SmallChange
+  commentId: F:FluentGpu.Controls.NumberBox.SmallChange
+  id: SmallChange
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: SmallChange
+  nameWithType: NumberBox.SmallChange
+  fullName: FluentGpu.Controls.NumberBox.SmallChange
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SmallChange
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 60
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public double SmallChange
+    return:
+      type: System.Double
+    content.vb: Public SmallChange As Double
+- uid: FluentGpu.Controls.NumberBox.LargeChange
+  commentId: F:FluentGpu.Controls.NumberBox.LargeChange
+  id: LargeChange
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: LargeChange
+  nameWithType: NumberBox.LargeChange
+  fullName: FluentGpu.Controls.NumberBox.LargeChange
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: LargeChange
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 61
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public double LargeChange
+    return:
+      type: System.Double
+    content.vb: Public LargeChange As Double
+- uid: FluentGpu.Controls.NumberBox.IsWrapEnabled
+  commentId: F:FluentGpu.Controls.NumberBox.IsWrapEnabled
+  id: IsWrapEnabled
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: IsWrapEnabled
+  nameWithType: NumberBox.IsWrapEnabled
+  fullName: FluentGpu.Controls.NumberBox.IsWrapEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsWrapEnabled
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 62
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsWrapEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsWrapEnabled As Boolean
+- uid: FluentGpu.Controls.NumberBox.AcceptsExpression
+  commentId: F:FluentGpu.Controls.NumberBox.AcceptsExpression
+  id: AcceptsExpression
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: AcceptsExpression
+  nameWithType: NumberBox.AcceptsExpression
+  fullName: FluentGpu.Controls.NumberBox.AcceptsExpression
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: AcceptsExpression
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 63
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool AcceptsExpression
+    return:
+      type: System.Boolean
+    content.vb: Public AcceptsExpression As Boolean
+- uid: FluentGpu.Controls.NumberBox.SpinButtonPlacementMode
+  commentId: F:FluentGpu.Controls.NumberBox.SpinButtonPlacementMode
+  id: SpinButtonPlacementMode
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: SpinButtonPlacementMode
+  nameWithType: NumberBox.SpinButtonPlacementMode
+  fullName: FluentGpu.Controls.NumberBox.SpinButtonPlacementMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: SpinButtonPlacementMode
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 64
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public NumberBoxSpinButtonPlacementMode SpinButtonPlacementMode
+    return:
+      type: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+    content.vb: Public SpinButtonPlacementMode As NumberBoxSpinButtonPlacementMode
+- uid: FluentGpu.Controls.NumberBox.ValidationMode
+  commentId: F:FluentGpu.Controls.NumberBox.ValidationMode
+  id: ValidationMode
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: ValidationMode
+  nameWithType: NumberBox.ValidationMode
+  fullName: FluentGpu.Controls.NumberBox.ValidationMode
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ValidationMode
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 65
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public NumberBoxValidationMode ValidationMode
+    return:
+      type: FluentGpu.Controls.NumberBoxValidationMode
+    content.vb: Public ValidationMode As NumberBoxValidationMode
+- uid: FluentGpu.Controls.NumberBox.PlaceholderText
+  commentId: F:FluentGpu.Controls.NumberBox.PlaceholderText
+  id: PlaceholderText
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: PlaceholderText
+  nameWithType: NumberBox.PlaceholderText
+  fullName: FluentGpu.Controls.NumberBox.PlaceholderText
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: PlaceholderText
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 66
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string PlaceholderText
+    return:
+      type: System.String
+    content.vb: Public PlaceholderText As String
+- uid: FluentGpu.Controls.NumberBox.Header
+  commentId: F:FluentGpu.Controls.NumberBox.Header
+  id: Header
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Header
+  nameWithType: NumberBox.Header
+  fullName: FluentGpu.Controls.NumberBox.Header
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Header
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 67
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Header
+    return:
+      type: System.String
+    content.vb: Public Header As String
+- uid: FluentGpu.Controls.NumberBox.Description
+  commentId: F:FluentGpu.Controls.NumberBox.Description
+  id: Description
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Description
+  nameWithType: NumberBox.Description
+  fullName: FluentGpu.Controls.NumberBox.Description
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Description
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 68
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public string? Description
+    return:
+      type: System.String
+    content.vb: Public Description As String
+- uid: FluentGpu.Controls.NumberBox.Width
+  commentId: F:FluentGpu.Controls.NumberBox.Width
+  id: Width
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Width
+  nameWithType: NumberBox.Width
+  fullName: FluentGpu.Controls.NumberBox.Width
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Width
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 69
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public float Width
+    return:
+      type: System.Single
+    content.vb: Public Width As Single
+- uid: FluentGpu.Controls.NumberBox.IsEnabled
+  commentId: F:FluentGpu.Controls.NumberBox.IsEnabled
+  id: IsEnabled
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: IsEnabled
+  nameWithType: NumberBox.IsEnabled
+  fullName: FluentGpu.Controls.NumberBox.IsEnabled
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: IsEnabled
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 70
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public bool IsEnabled
+    return:
+      type: System.Boolean
+    content.vb: Public IsEnabled As Boolean
+- uid: FluentGpu.Controls.NumberBox.Text
+  commentId: F:FluentGpu.Controls.NumberBox.Text
+  id: Text
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Text
+  nameWithType: NumberBox.Text
+  fullName: FluentGpu.Controls.NumberBox.Text
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Text
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 74
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    The WinUI <code>NumberBox.Text</code> property (microsoft.ui.xaml.controls idl): the FORMATTED string, two-way.
+        Caller-owned signal; external (programmatic) writes are validated immediately — OnTextPropertyChanged →
+        UpdateValueToText → ValidateInput (NumberBox.cpp:333–339). Null → an internal signal.
+  example: []
+  syntax:
+    content: public Signal<string>? Text
+    return:
+      type: FluentGpu.Signals.Signal{System.String}
+    content.vb: Public Text As Signal(Of String)
+- uid: FluentGpu.Controls.NumberBox.Formatter
+  commentId: F:FluentGpu.Controls.NumberBox.Formatter
+  id: Formatter
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Formatter
+  nameWithType: NumberBox.Formatter
+  fullName: FluentGpu.Controls.NumberBox.Formatter
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Formatter
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 78
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Value → display string (the <code>INumberFormatter2.FormatDouble</code> seam, NumberBox.cpp:644). Default =
+        invariant round-trip after rounding to 10 significant digits (<code>m_displayRounder.SignificantDigits(10)</code>,
+        NumberBox.cpp:216 + :643).
+  example: []
+  syntax:
+    content: public Func<double, string>? Formatter
+    return:
+      type: System.Func{System.Double,System.String}
+    content.vb: Public Formatter As Func(Of Double, String)
+- uid: FluentGpu.Controls.NumberBox.Parser
+  commentId: F:FluentGpu.Controls.NumberBox.Parser
+  id: Parser
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Parser
+  nameWithType: NumberBox.Parser
+  fullName: FluentGpu.Controls.NumberBox.Parser
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parser
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 82
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Display string → value (the <code>INumberParser.ParseDouble</code> seam, NumberBox.cpp:493–497). Default =
+        invariant <code>double.TryParse</code> (null = parse failure). With <xref href="FluentGpu.Controls.NumberBox.AcceptsExpression" data-throw-if-not-resolved="false"></xref> the expression
+        evaluator runs instead (operands parse invariantly), mirroring NumberBoxParser::Compute.
+  example: []
+  syntax:
+    content: public Func<string, double?>? Parser
+    return:
+      type: System.Func{System.String,System.Nullable{System.Double}}
+    content.vb: Public Parser As Func(Of String, Double?)
+- uid: FluentGpu.Controls.NumberBox.OnValueChanged
+  commentId: F:FluentGpu.Controls.NumberBox.OnValueChanged
+  id: OnValueChanged
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: OnValueChanged
+  nameWithType: NumberBox.OnValueChanged
+  fullName: FluentGpu.Controls.NumberBox.OnValueChanged
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: OnValueChanged
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 83
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public Action<double, double>? OnValueChanged
+    return:
+      type: System.Action{System.Double,System.Double}
+    content.vb: Public OnValueChanged As Action(Of Double, Double)
+- uid: FluentGpu.Controls.NumberBox.StyleOverride
+  commentId: F:FluentGpu.Controls.NumberBox.StyleOverride
+  id: StyleOverride
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: StyleOverride
+  nameWithType: NumberBox.StyleOverride
+  fullName: FluentGpu.Controls.NumberBox.StyleOverride
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StyleOverride
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 84
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public NumberBox.Style? StyleOverride
+    return:
+      type: FluentGpu.Controls.NumberBox.Style
+    content.vb: Public StyleOverride As NumberBox.Style
+- uid: FluentGpu.Controls.NumberBox.Parts
+  commentId: F:FluentGpu.Controls.NumberBox.Parts
+  id: Parts
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Parts
+  nameWithType: NumberBox.Parts
+  fullName: FluentGpu.Controls.NumberBox.Parts
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Parts
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 87
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: >-
+    Lightweight per-part styling (CSS ::part): modifiers keyed by the <code>PartXxx</code> consts; see
+        <xref href="FluentGpu.Dsl.TemplateParts" data-throw-if-not-resolved="false"></xref> for the contract.
+  example: []
+  syntax:
+    content: public TemplateParts? Parts
+    return:
+      type: FluentGpu.Dsl.TemplateParts
+    content.vb: Public Parts As TemplateParts
+- uid: FluentGpu.Controls.NumberBox.GlobalStyle
+  commentId: F:FluentGpu.Controls.NumberBox.GlobalStyle
+  id: GlobalStyle
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: GlobalStyle
+  nameWithType: NumberBox.GlobalStyle
+  fullName: FluentGpu.Controls.NumberBox.GlobalStyle
+  type: Field
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: GlobalStyle
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 120
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static NumberBox.Style? GlobalStyle
+    return:
+      type: FluentGpu.Controls.NumberBox.Style
+    content.vb: Public Shared GlobalStyle As NumberBox.Style
+- uid: FluentGpu.Controls.NumberBox.DefaultStyle
+  commentId: P:FluentGpu.Controls.NumberBox.DefaultStyle
+  id: DefaultStyle
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: DefaultStyle
+  nameWithType: NumberBox.DefaultStyle
+  fullName: FluentGpu.Controls.NumberBox.DefaultStyle
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DefaultStyle
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 121
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  syntax:
+    content: public static NumberBox.Style DefaultStyle { get; }
+    parameters: []
+    return:
+      type: FluentGpu.Controls.NumberBox.Style
+    content.vb: Public Shared ReadOnly Property DefaultStyle As NumberBox.Style
+  overload: FluentGpu.Controls.NumberBox.DefaultStyle*
+- uid: FluentGpu.Controls.NumberBox.Create(FluentGpu.Signals.Signal{System.Double},System.Double,System.Double,System.Double,System.Double,System.Double,FluentGpu.Controls.NumberBoxSpinButtonPlacementMode,FluentGpu.Controls.NumberBoxValidationMode,System.Boolean,System.Boolean,System.String,System.String,System.String,System.Single,System.Func{System.Double,System.String},System.Action{System.Double,System.Double},FluentGpu.Signals.Signal{System.String},System.Func{System.String,System.Nullable{System.Double}},System.Boolean)
+  commentId: M:FluentGpu.Controls.NumberBox.Create(FluentGpu.Signals.Signal{System.Double},System.Double,System.Double,System.Double,System.Double,System.Double,FluentGpu.Controls.NumberBoxSpinButtonPlacementMode,FluentGpu.Controls.NumberBoxValidationMode,System.Boolean,System.Boolean,System.String,System.String,System.String,System.Single,System.Func{System.Double,System.String},System.Action{System.Double,System.Double},FluentGpu.Signals.Signal{System.String},System.Func{System.String,System.Nullable{System.Double}},System.Boolean)
+  id: Create(FluentGpu.Signals.Signal{System.Double},System.Double,System.Double,System.Double,System.Double,System.Double,FluentGpu.Controls.NumberBoxSpinButtonPlacementMode,FluentGpu.Controls.NumberBoxValidationMode,System.Boolean,System.Boolean,System.String,System.String,System.String,System.Single,System.Func{System.Double,System.String},System.Action{System.Double,System.Double},FluentGpu.Signals.Signal{System.String},System.Func{System.String,System.Nullable{System.Double}},System.Boolean)
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Create(Signal<double>?, double, double, double, double, double, NumberBoxSpinButtonPlacementMode, NumberBoxValidationMode, bool, bool, string, string?, string?, float, Func<double, string>?, Action<double, double>?, Signal<string>?, Func<string, double?>?, bool)
+  nameWithType: NumberBox.Create(Signal<double>?, double, double, double, double, double, NumberBoxSpinButtonPlacementMode, NumberBoxValidationMode, bool, bool, string, string?, string?, float, Func<double, string>?, Action<double, double>?, Signal<string>?, Func<string, double?>?, bool)
+  fullName: FluentGpu.Controls.NumberBox.Create(FluentGpu.Signals.Signal<double>?, double, double, double, double, double, FluentGpu.Controls.NumberBoxSpinButtonPlacementMode, FluentGpu.Controls.NumberBoxValidationMode, bool, bool, string, string?, string?, float, System.Func<double, string>?, System.Action<double, double>?, FluentGpu.Signals.Signal<string>?, System.Func<string, double?>?, bool)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 127
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: Full WinUI-aligned factory.
+  example: []
+  syntax:
+    content: public static Element Create(Signal<double>? value = null, double initial = NaN, double minimum = -1.7976931348623157E+308, double maximum = 1.7976931348623157E+308, double smallChange = 1, double largeChange = 10, NumberBoxSpinButtonPlacementMode spinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden, NumberBoxValidationMode validationMode = NumberBoxValidationMode.InvalidInputOverwritten, bool isWrapEnabled = false, bool acceptsExpression = false, string placeholderText = "", string? header = null, string? description = null, float width = 120, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null, Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true)
+    parameters:
+    - id: value
+      type: FluentGpu.Signals.Signal{System.Double}
+    - id: initial
+      type: System.Double
+    - id: minimum
+      type: System.Double
+    - id: maximum
+      type: System.Double
+    - id: smallChange
+      type: System.Double
+    - id: largeChange
+      type: System.Double
+    - id: spinButtonPlacementMode
+      type: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+    - id: validationMode
+      type: FluentGpu.Controls.NumberBoxValidationMode
+    - id: isWrapEnabled
+      type: System.Boolean
+    - id: acceptsExpression
+      type: System.Boolean
+    - id: placeholderText
+      type: System.String
+    - id: header
+      type: System.String
+    - id: description
+      type: System.String
+    - id: width
+      type: System.Single
+    - id: formatter
+      type: System.Func{System.Double,System.String}
+    - id: onValueChanged
+      type: System.Action{System.Double,System.Double}
+    - id: text
+      type: FluentGpu.Signals.Signal{System.String}
+    - id: parser
+      type: System.Func{System.String,System.Nullable{System.Double}}
+    - id: isEnabled
+      type: System.Boolean
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(value As Signal(Of Double) = Nothing, initial As Double = NaN, minimum As Double = -1.7976931348623157E+308, maximum As Double = 1.7976931348623157E+308, smallChange As Double = 1, largeChange As Double = 10, spinButtonPlacementMode As NumberBoxSpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden, validationMode As NumberBoxValidationMode = NumberBoxValidationMode.InvalidInputOverwritten, isWrapEnabled As Boolean = False, acceptsExpression As Boolean = False, placeholderText As String = "", header As String = Nothing, description As String = Nothing, width As Single = 120, formatter As Func(Of Double, String) = Nothing, onValueChanged As Action(Of Double, Double) = Nothing, text As Signal(Of String) = Nothing, parser As Func(Of String, Double?) = Nothing, isEnabled As Boolean = True) As Element
+  overload: FluentGpu.Controls.NumberBox.Create*
+  nameWithType.vb: NumberBox.Create(Signal(Of Double), Double, Double, Double, Double, Double, NumberBoxSpinButtonPlacementMode, NumberBoxValidationMode, Boolean, Boolean, String, String, String, Single, Func(Of Double, String), Action(Of Double, Double), Signal(Of String), Func(Of String, Double?), Boolean)
+  fullName.vb: FluentGpu.Controls.NumberBox.Create(FluentGpu.Signals.Signal(Of Double), Double, Double, Double, Double, Double, FluentGpu.Controls.NumberBoxSpinButtonPlacementMode, FluentGpu.Controls.NumberBoxValidationMode, Boolean, Boolean, String, String, String, Single, System.Func(Of Double, String), System.Action(Of Double, Double), FluentGpu.Signals.Signal(Of String), System.Func(Of String, Double?), Boolean)
+  name.vb: Create(Signal(Of Double), Double, Double, Double, Double, Double, NumberBoxSpinButtonPlacementMode, NumberBoxValidationMode, Boolean, Boolean, String, String, String, Single, Func(Of Double, String), Action(Of Double, Double), Signal(Of String), Func(Of String, Double?), Boolean)
+- uid: FluentGpu.Controls.NumberBox.Create(System.Double,System.Double)
+  commentId: M:FluentGpu.Controls.NumberBox.Create(System.Double,System.Double)
+  id: Create(System.Double,System.Double)
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Create(double, double)
+  nameWithType: NumberBox.Create(double, double)
+  fullName: FluentGpu.Controls.NumberBox.Create(double, double)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Create
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 149
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Legacy: an editable numeric field with NO spin buttons (WinUI default). <code class="paramref">step</code> maps to SmallChange.'
+  example: []
+  syntax:
+    content: public static Element Create(double initial = 0, double step = 1)
+    parameters:
+    - id: initial
+      type: System.Double
+    - id: step
+      type: System.Double
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function Create(initial As Double = 0, [step] As Double = 1) As Element
+  overload: FluentGpu.Controls.NumberBox.Create*
+  nameWithType.vb: NumberBox.Create(Double, Double)
+  fullName.vb: FluentGpu.Controls.NumberBox.Create(Double, Double)
+  name.vb: Create(Double, Double)
+- uid: FluentGpu.Controls.NumberBox.CreateWithSpinners(System.Double,System.Double)
+  commentId: M:FluentGpu.Controls.NumberBox.CreateWithSpinners(System.Double,System.Double)
+  id: CreateWithSpinners(System.Double,System.Double)
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: CreateWithSpinners(double, double)
+  nameWithType: NumberBox.CreateWithSpinners(double, double)
+  fullName: FluentGpu.Controls.NumberBox.CreateWithSpinners(double, double)
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: CreateWithSpinners
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 154
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  summary: 'Legacy: an editable numeric field with an inline up/down spin column.'
+  example: []
+  syntax:
+    content: public static Element CreateWithSpinners(double initial = 0, double step = 1)
+    parameters:
+    - id: initial
+      type: System.Double
+    - id: step
+      type: System.Double
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Shared Function CreateWithSpinners(initial As Double = 0, [step] As Double = 1) As Element
+  overload: FluentGpu.Controls.NumberBox.CreateWithSpinners*
+  nameWithType.vb: NumberBox.CreateWithSpinners(Double, Double)
+  fullName.vb: FluentGpu.Controls.NumberBox.CreateWithSpinners(Double, Double)
+  name.vb: CreateWithSpinners(Double, Double)
+- uid: FluentGpu.Controls.NumberBox.Render
+  commentId: M:FluentGpu.Controls.NumberBox.Render
+  id: Render
+  parent: FluentGpu.Controls.NumberBox
+  langs:
+  - csharp
+  - vb
+  name: Render()
+  nameWithType: NumberBox.Render()
+  fullName: FluentGpu.Controls.NumberBox.Render()
+  type: Method
+  source:
+    remote:
+      path: src/FluentGpu.Controls/NumberBox.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Render
+    path: ../../src/FluentGpu.Controls/NumberBox.cs
+    startLine: 191
+  assemblies:
+  - FluentGpu.Controls
+  namespace: FluentGpu.Controls
+  example: []
+  syntax:
+    content: public override Element Render()
+    return:
+      type: FluentGpu.Dsl.Element
+    content.vb: Public Overrides Function Render() As Element
+  overridden: FluentGpu.Hooks.Component.Render
+  overload: FluentGpu.Controls.NumberBox.Render*
+references:
+- uid: FluentGpu.Controls.EditableText
+  commentId: T:FluentGpu.Controls.EditableText
+  href: FluentGpu.Controls.EditableText.html
+  name: EditableText
+  nameWithType: EditableText
+  fullName: FluentGpu.Controls.EditableText
+- uid: FluentGpu.Controls.NumberBox.Value
+  commentId: F:FluentGpu.Controls.NumberBox.Value
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_Value
+  name: Value
+  nameWithType: NumberBox.Value
+  fullName: FluentGpu.Controls.NumberBox.Value
+- uid: FluentGpu.Controls.NumberBox.Formatter
+  commentId: F:FluentGpu.Controls.NumberBox.Formatter
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_Formatter
+  name: Formatter
+  nameWithType: NumberBox.Formatter
+  fullName: FluentGpu.Controls.NumberBox.Formatter
+- uid: FluentGpu.Controls.NumberBox.SmallChange
+  commentId: F:FluentGpu.Controls.NumberBox.SmallChange
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_SmallChange
+  name: SmallChange
+  nameWithType: NumberBox.SmallChange
+  fullName: FluentGpu.Controls.NumberBox.SmallChange
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html#FluentGpu_Controls_NumberBoxSpinButtonPlacementMode_Hidden
+  name: Hidden
+  nameWithType: NumberBoxSpinButtonPlacementMode.Hidden
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Hidden
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html#FluentGpu_Controls_NumberBoxSpinButtonPlacementMode_Inline
+  name: Inline
+  nameWithType: NumberBoxSpinButtonPlacementMode.Inline
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Inline
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  commentId: F:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html#FluentGpu_Controls_NumberBoxSpinButtonPlacementMode_Compact
+  name: Compact
+  nameWithType: NumberBoxSpinButtonPlacementMode.Compact
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.Compact
+- uid: FluentGpu.Controls.NumberBox.ValidationMode
+  commentId: F:FluentGpu.Controls.NumberBox.ValidationMode
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_ValidationMode
+  name: ValidationMode
+  nameWithType: NumberBox.ValidationMode
+  fullName: FluentGpu.Controls.NumberBox.ValidationMode
+- uid: FluentGpu.Controls.NumberBox.AcceptsExpression
+  commentId: F:FluentGpu.Controls.NumberBox.AcceptsExpression
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_AcceptsExpression
+  name: AcceptsExpression
+  nameWithType: NumberBox.AcceptsExpression
+  fullName: FluentGpu.Controls.NumberBox.AcceptsExpression
+- uid: FluentGpu.Controls
+  commentId: N:FluentGpu.Controls
+  href: FluentGpu.html
+  name: FluentGpu.Controls
+  nameWithType: FluentGpu.Controls
+  fullName: FluentGpu.Controls
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Controls
+    name: Controls
+    href: FluentGpu.Controls.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Hooks.Component
+  commentId: T:FluentGpu.Hooks.Component
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.Component.html
+  name: Component
+  nameWithType: Component
+  fullName: FluentGpu.Hooks.Component
+- uid: FluentGpu.Hooks.Component.Context
+  commentId: P:FluentGpu.Hooks.Component.Context
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Context
+  name: Context
+  nameWithType: Component.Context
+  fullName: FluentGpu.Hooks.Component.Context
+- uid: FluentGpu.Hooks.Component.RunsOnce
+  commentId: P:FluentGpu.Hooks.Component.RunsOnce
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RunsOnce
+  name: RunsOnce
+  nameWithType: Component.RunsOnce
+  fullName: FluentGpu.Hooks.Component.RunsOnce
+- uid: FluentGpu.Hooks.Component.RenderWithHooks
+  commentId: M:FluentGpu.Hooks.Component.RenderWithHooks
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  name: RenderWithHooks()
+  nameWithType: Component.RenderWithHooks()
+  fullName: FluentGpu.Hooks.Component.RenderWithHooks()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.RenderWithHooks
+    name: RenderWithHooks
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_RenderWithHooks
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.Unmount
+  commentId: M:FluentGpu.Hooks.Component.Unmount
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  name: Unmount()
+  nameWithType: Component.Unmount()
+  fullName: FluentGpu.Hooks.Component.Unmount()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Unmount
+    name: Unmount
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Unmount
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseEntrance(System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.Component.FluentGpu.Hooks.MotionHooks.UseHoverScale(System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  parent: FluentGpu.Hooks.MotionHooks
+  definition: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Hooks
+  commentId: N:FluentGpu.Hooks
+  href: FluentGpu.html
+  name: FluentGpu.Hooks
+  nameWithType: FluentGpu.Hooks
+  fullName: FluentGpu.Hooks
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Hooks
+    name: Hooks
+    href: FluentGpu.Hooks.html
+- uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  name: UseEntrance(Component, float, object)
+  nameWithType: MotionHooks.UseEntrance(Component, float, object)
+  fullName: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, float, object)
+  nameWithType.vb: MotionHooks.UseEntrance(Component, Single, Object)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component, Single, Object)
+  name.vb: UseEntrance(Component, Single, Object)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseEntrance(FluentGpu.Hooks.Component,System.Single,System.Object)
+    name: UseEntrance
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseEntrance_FluentGpu_Hooks_Component_System_Single_System_Object_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: FluentGpu.Hooks.MotionHooks
+  commentId: T:FluentGpu.Hooks.MotionHooks
+  parent: FluentGpu.Hooks
+  href: FluentGpu.Hooks.MotionHooks.html
+  name: MotionHooks
+  nameWithType: MotionHooks
+  fullName: FluentGpu.Hooks.MotionHooks
+- uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  commentId: M:FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+  isExternal: true
+  href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  name: UseHoverScale(Component, bool, float)
+  nameWithType: MotionHooks.UseHoverScale(Component, bool, float)
+  fullName: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, bool, float)
+  nameWithType.vb: MotionHooks.UseHoverScale(Component, Boolean, Single)
+  fullName.vb: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component, Boolean, Single)
+  name.vb: UseHoverScale(Component, Boolean, Single)
+  spec.csharp:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: bool
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: float
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.MotionHooks.UseHoverScale(FluentGpu.Hooks.Component,System.Boolean,System.Single)
+    name: UseHoverScale
+    href: FluentGpu.Hooks.MotionHooks.html#FluentGpu_Hooks_MotionHooks_UseHoverScale_FluentGpu_Hooks_Component_System_Boolean_System_Single_
+  - name: (
+  - uid: FluentGpu.Hooks.Component
+    name: Component
+    href: FluentGpu.Hooks.Component.html
+  - name: ','
+  - name: " "
+  - uid: System.Boolean
+    name: Boolean
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.boolean
+  - name: ','
+  - name: " "
+  - uid: System.Single
+    name: Single
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.single
+  - name: )
+- uid: System.String
+  commentId: T:System.String
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.string
+  name: string
+  nameWithType: string
+  fullName: string
+  nameWithType.vb: String
+  fullName.vb: String
+  name.vb: String
+- uid: FluentGpu.Signals.Signal{System.Double}
+  commentId: T:FluentGpu.Signals.Signal{System.Double}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<double>
+  nameWithType: Signal<double>
+  fullName: FluentGpu.Signals.Signal<double>
+  nameWithType.vb: Signal(Of Double)
+  fullName.vb: FluentGpu.Signals.Signal(Of Double)
+  name.vb: Signal(Of Double)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.Double
+    name: double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Double
+    name: Double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: )
+- uid: FluentGpu.Signals.Signal`1
+  commentId: T:FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<T>
+  nameWithType: Signal<T>
+  fullName: FluentGpu.Signals.Signal<T>
+  nameWithType.vb: Signal(Of T)
+  fullName.vb: FluentGpu.Signals.Signal(Of T)
+  name.vb: Signal(Of T)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Double
+  commentId: T:System.Double
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.double
+  name: double
+  nameWithType: double
+  fullName: double
+  nameWithType.vb: Double
+  fullName.vb: Double
+  name.vb: Double
+- uid: System.Boolean
+  commentId: T:System.Boolean
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.boolean
+  name: bool
+  nameWithType: bool
+  fullName: bool
+  nameWithType.vb: Boolean
+  fullName.vb: Boolean
+  name.vb: Boolean
+- uid: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  commentId: T:FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode.html
+  name: NumberBoxSpinButtonPlacementMode
+  nameWithType: NumberBoxSpinButtonPlacementMode
+  fullName: FluentGpu.Controls.NumberBoxSpinButtonPlacementMode
+- uid: FluentGpu.Controls.NumberBoxValidationMode
+  commentId: T:FluentGpu.Controls.NumberBoxValidationMode
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBoxValidationMode.html
+  name: NumberBoxValidationMode
+  nameWithType: NumberBoxValidationMode
+  fullName: FluentGpu.Controls.NumberBoxValidationMode
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Signals.Signal{System.String}
+  commentId: T:FluentGpu.Signals.Signal{System.String}
+  parent: FluentGpu.Signals
+  definition: FluentGpu.Signals.Signal`1
+  href: FluentGpu.Signals.Signal-1.html
+  name: Signal<string>
+  nameWithType: Signal<string>
+  fullName: FluentGpu.Signals.Signal<string>
+  nameWithType.vb: Signal(Of String)
+  fullName.vb: FluentGpu.Signals.Signal(Of String)
+  name.vb: Signal(Of String)
+  spec.csharp:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: FluentGpu.Signals.Signal`1
+    name: Signal
+    href: FluentGpu.Signals.Signal-1.html
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Func{System.Double,System.String}
+  commentId: T:System.Func{System.Double,System.String}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<double, string>
+  nameWithType: Func<double, string>
+  fullName: System.Func<double, string>
+  nameWithType.vb: Func(Of Double, String)
+  fullName.vb: System.Func(Of Double, String)
+  name.vb: Func(Of Double, String)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.Double
+    name: double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Double
+    name: Double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: ','
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: )
+- uid: System.Func`2
+  commentId: T:System.Func`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<T, TResult>
+  nameWithType: Func<T, TResult>
+  fullName: System.Func<T, TResult>
+  nameWithType.vb: Func(Of T, TResult)
+  fullName.vb: System.Func(Of T, TResult)
+  name.vb: Func(Of T, TResult)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: ','
+  - name: " "
+  - name: TResult
+  - name: )
+- uid: System.Func{System.String,System.Nullable{System.Double}}
+  commentId: T:System.Func{System.String,System.Nullable{System.Double}}
+  parent: System
+  definition: System.Func`2
+  href: https://learn.microsoft.com/dotnet/api/system.func-2
+  name: Func<string, double?>
+  nameWithType: Func<string, double?>
+  fullName: System.Func<string, double?>
+  nameWithType.vb: Func(Of String, Double?)
+  fullName.vb: System.Func(Of String, Double?)
+  name.vb: Func(Of String, Double?)
+  spec.csharp:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: <
+  - uid: System.String
+    name: string
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Double
+    name: double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: '?'
+  - name: '>'
+  spec.vb:
+  - uid: System.Func`2
+    name: Func
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.func-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.String
+    name: String
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.string
+  - name: ','
+  - name: " "
+  - uid: System.Double
+    name: Double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: '?'
+  - name: )
+- uid: System.Action{System.Double,System.Double}
+  commentId: T:System.Action{System.Double,System.Double}
+  parent: System
+  definition: System.Action`2
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<double, double>
+  nameWithType: Action<double, double>
+  fullName: System.Action<double, double>
+  nameWithType.vb: Action(Of Double, Double)
+  fullName.vb: System.Action(Of Double, Double)
+  name.vb: Action(Of Double, Double)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - uid: System.Double
+    name: double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: ','
+  - name: " "
+  - uid: System.Double
+    name: double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: System.Double
+    name: Double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: ','
+  - name: " "
+  - uid: System.Double
+    name: Double
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.double
+  - name: )
+- uid: System.Action`2
+  commentId: T:System.Action`2
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.action-2
+  name: Action<T1, T2>
+  nameWithType: Action<T1, T2>
+  fullName: System.Action<T1, T2>
+  nameWithType.vb: Action(Of T1, T2)
+  fullName.vb: System.Action(Of T1, T2)
+  name.vb: Action(Of T1, T2)
+  spec.csharp:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: <
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: '>'
+  spec.vb:
+  - uid: System.Action`2
+    name: Action
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.action-2
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T1
+  - name: ','
+  - name: " "
+  - name: T2
+  - name: )
+- uid: FluentGpu.Controls.NumberBox.Style
+  commentId: T:FluentGpu.Controls.NumberBox.Style
+  parent: FluentGpu.Controls
+  href: FluentGpu.Controls.NumberBox.html
+  name: NumberBox.Style
+  nameWithType: NumberBox.Style
+  fullName: FluentGpu.Controls.NumberBox.Style
+  spec.csharp:
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+  spec.vb:
+  - uid: FluentGpu.Controls.NumberBox
+    name: NumberBox
+    href: FluentGpu.Controls.NumberBox.html
+  - name: .
+  - uid: FluentGpu.Controls.NumberBox.Style
+    name: Style
+    href: FluentGpu.Controls.NumberBox.Style.html
+- uid: FluentGpu.Dsl.TemplateParts
+  commentId: T:FluentGpu.Dsl.TemplateParts
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.TemplateParts.html
+  name: TemplateParts
+  nameWithType: TemplateParts
+  fullName: FluentGpu.Dsl.TemplateParts
+- uid: FluentGpu.Dsl
+  commentId: N:FluentGpu.Dsl
+  href: FluentGpu.html
+  name: FluentGpu.Dsl
+  nameWithType: FluentGpu.Dsl
+  fullName: FluentGpu.Dsl
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Dsl
+    name: Dsl
+    href: FluentGpu.Dsl.html
+- uid: FluentGpu.Controls.NumberBox.DefaultStyle*
+  commentId: Overload:FluentGpu.Controls.NumberBox.DefaultStyle
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_DefaultStyle
+  name: DefaultStyle
+  nameWithType: NumberBox.DefaultStyle
+  fullName: FluentGpu.Controls.NumberBox.DefaultStyle
+- uid: FluentGpu.Controls.NumberBox.Create*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Create
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_Create_FluentGpu_Signals_Signal_System_Double__System_Double_System_Double_System_Double_System_Double_System_Double_FluentGpu_Controls_NumberBoxSpinButtonPlacementMode_FluentGpu_Controls_NumberBoxValidationMode_System_Boolean_System_Boolean_System_String_System_String_System_String_System_Single_System_Func_System_Double_System_String__System_Action_System_Double_System_Double__FluentGpu_Signals_Signal_System_String__System_Func_System_String_System_Nullable_System_Double___System_Boolean_
+  name: Create
+  nameWithType: NumberBox.Create
+  fullName: FluentGpu.Controls.NumberBox.Create
+- uid: FluentGpu.Dsl.Element
+  commentId: T:FluentGpu.Dsl.Element
+  parent: FluentGpu.Dsl
+  href: FluentGpu.Dsl.Element.html
+  name: Element
+  nameWithType: Element
+  fullName: FluentGpu.Dsl.Element
+- uid: FluentGpu.Controls.NumberBox.CreateWithSpinners*
+  commentId: Overload:FluentGpu.Controls.NumberBox.CreateWithSpinners
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_CreateWithSpinners_System_Double_System_Double_
+  name: CreateWithSpinners
+  nameWithType: NumberBox.CreateWithSpinners
+  fullName: FluentGpu.Controls.NumberBox.CreateWithSpinners
+- uid: FluentGpu.Hooks.Component.Render
+  commentId: M:FluentGpu.Hooks.Component.Render
+  parent: FluentGpu.Hooks.Component
+  href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  name: Render()
+  nameWithType: Component.Render()
+  fullName: FluentGpu.Hooks.Component.Render()
+  spec.csharp:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Hooks.Component.Render
+    name: Render
+    href: FluentGpu.Hooks.Component.html#FluentGpu_Hooks_Component_Render
+  - name: (
+  - name: )
+- uid: FluentGpu.Controls.NumberBox.Render*
+  commentId: Overload:FluentGpu.Controls.NumberBox.Render
+  href: FluentGpu.Controls.NumberBox.html#FluentGpu_Controls_NumberBox_Render
+  name: Render
+  nameWithType: NumberBox.Render
+  fullName: FluentGpu.Controls.NumberBox.Render

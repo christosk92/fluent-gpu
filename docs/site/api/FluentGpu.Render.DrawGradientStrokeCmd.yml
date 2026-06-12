@@ -1,0 +1,1103 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Render.DrawGradientStrokeCmd
+  commentId: T:FluentGpu.Render.DrawGradientStrokeCmd
+  id: DrawGradientStrokeCmd
+  parent: FluentGpu.Render
+  children:
+  - FluentGpu.Render.DrawGradientStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Int32,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  - FluentGpu.Render.DrawGradientStrokeCmd.C0
+  - FluentGpu.Render.DrawGradientStrokeCmd.C1
+  - FluentGpu.Render.DrawGradientStrokeCmd.C2
+  - FluentGpu.Render.DrawGradientStrokeCmd.C3
+  - FluentGpu.Render.DrawGradientStrokeCmd.End
+  - FluentGpu.Render.DrawGradientStrokeCmd.O0
+  - FluentGpu.Render.DrawGradientStrokeCmd.O1
+  - FluentGpu.Render.DrawGradientStrokeCmd.O2
+  - FluentGpu.Render.DrawGradientStrokeCmd.O3
+  - FluentGpu.Render.DrawGradientStrokeCmd.Opacity
+  - FluentGpu.Render.DrawGradientStrokeCmd.Radii
+  - FluentGpu.Render.DrawGradientStrokeCmd.Rect
+  - FluentGpu.Render.DrawGradientStrokeCmd.Shape
+  - FluentGpu.Render.DrawGradientStrokeCmd.Start
+  - FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+  - FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+  - FluentGpu.Render.DrawGradientStrokeCmd.Transform
+  langs:
+  - csharp
+  - vb
+  name: DrawGradientStrokeCmd
+  nameWithType: DrawGradientStrokeCmd
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd
+  type: Struct
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: DrawGradientStrokeCmd
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: 'public readonly record struct DrawGradientStrokeCmd : IEquatable<DrawGradientStrokeCmd>'
+    content.vb: Public Structure DrawGradientStrokeCmd Implements IEquatable(Of DrawGradientStrokeCmd)
+  implements:
+  - System.IEquatable{FluentGpu.Render.DrawGradientStrokeCmd}
+  inheritedMembers:
+  - System.ValueType.Equals(System.Object)
+  - System.ValueType.GetHashCode
+  - System.ValueType.ToString
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Int32,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  commentId: M:FluentGpu.Render.DrawGradientStrokeCmd.#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Int32,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)
+  id: '#ctor(FluentGpu.Foundation.RectF,FluentGpu.Foundation.CornerRadius4,FluentGpu.Foundation.Point2,FluentGpu.Foundation.Point2,System.Int32,System.Int32,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,FluentGpu.Foundation.ColorF,System.Single,System.Single,System.Single,System.Single,System.Single,FluentGpu.Foundation.Affine2D,System.Single)'
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: DrawGradientStrokeCmd(RectF, CornerRadius4, Point2, Point2, int, int, ColorF, ColorF, ColorF, ColorF, float, float, float, float, float, Affine2D, float)
+  nameWithType: DrawGradientStrokeCmd.DrawGradientStrokeCmd(RectF, CornerRadius4, Point2, Point2, int, int, ColorF, ColorF, ColorF, ColorF, float, float, float, float, float, Affine2D, float)
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.DrawGradientStrokeCmd(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, int, int, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, float, float, float, float, float, FluentGpu.Foundation.Affine2D, float)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Radii, Point2 Start, Point2 End, int Shape, int StopCount, ColorF C0, ColorF C1, ColorF C2, ColorF C3, float O0, float O1, float O2, float O3, float StrokeWidth, Affine2D Transform, float Opacity)
+    parameters:
+    - id: Rect
+      type: FluentGpu.Foundation.RectF
+    - id: Radii
+      type: FluentGpu.Foundation.CornerRadius4
+    - id: Start
+      type: FluentGpu.Foundation.Point2
+    - id: End
+      type: FluentGpu.Foundation.Point2
+    - id: Shape
+      type: System.Int32
+    - id: StopCount
+      type: System.Int32
+    - id: C0
+      type: FluentGpu.Foundation.ColorF
+    - id: C1
+      type: FluentGpu.Foundation.ColorF
+    - id: C2
+      type: FluentGpu.Foundation.ColorF
+    - id: C3
+      type: FluentGpu.Foundation.ColorF
+    - id: O0
+      type: System.Single
+    - id: O1
+      type: System.Single
+    - id: O2
+      type: System.Single
+    - id: O3
+      type: System.Single
+    - id: StrokeWidth
+      type: System.Single
+    - id: Transform
+      type: FluentGpu.Foundation.Affine2D
+    - id: Opacity
+      type: System.Single
+    content.vb: Public Sub New(Rect As RectF, Radii As CornerRadius4, Start As Point2, [End] As Point2, Shape As Integer, StopCount As Integer, C0 As ColorF, C1 As ColorF, C2 As ColorF, C3 As ColorF, O0 As Single, O1 As Single, O2 As Single, O3 As Single, StrokeWidth As Single, Transform As Affine2D, Opacity As Single)
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.#ctor*
+  nameWithType.vb: DrawGradientStrokeCmd.New(RectF, CornerRadius4, Point2, Point2, Integer, Integer, ColorF, ColorF, ColorF, ColorF, Single, Single, Single, Single, Single, Affine2D, Single)
+  fullName.vb: FluentGpu.Render.DrawGradientStrokeCmd.New(FluentGpu.Foundation.RectF, FluentGpu.Foundation.CornerRadius4, FluentGpu.Foundation.Point2, FluentGpu.Foundation.Point2, Integer, Integer, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, FluentGpu.Foundation.ColorF, Single, Single, Single, Single, Single, FluentGpu.Foundation.Affine2D, Single)
+  name.vb: New(RectF, CornerRadius4, Point2, Point2, Integer, Integer, ColorF, ColorF, ColorF, ColorF, Single, Single, Single, Single, Single, Affine2D, Single)
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Rect
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Rect
+  id: Rect
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Rect
+  nameWithType: DrawGradientStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Rect
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Rect
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public RectF Rect { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.RectF
+    content.vb: Public Property Rect As RectF
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Rect*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Radii
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Radii
+  id: Radii
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Radii
+  nameWithType: DrawGradientStrokeCmd.Radii
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Radii
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Radii
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public CornerRadius4 Radii { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.CornerRadius4
+    content.vb: Public Property Radii As CornerRadius4
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Radii*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Start
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Start
+  id: Start
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Start
+  nameWithType: DrawGradientStrokeCmd.Start
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Start
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Start
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 Start { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property Start As Point2
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Start*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.End
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.End
+  id: End
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: End
+  nameWithType: DrawGradientStrokeCmd.End
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.End
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: End
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Point2 End { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Point2
+    content.vb: Public Property [End] As Point2
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.End*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Shape
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Shape
+  id: Shape
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Shape
+  nameWithType: DrawGradientStrokeCmd.Shape
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Shape
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Shape
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int Shape { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property Shape As Integer
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Shape*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+  id: StopCount
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: StopCount
+  nameWithType: DrawGradientStrokeCmd.StopCount
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StopCount
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 92
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public int StopCount { get; init; }
+    parameters: []
+    return:
+      type: System.Int32
+    content.vb: Public Property StopCount As Integer
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.StopCount*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C0
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.C0
+  id: C0
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: C0
+  nameWithType: DrawGradientStrokeCmd.C0
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C0
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: C0
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF C0 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property C0 As ColorF
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.C0*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C1
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.C1
+  id: C1
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: C1
+  nameWithType: DrawGradientStrokeCmd.C1
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C1
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: C1
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF C1 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property C1 As ColorF
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.C1*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C2
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.C2
+  id: C2
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: C2
+  nameWithType: DrawGradientStrokeCmd.C2
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C2
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: C2
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF C2 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property C2 As ColorF
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.C2*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C3
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.C3
+  id: C3
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: C3
+  nameWithType: DrawGradientStrokeCmd.C3
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C3
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: C3
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public ColorF C3 { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.ColorF
+    content.vb: Public Property C3 As ColorF
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.C3*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O0
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.O0
+  id: O0
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: O0
+  nameWithType: DrawGradientStrokeCmd.O0
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O0
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: O0
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float O0 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property O0 As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.O0*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O1
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.O1
+  id: O1
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: O1
+  nameWithType: DrawGradientStrokeCmd.O1
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O1
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: O1
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float O1 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property O1 As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.O1*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O2
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.O2
+  id: O2
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: O2
+  nameWithType: DrawGradientStrokeCmd.O2
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O2
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: O2
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float O2 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property O2 As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.O2*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O3
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.O3
+  id: O3
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: O3
+  nameWithType: DrawGradientStrokeCmd.O3
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O3
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: O3
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float O3 { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property O3 As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.O3*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+  id: StrokeWidth
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: StrokeWidth
+  nameWithType: DrawGradientStrokeCmd.StrokeWidth
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: StrokeWidth
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float StrokeWidth { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property StrokeWidth As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Transform
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Transform
+  id: Transform
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Transform
+  nameWithType: DrawGradientStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Transform
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Transform
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public Affine2D Transform { get; init; }
+    parameters: []
+    return:
+      type: FluentGpu.Foundation.Affine2D
+    content.vb: Public Property Transform As Affine2D
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Transform*
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Opacity
+  commentId: P:FluentGpu.Render.DrawGradientStrokeCmd.Opacity
+  id: Opacity
+  parent: FluentGpu.Render.DrawGradientStrokeCmd
+  langs:
+  - csharp
+  - vb
+  name: Opacity
+  nameWithType: DrawGradientStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Opacity
+  type: Property
+  source:
+    remote:
+      path: src/FluentGpu.Render/DrawList.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: Opacity
+    path: ../../src/FluentGpu.Render/DrawList.cs
+    startLine: 93
+  assemblies:
+  - FluentGpu.Render
+  namespace: FluentGpu.Render
+  syntax:
+    content: public float Opacity { get; init; }
+    parameters: []
+    return:
+      type: System.Single
+    content.vb: Public Property Opacity As Single
+  overload: FluentGpu.Render.DrawGradientStrokeCmd.Opacity*
+references:
+- uid: FluentGpu.Render
+  commentId: N:FluentGpu.Render
+  href: FluentGpu.html
+  name: FluentGpu.Render
+  nameWithType: FluentGpu.Render
+  fullName: FluentGpu.Render
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Render
+    name: Render
+    href: FluentGpu.Render.html
+- uid: System.IEquatable{FluentGpu.Render.DrawGradientStrokeCmd}
+  commentId: T:System.IEquatable{FluentGpu.Render.DrawGradientStrokeCmd}
+  parent: System
+  definition: System.IEquatable`1
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<DrawGradientStrokeCmd>
+  nameWithType: IEquatable<DrawGradientStrokeCmd>
+  fullName: System.IEquatable<FluentGpu.Render.DrawGradientStrokeCmd>
+  nameWithType.vb: IEquatable(Of DrawGradientStrokeCmd)
+  fullName.vb: System.IEquatable(Of FluentGpu.Render.DrawGradientStrokeCmd)
+  name.vb: IEquatable(Of DrawGradientStrokeCmd)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - uid: FluentGpu.Render.DrawGradientStrokeCmd
+    name: DrawGradientStrokeCmd
+    href: FluentGpu.Render.DrawGradientStrokeCmd.html
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - uid: FluentGpu.Render.DrawGradientStrokeCmd
+    name: DrawGradientStrokeCmd
+    href: FluentGpu.Render.DrawGradientStrokeCmd.html
+  - name: )
+- uid: System.ValueType.Equals(System.Object)
+  commentId: M:System.ValueType.Equals(System.Object)
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  name: Equals(object)
+  nameWithType: ValueType.Equals(object)
+  fullName: System.ValueType.Equals(object)
+  nameWithType.vb: ValueType.Equals(Object)
+  fullName.vb: System.ValueType.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.equals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.ValueType.GetHashCode
+  commentId: M:System.ValueType.GetHashCode
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  name: GetHashCode()
+  nameWithType: ValueType.GetHashCode()
+  fullName: System.ValueType.GetHashCode()
+  spec.csharp:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode
+  - name: (
+  - name: )
+- uid: System.ValueType.ToString
+  commentId: M:System.ValueType.ToString
+  parent: System.ValueType
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  name: ToString()
+  nameWithType: ValueType.ToString()
+  fullName: System.ValueType.ToString()
+  spec.csharp:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.ValueType.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.valuetype.tostring
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.IEquatable`1
+  commentId: T:System.IEquatable`1
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  name: IEquatable<T>
+  nameWithType: IEquatable<T>
+  fullName: System.IEquatable<T>
+  nameWithType.vb: IEquatable(Of T)
+  fullName.vb: System.IEquatable(Of T)
+  name.vb: IEquatable(Of T)
+  spec.csharp:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: <
+  - name: T
+  - name: '>'
+  spec.vb:
+  - uid: System.IEquatable`1
+    name: IEquatable
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.iequatable-1
+  - name: (
+  - name: Of
+  - name: " "
+  - name: T
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: System.ValueType
+  commentId: T:System.ValueType
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.valuetype
+  name: ValueType
+  nameWithType: ValueType
+  fullName: System.ValueType
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.#ctor*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.#ctor
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd__ctor_FluentGpu_Foundation_RectF_FluentGpu_Foundation_CornerRadius4_FluentGpu_Foundation_Point2_FluentGpu_Foundation_Point2_System_Int32_System_Int32_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_FluentGpu_Foundation_ColorF_System_Single_System_Single_System_Single_System_Single_System_Single_FluentGpu_Foundation_Affine2D_System_Single_
+  name: DrawGradientStrokeCmd
+  nameWithType: DrawGradientStrokeCmd.DrawGradientStrokeCmd
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.DrawGradientStrokeCmd
+  nameWithType.vb: DrawGradientStrokeCmd.New
+  fullName.vb: FluentGpu.Render.DrawGradientStrokeCmd.New
+  name.vb: New
+- uid: FluentGpu.Foundation.RectF
+  commentId: T:FluentGpu.Foundation.RectF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.RectF.html
+  name: RectF
+  nameWithType: RectF
+  fullName: FluentGpu.Foundation.RectF
+- uid: FluentGpu.Foundation.CornerRadius4
+  commentId: T:FluentGpu.Foundation.CornerRadius4
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.CornerRadius4.html
+  name: CornerRadius4
+  nameWithType: CornerRadius4
+  fullName: FluentGpu.Foundation.CornerRadius4
+- uid: FluentGpu.Foundation.Point2
+  commentId: T:FluentGpu.Foundation.Point2
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Point2.html
+  name: Point2
+  nameWithType: Point2
+  fullName: FluentGpu.Foundation.Point2
+- uid: System.Int32
+  commentId: T:System.Int32
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.int32
+  name: int
+  nameWithType: int
+  fullName: int
+  nameWithType.vb: Integer
+  fullName.vb: Integer
+  name.vb: Integer
+- uid: FluentGpu.Foundation.ColorF
+  commentId: T:FluentGpu.Foundation.ColorF
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.ColorF.html
+  name: ColorF
+  nameWithType: ColorF
+  fullName: FluentGpu.Foundation.ColorF
+- uid: System.Single
+  commentId: T:System.Single
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.single
+  name: float
+  nameWithType: float
+  fullName: float
+  nameWithType.vb: Single
+  fullName.vb: Single
+  name.vb: Single
+- uid: FluentGpu.Foundation.Affine2D
+  commentId: T:FluentGpu.Foundation.Affine2D
+  parent: FluentGpu.Foundation
+  href: FluentGpu.Foundation.Affine2D.html
+  name: Affine2D
+  nameWithType: Affine2D
+  fullName: FluentGpu.Foundation.Affine2D
+- uid: FluentGpu.Foundation
+  commentId: N:FluentGpu.Foundation
+  href: FluentGpu.html
+  name: FluentGpu.Foundation
+  nameWithType: FluentGpu.Foundation
+  fullName: FluentGpu.Foundation
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Foundation
+    name: Foundation
+    href: FluentGpu.Foundation.html
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Rect*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Rect
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Rect
+  name: Rect
+  nameWithType: DrawGradientStrokeCmd.Rect
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Rect
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Radii*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Radii
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Radii
+  name: Radii
+  nameWithType: DrawGradientStrokeCmd.Radii
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Radii
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Start*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Start
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Start
+  name: Start
+  nameWithType: DrawGradientStrokeCmd.Start
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Start
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.End*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.End
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_End
+  name: End
+  nameWithType: DrawGradientStrokeCmd.End
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.End
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Shape*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Shape
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Shape
+  name: Shape
+  nameWithType: DrawGradientStrokeCmd.Shape
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Shape
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.StopCount*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_StopCount
+  name: StopCount
+  nameWithType: DrawGradientStrokeCmd.StopCount
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.StopCount
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C0*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.C0
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_C0
+  name: C0
+  nameWithType: DrawGradientStrokeCmd.C0
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C0
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C1*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.C1
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_C1
+  name: C1
+  nameWithType: DrawGradientStrokeCmd.C1
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C1
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C2*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.C2
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_C2
+  name: C2
+  nameWithType: DrawGradientStrokeCmd.C2
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C2
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.C3*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.C3
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_C3
+  name: C3
+  nameWithType: DrawGradientStrokeCmd.C3
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.C3
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O0*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.O0
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_O0
+  name: O0
+  nameWithType: DrawGradientStrokeCmd.O0
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O0
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O1*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.O1
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_O1
+  name: O1
+  nameWithType: DrawGradientStrokeCmd.O1
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O1
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O2*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.O2
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_O2
+  name: O2
+  nameWithType: DrawGradientStrokeCmd.O2
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O2
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.O3*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.O3
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_O3
+  name: O3
+  nameWithType: DrawGradientStrokeCmd.O3
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.O3
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_StrokeWidth
+  name: StrokeWidth
+  nameWithType: DrawGradientStrokeCmd.StrokeWidth
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.StrokeWidth
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Transform*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Transform
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Transform
+  name: Transform
+  nameWithType: DrawGradientStrokeCmd.Transform
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Transform
+- uid: FluentGpu.Render.DrawGradientStrokeCmd.Opacity*
+  commentId: Overload:FluentGpu.Render.DrawGradientStrokeCmd.Opacity
+  href: FluentGpu.Render.DrawGradientStrokeCmd.html#FluentGpu_Render_DrawGradientStrokeCmd_Opacity
+  name: Opacity
+  nameWithType: DrawGradientStrokeCmd.Opacity
+  fullName: FluentGpu.Render.DrawGradientStrokeCmd.Opacity

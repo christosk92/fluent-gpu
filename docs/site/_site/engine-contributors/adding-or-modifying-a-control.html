@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Adding or modifying a control | FluentGpu Developer Docs </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Adding or modifying a control | FluentGpu Developer Docs ">
+      
+      
+      <link rel="icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="../toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/christosk92/fluent-gpu/blob/feat/prop-unification/docs/site/engine-contributors/adding-or-modifying-a-control.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../logo.svg" alt="FluentGpu">
+            FluentGpu
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+
+      <div class="content">
+        <div class="actionbar">
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="adding-or-modifying-a-control">Adding or modifying a control</h1>
+
+<p>This page is for people <strong>adding a control to, or changing a control in, <code>src/FluentGpu.Controls/</code></strong> so it looks and
+moves 1:1 with WinUI 3. If you are <em>using</em> the controls in an app, read the app-author
+<a href="../app-authors/controls-cookbook.html">Controls cookbook</a> and the guide's
+<a href="../../guide/components-elements-layout.md">Elements, layout, controls &amp; theming</a> first — they own the authoring
+surface. This page covers the rules a control author obeys, where each piece lives in <code>src/</code>, and how to prove the
+result is faithful with the harness.</p>
+<p>Two upstream docs are the source of truth this page operationalizes; keep them open while you work:</p>
+<ul>
+<li>The guide's <a href="../../guide/control-fidelity.md">Building WinUI-faithful controls</a> — visual-state ramps, the two motion
+engines, the rendering rules, and the template-parts law (with the bugs that taught each rule).</li>
+<li>The guide's <a href="../../guide/winui-control-parity-audit.md">WinUI control parity audit</a> — the source-backed per-control
+diff and the <strong>acceptance rule</strong> every control patch must satisfy before it is called 1:1.</li>
+</ul>
+<p>The architectural authority is the controls subsystem design doc,
+<a href="../../../design/subsystems/controls.md"><code>design/subsystems/controls.md</code></a>; the precedence authority for any
+cross-cutting contract is <a href="../../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a>.</p>
+<h2 id="the-rule-controls-are-pure-composition-over-the-real-seams">The rule: controls are pure composition over the real seams</h2>
+<p>A FluentGpu control is <strong>not a node type and not a peer object</strong> — it is a render function (a <code>Component</code>, or more
+commonly a static factory returning an <code>Element</code>) that composes primitive Elements and wires the interaction/semantics
+seams the engine already owns. There is exactly one retained tree; a control is &quot;just&quot; disciplined composition.</p>
+<p>The hard constraint, stated in <a href="../../../design/subsystems/controls.md"><code>controls.md</code> §0/§13</a>: a control <strong>introduces
+no new <code>SceneStore</code> column, no new DrawList opcode, no new PAL seam, no new RHI method, and no new engine hook.</strong> The
+seam program already minted every primitive a control needs. If you find yourself reaching for a one-off animation
+system or a new render primitive to make a control work, <strong>stop</strong> — that is the signal to add the missing primitive
+<em>once</em> to the engine (<code>BoxEl</code>, <code>TextEl</code>, <code>AnimEngine</code>, or a popup/focus service) and let every control consume it, not
+to fork it inside one control. This is the single most important review gate: the WinUI parity audit's closing rule is
+<em>&quot;if a state cannot be represented without one-off control code, stop and add the shared engine primitive first.&quot;</em></p>
+<p>What a control file in <code>src/FluentGpu.Controls/*.cs</code> is allowed to contain:</p>
+<ul>
+<li><code>BoxEl</code>/<code>TextEl</code>/<code>ImageEl</code> composition (the visual tree),</li>
+<li>a per-control <code>Style</code> record (the WinUI theme-resource values, sourced and annotated line-by-line),</li>
+<li>the interaction wiring (<code>OnClick</code>, <code>OnKeyDown</code>, <code>OnDrag</code>, <code>Role</code>, <code>IsEnabled</code>, …),</li>
+<li><code>TemplateParts</code> plumbing (the one styling door, below),</li>
+<li>and at most a small <code>internal static class XxxMotion</code> of WinUI timing/easing constants.</li>
+</ul>
+<p>A control owns <strong>no <code>ComPtr</code>, no GPU object, no native handle</strong>. It writes Elements (UI thread); the reconciler writes
+columns; the render thread owns every <code>ComPtr</code>. That is why controls are 100% portable and recompile unchanged for
+macOS. See <a href="seams-rhi-pal-text.html">the seams page</a> and
+<a href="render-pipeline-and-scenerecorder.html">the render pipeline page</a> if a control genuinely needs a new primitive — that
+work lands <em>there</em>, then the control consumes it.</p>
+<blockquote>
+<p><strong>Where the code is.</strong> Controls are composition-only: <code>src/FluentGpu.Controls/*.cs</code>. The primitives they compose live
+elsewhere and are the place an honest gap gets fixed: Element shapes/props in <code>src/FluentGpu.Dsl/Element.cs</code>; the
+<code>TemplateParts</code> door in <code>src/FluentGpu.Dsl/TemplateParts.cs</code>; the interaction animator + authored timelines in
+<code>src/FluentGpu.Animation/AnimEngine.cs</code>; the rounded-rect rasterizer in <code>src/FluentGpu.Render/SceneRecorder.cs</code>;
+theme tokens in <code>src/FluentGpu.Dsl/Tokens.cs</code>. The reactive shell for stateful controls (<code>Component</code>, hooks) is
+<code>src/FluentGpu.Hooks/</code>. See the full <a href="contributor-map.html">Contributor map</a>.</p>
+</blockquote>
+<h2 id="step-1--read-the-whole-winui-template">Step 1 — read the WHOLE WinUI template</h2>
+<p>Skipping this is the recurring failure the fidelity guide exists to prevent: skim a summary and you <em>will</em> miss a state
+(the pressed glyph dim, the disabled stroke recolor, the press-only proto-dot). For every control, parity is checked
+against <strong>three</strong> source layers in the local WinUI checkout at <code>C:\WAVEE\microsoft-ui-xaml</code>, not just the XAML:</p>
+<ol>
+<li><strong>Styling &amp; visual states</strong> — <code>controls\dev\CommonStyles\&lt;Control&gt;_themeresources*.xaml</code> (framework controls) or
+<code>controls\dev\&lt;Control&gt;\*.xaml</code> (muxcontrols). Read every <code>VisualState</code> in every group, every <code>Storyboard</code>/<code>Setter</code>,
+every brush resource, and any <code>AnimatedIcon</code> source.</li>
+<li><strong>Behavior</strong> — <code>controls\dev\&lt;Control&gt;\*.cpp</code>, <code>*.h</code>, <code>*.idl</code> (keyboard, focus, selection, repeat timing, parser
+logic).</li>
+<li><strong>Generated source</strong> — <code>controls\dev\Generated\*.properties.*</code>, especially <code>TemplateSettings</code>: many storyboards do
+not hard-code their geometry — they bind to <code>TemplateSettings</code> computed in C++ at runtime.</li>
+</ol>
+<p>Resolve every <code>{StaticResource …}</code> / <code>{ThemeResource …}</code>. The shared <strong>timing/easing tokens</strong> almost always live in
+<code>controls\dev\CommonStyles\Common_themeresources_any.xaml</code>: <code>ControlNormalAnimationDuration = 250ms</code>,
+<code>ControlFastAnimationDuration = 167ms</code>, <code>ControlFasterAnimationDuration = 83ms</code>,
+<code>ControlFastOutSlowInKeySpline = 0,0,0,1</code> (the engine's <code>Easing.FluentPopOpen</code>). Colors/sizes bounce through
+per-control theme keys; map each to a <code>Tok.*</code> token (Dark <strong>and</strong> Light).</p>
+<p>The <code>RadioButton.cs</code> and <code>Slider.cs</code> headers are the model for how to <em>record</em> this work: every <code>Style</code> field carries
+the exact WinUI key and source line it came from (e.g. <code>DotHoverSize … // RadioButtonCheckGlyphPointerOverSize (template:180)</code>). Annotate as you read — the annotations <em>are</em> the parity proof a reviewer checks.</p>
+<p>Pitfalls that caused real misses (from <a href="../../guide/control-fidelity.md">control-fidelity §0</a>):</p>
+<ul>
+<li>Don't search only for <code>Animation</code> — some state changes are <code>Setter</code>s or zero-duration animations.</li>
+<li>Don't search only for <code>Pressed</code> — WinUI names cross-product states like <code>CheckedPressed</code>, <code>SelectedPointerOver</code>,
+<code>UncheckedDisabled</code>, or nests <code>Pressed</code> in a child style.</li>
+<li>Don't ignore invisible parts — RadioButton's press grow is a <em>separate</em> <code>PressedCheckGlyph</code> with <code>Opacity=0</code> at rest.</li>
+<li>If a <code>_perf2026</code> template exists, diff it against the non-perf file and document which one the control follows.</li>
+</ul>
+<h2 id="step-2--model-visual-state-as-statebrush-ramps-over-orthogonal-axes">Step 2 — model visual state as <code>StateBrush</code> ramps over orthogonal axes</h2>
+<p>WinUI enumerates the <strong>cross-product</strong> of state axes — CheckBox = <code>{Unchecked,Checked,Indeterminate} × {Normal,PointerOver,Pressed,Disabled}</code> = 12 <code>VisualState</code>s, each restating several setters. <strong>Do not replicate that.</strong>
+That combinatorial restatement is precisely why states get missed.</p>
+<p>Instead, model each visual property as a function of the <strong>orthogonal</strong> axes — logical state (checked/selected/…) ×
+interaction (hover/press/disabled, which the engine tracks per node) — with a <strong><code>StateBrush</code> ramp</strong> from
+<code>src/FluentGpu.Controls/ControlMotion.cs</code>:</p>
+<pre><code class="lang-csharp">public readonly record struct StateBrush(ColorF Rest, ColorF Hover, ColorF Pressed, ColorF Disabled);
+</code></pre>
+<ul>
+<li>Declare <strong>one ramp per logical state</strong> (CheckBox = 2: an off ramp + an accent ramp), picked by the logical state.</li>
+<li>Wire <code>Rest/Hover/Pressed</code> into the element's <code>Fill</code>/<code>HoverFill</code>/<code>PressedFill</code>,
+<code>BorderColor</code>/<code>HoverBorderColor</code>/<code>PressedBorderColor</code>, or <code>Opacity</code>/<code>HoverOpacity</code>/<code>PressedOpacity</code>.</li>
+<li>Put the timing on the <em>same</em> element via <code>HoverDurationMs</code>, <code>PressDurationMs</code>, <code>HoverEasing</code>, <code>PressEasing</code> — use
+WinUI's tokens when the template does (83 / 167 / 250 ms, usually <code>Easing.FluentPopOpen</code>).</li>
+</ul>
+<p>The engine's <code>InteractionAnimator</code> eases the displayed value toward the current target and retargets interruptibly.
+Disabled is a flat resting swap (<code>StateBrush.Resting(enabled)</code>) unless WinUI explicitly animates disabled. The target a
+node displays falls out of one priority rule (no <code>GoToState</code>, no storyboards):</p>
+<pre><code class="lang-text">if !enabled:       use logical.Disabled
+else if pressed:   use logical.Pressed
+else if hovered:   use logical.Hover
+else:              use logical.Rest
+</code></pre>
+<p>Treat WinUI names like <code>SelectedPressed</code> or <code>UncheckedPointerOver</code> as <em>labels for points in this graph</em>, not separate
+code paths: <code>SelectedPressed</code> = the selected logical ramp + the pressed interaction target; a <code>CheckedNormal → CheckedPressed</code> change is one interaction-axis retarget the <code>InteractionAnimator</code> handles. Focus is another orthogonal
+axis — add it explicitly when the control has focus visuals; never fold it into hover or pressed.</p>
+<p><code>Button.cs</code> shows the wiring concretely: the <code>Style</code> record holds <code>HoverBackground</code>/<code>PressedBackground</code>/
+<code>DisabledBackground</code> (+ matching foreground and border-brush legs), and <code>Build</code> fans them onto the root box's
+<code>Fill</code>/<code>HoverFill</code>/<code>PressedFill</code> and the label's <code>Color</code>/<code>HoverColor</code>/<code>PressedColor</code>/<code>DisabledColor</code>. Disabled is a
+<em>logical</em> swap: <code>Fill = enabled ? s.Background : s.DisabledBackground</code>, with <code>IsEnabled = enabled</code> arming the engine's
+hit-test gate so hover/press never fire while disabled.</p>
+<blockquote>
+<p><strong>Honest gap to know about.</strong> <code>TextEl</code> color now has the unified <code>Color</code> channel plus <code>HoverColor</code>/<code>PressedColor</code>/
+<code>DisabledColor</code> legs (Button's label uses them). The audit's standing cross-cutting note is that <em>some</em> text/glyph
+ramps still need inheriting interaction progress from the nearest interactive ancestor; if a control needs a
+per-state text effect that isn't expressible, that is an engine extension (<code>TextEl</code>), recorded honestly in the
+<a href="../../guide/winui-control-parity-audit.md">parity audit</a> — not a one-off in the control.</p>
+</blockquote>
+<h2 id="step-3--sizes-geometry-sub-parts-and-glyphs-from-the-template">Step 3 — sizes, geometry, sub-parts, and glyphs from the template</h2>
+<p>Pull exact values, never eyeballed ones: box size, glyph size, corner radius, padding, min-height, the precise Segoe
+Fluent glyph(s), and any indicator parts. Put them on the <code>Style</code> record so they are restylable and reviewable.</p>
+<p><code>RadioButton.cs</code> is the reference for a multi-part control with geometry-driven motion. The 20px ring, the 12→14→10px
+dot ramp, and the 4px unchecked-pressed proto-dot are all <code>Style</code> fields traced to template lines; the press grow/shrink
+is expressed as <strong>transform scale</strong>, not a width/height keyframe, so the visual size changes while layout stays put:</p>
+<pre><code class="lang-csharp">float hoverScale = s.DotSize &gt; 0f ? s.DotHoverSize / s.DotSize : 1f;   // 14/12
+float pressScale = s.DotSize &gt; 0f ? s.DotPressedSize / s.DotSize : 1f; // 10/12
+var dot = new BoxEl
+{
+    Key = &quot;CheckGlyph&quot;,
+    Width = dotSize, Height = dotSize,
+    Corners = Radii.Circle(dotSize),
+    Fill = !isEnabled ? s.DotDisabled : s.Dot,
+    HoverScale = isEnabled ? hoverScale : 1f,
+    PressScale = isEnabled ? pressScale : 1f,
+    HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
+    PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
+    HoverEasing = RadioButtonMotion.FastOutSlowIn,
+    PressEasing = RadioButtonMotion.FastOutSlowIn,
+};
+</code></pre>
+<p><code>HoverScale</code>/<code>PressScale</code> are <strong>composited-only</strong> — the recorder scales the node about its centre by the eased
+hover/press progress of its nearest interactive ancestor; it never changes layout or hit-test (HitTest reads <code>Bounds</code>,
+never <code>LocalTransform</code>). That is why a slider thumb's inner dot grows on <em>control</em> hover (the track is the interactive
+ancestor): see <code>Slider.BuildThumb</code>, where the 12px inner dot rests at the WinUI Normal-state <code>0.86</code> scale and eases to
+net <code>1.167</code>/<code>0.71</code> on hover/press.</p>
+<p>For the rounded-rect rendering rules that geometry depends on (the hollow-ring border, the <code>bw/2</code> corner inset, the
+SDF quad inflation — each the fix for a real bug), see <a href="../../guide/control-fidelity.md">control-fidelity §1</a>. Do not
+regress them.</p>
+<h2 id="step-4--motion-ownership-interactionanimator-vs-animengine">Step 4 — motion ownership: <code>InteractionAnimator</code> vs <code>AnimEngine</code></h2>
+<p>There are two animation systems on purpose, with one ownership rule:</p>
+<ul>
+<li><strong><code>InteractionAnimator</code> owns hover/press visual states.</strong> Use <code>BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}</code>,
+<code>HoverScale</code>, <code>PressScale</code>, and the per-element duration/easing fields. This covers every WinUI state-group
+storyboard that reacts to <code>PointerOver</code>/<code>Pressed</code>, including child parts that inherit the root's interaction
+progress.</li>
+<li><strong><code>AnimEngine</code> owns authored timelines.</strong> Use keyframes/channels for explicit non-input timelines: FLIP, reveal,
+stroke trim, path draw-on, open/close, or any <code>AnimatedIcon</code> segment with real keyframes. Channels are the
+<code>AnimChannel</code> enum (<code>src/FluentGpu.Animation/AnimEngine.cs</code>): <code>TranslateX/Y</code>, <code>ScaleX/Y</code>, <code>Rotation</code>, <code>Opacity</code>,
+<code>SizeW/H</code>, <code>StrokeTrimStart/End</code>, <code>ClipL/T/R/B</code>, <code>LayoutW/H</code>.</li>
+<li><strong>Enter/exit presets are lifecycle sugar over <code>AnimEngine</code>.</strong> <code>ControlMotion.IconPop</code> and <code>ControlMotion.DotScaleIn</code>
+apply when the reconciler <strong>inserts/removes a keyed child</strong> — use them <em>only</em> when WinUI actually inserts or appears a
+part. (RadioButton's checked glyph is <strong>not</strong> a dot-pop: it is visible immediately and changes size via hover/press,
+which is why <code>DotScaleIn</code>'s own doc-comment warns &quot;WinUI RadioButton itself does not use this.&quot;)</li>
+<li><strong>Press-only parts stay in the tree with explicit targets.</strong> RadioButton's <code>PressedCheckGlyph</code> is the model: a
+separate <code>Key</code> from the checked dot, <code>Opacity = 0</code>/<code>PressedOpacity = 1</code>, a 4→10 <code>PressScale</code>, <code>PressDurationMs = 167</code>,
+<code>PressEasing = FastOutSlowIn</code>.</li>
+</ul>
+<p>The Expander chevron shows an authored timeline driven from a typed computed-settings record. The rotation is owned by
+<code>AnimEngine</code> (not a static <code>Rotation</code>); an <code>OnRealized</code> ref captures the chevron node, and a <code>UseEffect</code> keyed on <code>open</code>
+retargets the rotation from the <strong>live</strong> value (never snapping on an interrupted toggle), with WinUI's Lottie spline:</p>
+<pre><code class="lang-csharp">anim.Animate(chevronRef.Value, AnimChannel.Rotation, from, to, ChevronMs,
+    EasingSpec.CubicBezier(0.167f, 0.167f, 0f, 1f));
+</code></pre>
+<p><strong>Layout-size changes that must reflow neighbours use <code>SizeMode.Reflow</code></strong> — the one <em>deliberate divergence from WinUI</em>.
+Where WinUI snaps the layout and only translates content (Expander ExpandDown/CollapseUp), FluentGpu eases the space
+itself through real boundary-scoped relayout each tick, keeping the WinUI timings/easings exactly (expand 333ms
+<code>KeySpline 0,0,0,1</code>; collapse 167ms <code>KeySpline 1,1,0,1</code> via <code>ExitDynamics</code>). The Expander's clip wrapper is the
+reference consumer — a <code>LayoutTransition</code> with <code>Size: SizeMode.Reflow</code> and <code>Anchor: SizeAnchor.Trailing</code> on an
+always-mounted <code>ClipToBounds</code> host, with the declared <code>Height = open ? float.NaN : 0f</code> toggle as the whole motion
+trigger. <code>SizeMode</code> values: <code>Auto</code>, <code>Reveal</code>, <code>ScaleCorrect</code>, <code>Relayout</code>, <code>Reflow</code> — use <code>Reflow</code> only when siblings
+must move; for a glyph resize that should <em>not</em> reflow, use transform scale (Step 3).</p>
+<h2 id="step-5--the-templateparts-law">Step 5 — the <code>TemplateParts</code> law</h2>
+<p>Customization of a control's internals goes through <strong>one generic door</strong> — <code>TemplateParts</code>
+(<code>src/FluentGpu.Dsl/TemplateParts.cs</code>; CSS <code>::part</code> / WinUI lightweight styling, signals-native) — never through
+per-control feature props. Every new control obeys these rules:</p>
+<ul>
+<li><strong>Export <code>public const string PartXxx</code> consts</strong> for each named template part — mirror the WinUI template-part
+<code>x:Name</code> where an equivalent exists (Expander: <code>Root</code>/<code>Header</code>/<code>Chevron</code>/<code>Clip</code>/<code>Content</code>) — plus a
+<code>public TemplateParts? Parts;</code> field (or a trailing <code>TemplateParts? parts</code> factory arg). Document each part's
+<strong>OWNED</strong> props on its const (the props the control re-asserts and a modifier therefore cannot win).</li>
+<li><strong>Route every named part</strong> through <code>parts.Apply(PartXxx, el)</code> after building it, then <strong>re-assert the part's
+mechanics-critical props</strong> with one trailing <code>with</code> — click/toggle handlers, reflow <code>Animate</code> specs, value-position
+binds, <code>Key</code>, <code>Role</code>, <code>TabStop</code> — and <strong>chain</strong> ref-capture handlers (<code>OnRealized</code>/<code>OnPinned</code>) via
+<code>TemplateParts.Chain</code>. A modifier can restyle everything but break nothing.</li>
+<li><strong><code>parts.Apply</code> is type-preserving and null-safe</strong>: it is a no-op (no allocation) when <code>parts</code> is null or the part
+has no modifier, and it keeps the <em>original</em> element if a modifier changed the record type (parts <strong>style</strong>; content
+<strong>slots</strong> like <code>Content</code>/<code>HeaderContent</code> <strong>restructure</strong>).</li>
+<li><strong>New styling knobs are banned.</strong> The review question for any proposed public field: <em>could the caller write
+<code>Parts[PartX] = el =&gt; el with { … }</code> instead?</em> Then they must. Keep only: content <strong>slots</strong> (Element-typed), state
+signals/callbacks, options/config, and the theme token-bundle <code>Style</code> record — those are not part-styling.</li>
+</ul>
+<p>The re-assert pattern, straight from <code>Button.Build</code> (the simplest case):</p>
+<pre><code class="lang-csharp">// Parts: restyle anything (fills, corners, padding…); the click mechanics and the label slot always win.
+return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
+</code></pre>
+<p>And the chained-ref form, from the Expander chevron (a modifier may add its own <code>OnRealized</code>; the control's must still
+run to capture the rotation node):</p>
+<pre><code class="lang-csharp">var m = cp.Apply(PartChevron, chevron);
+chevron = m with { OnRealized = TemplateParts.Chain(chevronCapture, m.OnRealized) };
+</code></pre>
+<p>Two more part rules for collections and lists (see <a href="../../guide/control-fidelity.md">control-fidelity §6</a> for the full
+text):</p>
+<ul>
+<li>Part-name strings may match existing reconciler <code>Key</code>s for one vocabulary, but <code>Key</code> stays a separate identity
+concept — <strong>repeated parts (tab items, tick marks) must never derive their <code>Key</code> from a part const.</strong> (Slider's
+<code>PartTickBar</code> is applied to <em>every</em> mounted tick bar; the marks carry their own positions, not the part name.)</li>
+<li>Per-item <strong>variation</strong> in a virtualized/recycled path rides the <strong><code>PartDelta</code> value seam</strong> (nullable
+<code>Fill</code>/<code>Foreground</code>/<code>Opacity</code>/<code>Corners</code>/<code>Padding</code>/<code>Border</code>/<code>Glyph</code> baked into the chrome during construction — zero
+extra allocation, shape-stable), <strong>never</strong> a per-item <code>TemplateParts</code> modifier in a recycled scroll path (that is the
+banned hazard; a CI shape-hash + <code>HotPhaseAllocBytes == 0</code> check enforce it). List-<em>uniform</em> part modifiers are legal
+again via the apply-once prototype cache (<code>TemplateParts.TryApplyCached</code>).</li>
+</ul>
+<blockquote>
+<p><strong>One transform owner.</strong> Don't put <code>StickyTop</code> or a bound <code>Transform</code> on a transform-owned part (e.g. the Expander
+clip mid-reflow, whose const explicitly says <em>&quot;do not add StickyTop/TransformBind here&quot;</em>). A bound prop is a <code>Prop&lt;T&gt;</code>
+taking a value, a <code>Func&lt;T&gt;</code> (<code>Prop.Of</code> for inline lambdas), or a concrete signal — for the bound-prop mental model
+see <a href="signals-and-reactivity-internals.html">Signals internals</a> and the app-author
+<a href="../app-authors/signals-components-and-bindings.html">bindings page</a>.</p>
+</blockquote>
+<h2 id="step-6--verify-empirically-logs-and-pixels-not-vibes">Step 6 — verify empirically: logs and pixels, not vibes</h2>
+<p>Evidence before claiming an animation works. Three layers, use all three (from
+<a href="../../guide/control-fidelity.md">control-fidelity §4</a>):</p>
+<p><strong>Headless golden checks</strong> — the deterministic, log-based truth, in <code>src/FluentGpu.VerticalSlice/Program.cs</code>:</p>
+<pre><code class="lang-text">dotnet build src/FluentGpu.VerticalSlice          # must be clean
+dotnet run   --project src/FluentGpu.VerticalSlice # must print &quot;ALL CHECKS PASSED&quot;
+</code></pre>
+<p>These are ~60 cross-seam checks with no GPU/window. The pattern: reconcile the control, run a <code>new FlexLayout(...).Run</code>,
+walk to a node with <code>Child(scene, node, i)</code>, <code>engine.Tick(16f)</code>, and assert
+<code>scene.Paint(node).Opacity</code> / <code>.LocalTransform.M11</code>. For the <strong>live</strong> path use a real <code>AppHost</code> + <code>ClickNode</code> and read
+the node after the click frame. <strong>A control animation is not done until a headless check proves the node's
+opacity/scale/trim goes mid-flight → settled</strong> (existing examples: RadioButton checked/pressed glyph sizes, the
+interaction-ramp wiring, the CheckBox checkmark draw-on).</p>
+<p><strong>GPU pixels</strong> — a deterministic <code>ShotScene</code> (add per-control shot ids in <code>src/FluentGpu.WindowsApp/ShotScene.cs</code>):</p>
+<pre><code class="lang-text">dotnet run --project src/FluentGpu.WindowsApp -- --screenshot out\x.png --shot &lt;id&gt; --frames N
+</code></pre>
+<p>To prove an animation <strong>actually runs on the GPU</strong>, temporarily slow its duration/spring response and capture an early
+frame — a slow draw/grow forces a visibly mid-animation glyph; if it is already settled, the animation is not reaching
+the GPU. (Static screenshots can look settled because window init paints/ticks several times before capture.)</p>
+<p><strong>Diagnostics</strong> — <code>FG_DIAG=1</code> enables <code>Diag</code> (anim seed/retarget events; scene dumps with <code>FG_DUMP=1</code>); <code>FrameStats</code>
+from <code>RunFrame()</code> exposes <code>Rendered</code>, <code>ComponentsRendered</code>, and <code>HotPhaseAllocBytes</code> (must be <code>0</code> steady). For the
+broader verification spine see <a href="frame-pipeline-and-verification-harness.html">Frame pipeline and verification harness</a>
+and <a href="validation-and-gates.html">Validation and gates</a>.</p>
+<blockquote>
+<p><strong>No &quot;known residuals.&quot;</strong> Fix every verification finding (warnings too, not just blockers) — including engine
+primitives like a stroke-glyph dim. A control is not 1:1 with a documented residual still flapping.</p>
+</blockquote>
+<h2 id="the-6-step-control-parity-checklist-and-the-acceptance-rule">The 6-step control-parity checklist and the acceptance rule</h2>
+<p>The process, condensed from <a href="../../guide/control-fidelity.md">control-fidelity §5</a> — follow it, don't shortcut:</p>
+<ol>
+<li><strong>Read the WHOLE WinUI template</strong> — every <code>VisualState</code>/<code>Storyboard</code>/<code>Setter</code>, every brush key, sizes/padding/corner,
+the <code>AnimatedIcon</code> states; resolve durations/easings in <code>Common_themeresources_any.xaml</code> and brushes to <code>Tok</code> (Dark +
+Light).</li>
+<li><strong>Map the state matrix to ramps</strong> — one <code>StateBrush</code> per logical state for fill / stroke / glyph-fg / label-fg
+(rest/hover/pressed/disabled). Note where press <em>dims</em>.</li>
+<li><strong>Sizes &amp; geometry</strong> — box/glyph size, corner radius, padding, min-height → exact <code>Style</code> values.</li>
+<li><strong>Sub-parts &amp; glyphs</strong> — the right Segoe Fluent glyph(s), indicator parts, parts that appear on a state.</li>
+<li><strong>Motion</strong> — hover/press storyboards → <code>InteractionAnimator</code> targets/specs; authored timelines (stroke trim, reveal,
+FLIP, open/close) → <code>AnimEngine</code> keyframes/channels; enter/exit presets only for true insert/remove sub-parts.</li>
+<li><strong>Verify</strong> — a headless <code>Check()</code> for behavior + a key motion assertion; a <code>--shot</code> capture diffed against WinUI
+(incl. the slow-motion proof). Save a golden PNG.</li>
+</ol>
+<p><strong>The acceptance rule.</strong> Before marking any control 1:1, the PR must list (from
+<a href="../../guide/winui-control-parity-audit.md">the parity audit</a>):</p>
+<ul>
+<li>Exact WinUI XAML/template files read.</li>
+<li>Exact C++/H/IDL behavior files read, or <code>framework source not present in controls/dev</code>.</li>
+<li>Exact generated property/template-setting files read, or <code>Generated: none</code>.</li>
+<li>The mapped state matrix: logical state × interaction state × focus/disabled.</li>
+<li>The mapped motion source: <code>BrushTransition</code>, storyboard, <code>TemplateSettings</code>, animated-icon segment, or no animation.</li>
+<li>A headless vertical-slice check for the changed behavior or animation.</li>
+<li>A live GPU screenshot or slow-motion proof for motion the headless harness cannot prove.</li>
+</ul>
+<p>And the load-bearing escalation: <strong>if a state cannot be represented without one-off control code, stop and add the
+shared engine primitive first.</strong></p>
+<h2 id="pairing-the-control-with-a-gallery-demo-page">Pairing the control with a gallery demo page</h2>
+<p>A control is not finished until it has a demo page in <code>src/FluentGpu.WindowsApp/</code> modeled on the WinUI Gallery. The two
+pieces are <code>ControlExample.Build(...)</code> (<code>src/FluentGpu.WindowsApp/ControlExample.cs</code>) — a BodyStrong header + a bordered
+example card + optional options/output panel + an optional collapsible <strong>source-code</strong> panel — and the page scaffold
+<code>GalleryPage.Shell(...)</code> (<code>src/FluentGpu.WindowsApp/ControlGalleryPages.cs</code>).</p>
+<p><code>ControlExample</code> is a <strong>factory, not a component</strong> on purpose: the live <code>example</code> must refresh every render, and
+component props are mount-only — a component would freeze the demo. Its signature:</p>
+<pre><code class="lang-csharp">public static Element Build(string title, Element example, string? description = null,
+    Element? options = null, Element? output = null, string? code = null, FlexAlign exampleAlign = FlexAlign.Start)
+</code></pre>
+<p>The <code>code:</code> argument is a raw-string snippet shown in the &quot;Source code&quot; expander; the expander reuses the <strong>real</strong>
+<code>Expander</code> control with its content padding zeroed via the template-parts door (<code>Parts = new() { [Expander.PartContent] = p =&gt; p with { Padding = Edges4.All(0) } }</code>) — the same lightweight-styling path an app would use. A representative
+page, straight from <code>ControlGalleryPages.cs</code>:</p>
+<pre><code class="lang-csharp">sealed class ToggleSwitchControlPage : Component
+{
+    public override Element Render()
+    {
+        var (a, setA) = UseState(true);
+        var (b, setB) = UseState(false);
+        return GalleryPage.Shell(&quot;ToggleSwitch&quot;, &quot;A switch that a user can turn on and off.&quot;,
+            ControlExample.Build(&quot;A simple ToggleSwitch&quot;, ToggleSwitch.Create(a, () =&gt; setA(!a)),
+                output: BodyStrong(a ? &quot;On&quot; : &quot;Off&quot;),
+                code: &quot;&quot;&quot;
+                var (a, setA) = UseState(true);
+
+                ToggleSwitch.Create(a, () =&gt; setA(!a))
+                &quot;&quot;&quot;),
+            ControlExample.Build(&quot;With header + On/Off content&quot;,
+                ToggleSwitch.Create(b, () =&gt; setB(!b), header: &quot;Wi-Fi&quot;, onContent: &quot;Connected&quot;, offContent: &quot;Disconnected&quot;),
+                output: BodyStrong(b ? &quot;Connected&quot; : &quot;Disconnected&quot;),
+                code: &quot;&quot;&quot;
+                ToggleSwitch.Create(b, () =&gt; setB(!b),
+                    header: &quot;Wi-Fi&quot;, onContent: &quot;Connected&quot;, offContent: &quot;Disconnected&quot;)
+                &quot;&quot;&quot;));
+    }
+}
+</code></pre>
+<p>Conventions to mirror:</p>
+<ul>
+<li>Use a <strong>signal-bound readout</strong> for hot, per-move values so only the readout updates:
+<code>GalleryPage.LiveText(() =&gt; $&quot;{basic.Value:0.00}&quot;)</code> over <code>Slider.Bind(basic)</code> — never re-render the whole page on a
+drag. Use <code>output: BodyStrong(...)</code> for low-frequency, re-render-driven readouts.</li>
+<li>Show the <em>cheapest correct</em> path in the snippet: the Slider page leads with <code>Slider.Bind</code> (compositor-only) and
+annotates <em>why</em>, then shows <code>Slider.Ranged</code> for the controlled variant.</li>
+<li>One demo card per distinct facet (two-state vs three-state, simple vs header), each with its own <code>output</code> and <code>code</code>.</li>
+<li>For controls that need a sized frame (SplitView, TabView), wrap the live control in a fixed-size bordered <code>BoxEl</code>
+like <code>NavLayoutPages.cs</code>'s <code>Frame(...)</code>.</li>
+</ul>
+<p>Register the page in the gallery's <code>PageInfo</code>/catalog so it appears in the nav (the existing pages and
+<code>GalleryApp.ControlCatalog</code> are the pattern). See the app-author
+<a href="../app-authors/controls-cookbook.html">Controls cookbook</a> for the authoring-side view of these same controls.</p>
+<h2 id="canon-link-the-controls-subsystem">Canon link: the controls subsystem</h2>
+<p>The authoritative design for the control kit — the posture, the universal five-tuple contract every control obeys
+(composition / UIA pattern + ControlType / keyboard / name-role / motion-cursor-RTL), the styling system, and the seam
+matrix proving each seam has a control consumer — is
+<a href="../../../design/subsystems/controls.md"><code>design/subsystems/controls.md</code></a>. It is a <strong>pure consumer</strong> of the seams the
+other subsystem docs own and adds no new opcode/column/seam/hook; when it references a type it uses that owner's
+canonical shape. For precedence on any cross-cutting value, consult
+<a href="../../../design/SPEC-INDEX.md"><code>design/SPEC-INDEX.md</code></a>; for which doc owns which artifact, the ownership map in
+<a href="../../../design/subsystems/README.md"><code>design/subsystems/README.md</code></a>.</p>
+<p>Remember the through-line: <strong>a control is the disciplined composition of primitives the engine already owns.</strong> If a
+control patch wants a new primitive, that is engine work in <code>Dsl</code>/<code>Animation</code>/<code>Render</code> (and a line in the
+<a href="../../guide/winui-control-parity-audit.md">parity audit</a>'s cross-cutting-gaps table) — done once, consumed everywhere —
+never a fork inside one control file.</p>
+
+</article>
+
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          FluentGpu — a near-zero-allocation, NativeAOT, GPU-rendered UI engine for .NET 10. Usage docs live here; architecture canon lives in design/ (SPEC-INDEX.md is the precedence authority).
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

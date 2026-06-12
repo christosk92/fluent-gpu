@@ -64,6 +64,17 @@ public sealed class TreeReconciler
 
     /// <summary>Live nested components — the host drains their effects each frame.</summary>
     public List<Component> LiveComponents => _live;
+
+    // ── O(1) census accessors (read by the MemCensus sampler; trivial .Count reads) ───────────────
+    /// <summary>Mounted component entries (the <c>_comps</c> anchor map) — O(1) census.</summary>
+    public int ComponentCount => _comps.Count;
+    /// <summary>Nodes carrying reactive bindings / control-flow effects (the <c>_nodeBindings</c> map) — O(1) census.</summary>
+    public int NodeBindingCount => _nodeBindings.Count;
+    /// <summary>Virtual-list viewport boundaries (the <c>_virtuals</c> map) — O(1) census.</summary>
+    public int VirtualBoundaryCount => _virtuals.Count;
+    /// <summary>Context-provider value signals (the <c>_providerSig</c> map) — O(1) census.</summary>
+    public int ProviderCount => _providerSig.Count;
+
     /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
     public AnimEngine? Anim { get; set; }
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
@@ -281,7 +292,7 @@ public sealed class TreeReconciler
             return;
         }
 
-        WriteColumns(node, newEl, isMount: false);
+        WriteColumns(node, newEl, isMount: false, oldEl);
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
 
@@ -336,6 +347,7 @@ public sealed class TreeReconciler
     {
         if (!_scene.IsLive(node)) return;
         _renderCount++;
+        if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
         Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
         ReconcileSingleChild(node, newRendered, entry.Rendered);
@@ -490,12 +502,13 @@ public sealed class TreeReconciler
             if (ime.Source.IsBound)
             {
                 var sbind = ime.Source.Thunk; var ssig = ime.Source.Signal;
+                (int dW, int dH) = ImageDecodeTarget(in ime);   // extent props don't bind, so the target is stable
                 AddBinding(node, new Effect(Runtime, () =>
                 {
                     if (!_scene.IsLive(node)) return;
                     string src = sbind is not null ? sbind() : ssig!.Value;
                     int newId = Images is not null && src.Length > 0
-                        ? Images.Request(src, (int)ime.Width, (int)ime.Height, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
+                        ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
                     if (newId == paint.ImageId) return;
                     if (Images is not null)
@@ -513,6 +526,19 @@ public sealed class TreeReconciler
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind is not null ? pbind() : psig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
         }
+    }
+
+    // Decode-target px for an image: explicit Width/Height drive it; otherwise the DecodePx hint (a fluid/aspect image's
+    // real box size isn't known until layout), deriving the missing cross extent from AspectRatio. 0 ⇒ source resolution.
+    private static (int W, int H) ImageDecodeTarget(in ImageEl im)
+    {
+        int hint = !float.IsNaN(im.DecodePx) ? (int)im.DecodePx : 0;
+        int w = !float.IsNaN(im.Width) ? (int)im.Width : hint;
+        int h;
+        if (!float.IsNaN(im.Height)) h = (int)im.Height;
+        else if (!float.IsNaN(im.AspectRatio) && im.AspectRatio > 0f && w > 0) h = (int)MathF.Round(w / im.AspectRatio);
+        else h = hint;
+        return (w, h);
     }
 
     // ── Scroll / Virtualization (unchanged behavior) ────────────────────────────────────────────
@@ -968,7 +994,7 @@ public sealed class TreeReconciler
 
     // ── Column writes (POD → scene) ─────────────────────────────────────────────────────────────
 
-    private void WriteColumns(NodeHandle node, Element el, bool isMount)
+    private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         switch (el)
         {
@@ -1041,6 +1067,16 @@ public sealed class TreeReconciler
                     if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
                     if (b.ScaleX != 1f || b.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(b.ScaleX, b.ScaleY));
                     paint.LocalTransform = tf;
+                }
+                // Static→identity hand-off: when the PREVIOUS element declared a static transform and this one
+                // declares none, clear the stale static — the in-place differ can morph e.g. a rail (OffsetY=14)
+                // into a plain track box, which otherwise keeps painting/hit-testing 14px off forever (the ranged-
+                // slider tooltip hover flap). Identity-declared elements still leave ANIM-owned matrices alone:
+                // this writes only on the declared-static → declared-identity transition, never per re-render.
+                else if (!b.Transform.IsBound && old is BoxEl ob && !ob.Transform.IsBound
+                         && (ob.OffsetX != 0f || ob.OffsetY != 0f || ob.ScaleX != 1f || ob.ScaleY != 1f || ob.Rotation != 0f))
+                {
+                    paint.LocalTransform = Affine2D.Identity;
                 }
                 // Re-assert unconditionally (like Width/Fill): gating on != 1f made an Opacity 0→1 update a no-op,
                 // so a node hidden by a prior render could never be shown again (the ProgressRing IsActive flip).
@@ -1144,6 +1180,11 @@ public sealed class TreeReconciler
                     _scene.SetHoverMove(node, b.OnHoverMove);
                     _scene.SetPointerExit(node, b.OnPointerExit);
                     _scene.Mark(node, NodeFlags.WantsPointer);
+                    // Cross-axis content-pan opt-in (SwipeControl/FlipView): the touch path enrolls an axis-locked Drag
+                    // arena member that competes with an enclosing scroller's Pan instead of eager-capturing (§7A). Only
+                    // meaningful with an OnDrag — a bare DragYieldsToPan with no drag handler is a no-op flag.
+                    if (b.OnDrag is not null && b.DragYieldsToPan) _scene.Mark(node, NodeFlags.DragYieldsToPan);
+                    else _scene.Unmark(node, NodeFlags.DragYieldsToPan);
                 }
                 else
                 {
@@ -1152,6 +1193,7 @@ public sealed class TreeReconciler
                     _scene.SetDrag(node, null);
                     _scene.SetHoverMove(node, null);
                     _scene.SetPointerExit(node, null);
+                    _scene.Unmark(node, NodeFlags.DragYieldsToPan);
                 }
 
                 if (b.OnPointerPressed is not null)
@@ -1338,12 +1380,17 @@ public sealed class TreeReconciler
                 paint.VisualKind = VisualKind.Image;
                 if (!im.Placeholder.IsBound) paint.Fill = im.Placeholder.Value;   // bound rows tint via the binding
                 paint.Corners = im.Corners;
+                paint.ImageFit = (byte)im.Fit;
+
+                // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
+                // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.
+                (int decodeW, int decodeH) = ImageDecodeTarget(in im);
 
                 int oldId = paint.ImageId;
                 if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
                     int newId = (Images is not null && im.Source.Value.Length > 0)
-                        ? Images.Request(im.Source.Value, (int)im.Width, (int)im.Height, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
+                        ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
                     if (newId != oldId)
                     {
                         if (Images is not null)
@@ -1356,7 +1403,7 @@ public sealed class TreeReconciler
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
-                li.Width = im.Width; li.Height = im.Height;
+                li.Width = im.Width; li.Height = im.Height; li.AspectRatio = im.AspectRatio;
                 li.Margin = im.Margin; li.AlignSelf = im.AlignSelf;
                 break;
             }

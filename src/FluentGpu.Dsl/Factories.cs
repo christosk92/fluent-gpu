@@ -54,6 +54,28 @@ public static partial class Ui
     public static ImageEl Image(string source, float width, float height, float corners, string placeholder)
         => Image(source, width, height, corners, ParseColorCode(placeholder, ColorF.FromRgba(0x33, 0x33, 0x33)));
 
+    /// <summary>A responsive image: no fixed extent — it fills the width its layout gives it and (with
+    /// <paramref name="aspect"/> set) derives its height (CSS <c>aspect-ratio</c>), then maps its pixels into that box
+    /// per <paramref name="fit"/> (default <see cref="ImageFit.Cover"/> — aspect-preserving crop). The album/thumbnail
+    /// grid shape. <paramref name="decodePx"/> is the decode-size hint (the real box size isn't known at request time).</summary>
+    public static ImageEl Image(string source, ImageFit fit, float aspect = float.NaN, float decodePx = float.NaN,
+                                float corners = 0f, ColorF? placeholder = null, string? blurHash = null, ImageTransition? transition = null)
+        => new()
+        {
+            Source = source,
+            Fit = fit,
+            AspectRatio = aspect,
+            DecodePx = decodePx,
+            Corners = CornerRadius4.All(corners),
+            Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33),
+            BlurHash = blurHash,
+            Transition = transition,
+        };
+
+    /// <summary>A responsive image whose pending placeholder comes from a CSS-style hex color code.</summary>
+    public static ImageEl Image(string source, ImageFit fit, float aspect, float decodePx, float corners, string placeholder)
+        => Image(source, fit, aspect, decodePx, corners, ParseColorCode(placeholder, ColorF.FromRgba(0x33, 0x33, 0x33)));
+
     public static bool TryParseColorCode(string? value, out ColorF color)
     {
         color = default;

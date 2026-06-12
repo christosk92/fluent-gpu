@@ -1,0 +1,407 @@
+### YamlMime:ManagedReference
+items:
+- uid: FluentGpu.Signals.ReactiveScope
+  commentId: T:FluentGpu.Signals.ReactiveScope
+  id: ReactiveScope
+  parent: FluentGpu.Signals
+  children:
+  - FluentGpu.Signals.ReactiveScope.#ctor(FluentGpu.Signals.ReactiveRuntime,FluentGpu.Signals.Computation)
+  langs:
+  - csharp
+  - vb
+  name: ReactiveScope
+  nameWithType: ReactiveScope
+  fullName: FluentGpu.Signals.ReactiveScope
+  type: Class
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/ReactiveCore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: ReactiveScope
+    path: ../../src/FluentGpu.Foundation/Signals/ReactiveCore.cs
+    startLine: 158
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  summary: >-
+    A stable owner that never re-runs — a container for child computations + cleanups. Used as a component's lifetime
+
+    scope (its render-effect + bindings live under it) and as the app root. Disposing it cascades to everything it owns.
+  example: []
+  syntax:
+    content: 'public sealed class ReactiveScope : Computation, IDisposable'
+    content.vb: Public NotInheritable Class ReactiveScope Inherits Computation Implements IDisposable
+  inheritance:
+  - System.Object
+  - FluentGpu.Signals.Computation
+  implements:
+  - System.IDisposable
+  inheritedMembers:
+  - FluentGpu.Signals.Computation.RunNow
+  - FluentGpu.Signals.Computation.Schedule
+  - FluentGpu.Signals.Computation.Dispose
+  - System.Object.Equals(System.Object)
+  - System.Object.Equals(System.Object,System.Object)
+  - System.Object.GetHashCode
+  - System.Object.GetType
+  - System.Object.ReferenceEquals(System.Object,System.Object)
+  - System.Object.ToString
+- uid: FluentGpu.Signals.ReactiveScope.#ctor(FluentGpu.Signals.ReactiveRuntime,FluentGpu.Signals.Computation)
+  commentId: M:FluentGpu.Signals.ReactiveScope.#ctor(FluentGpu.Signals.ReactiveRuntime,FluentGpu.Signals.Computation)
+  id: '#ctor(FluentGpu.Signals.ReactiveRuntime,FluentGpu.Signals.Computation)'
+  parent: FluentGpu.Signals.ReactiveScope
+  langs:
+  - csharp
+  - vb
+  name: ReactiveScope(ReactiveRuntime, Computation?)
+  nameWithType: ReactiveScope.ReactiveScope(ReactiveRuntime, Computation?)
+  fullName: FluentGpu.Signals.ReactiveScope.ReactiveScope(FluentGpu.Signals.ReactiveRuntime, FluentGpu.Signals.Computation?)
+  type: Constructor
+  source:
+    remote:
+      path: src/FluentGpu.Foundation/Signals/ReactiveCore.cs
+      branch: feat/prop-unification
+      repo: https://github.com/christosk92/fluent-gpu.git
+    id: .ctor
+    path: ../../src/FluentGpu.Foundation/Signals/ReactiveCore.cs
+    startLine: 160
+  assemblies:
+  - FluentGpu.Foundation
+  namespace: FluentGpu.Signals
+  syntax:
+    content: public ReactiveScope(ReactiveRuntime runtime, Computation? owner = null)
+    parameters:
+    - id: runtime
+      type: FluentGpu.Signals.ReactiveRuntime
+    - id: owner
+      type: FluentGpu.Signals.Computation
+    content.vb: Public Sub New(runtime As ReactiveRuntime, owner As Computation = Nothing)
+  overload: FluentGpu.Signals.ReactiveScope.#ctor*
+  nameWithType.vb: ReactiveScope.New(ReactiveRuntime, Computation)
+  fullName.vb: FluentGpu.Signals.ReactiveScope.New(FluentGpu.Signals.ReactiveRuntime, FluentGpu.Signals.Computation)
+  name.vb: New(ReactiveRuntime, Computation)
+references:
+- uid: FluentGpu.Signals
+  commentId: N:FluentGpu.Signals
+  href: FluentGpu.html
+  name: FluentGpu.Signals
+  nameWithType: FluentGpu.Signals
+  fullName: FluentGpu.Signals
+  spec.csharp:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+  spec.vb:
+  - uid: FluentGpu
+    name: FluentGpu
+    href: FluentGpu.html
+  - name: .
+  - uid: FluentGpu.Signals
+    name: Signals
+    href: FluentGpu.Signals.html
+- uid: System.Object
+  commentId: T:System.Object
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object
+  name: object
+  nameWithType: object
+  fullName: object
+  nameWithType.vb: Object
+  fullName.vb: Object
+  name.vb: Object
+- uid: FluentGpu.Signals.Computation
+  commentId: T:FluentGpu.Signals.Computation
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.Computation.html
+  name: Computation
+  nameWithType: Computation
+  fullName: FluentGpu.Signals.Computation
+- uid: System.IDisposable
+  commentId: T:System.IDisposable
+  parent: System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.idisposable
+  name: IDisposable
+  nameWithType: IDisposable
+  fullName: System.IDisposable
+- uid: FluentGpu.Signals.Computation.RunNow
+  commentId: M:FluentGpu.Signals.Computation.RunNow
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  name: RunNow()
+  nameWithType: Computation.RunNow()
+  fullName: FluentGpu.Signals.Computation.RunNow()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.RunNow
+    name: RunNow
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.RunNow
+    name: RunNow
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_RunNow
+  - name: (
+  - name: )
+- uid: FluentGpu.Signals.Computation.Schedule
+  commentId: M:FluentGpu.Signals.Computation.Schedule
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  name: Schedule()
+  nameWithType: Computation.Schedule()
+  fullName: FluentGpu.Signals.Computation.Schedule()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.Schedule
+    name: Schedule
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.Schedule
+    name: Schedule
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Schedule
+  - name: (
+  - name: )
+- uid: FluentGpu.Signals.Computation.Dispose
+  commentId: M:FluentGpu.Signals.Computation.Dispose
+  parent: FluentGpu.Signals.Computation
+  href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  name: Dispose()
+  nameWithType: Computation.Dispose()
+  fullName: FluentGpu.Signals.Computation.Dispose()
+  spec.csharp:
+  - uid: FluentGpu.Signals.Computation.Dispose
+    name: Dispose
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: FluentGpu.Signals.Computation.Dispose
+    name: Dispose
+    href: FluentGpu.Signals.Computation.html#FluentGpu_Signals_Computation_Dispose
+  - name: (
+  - name: )
+- uid: System.Object.Equals(System.Object)
+  commentId: M:System.Object.Equals(System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  name: Equals(object)
+  nameWithType: object.Equals(object)
+  fullName: object.Equals(object)
+  nameWithType.vb: Object.Equals(Object)
+  fullName.vb: Object.Equals(Object)
+  name.vb: Equals(Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.Equals(System.Object,System.Object)
+  commentId: M:System.Object.Equals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  name: Equals(object, object)
+  nameWithType: object.Equals(object, object)
+  fullName: object.Equals(object, object)
+  nameWithType.vb: Object.Equals(Object, Object)
+  fullName.vb: Object.Equals(Object, Object)
+  name.vb: Equals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.Equals(System.Object,System.Object)
+    name: Equals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.GetHashCode
+  commentId: M:System.Object.GetHashCode
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  name: GetHashCode()
+  nameWithType: object.GetHashCode()
+  fullName: object.GetHashCode()
+  nameWithType.vb: Object.GetHashCode()
+  fullName.vb: Object.GetHashCode()
+  spec.csharp:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetHashCode
+    name: GetHashCode
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gethashcode
+  - name: (
+  - name: )
+- uid: System.Object.GetType
+  commentId: M:System.Object.GetType
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  name: GetType()
+  nameWithType: object.GetType()
+  fullName: object.GetType()
+  nameWithType.vb: Object.GetType()
+  fullName.vb: Object.GetType()
+  spec.csharp:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.GetType
+    name: GetType
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.gettype
+  - name: (
+  - name: )
+- uid: System.Object.ReferenceEquals(System.Object,System.Object)
+  commentId: M:System.Object.ReferenceEquals(System.Object,System.Object)
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  name: ReferenceEquals(object, object)
+  nameWithType: object.ReferenceEquals(object, object)
+  fullName: object.ReferenceEquals(object, object)
+  nameWithType.vb: Object.ReferenceEquals(Object, Object)
+  fullName.vb: Object.ReferenceEquals(Object, Object)
+  name.vb: ReferenceEquals(Object, Object)
+  spec.csharp:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+  spec.vb:
+  - uid: System.Object.ReferenceEquals(System.Object,System.Object)
+    name: ReferenceEquals
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.referenceequals
+  - name: (
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: ','
+  - name: " "
+  - uid: System.Object
+    name: Object
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object
+  - name: )
+- uid: System.Object.ToString
+  commentId: M:System.Object.ToString
+  parent: System.Object
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  name: ToString()
+  nameWithType: object.ToString()
+  fullName: object.ToString()
+  nameWithType.vb: Object.ToString()
+  fullName.vb: Object.ToString()
+  spec.csharp:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+  spec.vb:
+  - uid: System.Object.ToString
+    name: ToString
+    isExternal: true
+    href: https://learn.microsoft.com/dotnet/api/system.object.tostring
+  - name: (
+  - name: )
+- uid: System
+  commentId: N:System
+  isExternal: true
+  href: https://learn.microsoft.com/dotnet/api/system
+  name: System
+  nameWithType: System
+  fullName: System
+- uid: FluentGpu.Signals.ReactiveScope.#ctor*
+  commentId: Overload:FluentGpu.Signals.ReactiveScope.#ctor
+  href: FluentGpu.Signals.ReactiveScope.html#FluentGpu_Signals_ReactiveScope__ctor_FluentGpu_Signals_ReactiveRuntime_FluentGpu_Signals_Computation_
+  name: ReactiveScope
+  nameWithType: ReactiveScope.ReactiveScope
+  fullName: FluentGpu.Signals.ReactiveScope.ReactiveScope
+  nameWithType.vb: ReactiveScope.New
+  fullName.vb: FluentGpu.Signals.ReactiveScope.New
+  name.vb: New
+- uid: FluentGpu.Signals.ReactiveRuntime
+  commentId: T:FluentGpu.Signals.ReactiveRuntime
+  parent: FluentGpu.Signals
+  href: FluentGpu.Signals.ReactiveRuntime.html
+  name: ReactiveRuntime
+  nameWithType: ReactiveRuntime
+  fullName: FluentGpu.Signals.ReactiveRuntime
