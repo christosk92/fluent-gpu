@@ -192,7 +192,6 @@ public sealed record BoxEl : Element
     // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
     // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).
     public Func<Affine2D>? TransformBind { init { if (value is not null) Transform = value; } }   // → LocalTransform (TransformDirty | PaintDirty)
-    public Func<ColorF>? FillBind { init { if (value is not null) Fill = value; } }               // → Fill (PaintDirty)
 
     /// <summary>Called once when this box is realized into the scene, with its node handle — for a control factory to
     /// capture the handle (e.g. to wire a signal binding that needs the live node). Fires at mount only.</summary>

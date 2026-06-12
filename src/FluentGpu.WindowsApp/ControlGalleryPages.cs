@@ -367,7 +367,7 @@ sealed class ColorPickerControlPage : Component
         return GalleryPage.Shell("ColorPicker", "A spectrum, hue and alpha selector with channel/hex input.",
             ControlExample.Build("A ColorPicker with alpha", ColorPicker.Create(color, alphaEnabled: true),
                 output: VStack(6,
-                    new BoxEl { Width = 96, Height = 40, Corners = Radii.ControlAll, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f, FillBind = () => color.Value },
+                    new BoxEl { Width = 96, Height = 40, Corners = Radii.ControlAll, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f, Fill = color },
                     GalleryPage.LiveText(() => "#" + color.Value.ToHex())),
                 code: """
                 var color = UseSignal(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
@@ -375,7 +375,7 @@ sealed class ColorPickerControlPage : Component
                 ColorPicker.Create(color, alphaEnabled: true)
 
                 // The swatch rides a compositor-only fill binding — no re-render while dragging:
-                new BoxEl { Width = 96, Height = 40, FillBind = () => color.Value }
+                new BoxEl { Width = 96, Height = 40, Fill = color }
                 """));
     }
 }

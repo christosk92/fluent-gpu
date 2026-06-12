@@ -207,7 +207,7 @@ sealed class BoundVirtualProbe : Component
                return new BoxEl
                {
                    Height = 40,
-                   FillBind = () => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50)),
+                   Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
                    Children = [new TextEl("") { Size = 12f, TextBind = () => $"row {idx.Value}" }],
                };
            })
@@ -10231,7 +10231,7 @@ static class Slice
                     Direction = 1, Width = 400, Height = 400, Gap = 2,
                     Children = new Element[]
                     {
-                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, FillBind = () => fill.Value, OnRealized = nh => nFill = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = Prop.Of(() => fill.Value), OnRealized = nh => nFill = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), Opacity = Prop.Of(() => op.Value), OnRealized = nh => nOp = nh },
                         new BoxEl { Height = 10, BorderWidth = proof, Width = Prop.Of(() => w.Value), OnRealized = nh => nW = nh },
                         new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },

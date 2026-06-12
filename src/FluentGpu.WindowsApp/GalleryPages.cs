@@ -1,9 +1,10 @@
-﻿using System;
+using System;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using FluentGpu.Reconciler;
 using static FluentGpu.Dsl.Ui;
 
@@ -1105,7 +1106,7 @@ sealed class VirtualizationPage : Component
             Gap = 12f,
             AlignItems = FlexAlign.Center,
             Padding = new Edges4(16, 0, 16, 0),
-            FillBind = () => (idx.Value % 2 == 0) ? RowEven : RowOdd,
+            Fill = Prop.Of(() => (idx.Value % 2 == 0) ? RowEven : RowOdd),
             HoverFill = RowHover,
             Children =
             [
@@ -1553,7 +1554,7 @@ sealed class StatePage_BindHost : Component
                 new BoxEl
                 {
                     Width = 32f, Height = 32f, Margin = Edges4.All(2), Corners = Radii.ControlAll,
-                    FillBind = () => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value),
+                    Fill = Prop.Of(() => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value)),
                     TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),
                 },
             ],
@@ -1571,7 +1572,7 @@ sealed class StatePage_BindHost : Component
             {
                 Width = 32, Height = 32,
                 TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),  // compositor-only
-                FillBind = () => ColorF.Lerp(grey, Tok.AccentDefault, x.Value),  // compositor-only
+                Fill = Prop.Of(() => ColorF.Lerp(grey, Tok.AccentDefault, x.Value)),  // compositor-only
             };
             """);
     }
