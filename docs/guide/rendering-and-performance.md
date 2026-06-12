@@ -30,7 +30,7 @@ re-record cheap world transforms — no relayout, no re-diff. That's the "compos
 A frame whose only work was transform/paint **binding** writes does **nothing in 3/6** — it skips render, reconcile,
 and layout, and just re-records (`FrameStats.Rendered == false`). That's the compositor bypass.
 
-### The retained scene (`SceneStore`, `src/FluentGpu.Scene/`)
+### The retained scene (`SceneStore`, `src/FluentGpu.Engine/Scene/`)
 
 - SoA columns indexed by a generational **handle** `{u32 index, u32 gen}` (a stale handle is detected via `gen`).
 - Topology via parent/child/sibling index columns (O(1) navigation). Per-node `Bounds` (local rect), `Paint`
@@ -58,7 +58,7 @@ is O(that component's subtree), not O(app).
 ## Scoped relayout
 
 Full-tree layout runs only on first frame, window resize, DPI change, or a root structural change. Otherwise layout
-is **O(change)**: `SceneStore` keeps a `LayoutDirty` worklist; `LayoutInvalidator` (`src/FluentGpu.Layout/`) walks each
+is **O(change)**: `SceneStore` keeps a `LayoutDirty` worklist; `LayoutInvalidator` (`src/FluentGpu.Engine/Layout/`) walks each
 dirty node **up to the nearest layout boundary** and re-solves only that subtree (`FlexLayout.RunSubtree`).
 
 A **layout boundary** is a node whose own size cannot change because of a descendant, so the walk stops there and the

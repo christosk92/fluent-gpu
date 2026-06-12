@@ -2,7 +2,7 @@
 
 You almost never need this page. FluentGpu is fast *by construction* — the signals-first core means a state change touches only what read it, and the compositor recomposites without relayout. Read [signals, components, and bindings](./signals-components-and-bindings.md) first; it teaches the model. Come **here** when you have a concrete hot path (a slider that drags at 200 Hz, a 100k-row list, a page that stutters on one keystroke) and you want to (a) reach for the cheapest mechanism, (b) draw the **layout boundary** that firewalls a relayout, and (c) *prove* the result with numbers instead of eyeballing it.
 
-The whole page rests on one fact about the frame loop (`src/FluentGpu.Hosting/AppHost.cs`): **a frame does only as much work as the dirtiest thing that changed.** Three update mechanisms map onto three increasing tiers of work, and your job is to keep each change in the cheapest tier that expresses it.
+The whole page rests on one fact about the frame loop (`src/FluentGpu.Engine/Hosting/AppHost.cs`): **a frame does only as much work as the dirtiest thing that changed.** Three update mechanisms map onto three increasing tiers of work, and your job is to keep each change in the cheapest tier that expresses it.
 
 ```csharp
 using static FluentGpu.Dsl.Ui;   // VStack, HStack, Text, ScrollView…
@@ -14,7 +14,7 @@ using FluentGpu.Foundation;       // Affine2D, NodeFlags, ColorF
 
 ## The three dirty axes
 
-Every update marks a node along one of **three orthogonal axes** (the `NodeFlags` dirty bits in `src/FluentGpu.Foundation/NodeFlags.cs`). The axis you hit decides how expensive the frame is. This is the single most useful mental model on this page — the rest is consequences of it.
+Every update marks a node along one of **three orthogonal axes** (the `NodeFlags` dirty bits in `src/FluentGpu.Engine/Foundation/NodeFlags.cs`). The axis you hit decides how expensive the frame is. This is the single most useful mental model on this page — the rest is consequences of it.
 
 | Axis (`NodeFlags`) | Set by | What the frame does | Tier |
 |---|---|---|---|
@@ -82,7 +82,7 @@ If a value is *also* shown as text (the "70%" next to the slider), let that smal
 
 ## Scoped relayout and the layout-boundary firewall
 
-When you *do* land on the middle tier (a re-render, or a `Width`/`Height`/`Text` bind), the relayout is **scoped, not full**. Full-tree layout runs only on the first frame, a window resize, a DPI change, or a root structural change. Otherwise the engine keeps a `LayoutDirty` worklist and `LayoutInvalidator` (`src/FluentGpu.Layout/LayoutInvalidator.cs`) walks each dirty node **up to the nearest layout boundary**, then re-solves only that subtree (`FlexLayout.RunSubtree`). The cost is O(change), not O(tree).
+When you *do* land on the middle tier (a re-render, or a `Width`/`Height`/`Text` bind), the relayout is **scoped, not full**. Full-tree layout runs only on the first frame, a window resize, a DPI change, or a root structural change. Otherwise the engine keeps a `LayoutDirty` worklist and `LayoutInvalidator` (`src/FluentGpu.Engine/Layout/LayoutInvalidator.cs`) walks each dirty node **up to the nearest layout boundary**, then re-solves only that subtree (`FlexLayout.RunSubtree`). The cost is O(change), not O(tree).
 
 A **layout boundary** is a node whose own size cannot change because of a descendant, so the up-walk stops there and the parent is never disturbed. The live predicate (`LayoutInvalidator.IsLayoutBoundary`):
 
@@ -104,7 +104,7 @@ new BoxEl
 };
 ```
 
-Note the spelling: the authoring property is **`ClipToBounds`** on `BoxEl` (`src/FluentGpu.Dsl/Element.cs`); the corresponding `NodeFlags` bit the engine reads is `ClipsToBounds` (with the *s*). A scroll/virtual viewport is *implicitly* a boundary (it clips and offsets by transform), which is why in-window scrolling never relayouts. (Pitfall: "A small change relayouts the whole page".)
+Note the spelling: the authoring property is **`ClipToBounds`** on `BoxEl` (`src/FluentGpu.Engine/Dsl/Element.cs`); the corresponding `NodeFlags` bit the engine reads is `ClipsToBounds` (with the *s*). A scroll/virtual viewport is *implicitly* a boundary (it clips and offsets by transform), which is why in-window scrolling never relayouts. (Pitfall: "A small change relayouts the whole page".)
 
 A self-invalidating **text measure cache** (per node, keyed by text + style + available width) lets a scoped relayout skip re-shaping unchanged text leaves on the real DirectWrite path — so a re-render that doesn't touch a sibling's text doesn't re-shape it.
 
@@ -170,7 +170,7 @@ Do not eyeball performance. The engine hands you the exact numbers it uses inter
 
 ### `FrameStats` (returned from every frame, and published as an ambient context)
 
-`AppHost.RunFrame()`/`Paint()` returns a `FrameStats` (`src/FluentGpu.Hosting/AppHost.cs`). The three fields you assert on:
+`AppHost.RunFrame()`/`Paint()` returns a `FrameStats` (`src/FluentGpu.Engine/Hosting/AppHost.cs`). The three fields you assert on:
 
 - **`Rendered`** — `false` on a steady or **compositor-only** frame. A bound-scalar drag should keep this `false`; if it flips `true` every frame, something is re-rendering when it should be binding.
 - **`ComponentsRendered`** — how many components re-rendered this frame. After a localized interaction it should be **small (ideally 1)**. A surprisingly large number means state lives too high, or a parent is re-rendering children it shouldn't.
@@ -188,7 +188,7 @@ return new TextEl("")
 
 ### Environment flags (stderr / on-screen, no profiler)
 
-All gated through `Diag.EnvFlag` (`src/FluentGpu.Foundation/Diag.cs`); set them in the environment before you run:
+All gated through `Diag.EnvFlag` (`src/FluentGpu.Engine/Foundation/Diag.cs`); set them in the environment before you run:
 
 | Flag | Effect |
 |---|---|

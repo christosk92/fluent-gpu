@@ -114,7 +114,7 @@ Concretely, before you write a sample:
 - **Use the real authoring imports.** The cheat-sheet imports are `using static FluentGpu.Dsl.Ui;`, `using
   FluentGpu.Hooks;`, `using FluentGpu.Signals;`, `using FluentGpu.Controls;` — these are the ones every guide and gallery
   page uses. (Note one true subtlety the docs already state honestly: `Signal<T>` and `Prop<T>` are authored from the
-  `FluentGpu.Signals` namespace even though their files live under the `FluentGpu.Foundation` assembly's `Signals/`
+  `FluentGpu.Signals` namespace even though their files live under the `FluentGpu.Engine` assembly's `Foundation/Signals/`
   folder.)
 - **Respect the signals mental model in the sample itself.** A bound thunk reads `.Value` (it subscribes), not `.Peek()`;
   `ReactiveComponent.Setup()` shows a changing value through a bound prop (`Text = sig`, or `Text = Prop.Of(() => …)`),

@@ -21,19 +21,19 @@ React-style authoring surface — and it is the *as-built* runtime, documented a
 
 | If you're changing… | Edit |
 |---|---|
-| The reactive core (computations, scheduler) | `src/FluentGpu.Foundation/Signals/ReactiveCore.cs` |
-| `Signal<T>` / `FloatSignal` | `src/FluentGpu.Foundation/Signals/Signal.cs` |
-| `Effect` / `ManagedEffect` | `src/FluentGpu.Foundation/Signals/Effect.cs` |
-| `Memo<T>` | `src/FluentGpu.Foundation/Signals/Memo.cs` |
-| The unified bindable channel `Prop<T>` | `src/FluentGpu.Foundation/Signals/Prop.cs` |
-| Hook cells + stable call-order | `src/FluentGpu.Hooks/RenderContext.cs` |
-| `Component` / `ReactiveComponent` (the `RunsOnce` gate) | `src/FluentGpu.Hooks/Component.cs` |
-| Reconcile, render-effects, `For`/`Show`, context, bind wiring | `src/FluentGpu.Reconciler/Reconciler.cs` |
-| The frame loop that calls `Flush` (phase 3) | `src/FluentGpu.Hosting/AppHost.cs` |
+| The reactive core (computations, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/ReactiveCore.cs` |
+| `Signal<T>` / `FloatSignal` | `src/FluentGpu.Engine/Foundation/Signals/Signal.cs` |
+| `Effect` / `ManagedEffect` | `src/FluentGpu.Engine/Foundation/Signals/Effect.cs` |
+| `Memo<T>` | `src/FluentGpu.Engine/Foundation/Signals/Memo.cs` |
+| The unified bindable channel `Prop<T>` | `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` |
+| Hook cells + stable call-order | `src/FluentGpu.Engine/Hooks/RenderContext.cs` |
+| `Component` / `ReactiveComponent` (the `RunsOnce` gate) | `src/FluentGpu.Engine/Hooks/Component.cs` |
+| Reconcile, render-effects, `For`/`Show`, context, bind wiring | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| The frame loop that calls `Flush` (phase 3) | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
 | Golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
 
 > Namespace vs assembly: the reactive types are authored from the namespace `FluentGpu.Signals`, but their files live
-> in the **`FluentGpu.Foundation`** assembly under `Signals/`. Per the module DAG in `reconciler-hooks.md §1`,
+> in the **`FluentGpu.Engine`** assembly under `Foundation/Signals/`. Per the module DAG in `reconciler-hooks.md §1`,
 > `Dsl` and `Hooks` reference `Foundation` (for signals) but have **zero** reference to `Scene`; only the
 > `Reconciler` bridges signals to the SoA `SceneStore`.
 

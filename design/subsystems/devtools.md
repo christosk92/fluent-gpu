@@ -388,7 +388,7 @@ public readonly struct UpdateRecordView   // POD projection of one UpdateQueueSl
   "the frame published after draining through update N" — **time-travel reuses the same snapshot the render thread uses**
   (the §1.2 reuse claim, again).
 - **Replay** = feed the recorded `(slot, updater, lane)` log back through the phase-3 drain in a **headless host**
-  (`Rhi.Headless`/`Pal.Headless`, `validation.md`), stepping update-by-update or frame-by-frame, and diff the resulting
+  (`FluentGpu.Engine` Headless/Rhi/ + Headless/Pal/, `validation.md`), stepping update-by-update or frame-by-frame, and diff the resulting
   published `SceneFrame`/`StructuralLedger` against the recorded one. Determinism is *guaranteed by the same property the
   P4 discard-restart gate relies on*: reconcile is pure and produces a **byte-identical** DrawList for the same input
   schedule (`validation.md` §12.5 / §2.4 `ConcurrentRecord_MatchesSingleThreadedGolden`). Time-travel is therefore not a

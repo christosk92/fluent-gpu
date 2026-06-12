@@ -77,22 +77,24 @@ Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only
 
 ## Where to change what
 
+All engine subsystems now live under the single `src/FluentGpu.Engine` project (one folder per former project, namespaces unchanged); the Windows backend (D3D12/DirectWrite/etc.) is `src/FluentGpu.Windows`.
+
 | Area | File |
 |---|---|
-| Signals runtime | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
-| Hooks | `src/FluentGpu.Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) |
-| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Reconciler/Reconciler.cs` |
-| Element shapes / props / binds | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` |
-| DSL helpers / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` |
+| Signals runtime | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
+| Hooks | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) |
+| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`; `src/FluentGpu.Engine/Hooks/{ControlFlow,Context,ComponentEl}.cs` |
+| DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
 | Control visual state / motion | `StateBrush` ramps + `InteractionAnimator` progress; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing`. Declare targets/specs, NOT a state matrix or per-control runtime |
 | Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal); use for draw-on paths and authored timelines, not hover/press visual states |
-| Rounded-rect / border rendering | `SceneRecorder.cs` + `Rhi.D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
-| Frame loop / scheduling | `src/FluentGpu.Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
-| Layout / scoped relayout | `src/FluentGpu.Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
-| Retained scene (SoA, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
-| Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` |
-| Theming tokens | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
+| Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
+| Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
+| Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
+| Retained scene (SoA, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
+| Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
 | Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
 
 ## WinUI controls, animations, and states

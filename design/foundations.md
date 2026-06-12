@@ -137,7 +137,7 @@ Alloc and Free so any handle captured before a Free is invalidated. Generation w
 - "Get a ref, mutate in place": `ref T Get(Handle)` returns a `ref` into the slab; callers mutate
   fields directly (no read-modify-write copy). Marked `[MethodImpl(AggressiveInlining)]`.
 - COM: `ComPtr<T>` (vendored from ComputeSharp, `unsafe struct`, `T : unmanaged`) is the ONLY
-  COM lifetime primitive. Raw `T*` only inside `RHI`/`Pal.Windows`/`Text.DirectWrite` impls.
+  COM lifetime primitive. Raw `T*` only inside the OS backend (`FluentGpu.Windows` D3D12/, Pal/, DirectWrite/).
 - No `IEnumerable`/LINQ/iterator state machines on per-frame paths. Index loops only.
 - `EqualityComparer<T>.Default` is allowed (AOT-safe singleton); custom struct `Equals` preferred.
 
@@ -366,9 +366,9 @@ atlas UV) is written into a `BufferHandle`-backed upload ring (§4).
 
 ## 4. PAL + RHI SEAM (`FluentGpu.Pal`, `FluentGpu.Rhi`)
 
-> Portability rule: **`FluentGpu.Pal` and `FluentGpu.Rhi` are interface-only (+ POD descs).
-> `FluentGpu.Pal.Windows` / `FluentGpu.Rhi.D3D12` are the reference impls. Engine code (Scene,
-> Render, Layout, Reconciler) depends ONLY on the interfaces.** A Metal/CoreText backend later
+> Portability rule: **the `Seams/Pal` and `Seams/Rhi` folders (namespaces `FluentGpu.Pal`/`FluentGpu.Rhi`)
+> are interface-only (+ POD descs); the OS backend `FluentGpu.Windows` (Pal/ / D3D12/) holds the reference
+> impls. Engine code (Scene, Render, Layout, Reconciler) depends ONLY on the interfaces.** A Metal/CoreText backend later
 > implements the SAME interfaces with zero engine changes.
 
 ### 4.1 PAL — platform/OS seam
@@ -421,7 +421,7 @@ public interface IImeSession                 // composition/candidate window
 | `IImeSession`        | `ITfThreadMgr` / `WM_IME_*`                 | composition rect + events |
 | DPI                  | `GetDpiForWindow`                           | `double Scale` |
 
-Windows-specific (NOT in portable interface, lives in `Pal.Windows`): HWND, WndProc, raw `WM_*`,
+Windows-specific (NOT in portable interface, lives in `FluentGpu.Windows` Pal/): HWND, WndProc, raw `WM_*`,
 TSF, win32 cursor/caret. Everything the engine sees is the portable `InputEvent`/`Size2`/scale.
 
 ### 4.2 RHI — render hardware seam (graphics pipeline; D3D12 reference)
@@ -482,7 +482,7 @@ public interface IPipeline : IDisposable { }     // opaque PSO handle
 public interface IShaderModule : IDisposable { }
 ```
 
-| RHI concept     | D3D12 reference (`Rhi.D3D12`)                              | Metal later (`Rhi.Metal`) |
+| RHI concept     | D3D12 reference (Windows D3D12/)                           | Metal later (Windows.Mac Metal/) |
 |-----------------|-----------------------------------------------------------|----------------------------|
 | `IGpuDevice`    | `ID3D12Device` + queues + fences (ComputeSharp pattern)   | `MTLDevice` |
 | `ISwapchain`    | `IDXGISwapChain3` + `IDCompositionTarget/Visual` present  | `CAMetalLayer` |
@@ -493,17 +493,17 @@ public interface IShaderModule : IDisposable { }
 | `IShaderModule` | DXIL bytecode (embedded at build; no runtime fxc)          | MSL/metallib |
 | present compose | **DirectComposition** (`IDCompositionDevice`, flat C API) | CoreAnimation |
 
-Windows-specific (in `Rhi.D3D12`/`Pal.Windows` only): all `ComPtr<T>`, raw COM vtables, DXGI,
-D3D12, **DComp** (NEW binding we author), **DWrite** (NEW, in Text impl). RHI/PAL interfaces above
+Windows-specific (in `FluentGpu.Windows` D3D12/ / Pal/ only): all `ComPtr<T>`, raw COM vtables, DXGI,
+D3D12, **DComp** (NEW binding we author), **DWrite** (NEW, in the DirectWrite/ impl). RHI/PAL interfaces above
 contain ZERO COM types — only POD descs, handles, spans. This is the swap line.
 
-Seed-from-ComputeSharp (vendored into `Rhi.D3D12`): `ComPtr<T>`, DXGI + D3D12 bindings, command-list
+Seed-from-ComputeSharp (vendored into `FluentGpu.Windows` D3D12/ + Interop/): `ComPtr<T>`, DXGI + D3D12 bindings, command-list
 pool, fence/device-lost pattern, ILLink substitutions, source-gen scaffolding. NEW (author): RTV/DSV
 descriptor mgmt, `GraphicsPipelineDesc`→PSO, vertex/instance/index buffers, swapchain+DComp present.
 
 ---
 
-## 5. TEXT SEAM (`FluentGpu.Text`, impl `FluentGpu.Text.DirectWrite`)
+## 5. TEXT SEAM (seam `FluentGpu.Text` = Engine Seams/Text/, impl `FluentGpu.Windows` DirectWrite/)
 
 > All text is shaped+rasterized into a GPU glyph atlas; the paint path never sees `string`.
 > DirectWrite implements the seam on Windows; CoreText implements the SAME seam on macOS later.
@@ -579,7 +579,7 @@ TextElement.Content (string, edge)
                       └─ batcher: instanced textured quads sampling atlas page
 ```
 
-| Seam method        | Windows (`Text.DirectWrite`)                  | macOS later (`Text.CoreText`) |
+| Seam method        | Windows (DirectWrite/)                        | macOS later (CoreText/) |
 |--------------------|-----------------------------------------------|-------------------------------|
 | `IFontSystem`      | `IDWriteFactory`, `IDWriteFontCollection`     | `CTFontCollection` |
 | `IFontFace`        | `IDWriteFontFace`                             | `CTFont` |
@@ -587,8 +587,8 @@ TextElement.Content (string, edge)
 | `IGlyphRasterizer` | `IDWriteGlyphRunAnalysis` → alpha/ClearType   | `CGContext` glyph draw |
 | `IGlyphAtlas`      | engine-owned (portable); uploads via RHI      | same (portable) |
 
-DWrite + DComp COM bindings are NOT in ComputeSharp → authored fresh in `Text.DirectWrite` /
-`Rhi.D3D12` using the ComputeSharp `ComPtr<T>` + **hand-vtable `IComObject` pattern on the per-frame
+DWrite + DComp COM bindings are NOT in ComputeSharp → authored fresh in the `FluentGpu.Windows`
+DirectWrite/ + D3D12/ folders using the ComputeSharp `ComPtr<T>` + **hand-vtable `IComObject` pattern on the per-frame
 hot path**; cold/warm COM (DWrite *setup*, UIA, TSF, OLE) uses source-generated
 `[GeneratedComInterface]`/`[GeneratedComClass]` (canonical COM ruling: `dotnet10-csharp14-zero-alloc.md` §4).
 
@@ -693,95 +693,112 @@ scalar types. RenderContext compares dep spans field-wise (no boxing). This supe
 
 ---
 
-## 7. NAMESPACE / MODULE LAYOUT (assemblies, acyclic, inward-only deps)
+## 7. PROJECT / MODULE LAYOUT (4 libs + 4 satellites, acyclic, inward-only deps)
+
+The repo is **4 libraries + 4 satellites = 8 projects** (`src/FluentGpu.slnx`). The portable engine that
+once spanned ~14 projects is now FOLDERS inside the single **`FluentGpu.Engine`** library (`RootNamespace=
+FluentGpu`; namespaces unchanged — `FluentGpu.Scene`, `FluentGpu.Rhi`, `FluentGpu.Dsl`, …). The boxes below
+are those folders; the inward-only dependency direction is now a **review-enforced folder/namespace
+discipline** inside `Engine`, except the one load-bearing edge that stays a real `.csproj` boundary:
+**`Engine` never references `FluentGpu.Windows`** (the OS backend), so the backend stays swappable.
 
 ```
-Dependency direction: arrows point to dependencies. NO cycles. Impls depend INWARD only.
+Dependency direction: arrows point to dependencies. NO cycles. The OS backend depends INWARD only.
 
+  FluentGpu.Engine  (ONE library; the boxes are FOLDERS, namespaces verbatim)
+  ─────────────────────────────────────────────────────────────────────────────────────
                          ┌────────────────────────┐
-                         │  FluentGpu.Foundation    │  Handle, allocators, StringInterner,
+                         │  Foundation/            │  Handle, allocators, StringInterner,
                          │  (no deps)              │  math (Affine2D, LayoutRect, ColorF), spans
                          └────────────┬───────────┘
         ┌───────────────┬────────────┼─────────────┬───────────────┬───────────────┐
         ▼               ▼            ▼             ▼               ▼               ▼
   ┌──────────┐   ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌──────────┐   ┌──────────┐
-  │ .Rhi     │   │ .Pal     │  │ .Text    │  │ .Scene   │   │ .Layout  │   │ .Input   │
+  │ Seams/Rhi│   │ Seams/Pal│  │Seams/Text│  │ Scene/   │   │ Layout/  │   │ Input/   │
   │ (iface)  │   │ (iface)  │  │ (seam)   │  │ SceneStore│  │ Yoga port│   │ events,  │
   └────┬─────┘   └────┬─────┘  └────┬─────┘  └────┬─────┘   └────┬─────┘   │ hit-test │
        │              │             │            │              │         └────┬─────┘
        │              │             │            └──────┬───────┘              │
        │              │             │                   ▼                      │
        │              │             │            ┌──────────────┐              │
-       │              │             └───────────►│  .Render     │◄─────────────┘
-       │              │                          │  DrawList,   │  depends: Scene, Text(seam),
+       │              │             └───────────►│  Render/     │◄─────────────┘
+       │              │                          │  DrawList,   │  sees: Scene, Text(seam),
        │              │                          │  batcher     │  Rhi(iface), Layout, Foundation
        │              │                          └──────┬───────┘
        │              │                                 ▼
        │              │                          ┌──────────────┐
-       │              │                          │ .Reconciler  │  depends: Scene, Render,
+       │              │                          │ Reconciler/  │  sees: Scene, Render,
        │              │                          │ ISceneBackend│  Layout, Foundation, Dsl
-       │              │                          └──────┬───────┘
-       │              │                                 ▼
-       │              │                          ┌──────────────┐
-       │              │                          │ .Controls    │  SDK controls layer; depends:
-       │              │                          │ Button/Slider│  Foundation, Dsl, Hooks,
-       │              │                          │ Nav/Repeater │  Animation, Scene, Reconciler
-       │              │                          └──────┬───────┘  (Reconciler refs only VirtualListEl
-       │              │                                 │           → Controls→Reconciler one-way)
+       │              │                          └──────┬───────┘  (declares VirtualListEl)
        │              │            ┌────────────┐ ┌─────┴────────┐  ┌──────────────┐
-       │              │            │ .Hooks     │ │ .Dsl         │  │ .Animation   │
+       │              │            │ Hooks/     │ │ Dsl/         │  │ Animation/   │
        │              │            │ RenderCtx  │ │ Element recs,│  │ Curve, track │
        │              │            └─────┬──────┘ │ factories,   │  └──────┬───────┘
        │              │                  │        │ modifiers    │         │
        │              │                  └────────┴──────┬───────┴─────────┘
        │              │                                  ▼
        │              │                          ┌──────────────┐
-       │              │                          │ .Hosting     │  app/window/run-loop wiring,
+       │              │                          │ Hosting/     │  app/window/run-loop wiring,
        │              │                          │ (composition │  frame lifecycle orchestrator;
-       │              │                          │  root)       │  depends on ALL above + iface
-       │              │                          └──────┬───────┘
+       │              │                          │  root)       │  sees ALL above + the seam ifaces
+       │              │                          └──────┬───────┘  (+ Media/ and Headless/{Rhi,Pal,Text}/
+       │              │                                 │           test backends also live in Engine)
+  ─────┼──────────────┼─────────────────────────────────┼───────────────────────────────────────────
+       │              │                                 │   bound at the composition root (WindowsApp)
        ▼              ▼                                 ▼
-  ┌────────────┐ ┌──────────────┐              (composition root binds impls)
-  │.Rhi.D3D12  │ │.Pal.Windows  │  ┌──────────────────────┐  ┌──────────────────────┐
-  │ ComPtr,    │ │ HWND,WndProc │  │ .Text.DirectWrite    │  │ .Accessibility       │
-  │ DXGI,D3D12,│ │ TSF, clip    │  │ DWrite COM bindings  │  │ (UIA bridge, opt)    │
-  │ DComp      │ └──────────────┘  └──────────────────────┘  └──────────────────────┘
-  └────────────┘   impls implement .Pal / .Rhi / .Text seams; depend inward only.
+  ┌──────────────────────────────────────┐   ┌────────────────────┐   ┌────────────────────┐
+  │ FluentGpu.Windows (the OS BACKEND;    │   │ FluentGpu.Controls │   │ FluentGpu.WindowsApi│
+  │  refs Engine + 1 TerraFX package)     │   │ SDK control kit;   │   │  OS-services scaffold│
+  │  D3D12/ (ComPtr,DXGI,D3D12,DComp)     │   │ refs Engine ONLY;  │   │  (Notifications/    │
+  │  Pal/ (HWND,WndProc,TSF,clip)         │   │ TerraFX-free       │   │   Credentials/      │
+  │  DirectWrite/ · Uia/ · Wic/ · Interop/│   │ Button/Slider/Nav  │   │   Packaging/        │
+  └──────────────────────────────────────┘   └────────────────────┘   │   Activation/)      │
+   the OS backend implements the Seams/Pal/Rhi/Text interfaces;        └────────────────────┘
+   Engine NEVER references it (compiler-enforced) — swappable wholesale.
 
-  ┌──────────────────────────────────────────────────────────────────────────────────┐
-  │ .SourceGen (Roslyn analyzer assembly; build-time only, referenced by all)          │
-  │  - ElementTypeId table, hand-vtable for D3D/DXGI/DWrite/DComp, DepKey overloads,    │
-  │    HLSL→DXIL embed (ComputeSharp transpiler reuse), property-dispatch.              │
-  └──────────────────────────────────────────────────────────────────────────────────┘
+  Satellites: FluentGpu.SourceGen + FluentGpu.Interop.SourceGen (Roslyn analyzers; build-time only;
+  netstandard2.0 — cannot merge into the net10 libs), FluentGpu.VerticalSlice (AOT harness exe),
+  FluentGpu.WindowsApp (gallery exe / composition root — refs Engine+Controls+Windows).
 ```
 
-Assembly list (one assembly per box; trimmable, AOT):
-- `FluentGpu.Foundation` — primitives, allocators, math, interner. Zero deps.
-- `FluentGpu.Rhi` — RHI interfaces + POD descs. Dep: Foundation.
-- `FluentGpu.Rhi.D3D12` — reference GPU backend. Dep: Rhi, Foundation. (ComputeSharp-seeded COM.)
-- `FluentGpu.Pal` — platform interfaces + InputEvent. Dep: Foundation.
-- `FluentGpu.Pal.Windows` — Win32 impl. Dep: Pal, Foundation.
-- `FluentGpu.Text` — text seam interfaces + glyph/atlas POD. Dep: Foundation, Rhi(iface).
-- `FluentGpu.Text.DirectWrite` — DWrite impl. Dep: Text, Rhi(iface), Foundation.
-- `FluentGpu.Scene` — SceneStore SoA, tables (Brush/Clip/GlyphRun). Dep: Foundation.
-- `FluentGpu.Layout` — Yoga port + LayoutCache + text-measure bridge. Dep: Scene, Text(iface), Foundation.
-- `FluentGpu.Render` — DrawList encoding, render-walk, batcher. Dep: Scene, Layout, Text(iface), Rhi(iface), Foundation.
-- `FluentGpu.Input` — gesture FSM, focus, hit-test. Dep: Scene, Layout, Pal(iface), Foundation.
-- `FluentGpu.Animation` — Curve/Easing/AnimTrack. Dep: Scene, Foundation.
-- `FluentGpu.Dsl` — Element records, factories, modifiers (Reactor model verbatim, decoupled). Dep: Foundation.
-- `FluentGpu.Hooks` — RenderContext, hook states, Context. Dep: Dsl, Foundation.
-- `FluentGpu.Reconciler` — ISceneBackend, reconciler, ChildReconciler (Reactor reuse). Dep: Scene, Render, Layout, Hooks, Dsl, Foundation.
-- `FluentGpu.Controls` — the SDK controls layer (Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView + Navigator/PageHost/Route/Nav + Repeater + the `Virtual` factory + `Icons`). Top of the graph; refs Foundation, Dsl, Hooks, Animation, Scene, Reconciler. **Acyclic**: Reconciler references only `VirtualListEl` (which stays in Reconciler), so `Controls → Reconciler` is one-way. Content owned by `subsystems/controls.md`. (Aspirational lookless `ControlTemplate`/`ControlTheme`/`VisualState` kit is the stated future target; as-shipped Phase 0 is the composition-factory hoist + per-control `Style` records — see `subsystems/controls.md`.)
-- `FluentGpu.Accessibility` — optional UIA bridge. Dep: Scene, Pal(iface), Foundation.
-- `FluentGpu.Hosting` — composition root; binds impls to seams; owns frame loop. Dep: all interface assemblies + selected impls.
-- `FluentGpu.SourceGen` — Roslyn analyzer; build-time; no runtime dep.
+Project list (trimmable, AOT):
+- **`FluentGpu.Engine`** — the portable engine core (`RootNamespace=FluentGpu`, no NuGet). One folder per
+  former project, namespaces verbatim: `Foundation/` (primitives, allocators, math, interner — the root),
+  `Seams/Rhi/` `Seams/Pal/` `Seams/Text/` (interface-only seams + POD descs/`InputEvent`/glyph-atlas POD),
+  `Scene/` (SceneStore SoA + Brush/Clip/GlyphRun tables + `VirtualLayout`), `Layout/` (Yoga port + cache +
+  text-measure bridge), `Render/` (DrawList encoding, render-walk, batcher), `Dsl/` (Element records,
+  factories, modifiers — Reactor model verbatim), `Hooks/` (RenderContext, hook states, Context),
+  `Reconciler/` (`ISceneBackend`, reconciler, ChildReconciler — declares `VirtualListEl`), `Animation/`
+  (Curve/Easing/AnimTrack), `Input/` (gesture FSM, focus, hit-test), `Media/`, `Hosting/` (composition
+  root / frame loop), and `Headless/{Rhi,Pal,Text}/` (the test backends; referenced by test hosts only).
+- **`FluentGpu.Controls`** — the SDK controls layer (Button/IconButton/ToggleButton/Slider/ScrollBar/
+  NavigationView + Navigator/PageHost/Route/Nav + Repeater + the `Virtual` factory + `Icons`). Refs
+  **Engine only**; stays **TerraFX-free**. **Acyclic**: `VirtualListEl` is declared in `Engine` (Reconciler/),
+  so `Controls → Reconciler` is one-way with no back-edge. Content owned by `subsystems/controls.md`.
+  (Aspirational lookless `ControlTemplate`/`ControlTheme`/`VisualState` kit is the stated future target;
+  as-shipped Phase 0 is the composition-factory hoist + per-control `Style` records — see that doc.)
+- **`FluentGpu.Windows`** — the swappable Windows OS backend. Refs Engine + the **one**
+  `TerraFX.Interop.Windows` package. Folders: `Interop/` (vendored ComputeSharp bindings + DComp/DWrite/UIA/
+  WIC), `Pal/` (Win32 windowing/input/IME), `D3D12/` (GPU backend, ComputeSharp-seeded COM), `DirectWrite/`
+  (DWrite shape+raster), `Wic/` (image codecs), `Uia/` (UIA bridge). Implements the `Seams/*` interfaces.
+- **`FluentGpu.WindowsApi`** — empty scaffold for OS services (`Notifications/`/`Credentials/`/`Packaging/`/
+  `Activation/`); refs Engine. (MSIX packaging is **app-side** — `.wapproj`/packaging props — not here.)
+- Satellites: **`FluentGpu.SourceGen`** (portable Roslyn analyzer: ElementTypeId table, DepKey overloads,
+  HLSL→DXIL embed, property-dispatch; referenced by Engine) + **`FluentGpu.Interop.SourceGen`** (the
+  COM-binding generator; referenced by `FluentGpu.Windows` only) — both netstandard2.0, build-time only.
+  **`FluentGpu.VerticalSlice`** (AOT validation harness exe; refs Engine+Controls; closure stays
+  TerraFX-free). **`FluentGpu.WindowsApp`** (WinExe gallery / composition root; refs Engine+Controls+Windows).
 
 **Cycle-prevention invariants (binding):**
-1. No interface assembly references an impl assembly (Render references `Rhi`, never `Rhi.D3D12`).
-2. Impl assemblies (`*.D3D12`, `*.Windows`, `*.DirectWrite`) are leaves — referenced ONLY by `Hosting`.
-3. `Dsl`/`Hooks` know nothing of `Scene`/`Render`/`Rhi` (programming-model layer is GPU-agnostic;
-   `Reconciler` is the only bridge from Element-world to SceneStore-world via `ISceneBackend`).
-4. `Foundation` depends on nothing. Everything depends on `Foundation`.
+1. **Compiler-enforced:** `FluentGpu.Engine` references **no** OS backend — `FluentGpu.Windows` is bound only
+   at the composition root, so the backend swaps wholesale (macOS = a future `FluentGpu.Windows.Mac`).
+   `FluentGpu.Controls` references `Engine` only and stays TerraFX-free.
+2. **Review-enforced (intra-`Engine` folder discipline):** `Render/` sees the `Seams/Rhi`/`Seams/Text`
+   interfaces, never the OS impls (which live in a library it cannot reference). The OS-backend folders
+   implement the `Seams/Pal`/`/Rhi`/`/Text` interfaces and are bound only by `Hosting/`.
+3. `Dsl/`/`Hooks/` know nothing of `Scene`/`Render`/`Rhi` (programming-model layer is GPU-agnostic;
+   `Reconciler/` is the only bridge from Element-world to SceneStore-world via `ISceneBackend`).
+4. `Foundation/` depends on nothing. Everything depends on `Foundation/`.
 
 ### 7.1 ISceneBackend — the reconciler↔scene bridge (replaces Reactor's IRenderBackend)
 ```csharp
@@ -808,10 +825,10 @@ ChildReconciler LIS algorithm (Reactor, host-agnostic) and RenderContext hooks a
 3. SceneStore is **SoA**; one generation/free-list spine; layout-input/result + paint columns co-located, indexed by NodeHandle.
 4. DrawList = flat POD `DrawCmd`+payload stream in double-buffered arenas; brushes/clips/glyphs by handle/index;
    incremental via dirty-subtree re-record + memcpy of clean spans; zero per-frame managed alloc.
-5. PAL + RHI are **interface-only**; D3D12 + Win32 + DComp are reference impls in leaf assemblies; DrawList POD is the swap line.
+5. PAL + RHI are **interface-only** (Engine `Seams/`); D3D12 + Win32 + DComp are reference impls in the swappable `FluentGpu.Windows` backend (D3D12/, Pal/, Interop/); DrawList POD is the swap line.
 6. Text seam: IFontSystem/IFontFace/ITextShaper(→spans)/IGlyphRasterizer/IGlyphAtlas; DWrite now, CoreText later; no `string` on paint path.
 7. Frame phases fixed (input→hookflush→render→reconcile→layout→anim→record→batch→submit→present→effects→arenaswap); single UI thread v1; effects after present.
-8. The design-core acyclic graph (now incl. `Animation`, `Hooks`, and the top-of-graph `FluentGpu.Controls`) plus OS/test-leaf assemblies — **27 projects** in the repo; acyclic, impls are leaves referenced only by `Hosting`; `Foundation` is the root with no deps. (The old "18 assemblies" count predated the `Animation`/`Hooks`/`Controls` splits and the test/leaf growth; restated consistently with `architecture-spec.md` §3 and `design/README.md`. `FluentGpu.Controls` sits above `Reconciler` — see §7.)
+8. **4 libraries + 4 satellites = 8 projects** (`src/FluentGpu.slnx`): the portable engine is folders in `FluentGpu.Engine`, plus `FluentGpu.Controls`, the swappable `FluentGpu.Windows` backend, `FluentGpu.WindowsApi`, and the SourceGen/Interop.SourceGen analyzers + VerticalSlice/WindowsApp exes. Acyclic; `Engine` never references `Windows` (compiler-enforced); `Foundation/` is the root with no deps. (Earlier passes counted "27 projects"/"18 assemblies" before the consolidation <!-- canon-allow: superseded assembly count, narrating the old layout -->; restated with `architecture-spec.md` §3 and `design/README.md`. `FluentGpu.Controls` sits above `Reconciler/` — see §7.)
 9. Hook deps = `ReadOnlySpan<DepKey>` (not `params object[]`); source-gen'd. Reactor Element/Hooks/ChildReconciler reused verbatim; reconciler bridges via `ISceneBackend`.
-10. ComputeSharp: vendor `ComPtr<T>` + DXGI/D3D12 bindings + pools + source-gen + AOT config into `Rhi.D3D12`; author DWrite + DComp + graphics-PSO/swapchain ourselves; do NOT take D2D1 for core; D3D12MA optional.
+10. ComputeSharp: vendor `ComPtr<T>` + DXGI/D3D12 bindings + pools + source-gen + AOT config into `FluentGpu.Windows` (D3D12/ + Interop/); author DWrite + DComp + graphics-PSO/swapchain ourselves; do NOT take D2D1 for core; D3D12MA optional.
 ```

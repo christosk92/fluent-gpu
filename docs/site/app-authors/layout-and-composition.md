@@ -36,7 +36,7 @@ builder when you don't.
 | `ShowEl` / `ForEl` | reactive conditional / keyed list — re-run as a boundary, not a re-render | `Flow.Show` / `Flow.For` |
 
 `BoxEl`, `TextEl`, `ImageEl`, `ScrollEl`, and `GridEl` are defined in
-[`src/FluentGpu.Dsl/Element.cs`](../../../src/FluentGpu.Dsl/Element.cs); the control-flow and context records
+[`src/FluentGpu.Engine/Dsl/Element.cs`](../../../src/FluentGpu.Engine/Dsl/Element.cs); the control-flow and context records
 live alongside in the same DSL assembly.
 
 A note that saves hours: **a button is a `BoxEl`.** There is no `ButtonEl`. `Button.Accent("Save", onSave)`
@@ -47,8 +47,8 @@ below applies to them too.
 ## `Ui.*` builders
 
 Add `using static FluentGpu.Dsl.Ui;` and author trees as plain expressions. The builders are in
-[`src/FluentGpu.Dsl/Factories.cs`](../../../src/FluentGpu.Dsl/Factories.cs) (and the type-ramp text factories in
-[`Typography.cs`](../../../src/FluentGpu.Dsl/Typography.cs)).
+[`src/FluentGpu.Engine/Dsl/Factories.cs`](../../../src/FluentGpu.Engine/Dsl/Factories.cs) (and the type-ramp text factories in
+[`Typography.cs`](../../../src/FluentGpu.Engine/Dsl/Typography.cs)).
 
 ```csharp
 // Containers
@@ -110,7 +110,7 @@ new BoxEl
 
 Flexbox (a Yoga-style model) is the default layout. A `BoxEl` is a flex container; its `Direction` picks the
 main axis, `Justify` distributes children along it, and `AlignItems` aligns them across it. The layout props on
-`BoxEl` (all in [`Element.cs`](../../../src/FluentGpu.Dsl/Element.cs)):
+`BoxEl` (all in [`Element.cs`](../../../src/FluentGpu.Engine/Dsl/Element.cs)):
 
 | Prop | Type | Notes |
 |---|---|---|
@@ -126,8 +126,8 @@ main axis, `Justify` distributes children along it, and `AlignItems` aligns them
 | `ClipToBounds` | `bool` | clip children to the box — **and a layout-boundary signal** (see below) |
 
 `FlexJustify` and `FlexAlign` are byte enums in
-[`src/FluentGpu.Foundation/LayoutTypes.cs`](../../../src/FluentGpu.Foundation/LayoutTypes.cs). `Edges4` is
-`(Left, Top, Right, Bottom)` from [`Geometry.cs`](../../../src/FluentGpu.Foundation/Geometry.cs).
+[`src/FluentGpu.Engine/Foundation/LayoutTypes.cs`](../../../src/FluentGpu.Engine/Foundation/LayoutTypes.cs). `Edges4` is
+`(Left, Top, Right, Bottom)` from [`Geometry.cs`](../../../src/FluentGpu.Engine/Foundation/Geometry.cs).
 
 Each knob in isolation, lifted from the gallery's Flex page
 ([`GalleryPages.cs`](../../../src/FluentGpu.WindowsApp/GalleryPages.cs)):
@@ -170,7 +170,7 @@ itself.
 
 When you need *true* two-dimensional alignment — every cell in a column sharing one measured width, so rows stay
 aligned — use `GridEl` instead of nesting flex rows. Columns are typed tracks (`TrackSize`, from
-[`src/FluentGpu.Foundation/TrackSize.cs`](../../../src/FluentGpu.Foundation/TrackSize.cs)); children flow
+[`src/FluentGpu.Engine/Foundation/TrackSize.cs`](../../../src/FluentGpu.Engine/Foundation/TrackSize.cs)); children flow
 row-major into the cells at a uniform row height.
 
 ```csharp
@@ -211,7 +211,7 @@ A grid resolves its star tracks against a concrete width, so give it (or an ance
 
 A modifier is a fluent extension method that returns a record `with`-copy — it tweaks one instance without
 forking a control's default style. They are in
-[`src/FluentGpu.Dsl/Modifiers.cs`](../../../src/FluentGpu.Dsl/Modifiers.cs). Because every modifier returns the
+[`src/FluentGpu.Engine/Dsl/Modifiers.cs`](../../../src/FluentGpu.Engine/Dsl/Modifiers.cs). Because every modifier returns the
 same record type, you can chain them, and you can apply them to a control: `Button.Accent("Save", onSave).Rounded(20)`
 just rounds that one button.
 
@@ -231,7 +231,7 @@ text.Foreground(c).FontSize(px).Strong().Font(family)  // Strong() = SemiBold 60
 
 `Strong()` is SemiBold (weight 600), matching the WinUI BodyStrong ramp — use `Bold = true` (or
 `FontWeight(700)`) for true bold. The text-tier colour helpers (`Secondary()`, `Tertiary()`, `Accent()`,
-`Disabled()`) are in [`Typography.cs`](../../../src/FluentGpu.Dsl/Typography.cs) and read theme tokens, so
+`Disabled()`) are in [`Typography.cs`](../../../src/FluentGpu.Engine/Dsl/Typography.cs) and read theme tokens, so
 prefer `Body("…").Secondary()` over `.Foreground(someGrey)`.
 
 Modifiers in action (the gallery's Typography page):
@@ -244,7 +244,7 @@ new TextEl("The quick brown fox") { Size = 18f, Color = Theme.WindowText }.Stron
 
 For the rich-paint presets — `Shadow`/`Elevate` take a `ShadowSpec`, and the `Elevation.*` presets
 (`Card`, `CardHover`, `Tooltip`, `Flyout`, `Dialog`) live in
-[`src/FluentGpu.Dsl/Elevation.cs`](../../../src/FluentGpu.Dsl/Elevation.cs):
+[`src/FluentGpu.Engine/Dsl/Elevation.cs`](../../../src/FluentGpu.Engine/Dsl/Elevation.cs):
 
 ```csharp
 Card(content).Elevate(Elevation.Flyout);                          // a lifted, flyout-band shadow
@@ -264,7 +264,7 @@ box.Acrylic(new AcrylicSpec(Tok.AccentDefault, tintOpacity: 0.6f,
 ## `BoxEl` visuals
 
 A `BoxEl` is both a layout container and a paintable surface. The surface props (all in
-[`Element.cs`](../../../src/FluentGpu.Dsl/Element.cs)):
+[`Element.cs`](../../../src/FluentGpu.Engine/Dsl/Element.cs)):
 
 - **`Fill`** — the resting background. It is a `Prop<ColorF>`: a static colour, a `Func<ColorF>` thunk
   (`Prop.Of(() => …)`), or a concrete signal. **`HoverFill`** / **`PressedFill`** are the eased interaction
@@ -274,7 +274,7 @@ A `BoxEl` is both a layout container and a paintable surface. The surface props 
   `A == 0` state colour means "auto-lighten/darken the resting border").
 - **`Corners`** — a `CornerRadius4` (`(TopLeft, TopRight, BottomRight, BottomLeft)`). Use
   `CornerRadius4.All(r)`, `.Rounded(r)`, or the Fluent ramp `Radii.ControlAll` / `Radii.OverlayAll` /
-  `Radii.PillAll` (from [`Radii.cs`](../../../src/FluentGpu.Dsl/Radii.cs)).
+  `Radii.PillAll` (from [`Radii.cs`](../../../src/FluentGpu.Engine/Dsl/Radii.cs)).
 - **`Shadow`** (`ShadowSpec?`) — a soft drop shadow drawn beneath the fill (the `Elevation.*` presets).
 - **`Gradient`** (`GradientSpec?`) — a gradient fill that supersedes `Fill` at record time; up to four stops.
 - **`BorderBrush`** (`GradientSpec?`) — a gradient stroke (the WinUI control-elevation border); needs
@@ -340,7 +340,7 @@ auto `NaN` sizes) and let content drive extent — explicit `Width`/`Height` are
 size or a layout boundary.
 
 For layout that adapts to the window, read the ambient client size. `Viewport.Size` is a context channel (in
-[`src/FluentGpu.Hooks/Context.cs`](../../../src/FluentGpu.Hooks/Context.cs)) the host pushes each frame:
+[`src/FluentGpu.Engine/Hooks/Context.cs`](../../../src/FluentGpu.Engine/Hooks/Context.cs)) the host pushes each frame:
 
 ```csharp
 public override Element Render()
@@ -381,7 +381,7 @@ signal so you reach for it while you compose, not after the page feels slow.
 ## Theming: read tokens, never hard-code colour
 
 The `Ui.*` surfaces and tier helpers read semantic tokens from `Tok` (in
-[`src/FluentGpu.Dsl/Tokens.cs`](../../../src/FluentGpu.Dsl/Tokens.cs)) so a theme switch re-skins them. Prefer a
+[`src/FluentGpu.Engine/Dsl/Tokens.cs`](../../../src/FluentGpu.Engine/Dsl/Tokens.cs)) so a theme switch re-skins them. Prefer a
 token to a literal `ColorF`:
 
 ```csharp

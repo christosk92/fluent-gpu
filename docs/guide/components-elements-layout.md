@@ -20,7 +20,7 @@ them in `Render()`/`Setup()` and return the root. Build them with the `Ui.*` hel
 | `ContextProviderEl` | `Ctx.Provide(channel, value, child)` | provides a context value |
 | `ShowEl` / `ForEl` | `Flow.Show` / `Flow.For` | reactive conditional / keyed list |
 
-### `Ui.*` builders (`src/FluentGpu.Dsl/Factories.cs`)
+### `Ui.*` builders (`src/FluentGpu.Engine/Dsl/Factories.cs`)
 
 ```csharp
 VStack(float gap, params Element[] children)            // column flex
@@ -43,7 +43,7 @@ Pill(string label, bool selected, Action onClick)
 LinearGradient(float angleDeg, params GradientStop[] stops) / RadialGradient(params GradientStop[] stops)
 ```
 
-### Modifiers (`src/FluentGpu.Dsl/Modifiers.cs`) — fluent per-element overrides
+### Modifiers (`src/FluentGpu.Engine/Dsl/Modifiers.cs`) — fluent per-element overrides
 
 ```csharp
 box.Background(c).HoverColor(c).PressedColor(c).Border(c, width).Rounded(r).Pad(all) / .Pad(l,t,r,b)
@@ -55,7 +55,7 @@ text.Foreground(c).FontSize(px).Strong().Font(family).Wrapped().NoWrap().Trim().
 These return a `with`-copy — they don't fork a control's default style, so e.g. `Button.Accent(...).Rounded(20)`
 just tweaks that one instance.
 
-### Template parts (`src/FluentGpu.Dsl/TemplateParts.cs`) — lightweight styling of CONTROL internals
+### Template parts (`src/FluentGpu.Engine/Dsl/TemplateParts.cs`) — lightweight styling of CONTROL internals
 
 The one generic door into a control's template — CSS `::part` / WinUI lightweight styling, signals-native. Controls
 export part-name consts (`Expander.PartHeader/PartChevron/PartClip/PartContent/PartRoot`) and a `Parts` field; app
@@ -210,7 +210,7 @@ ItemsView.Create(count, itemTemplate, layout, selector: SelectorVisual.AccentPil
 - Reorder rides the displacement channel (`ItemDisplacement`/`DisplacementVersion`); displaced siblings glide aside
   via an animated translate — a capability WinUI's own ItemsView lacks.
 
-## Theming (`Tok` / `Theme`, `src/FluentGpu.Dsl/Tokens.cs`)
+## Theming (`Tok` / `Theme`, `src/FluentGpu.Engine/Dsl/Tokens.cs`)
 
 Read semantic tokens; never hard-code colors:
 

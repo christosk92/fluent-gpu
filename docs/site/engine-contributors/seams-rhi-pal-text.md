@@ -39,22 +39,22 @@ behavior. It is also the macOS plan — `Pal.Cocoa` / `Rhi.Metal` / `Text.CoreTe
 
 The assembly rule is binding and the canon gate enforces it ([`foundations.md` §7](../../../design/foundations.md)):
 
-1. No interface assembly references an impl (`FluentGpu.Render` references `FluentGpu.Rhi`, **never** `Rhi.D3D12`).
+1. No interface assembly references an impl (`FluentGpu.Engine` (`Render/`) references only seam interfaces, **never** `FluentGpu.Windows`).
 2. Impl assemblies (`*.Windows`, `*.D3D12`, `*.DirectWrite`, and the `*.Headless` test doubles) are **leaves**,
-   referenced **only by `FluentGpu.Hosting`** — the composition root that binds an impl to each seam.
-3. `FluentGpu.Foundation` (handles, allocators, `ColorF`/geometry, `StringTable`, signals) is the root with no deps;
+   referenced **only by `FluentGpu.Engine` (`Hosting/`)** — the composition root that binds an impl to each seam.
+3. `FluentGpu.Engine` (`Foundation/`) (handles, allocators, `ColorF`/geometry, `StringTable`, signals) is the root with no deps;
    the seam interfaces depend only on it.
 
 Where each seam lives in `src/`:
 
 | Seam | Interface assembly (edit the contract here) | Real leaf | Headless leaf (tests/CI) |
 |---|---|---|---|
-| PAL | `src/FluentGpu.Pal/Pal.cs` (+ `Clipboard.cs`, `TextInput.cs`) | `FluentGpu.Pal.Windows` | `FluentGpu.Pal.Headless` |
-| RHI | `src/FluentGpu.Rhi/Rhi.cs` | `FluentGpu.Rhi.D3D12` | `FluentGpu.Rhi.Headless` |
-| Text | `src/FluentGpu.Text/Text.cs` | `FluentGpu.Text.DirectWrite` | `FluentGpu.Text.Headless` |
-| Composition root | — | `src/FluentGpu.Hosting/AppHost.cs` binds all three | same `AppHost`, headless impls |
+| PAL | `src/FluentGpu.Engine/Seams/Pal/Pal.cs` (+ `Clipboard.cs`, `TextInput.cs`) | `FluentGpu.Windows` (`Pal/`) | `FluentGpu.Engine/Headless/Pal/` |
+| RHI | `src/FluentGpu.Engine/Seams/Rhi/Rhi.cs` | `FluentGpu.Windows` (`D3D12/`) | `FluentGpu.Engine/Headless/Rhi/` |
+| Text | `src/FluentGpu.Engine/Seams/Text/Text.cs` | `FluentGpu.Windows` (`DirectWrite/`) | `FluentGpu.Engine/Headless/Text/` |
+| Composition root | — | `src/FluentGpu.Engine/Hosting/AppHost.cs` binds all three | same `AppHost`, headless impls |
 
-> **Honesty note on the as-built RHI.** The as-shipped `IGpuDevice` in `src/FluentGpu.Rhi/Rhi.cs` is **slimmer** than
+> **Honesty note on the as-built RHI.** The as-shipped `IGpuDevice` in `src/FluentGpu.Engine/Seams/Rhi/Rhi.cs` is **slimmer** than
 > the full hardened surface in [`pal-rhi.md` §2](../../../design/subsystems/pal-rhi.md) (which adds an `ICommandEncoder`,
 > `CreatePipeline`/`CreateBuffer`/`CreateTexture`, `CopyBufferToTexture`, device-lost tokens, and the multi-visual
 > DComp present-tree). The slim surface is the *current code*; the richer surface is the *design of record* the
@@ -66,7 +66,7 @@ Where each seam lives in `src/`:
 `FluentGpu.Pal` contains **zero** Windows or COM types: `Size2`, `Point2`, `RectF`, the opaque `NativeHandle`, and POD
 `InputEvent` are all an engine layer ever sees. Two interfaces carry the core.
 
-**`IPlatformApp`** (`src/FluentGpu.Pal/Pal.cs`) — app/process lifetime and the window factory:
+**`IPlatformApp`** (`src/FluentGpu.Engine/Seams/Pal/Pal.cs`) — app/process lifetime and the window factory:
 
 ```csharp
 public interface IPlatformApp : IDisposable
@@ -139,7 +139,7 @@ public enum InputKind : byte
 `InputEventRing` is a grow-only `InputEvent[]` with `Write` / `Drain` / `Clear`. A backend's `PumpInto` move-coalesces
 the OS flood and writes POD into the ring; the host `Drain()`s a `ReadOnlySpan<InputEvent>` in the input-dispatch phase.
 `ScrollDelta` is in DIP, sign-oriented so positive scrolls toward the content end; `TimestampMs` drives
-double/triple-click detection in `FluentGpu.Input`.
+double/triple-click detection in `FluentGpu.Engine` (`Input/`).
 
 ### The extended PAL seams (system colors, backdrop, video, memory, image codec)
 
@@ -155,7 +155,7 @@ hit them in the verification section: `IClipboard` (`Clipboard.cs`, with the `Se
 ## The RHI seam — `IGpuDevice` and what a backend must implement
 
 `FluentGpu.Rhi` is graphics-first and **zero-COM across the seam**: generational handles, POD descriptors, and spans
-only. The as-built contract (`src/FluentGpu.Rhi/Rhi.cs`) is deliberately small — `SubmitDrawList` is the one hot path,
+only. The as-built contract (`src/FluentGpu.Engine/Seams/Rhi/Rhi.cs`) is deliberately small — `SubmitDrawList` is the one hot path,
 and image residency rides two explicit calls:
 
 ```csharp
@@ -192,7 +192,7 @@ followed by a fixed-size `*Cmd` payload per opcode — `FillRoundRect`, `DrawGly
 `DrawRoundRectStroke`, `DrawShadow`, `DrawArc`, `DrawPolylineStroke`, `DrawGradientRect`/`DrawGradientStroke`,
 `PushLayer`/`PopLayer`, `DrawTabShape`) with **concrete, devirtualized** types — no per-draw interface dispatch — and
 turn each into GPU work (or, headless, into an inspectable list). The opcode set and their `*Cmd` shapes are owned by
-[`gpu-renderer.md`](../../../design/subsystems/gpu-renderer.md) and `FluentGpu.Render`; a backend *consumes* them, it
+[`gpu-renderer.md`](../../../design/subsystems/gpu-renderer.md) and `FluentGpu.Engine` (`Render/`); a backend *consumes* them, it
 does not define them. The `HeadlessGpuDevice` decode loop below is the exact, minimal reference for "how to read the
 stream."
 
@@ -204,7 +204,7 @@ toward that shape; do not improvise a parallel one.
 ## The Text seam — itemize/shape/raster/atlas/layout and the Yoga measure bridge
 
 `FluentGpu.Text` is portable (interface + POD; zero DirectWrite types). The as-built seam the layout and editor paths
-call is `IFontSystem` (`src/FluentGpu.Text/Text.cs`) — measurement plus the editor queries, all answered from **the
+call is `IFontSystem` (`src/FluentGpu.Engine/Seams/Text/Text.cs`) — measurement plus the editor queries, all answered from **the
 same layout pipeline** so hit-testing matches rendering exactly:
 
 ```csharp
@@ -236,7 +236,7 @@ public readonly record struct TextMetrics(Size2 Size, float Baseline,
     float UnderlineY = 0f, float UnderlineThickness = 0f, float StrikeY = 0f);
 ```
 
-**The Yoga measure bridge.** Layout (`FluentGpu.Layout`) does not know about glyphs; a text node's intrinsic size comes
+**The Yoga measure bridge.** Layout (`FluentGpu.Engine` (`Layout/`)) does not know about glyphs; a text node's intrinsic size comes
 from calling `IFontSystem.Measure` during the measure descent. The design contract is that this happens through **one
 `static readonly` measure function plus a generational handle in the node's user-data slot — never a captured closure**
 ([`text.md` §0/§8](../../../design/subsystems/text.md)), so the layout hot path stays allocation-free. There is also a
@@ -250,7 +250,7 @@ public static class TextSeam { public static IFontSystem? Default; }   // last-c
 The full text pipeline below the seam — itemization (BiDi/script/line-break/fallback), shaping (glyph ids + advances +
 clusters), the `GlyphKey`/`PackedGlyph`/`GlyphRunRealization` realization model, the R8 + BGRA glyph atlas with its
 epoch/eviction discipline, and `DrawGlyphRunCmd` emission — is owned end-to-end by
-[`subsystems/text.md`](../../../design/subsystems/text.md). The DirectWrite leaf (`FluentGpu.Text.DirectWrite`) is the
+[`subsystems/text.md`](../../../design/subsystems/text.md). The DirectWrite leaf (`FluentGpu.Windows` (`DirectWrite/`)) is the
 Windows impl; it is render-thread-confined COM and is covered under [Windows backends](./windows-backends.md).
 
 ## The headless backends and the deterministic advance model
@@ -258,14 +258,14 @@ Windows impl; it is render-thread-confined COM and is covered under [Windows bac
 The headless leaves are the reason the harness can run anywhere. Each implements its seam with **deterministic,
 inspectable** behavior and **no GPU/window/OS**.
 
-**`HeadlessPlatformApp` / `HeadlessWindow`** (`src/FluentGpu.Pal.Headless/HeadlessPlatform.cs`) — the synthetic window
+**`HeadlessPlatformApp` / `HeadlessWindow`** (`src/FluentGpu.Engine/Headless/Pal/HeadlessPlatform.cs`) — the synthetic window
 exposes a `QueueInput` test seam that the harness uses to *synthesize* input; `PumpInto` drains the queue into the ring.
 Window state (size, scale, activation, placement) is **settable** so a test can simulate a resize, a per-monitor DPI hop
 (`WM_DPICHANGED`), or a focus change; flipping `IsActive` even emits the matching `WindowFocus`/`WindowBlur` event, and
 `ToggleMaximize` emits `WindowStateChanged`, exactly like the Win32 backend's `WM_ACTIVATE`/`WM_SIZE` transitions. The
 clipboard records text, the IME records the composition lifecycle, and `OpenUri` records the URI instead of launching.
 
-**`HeadlessGpuDevice`** (`src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs`) — the CPU/null backend. It **decodes the POD
+**`HeadlessGpuDevice`** (`src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`) — the CPU/null backend. It **decodes the POD
 DrawList into reusable per-opcode lists** so a test asserts *what was drawn* without pixels, and it keeps capacity so
 there is **no per-frame managed allocation once warmed**. The inspectable surface (a sample):
 
@@ -313,7 +313,7 @@ public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sort
 `UploadImage` appends to a never-cleared `Uploads` log (one entry per decode completion, so the log is the history) and
 marks the id resident; `EvictImage` removes it and records the eviction — both directly assertable.
 
-**`HeadlessFontSystem`** and **the deterministic advance model** (`src/FluentGpu.Text.Headless/HeadlessFontSystem.cs`) —
+**`HeadlessFontSystem`** and **the deterministic advance model** (`src/FluentGpu.Engine/Headless/Text/HeadlessFontSystem.cs`) —
 this is the keystone that makes text-layout goldens **exact math** instead of font-dependent. It replaces DirectWrite
 with uniform, reproducible metrics. The headless checks are written against these exact constants:
 
@@ -350,7 +350,7 @@ host.RunFrame();
 // assert on host.Scene (post-layout bounds/flags) and device.LastGlyphs/LastRects (what was recorded)
 ```
 
-The `AppHost` constructor that ties the seams together (`src/FluentGpu.Hosting/AppHost.cs`):
+The `AppHost` constructor that ties the seams together (`src/FluentGpu.Engine/Hosting/AppHost.cs`):
 
 ```csharp
 public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,

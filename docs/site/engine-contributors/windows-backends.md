@@ -1,9 +1,9 @@
 # Windows backends: D3D12, DirectWrite, Win32
 
 This page is for engine contributors working **below the seams** — the three Windows leaf assemblies that turn the
-portable PAL/RHI/Text contracts into real pixels: `FluentGpu.Rhi.D3D12` (Direct3D 12 + DXGI + DirectComposition),
-`FluentGpu.Text.DirectWrite` (the DirectWrite layout/shaping backend), and `FluentGpu.Pal.Windows` (the Win32 window,
-message pump, DPI, theme, and Mica). It also covers the real image pipeline (`FluentGpu.Media` + the WIC codec) and the
+portable PAL/RHI/Text contracts into real pixels: `FluentGpu.Windows` (`D3D12/` — Direct3D 12 + DXGI + DirectComposition),
+`FluentGpu.Windows` (`DirectWrite/` — the DirectWrite layout/shaping backend), and `FluentGpu.Windows` (`Pal/` — the Win32 window,
+message pump, DPI, theme, and Mica). It also covers the real image pipeline (`FluentGpu.Windows` (`Wic/`) + the WIC codec) and the
 screenshot-capture path the fidelity loop uses.
 
 If you are changing the engine *above* the seams (the reconciler, layout, the recorder, signals), you want
@@ -22,7 +22,7 @@ page is specifically the *Windows implementation* of those seams.
 ## The Windows bootstrap (one method wires the whole stack)
 
 Everything starts in `FluentApp.Run` (`src/FluentGpu.WindowsApp/FluentApp.cs`) — the batteries-included entry point that
-constructs every Windows leaf and hands them to the portable [`AppHost`](../../../src/FluentGpu.Hosting/AppHost.cs). It
+constructs every Windows leaf and hands them to the portable [`AppHost`](../../../src/FluentGpu.Engine/Hosting/AppHost.cs). It
 is the most useful single read for understanding how the leaves fit together, because it is the one place the concrete
 types meet:
 
@@ -51,7 +51,7 @@ window.Show();
 The ordering is load-bearing and worth internalizing:
 
 1. **`Win32App` + `Win32Window`** — the window, class registration, DPI awareness, and message pump
-   (`FluentGpu.Pal.Windows`). The `mica` flag becomes `WindowDesc.Composited`, which makes the window
+   (`FluentGpu.Windows`, `Pal/`). The `mica` flag becomes `WindowDesc.Composited`, which makes the window
    `WS_EX_NOREDIRECTIONBITMAP` so a DirectComposition swapchain can show the DWM backdrop through transparent pixels.
 2. **System accent pickup** — `Win32Theme.AccentLight2()` reads the OS `AccentPalette` (the dark-theme Light2 shade WinUI
    uses); it falls back to `Win32Theme.Accent()` (the registry `AccentColorMenu`, then the DWM colorization color). The
@@ -72,7 +72,7 @@ time-driven animations advance deterministically.
 
 ## The D3D12 RHI leaf
 
-`D3D12Device` (`src/FluentGpu.Rhi.D3D12/D3D12Device.cs`) is the reference Windows RHI backend — it implements
+`D3D12Device` (`src/FluentGpu.Windows/D3D12/D3D12Device.cs`) is the reference Windows RHI backend — it implements
 `IGpuDevice`/`ISwapchain` (the seam owned by [`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) §2) over a real
 hardware device. The COM is hand-vtable through **TerraFX.Interop.Windows** (`ID3D12Device*`, `IDXGISwapChain3*`,
 `IDCompositionDevice*`, …), which is the as-built realization of the "no `ComWrappers` on the hot path" ruling (see
@@ -82,8 +82,8 @@ hardware device. The COM is hand-vtable through **TerraFX.Interop.Windows** (`ID
 
 | If you're changing… | Edit |
 |---|---|
-| Device/queue/fence/heaps bring-up, swapchain creation, the per-frame submit/present, capture, resize | `src/FluentGpu.Rhi.D3D12/D3D12Device.cs` |
-| The SDF rounded-rect / stroke / tab-shape pipeline | `src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs` |
+| Device/queue/fence/heaps bring-up, swapchain creation, the per-frame submit/present, capture, resize | `src/FluentGpu.Windows/D3D12/D3D12Device.cs` |
+| The SDF rounded-rect / stroke / tab-shape pipeline | `src/FluentGpu.Windows/D3D12/RoundRectPipeline.cs` |
 | Drop shadows, arcs, polyline strokes, gradients | `…/ShadowPipeline.cs`, `ArcPipeline.cs`, `PolylineStrokePipeline.cs`, `GradientPipeline.cs` |
 | The DirectWrite glyph atlas + run cache (the GPU text path) | `…/GlyphRenderer.cs` |
 | Image textures (atlas + per-bucket pool, staging) and the image draw pipeline | `…/ImageTextureStore.cs`, `ImagePipeline.cs` |
@@ -170,7 +170,7 @@ latency.
 
 ## DirectWrite text
 
-`DirectWriteFontSystem` (`src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs`) implements `IFontSystem` — the text
+`DirectWriteFontSystem` (`src/FluentGpu.Windows/DirectWrite/DirectWriteFontSystem.cs`) implements `IFontSystem` — the text
 seam owned by `FluentGpu.Text`. It is a thin wrapper over `TextLayoutEngine`, and its whole reason for existing is one
 invariant: **measure ≡ hit-test ≡ render.** Every member (measurement on the UI thread at phase-6 layout, *and* the
 editor queries at edit/drag time) funnels through one private `LayoutFor` call running the full pipeline — itemize →
@@ -186,11 +186,11 @@ measurement is per-character, shaped glyphs overlap and read as bold — see the
 
 | If you're changing… | Edit |
 |---|---|
-| The `IFontSystem` surface (measure + the caret/hit-test/range-rect queries) | `src/FluentGpu.Text.DirectWrite/DirectWriteFontSystem.cs` |
+| The `IFontSystem` surface (measure + the caret/hit-test/range-rect queries) | `src/FluentGpu.Windows/DirectWrite/DirectWriteFontSystem.cs` |
 | Itemization (BiDi/script segmentation, the callee CCWs) | `…/DWriteItemizer.cs` (`--itemtest` self-test) |
 | Shaping (glyph runs, advances, clusters) | `…/DWriteTextShaper.cs` (`--shapetest` self-test) |
 | The full layout engine (wrap, trim, line stacking, range rects) | `…/TextLayoutEngine.cs` (`--layouttest` self-test) |
-| The GPU rasterization of that layout (atlas + run cache) | `src/FluentGpu.Rhi.D3D12/GlyphRenderer.cs` |
+| The GPU rasterization of that layout (atlas + run cache) | `src/FluentGpu.Windows/D3D12/GlyphRenderer.cs` |
 
 The two threads never share a layout engine instance: the UI thread owns this `DirectWriteFontSystem`'s engine for
 measurement/queries, and the render thread's `GlyphRenderer` owns a separate one — so an edit-time query can never
@@ -204,7 +204,7 @@ specifically — run them when you touch itemization/shaping/layout.
 
 ## Win32 windowing and theme
 
-`Win32App` + `Win32Window` (`src/FluentGpu.Pal.Windows/Win32Platform.cs`) are the real Win32 PAL: `RegisterClassExW`
+`Win32App` + `Win32Window` (`src/FluentGpu.Windows/Pal/Win32Platform.cs`) are the real Win32 PAL: `RegisterClassExW`
 once, `CreateWindowExW`, a single static `[UnmanagedCallersOnly]` `WndProc` thunk, and a `PeekMessage` pump that drains
 `WM_*` into the POD `InputEventRing` ([`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) §1.2). Per-window dispatch is
 a `GCHandle` stored in `GWLP_USERDATA` (set in `WM_NCCREATE`, freed on dispose) — no managed allocation per message.
@@ -213,8 +213,8 @@ a `GCHandle` stored in `GWLP_USERDATA` (set in `WM_NCCREATE`, freed on dispose) 
 
 | If you're changing… | Edit |
 |---|---|
-| Window class, creation, the `WndProc`, the pump, DPI handling | `src/FluentGpu.Pal.Windows/Win32Platform.cs` (`Win32App`, `Win32Window`) |
-| The accent pickup + DWM dark caption + Mica/Acrylic backdrop | `src/FluentGpu.Pal.Windows/Win32Theme.cs` |
+| Window class, creation, the `WndProc`, the pump, DPI handling | `src/FluentGpu.Windows/Pal/Win32Platform.cs` (`Win32App`, `Win32Window`) |
+| The accent pickup + DWM dark caption + Mica/Acrylic backdrop | `src/FluentGpu.Windows/Pal/Win32Theme.cs` |
 | Clipboard, popup windows, text input/IME | `…/Win32Clipboard.cs`, `Win32PopupWindow.cs`, `Win32TextInput.cs` |
 
 ### DPI
@@ -239,7 +239,7 @@ touching it; the comments document the Fitts-corner and double-click edge cases.
 
 ### Mica via `DwmExtendFrameIntoClientArea` + accent pickup
 
-`Win32Theme` (`src/FluentGpu.Pal.Windows/Win32Theme.cs`) is the **sole owner** of the DWM backdrop calls — all flat C
+`Win32Theme` (`src/FluentGpu.Windows/Pal/Win32Theme.cs`) is the **sole owner** of the DWM backdrop calls — all flat C
 exports via `[LibraryImport]`, all on the UI thread, none touching a `ComPtr` or the render thread (consistent with
 [`window-backdrop-mica.md`](../../../design/subsystems/window-backdrop-mica.md): DWM rasterizes, we just present
 transparent pixels). `ApplyWindowMaterial(hwnd, dark, mica, customFrame)` does three things:
@@ -286,8 +286,8 @@ everywhere cold, `[LibraryImport]` for flat C exports, and no `ComWrappers` on t
 Windows leaves today:
 
 - **Hot-path consume** (D3D12 command list/queue/fence, swapchain `Present`, DComp `Commit`/visuals, the DirectWrite
-  glyph path) is hand-vtable `calli` via **TerraFX.Interop.Windows** (`src/FluentGpu.Rhi.D3D12/*.cs`,
-  `…/Text.DirectWrite/*.cs`). The design target ([`com-interop.md`](../../../design/subsystems/com-interop.md) §2–3) is
+  glyph path) is hand-vtable `calli` via **TerraFX.Interop.Windows** (`src/FluentGpu.Windows/D3D12/*.cs`,
+  `…/DirectWrite/*.cs`). The design target ([`com-interop.md`](../../../design/subsystems/com-interop.md) §2–3) is
   to *generate* these bindings from a harvested, runtime-self-checked `*.comabi.json` so no human ever types a vtable
   slot; as-built, TerraFX is the vendored binding surface and the generator pipeline is forward work. Either way the
   call site is the same `calli` through `T** lpVtbl`.
@@ -308,22 +308,22 @@ WIC codec is the model for "own it on one thread, hand off POD."
 `Ui.Image` is backed by an `ImageCache` over an `IImageDecoder`. The live (non-headless) chain that `FluentApp.Run`
 builds is three pieces, each a separate leaf so the codec stays swappable:
 
-- **`DefaultImageFetcher`** (`src/FluentGpu.Media/DefaultImageFetcher.cs`) — `IImageFetcher`. One pooled
+- **`DefaultImageFetcher`** (`src/FluentGpu.Engine/Media/DefaultImageFetcher.cs`) — `IImageFetcher`. One pooled
   `SocketsHttpHandler` (never `new HttpClient()` per request), HTTP/2 with bounded `MaxConnectionsPerServer`,
   `PooledConnectionLifetime` for DNS/CDN-edge rotation, automatic decompression, per-request deadline via the token, and
   a disk-first `DiskImageCache`. Bodies stream into an `ArrayPool` buffer — no per-fetch `byte[]`.
-- **`DecodeScheduler`** (`src/FluentGpu.Media/DecodeScheduler.cs`) — `IImageDecoder`. A worker pool draining three
+- **`DecodeScheduler`** (`src/FluentGpu.Engine/Media/DecodeScheduler.cs`) — `IImageDecoder`. A worker pool draining three
   priority lanes (Visible > Overscan > Prefetch). `Begin` is a non-blocking UI-thread enqueue; workers fetch+decode
   concurrently; `Pump` drains finished results on the UI thread and uploads pixels (returning the pooled decode buffer).
   `Prioritize` promotes a prefetch that scrolled into view; `Cancel` drops a recycled row's decode. Under backpressure
   the lowest off-screen lane is dropped — never Visible.
-- **`WicImageCodec`** (`src/FluentGpu.Media.Codecs.Wic/WicImageCodec.cs`) — `IImageCodec`. Windows Imaging Component
+- **`WicImageCodec`** (`src/FluentGpu.Windows/Wic/WicImageCodec.cs`) — `IImageCodec`. Windows Imaging Component
   **constrained** decode: it scales straight to the target bucket via `IWICBitmapScaler` (a 3000px cover never
   materializes full-res in CPU memory) and converts to `32bppPBGRA` (premultiplied BGRA — the engine's blend posture and
   the GPU texture format). All WIC COM is worker-thread-confined as described above.
 
 On the GPU side those decoded pixels land in `ImageTextureStore` (atlas pages for thumbnails ≤128px, a per-bucket pool
-for 256/512 art) and draw through `ImagePipeline` — see `src/FluentGpu.Rhi.D3D12/ImageTextureStore.cs` /
+for 256/512 art) and draw through `ImagePipeline` — see `src/FluentGpu.Windows/D3D12/ImageTextureStore.cs` /
 `ImagePipeline.cs`. `D3D12Device.UploadImage`/`EvictImage` are the seam between the decode completion and the resident
 texture. The decode-pipeline architecture is owned by `media-pipeline.md`; this is its Windows realization.
 
@@ -341,11 +341,11 @@ screenshot path is the tooling for that visual loop:
   PngWriter.WriteBgra(screenshot, px, cw, ch);
   ```
 
-- **`D3D12Device.CaptureBgra(out w, out h)`** (`src/FluentGpu.Rhi.D3D12/D3D12Device.cs`) — `WaitForGpu`, then a
+- **`D3D12Device.CaptureBgra(out w, out h)`** (`src/FluentGpu.Windows/D3D12/D3D12Device.cs`) — `WaitForGpu`, then a
   `COPY_SOURCE` → READBACK-heap `CopyTextureRegion`, mapped and re-packed on the CPU to tight top-down BGRA8 (the readback
   `RowPitch` is 256-aligned, so the per-row copy strips the padding). It is explicitly **not** a hot-path method — it
   stalls the GPU. With `FLIP_DISCARD` the just-presented buffer at `_frameIndex` is still intact until reused.
-- **`PngWriter.WriteBgra(path, bgra, w, h)`** (`src/FluentGpu.Foundation/PngWriter.cs`) — a minimal pure-managed PNG
+- **`PngWriter.WriteBgra(path, bgra, w, h)`** (`src/FluentGpu.Engine/Foundation/PngWriter.cs`) — a minimal pure-managed PNG
   encoder (no WIC / `System.Drawing`, AOT-safe, zero new deps) emitting an opaque RGB PNG from that buffer.
 
 The gallery exposes this end-to-end: `WindowsApp --screenshot out.png --shot <id> [--mica] [--w N --h H]` renders a
@@ -369,7 +369,7 @@ XML to read.
 > build` already enforces.
 
 **The native link.** The Windows leaves bind real system DLLs through **TerraFX.Interop.Windows 10.0.26100.6**
-(`PackageReference` in `src/FluentGpu.Rhi.D3D12/FluentGpu.Rhi.D3D12.csproj`); a plain `dotnet build`/`dotnet run` of the
+(`PackageReference` in `src/FluentGpu.Windows/FluentGpu.Windows.csproj`; TerraFX is the one `PackageReference` in that project); a plain `dotnet build`/`dotnet run` of the
 gallery (`src/FluentGpu.WindowsApp`) needs only the .NET 10 SDK and resolves d3d12/dxgi/dcomp/dwrite/dwmapi at runtime —
 no extra toolchain. The native link step that *does* need the MSVC linker is a **`PublishAot`** publish: NativeAOT shells
 out to `link.exe`, so a publish must run from a **Visual Studio Developer Command Prompt / Developer PowerShell** (or
@@ -379,7 +379,7 @@ iteration does not.
 ## Verifying
 
 These are backend leaves, so the headless golden harness does **not** exercise them directly — it runs on
-`FluentGpu.Rhi.Headless` / `FluentGpu.Pal.Headless` / `FluentGpu.Text.Headless`. Two distinct bars, kept separate:
+`FluentGpu.Engine/Headless/Rhi/` / `FluentGpu.Engine/Headless/Pal/` / `FluentGpu.Engine/Headless/Text/`. Two distinct bars, kept separate:
 
 - **Logic / DrawList correctness** — still the headless harness. After *any* engine change, including one that touches a
   Windows leaf's shared contract, run it and confirm `ALL CHECKS PASSED`:

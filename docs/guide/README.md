@@ -101,22 +101,22 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 
 | If you're changing… | Edit | Notes |
 |---|---|---|
-| The reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | AOT-clean; set→notify must stay alloc-free |
-| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | stable call-order; hook-cell zoo |
-| Component model (`Component`/`ReactiveComponent`) | `src/FluentGpu.Hooks/Component.cs` | `RunsOnce` gates tracked vs untracked render |
-| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Reconciler/Reconciler.cs` | the heart; render-effects + keyed `ReconcileChildren` |
-| Element shapes / props / bindings | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` | add a free `ElementTypeId`; wire in reconciler `Mount`/`Update` |
-| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` | pure element builders |
+| The reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | AOT-clean; set→notify must stay alloc-free |
+| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | stable call-order; hook-cell zoo |
+| Component model (`Component`/`ReactiveComponent`) | `src/FluentGpu.Engine/Hooks/Component.cs` | `RunsOnce` gates tracked vs untracked render |
+| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` | the heart; render-effects + keyed `ReconcileChildren` |
+| Element shapes / props / bindings | `src/FluentGpu.Engine/Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` | add a free `ElementTypeId`; wire in reconciler `Mount`/`Update` |
+| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` | pure element builders |
 | Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` | composition only — no new opcodes/columns. WinUI fidelity: **[control-fidelity.md](./control-fidelity.md)** |
 | Control visual state / interaction motion | `StateBrush` ramps + `InteractionAnimator`; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing` | model logical state x interaction state, NOT a 12-state matrix; child parts can inherit the clickable ancestor's progress |
 | Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal) + enter/exit presets in `ControlMotion` | use for authored WinUI timelines, draw-on paths, and true insert/remove parts; not for ordinary hover/press |
-| Rounded-rect / border rendering | `src/FluentGpu.Render/SceneRecorder.cs` + `src/FluentGpu.Rhi.D3D12/{RoundRect,Gradient}Pipeline.cs` | hollow SDF ring (no donut); `InsetCorners`; quad inflation for stroke band + AA |
-| Frame loop, scheduling, compositor frame | `src/FluentGpu.Hosting/AppHost.cs` | `RunFrame`/`Paint`; `_runtime.Flush()` is phase 3 |
-| Layout (flex/grid/measure) | `src/FluentGpu.Layout/FlexLayout.cs` | `Run` (full) vs `RunSubtree` (scoped) |
-| Scoped relayout / boundary firewall | `src/FluentGpu.Layout/LayoutInvalidator.cs` + `SceneStore` LayoutDirty worklist | up-rule walk to boundary |
-| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` | handle = `{index, gen}`; side-tables by node index |
-| Record → DrawList (the GPU command walk) | `src/FluentGpu.Render/SceneRecorder.cs` | composites transform/opacity without re-record |
-| Theming tokens / colors | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
+| Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` | hollow SDF ring (no donut); `InsetCorners`; quad inflation for stroke band + AA |
+| Frame loop, scheduling, compositor frame | `src/FluentGpu.Engine/Hosting/AppHost.cs` | `RunFrame`/`Paint`; `_runtime.Flush()` is phase 3 |
+| Layout (flex/grid/measure) | `src/FluentGpu.Engine/Layout/FlexLayout.cs` | `Run` (full) vs `RunSubtree` (scoped) |
+| Scoped relayout / boundary firewall | `src/FluentGpu.Engine/Layout/LayoutInvalidator.cs` + `SceneStore` LayoutDirty worklist | up-rule walk to boundary |
+| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` | handle = `{index, gen}`; side-tables by node index |
+| Record → DrawList (the GPU command walk) | `src/FluentGpu.Engine/Render/SceneRecorder.cs` | composites transform/opacity without re-record |
+| Theming tokens / colors | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | add a `Check(...)`; call it from `Main` |
 
 **Design corpus** (architecture source-of-truth, canon-gated) lives in `design/`. The as-built reactive model is

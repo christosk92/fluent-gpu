@@ -47,11 +47,11 @@ macOS. See [the seams page](./seams-rhi-pal-text.md) and
 work lands *there*, then the control consumes it.
 
 > **Where the code is.** Controls are composition-only: `src/FluentGpu.Controls/*.cs`. The primitives they compose live
-> elsewhere and are the place an honest gap gets fixed: Element shapes/props in `src/FluentGpu.Dsl/Element.cs`; the
-> `TemplateParts` door in `src/FluentGpu.Dsl/TemplateParts.cs`; the interaction animator + authored timelines in
-> `src/FluentGpu.Animation/AnimEngine.cs`; the rounded-rect rasterizer in `src/FluentGpu.Render/SceneRecorder.cs`;
-> theme tokens in `src/FluentGpu.Dsl/Tokens.cs`. The reactive shell for stateful controls (`Component`, hooks) is
-> `src/FluentGpu.Hooks/`. See the full [Contributor map](./contributor-map.md).
+> elsewhere and are the place an honest gap gets fixed: Element shapes/props in `src/FluentGpu.Engine/Dsl/Element.cs`; the
+> `TemplateParts` door in `src/FluentGpu.Engine/Dsl/TemplateParts.cs`; the interaction animator + authored timelines in
+> `src/FluentGpu.Engine/Animation/AnimEngine.cs`; the rounded-rect rasterizer in `src/FluentGpu.Engine/Render/SceneRecorder.cs`;
+> theme tokens in `src/FluentGpu.Engine/Dsl/Tokens.cs`. The reactive shell for stateful controls (`Component`, hooks) is
+> `src/FluentGpu.Engine/Hooks/`. See the full [Contributor map](./contributor-map.md).
 
 ## Step 1 — read the WHOLE WinUI template
 
@@ -180,7 +180,7 @@ There are two animation systems on purpose, with one ownership rule:
   progress.
 - **`AnimEngine` owns authored timelines.** Use keyframes/channels for explicit non-input timelines: FLIP, reveal,
   stroke trim, path draw-on, open/close, or any `AnimatedIcon` segment with real keyframes. Channels are the
-  `AnimChannel` enum (`src/FluentGpu.Animation/AnimEngine.cs`): `TranslateX/Y`, `ScaleX/Y`, `Rotation`, `Opacity`,
+  `AnimChannel` enum (`src/FluentGpu.Engine/Animation/AnimEngine.cs`): `TranslateX/Y`, `ScaleX/Y`, `Rotation`, `Opacity`,
   `SizeW/H`, `StrokeTrimStart/End`, `ClipL/T/R/B`, `LayoutW/H`.
 - **Enter/exit presets are lifecycle sugar over `AnimEngine`.** `ControlMotion.IconPop` and `ControlMotion.DotScaleIn`
   apply when the reconciler **inserts/removes a keyed child** — use them *only* when WinUI actually inserts or appears a
@@ -211,7 +211,7 @@ must move; for a glyph resize that should *not* reflow, use transform scale (Ste
 ## Step 5 — the `TemplateParts` law
 
 Customization of a control's internals goes through **one generic door** — `TemplateParts`
-(`src/FluentGpu.Dsl/TemplateParts.cs`; CSS `::part` / WinUI lightweight styling, signals-native) — never through
+(`src/FluentGpu.Engine/Dsl/TemplateParts.cs`; CSS `::part` / WinUI lightweight styling, signals-native) — never through
 per-control feature props. Every new control obeys these rules:
 
 - **Export `public const string PartXxx` consts** for each named template part — mirror the WinUI template-part

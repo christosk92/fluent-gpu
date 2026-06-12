@@ -6,27 +6,10 @@
         {
           "src": "../../src",
           "files": [
-            "FluentGpu.Dsl/FluentGpu.Dsl.csproj",
-            "FluentGpu.Hooks/FluentGpu.Hooks.csproj",
+            "FluentGpu.Engine/FluentGpu.Engine.csproj",
             "FluentGpu.Controls/FluentGpu.Controls.csproj",
-            "FluentGpu.Hosting/FluentGpu.Hosting.csproj",
-            "FluentGpu.Foundation/FluentGpu.Foundation.csproj",
-            "FluentGpu.Media/FluentGpu.Media.csproj",
-            "FluentGpu.Scene/FluentGpu.Scene.csproj",
-            "FluentGpu.Layout/FluentGpu.Layout.csproj",
-            "FluentGpu.Render/FluentGpu.Render.csproj",
-            "FluentGpu.Reconciler/FluentGpu.Reconciler.csproj",
-            "FluentGpu.Rhi/FluentGpu.Rhi.csproj",
-            "FluentGpu.Pal/FluentGpu.Pal.csproj",
-            "FluentGpu.Text/FluentGpu.Text.csproj",
-            "FluentGpu.Input/FluentGpu.Input.csproj",
-            "FluentGpu.Animation/FluentGpu.Animation.csproj",
-            "FluentGpu.Rhi.D3D12/FluentGpu.Rhi.D3D12.csproj",
-            "FluentGpu.Text.DirectWrite/FluentGpu.Text.DirectWrite.csproj",
-            "FluentGpu.Pal.Windows/FluentGpu.Pal.Windows.csproj",
-            "FluentGpu.Win32.Interop/FluentGpu.Win32.Interop.csproj",
-            "FluentGpu.Media.Codecs.Wic/FluentGpu.Media.Codecs.Wic.csproj",
-            "FluentGpu.Accessibility.Uia/FluentGpu.Accessibility.Uia.csproj"
+            "FluentGpu.Windows/FluentGpu.Windows.csproj",
+            "FluentGpu.WindowsApi/FluentGpu.WindowsApi.csproj"
           ]
         }
       ],

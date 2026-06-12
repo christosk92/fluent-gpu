@@ -26,7 +26,7 @@ stateful `Component`s). From an SDK user's view they are all *controls*. This re
 | D1 | What moves to `FluentGpu.Controls` | **All composition factories** (`VirtualListEl` stays in Reconciler) |
 | D2 | Misc-control naming | **Per-control class + `.Create`** |
 | D3 | Migration | **Hard cut** — move types, update all in-repo call sites, delete old definitions, no shims |
-| D4 | Packaging | **New `FluentGpu.Controls` assembly** (26 → 27 projects) |
+| D4 | Packaging | **New `FluentGpu.Controls` assembly** (26 → 27 projects) <!-- canon-allow: superseded assembly count, narrating the old layout --> |
 | D5 | Style organization | **Nested `Style` record + `partial` class, one file per control** (`Button.Style`, `Slider.Style`, …) |
 | D6 | Style scope | **All 6 visual controls** (Button, IconButton, ToggleButton, Slider, ScrollBar, NavigationView) |
 | D7 | IconButton shape | **WinUI rounded-square, r = `Radii.Control` (4)** |
@@ -37,8 +37,9 @@ stateful `Component`s). From an SDK user's view they are all *controls*. This re
 ## 2. The assembly move
 
 New project `src/FluentGpu.Controls/FluentGpu.Controls.csproj` (`IsAotCompatible=true`), referencing
-**Foundation, Dsl, Hooks, Animation, Scene, Reconciler**. Apps (`VerticalSlice`, `WindowsApp`) add a
-`ProjectReference` to it.
+**FluentGpu.Engine** (which consolidates Foundation, Dsl, Hooks, Animation, Scene, Reconciler and the rest of the
+portable engine). Apps (`VerticalSlice`, `WindowsApp`) add a `ProjectReference` to it.
+(Paths updated for the 2026-06 project consolidation.)
 
 ### 2.1 File moves — all moved types change to `namespace FluentGpu.Controls`
 | From | To | Contents |
@@ -254,7 +255,7 @@ duplicates):
 - `subsystems/controls.md`: add the shipped controls to the §13 catalog (IconButton, ToggleButton, NavigationView+NavItem+PaneMode, Navigator, PageHost, Route, Nav, Repeater+RepeatLayout, Virtual factory); add a "Phase 0 / shipping status" note; note `VirtualListEl` stays in Reconciler; **fix the dependency claim** (see ratification below).
 - `subsystems/README.md` §2.6 + `dsl-aot.md` §3.4: correct the `FluentGpu.Controls` deps from "Dsl/Hooks/Foundation only" to the real set (**+Reconciler, +Scene, +Animation**).
 - `theming.md`: register `FillControlStrong`/`FillControlStrongDisabled`/`FillControlSolid` (+ note `ScrollThumb` folds into `FillControlStrong`) → their WinUI keys. (Leaf token values — no `SPEC-INDEX` §2 row.)
-- Assembly count: `architecture-spec.md` §3, `foundations.md`, `README.md` say "18 assemblies" — stale. Restate as "design-core graph (now incl. Animation/Hooks/Controls) + OS/test leaves; 28 projects" and add `Controls` above `Reconciler` in the §3 ASCII graph.
+- Assembly count: `architecture-spec.md` §3, `foundations.md`, `README.md` say "18 assemblies" — stale. Restate as "4 libraries (Engine, Controls, Windows, WindowsApi) + 2 analyzers + 2 exes; paths updated for the 2026-06 project consolidation" and update the §3 ASCII graph.
 - Run `check-canon.ps1` — **expected PASS**; its 3 rules (handle-layout / COM-blanket / DepKey-union) don't match any new token/assembly/control name. No `canon-allow` comments needed.
 
 > **Ratification (the one genuine architectural delta):** the corpus placed `FluentGpu.Controls` as an
@@ -276,7 +277,7 @@ duplicates):
 9. **Verification** (§9).
 
 ## 9. Verification
-- Build all **28 projects** (the app projects pull everything transitively) — must compile, NativeAOT-clean.
+- Build all projects via `dotnet build src/FluentGpu.slnx` (the app projects pull everything transitively) — must compile, NativeAOT-clean. <!-- canon-allow: superseded assembly count, narrating the old layout -->
 - **VerticalSlice headless golden checks** stay green, **plus new headless goldens**: gradient-stroke
   border (assert a `LastGradients` entry with a stroke width), the crossfade curve (fill at t=0/mid/settled),
   and the thumb scale spring (ScaleX/Y over frames). Assert **0 managed alloc** on the steady animation tick.

@@ -388,7 +388,7 @@ the same way.)
 ## Implementing a custom `IVirtualLayout` (allocation-free geometry)
 
 Any deterministic, allocation-free geometry plugs into the virtualizer with **no engine changes**. Implement
-`IVirtualLayout` (`src/FluentGpu.Scene/VirtualLayout.cs`) — three pure methods that the engine calls *only* on
+`IVirtualLayout` (`src/FluentGpu.Engine/Scene/VirtualLayout.cs`) — three pure methods that the engine calls *only* on
 realize/arrange frames (a steady in-window scroll never touches them), returning structs / via out-params so a custom
 layout costs zero per-frame managed allocation:
 

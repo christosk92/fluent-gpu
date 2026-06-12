@@ -29,7 +29,7 @@ using static FluentGpu.Dsl.Ui;
 Image("https://i.scdn.co/image/ab67616d…", 150f, 150f, 8f, "#273E6C")
 ```
 
-The full factory signature (`src/FluentGpu.Dsl/Factories.cs`):
+The full factory signature (`src/FluentGpu.Engine/Dsl/Factories.cs`):
 
 ```csharp
 public static ImageEl Image(string source, float width, float height, float corners = 0f,
@@ -80,7 +80,7 @@ As an app author you only need three facts:
 The placeholder→image cross-fade is the engine's shared motion vocabulary — a duration plus an
 [`Easing`](#springs-and-tweens-the-named-curves) curve — so an image reveal animates exactly like every other
 control. Override it per image, or set the app-wide default once at startup
-(`src/FluentGpu.Foundation/ImageTransition.cs`):
+(`src/FluentGpu.Engine/Foundation/ImageTransition.cs`):
 
 ```csharp
 // App-wide default is a ~220ms FluentDecelerate fade. Disable per-image, or pick a custom fade:
@@ -93,7 +93,7 @@ ImageTransition.Default = ImageTransition.Fade(300f, Easing.FluentDecelerate); /
 
 In a virtualized list the row is built **once per visible slot** and rebound as you scroll. For that you set the
 unified-`Prop` channels on the record directly instead of calling the `Image(...)` factory, so the recycled slot
-swaps its art by re-running a thunk — no element rebuild (`src/FluentGpu.Dsl/Element.cs`,
+swaps its art by re-running a thunk — no element rebuild (`src/FluentGpu.Engine/Dsl/Element.cs`,
 `src/FluentGpu.WindowsApp/GalleryPages.cs`):
 
 ```csharp
@@ -115,7 +115,7 @@ for the recycler fast path this feeds.
 `Ui.Image(...)` paints. The **`UseImage` hook** lets a component *observe* an image's load state — to show a
 spinner, swap in a broken-art fallback, or read the failure reason — and **`PrefetchImage`** warms a decode before
 the art scrolls into view. They are protected methods on `Component`
-(`src/FluentGpu.Hooks/Component.cs`, `src/FluentGpu.Hooks/RenderContext.cs`):
+(`src/FluentGpu.Engine/Hooks/Component.cs`, `src/FluentGpu.Engine/Hooks/RenderContext.cs`):
 
 ```csharp
 protected ImageBinding UseImage(string src, int decodePx,
@@ -125,7 +125,7 @@ protected void PrefetchImage(string src, int decodePx);
 
 `UseImage` subscribes the component to image-status changes, so a `Pending → Ready` transition re-renders **just
 this component** (granular re-render, not the whole tree). It returns an `ImageBinding`
-(`src/FluentGpu.Scene/ImageCache.cs`):
+(`src/FluentGpu.Engine/Scene/ImageCache.cs`):
 
 ```csharp
 public readonly record struct ImageBinding(ImageHandle Handle, ImageState State, ImageFailureKind Failure, int Attempts)
@@ -154,7 +154,7 @@ sealed class Cover : Component
 ```
 
 `ImagePriority` is the decode urgency the worker pool drains in order — under backpressure the lowest off-screen
-lane is dropped first, never `Visible` (`src/FluentGpu.Scene/ImageCache.cs`):
+lane is dropped first, never `Visible` (`src/FluentGpu.Engine/Scene/ImageCache.cs`):
 
 ```csharp
 public enum ImagePriority : byte { Visible = 0, Overscan = 1, Prefetch = 2 }
@@ -182,7 +182,7 @@ every frame and tanks your frame rate. The [pitfalls table](../../guide/pitfalls
 fix is always the same — drive the value through a bind or an animation hook, not through component state. There is
 a [whole section below](#prefer-a-transform-bind-or-a-hook-over-setstate-per-tick) on choosing between them.
 
-The animatable channels are the `AnimChannel` enum (`src/FluentGpu.Animation/AnimEngine.cs`):
+The animatable channels are the `AnimChannel` enum (`src/FluentGpu.Engine/Animation/AnimEngine.cs`):
 
 ```csharp
 public enum AnimChannel : byte
@@ -203,7 +203,7 @@ deliberately touch real layout — see [geometry reveals](#geometry-reveals) and
 ### Springs and tweens (the named curves)
 
 The four scalar hooks all live on the component and take `deps` that re-seed the track when they change
-(`src/FluentGpu.Hooks/RenderContext.cs`):
+(`src/FluentGpu.Engine/Hooks/RenderContext.cs`):
 
 ```csharp
 UseSpring(AnimChannel ch, float to, SpringParams spring, params object[] deps);
@@ -229,10 +229,10 @@ UseSpring(AnimChannel.ScaleX, on ? 1.2f : 1f, SpringParams.FromResponse(0.3f, 0.
 ```
 
 `SpringParams.FromResponse(responseSec, dampingRatio)` is the friendly iOS/Compose form — `response` ≈ the settle
-time in seconds, `dampingRatio` 1 = critical (no overshoot), `< 1` = bouncy (`src/FluentGpu.Animation/AnimEngine.cs`).
+time in seconds, `dampingRatio` 1 = critical (no overshoot), `< 1` = bouncy (`src/FluentGpu.Engine/Animation/AnimEngine.cs`).
 
 A `Keyframe` is `(offset 0..1, value, optional easing)`; the named curves are the `Easing` enum
-(`src/FluentGpu.Foundation/Easing.cs`):
+(`src/FluentGpu.Engine/Foundation/Easing.cs`):
 
 ```csharp
 public enum Easing : byte
@@ -261,7 +261,7 @@ a timer. (The gallery shows the same idea through the lower-level `AnimEngine.Dr
 ### Motion sugar (UseEntrance, UseHoverScale; the UseAnimatedValue caveat)
 
 Two reusable Fluent patterns are extension methods on `Component`
-(`src/FluentGpu.Hooks/MotionHooks.cs`) — call them inside the component whose rendered root you want to animate:
+(`src/FluentGpu.Engine/Hooks/MotionHooks.cs`) — call them inside the component whose rendered root you want to animate:
 
 ```csharp
 this.UseEntrance(float offsetPx = 24, object? key = null);   // Fluent show: TranslateY 24→0 + Opacity 0→1, FluentDecelerate
@@ -284,7 +284,7 @@ sealed class FadeInCard : Component
 ```
 
 **The `UseAnimatedValue` caveat.** There is also a scalar hook that returns an eased `0..1`-ish value you can lerp
-anything with (`src/FluentGpu.Hooks/RenderContext.cs`):
+anything with (`src/FluentGpu.Engine/Hooks/RenderContext.cs`):
 
 ```csharp
 public float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut);
@@ -310,7 +310,7 @@ the same caveat in the [hooks section](../../guide/components-elements-layout.md
 
 The hooks above seed tracks on *your component's* node. When you need to animate a node you captured by handle —
 or play several channels of one element, or compose layers — drop to the engine directly via `Context.Anim`
-(the `AnimEngine`, `src/FluentGpu.Animation/AnimEngine.cs`). The pattern: capture a `NodeHandle` with
+(the `AnimEngine`, `src/FluentGpu.Engine/Animation/AnimEngine.cs`). The pattern: capture a `NodeHandle` with
 `OnRealized`, then seed in a `UseLayoutEffect` (which runs after the first layout, when the node is live):
 
 ```csharp
@@ -429,7 +429,7 @@ glide.
 You can hand the whole problem to the engine: set `Animate = LayoutTransition` on a `BoxEl`, change the
 declaration (a width, a justify, a child count), and the engine **diffs the old laid-out rect against the new one
 and animates the difference** — no imperative seeding, no per-control knowledge. This is the `LayoutTransition`
-surface (`src/FluentGpu.Foundation/LayoutTransition.cs`):
+surface (`src/FluentGpu.Engine/Foundation/LayoutTransition.cs`):
 
 ```csharp
 public readonly record struct LayoutTransition(
@@ -462,7 +462,7 @@ new BoxEl { Animate = new LayoutTransition(TransitionChannels.Position,
 
 ### Size modes — Reflow, ScaleCorrect, Relayout
 
-`SizeMode` chooses how a size change animates (`src/FluentGpu.Foundation/LayoutTransition.cs`):
+`SizeMode` chooses how a size change animates (`src/FluentGpu.Engine/Foundation/LayoutTransition.cs`):
 
 ```csharp
 public enum SizeMode : byte

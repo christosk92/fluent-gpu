@@ -82,7 +82,7 @@ public interface IBrushSink
     void MarkPaintDirty(NodeHandle node);   // routed to ISceneBackend.MarkDirty(node, PaintDirty)
 }
 
-// Implemented by Pal.Windows (cold/warm COM + registry reads). See §4.
+// Implemented by FluentGpu.Windows Pal/ (cold/warm COM + registry reads). See §4.
 public interface ISystemColors
 {
     SystemColorSnapshot Current { get; }    // by-value fat snapshot; read on demand, never per-frame
@@ -264,9 +264,9 @@ public readonly struct HcPalette { public readonly ColorF Window, WindowText, Ho
 
 ## 4. T1 — system + accent reactivity (the `ISystemColors` PAL seam)
 
-### 4.1 The PAL seam (`Pal.Windows` impl; ADD per `architecture-spec §4.7`)
+### 4.1 The PAL seam (`FluentGpu.Windows` Pal/ impl; ADD per `architecture-spec §4.7`)
 
-`ISystemColors` (declared in `Theme`, impl in `Pal.Windows`) reads the OS color state. The impl is **cold/warm
+`ISystemColors` (declared in `Theme`, impl in `FluentGpu.Windows` Pal/) reads the OS color state. The impl is **cold/warm
 COM + flat registry reads** — per the COM ruling (`dotnet10 §4`), this uses `[GeneratedComInterface]`/
 `[LibraryImport]`, **never the hot path**:
 
@@ -277,7 +277,7 @@ COM + flat registry reads** — per the COM ruling (`dotnet10 §4`), this uses `
 - On `WM_SETTINGCHANGE` with `lParam == "ImmersiveColorSet"` (or an HC toggle), re-read all and **`Epoch++`**.
 
 ```csharp
-// Pal.Windows — cold; runs on the UI thread inside phase 1/2 (pump→dispatch), NEVER per-frame steady state.
+// FluentGpu.Windows Pal/ — cold; runs on the UI thread inside phase 1/2 (pump→dispatch), NEVER per-frame steady state.
 sealed class WindowsSystemColors : ISystemColors
 {
     SystemColorSnapshot _snapshot;       // volatile-published; written only on OS change
@@ -722,9 +722,9 @@ Everything in `FluentGpu.Theme` is **portable** (zero Windows, zero COM, zero D3
 `BrushDeriver`, `PaletteCache`, `BrushCache`, the back-ref multimap, all POD types, and all hooks are pure C#
 over `Foundation` + `IBrushSink`.
 
-The **only** Windows-specific piece is the `ISystemColors` *implementation* (`Pal.Windows`):
+The **only** Windows-specific piece is the `ISystemColors` *implementation* (`FluentGpu.Windows` Pal/):
 
-| Concern | Windows (`Pal.Windows`) | macOS later (`Pal.Mac`) |
+| Concern | Windows (`FluentGpu.Windows` Pal/) | macOS later (`Pal.Mac`) |
 |---|---|---|
 | accent color | `DwmGetColorizationColor` + registry `Accent` | `NSColor.controlAccentColor` |
 | app theme Light/Dark | `AppsUseLightTheme` registry | `NSApplication.effectiveAppearance` |
@@ -756,7 +756,7 @@ sweep + back-ref `MarkPaintDirty` walk) and the recolor opacity-cross-fade contr
   effect/render phases.
 - **Animation**: the phase-7 AnimTrack that ticks the recolor cross-fade `Opacity` (Theme supplies the two
   endpoint `BrushHandle`s; Animation owns the tween).
-- **Pal.Windows**: the `ISystemColors` impl + the `WM_SETTINGCHANGE` wiring into the InputEventRing.
+- **`FluentGpu.Windows` Pal/**: the `ISystemColors` impl + the `WM_SETTINGCHANGE` wiring into the InputEventRing.
 
 ---
 

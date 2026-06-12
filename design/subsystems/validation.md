@@ -30,8 +30,8 @@
 | Property | Value |
 |---|---|
 | **Assembly** | `FluentGpu.Validation` (NEW). Test-host + CI-only; **never referenced by `Hosting`** and never shipped. |
-| **Assembly (NEW, shipped)** | `FluentGpu.Testing` (NEW). The **app-author test harness** (L13), folded into core (§11). Unlike `Validation`, this **is a shipped, consumer-facing NuGet** that app authors reference from *their* test projects. It is a thin assert/simulate/snapshot API layered atop the same headless leaves (`Pal.Headless`/`Rhi.Headless`) that `Validation` uses, but it carries **no `[Conditional]`-erased guards** and **no spike/ledger machinery** — those stay CI-internal to `FluentGpu.Validation`. `FluentGpu.Testing` depends only on the public seam interfaces + the headless leaves + `Foundation`; it never touches `Rhi.D3D12`/`Pal.Windows`/`Text.DirectWrite`. It is itself **not shipped into the app's product binary** (it is a test-time dependency), but it is a *supported public surface* and is versioned as such. |
-| **Deps** | `Foundation`, the **interface** seams (`Pal`, `Rhi`, `Text`), `Scene`, `Render`, `Reconciler`, `Hooks`, `Layout`, `Animation`, plus the **headless leaves** `Pal.Headless` + `Rhi.Headless`. May reference `Media`/`Theme` for their worst-case benches. **Must not** reference `Rhi.D3D12`/`Pal.Windows`/`Text.DirectWrite` except inside the explicitly Windows-gated `text.conformance` / `com.aot.roundtrip` / `render.aa` spike hosts (these are `#if WINDOWS` and excluded from the portable test pass). |
+| **Assembly (NEW, shipped)** | `FluentGpu.Testing` (NEW). The **app-author test harness** (L13), folded into core (§11). Unlike `Validation`, this **is a shipped, consumer-facing NuGet** that app authors reference from *their* test projects. It is a thin assert/simulate/snapshot API layered atop the same headless leaves (`FluentGpu.Engine` Headless/Pal/ and Headless/Rhi/) that `Validation` uses, but it carries **no `[Conditional]`-erased guards** and **no spike/ledger machinery** — those stay CI-internal to `FluentGpu.Validation`. `FluentGpu.Testing` depends only on the public seam interfaces + the headless leaves + `Foundation`; it never touches `FluentGpu.Windows` (D3D12/, Pal/, or DirectWrite/). It is itself **not shipped into the app's product binary** (it is a test-time dependency), but it is a *supported public surface* and is versioned as such. |
+| **Deps** | `Foundation`, the **interface** seams (`Pal`, `Rhi`, `Text`), `Scene`, `Render`, `Reconciler`, `Hooks`, `Layout`, `Animation`, plus the **headless leaves** `FluentGpu.Engine` (Headless/Pal/) + `FluentGpu.Engine` (Headless/Rhi/). May reference `Media`/`Theme` for their worst-case benches. **Must not** reference `FluentGpu.Windows` (D3D12/, Pal/, or DirectWrite/) except inside the explicitly Windows-gated `text.conformance` / `com.aot.roundtrip` / `render.aa` spike hosts (these are `#if WINDOWS` and excluded from the portable test pass). |
 | **Acyclicity** | Validation is a *sink*: everything depends inward, nothing depends on Validation. It adds no edge to the production DAG ([foundations §7](../foundations.md), [architecture-spec §3](../architecture-spec.md)). `FluentGpu.Testing` (§11) is likewise a *sink* on the production DAG — it depends inward on seams + headless leaves; no production assembly references it (app *test* projects do, off the product graph). |
 | **Analyzers** | The trust-ring rules **FG0001–FG0003** ship in `FluentGpu.SourceGen` (portable analyzer DLL — it is referenced by everything, so the `[Capability]` fence is enforced at *every* call site, including app code). The `FGCOM####` COM rules live in `FluentGpu.Interop.SourceGen` and are out of scope here (owned by the COM subsystem); this doc only consumes their non-suppressible-floor guarantee. |
 | **Erasure** | All runtime guards are `[Conditional("DEBUG")]` or `[Conditional("FGVALIDATE")]`. Shipping AOT defines neither ⇒ the JIT/ILC drops the call sites and the methods become unreferenced and trimmed. Working-set/footprint cost in ship: **~0** (verified by the footprint ratchet itself; see §5.3). |
@@ -62,7 +62,7 @@
         │  Members: alloc-tripwire (per-phase Δ==0, per-worker AllocScope-aggregated)                                  │
         │           + the LOAD-BEARING process-wide BDN gen0/1/2==0 backstop                                          │
         │         · footprint .mstat ratchet · golden-image perceptual diff                                           │
-        │         · headless structural (draw-call / batch / barrier / Bounds) asserts on Rhi.Headless+Pal.Headless   │
+        │         · headless structural (draw-call / batch / barrier / Bounds) asserts on Engine/Headless/Rhi+Pal     │
         │         · COM net-refcount / leak gate · epoch fault-injection · data-race gate                             │
         │   FOLDED-GAP GATES (§12, one per core-folded gap, mapped in §12.13):                                         │
         │         · lane/transition determinism (P1) · auto-batching semantics (P2a) · Suspense reveal+keep-stale     │
@@ -117,7 +117,7 @@ oracle*. There are two distinct oracles and they are kept separate:
    No tolerance. A miss is a hard Red. This oracle does not need Windows and runs in the portable pass.
 2. **DWrite shaping oracle (perceptual, Windows-only, `#if WINDOWS`):** for a curated script corpus (Latin,
    CJK, Arabic with marks/kashida, Devanagari conjuncts, Hebrew niqqud, Thai, emoji ZWJ sequences), shape the
-   same text through `Text.DirectWrite` and through our pipeline and assert: same glyph count per cluster,
+   same text through `FluentGpu.Windows` (DirectWrite/ folder) and through our pipeline and assert: same glyph count per cluster,
    advance-width within ε, BiDi visual order identical, subpixel phase bucket identical. Positions are the
    final device-space dest rects the renderer contract promises ([architecture-spec §4.6](../architecture-spec.md)),
    so this is an end-of-pipeline comparison.
@@ -153,7 +153,7 @@ shapes the same corpus from N worker threads against a SHARED DWrite factory (se
 this variant is not Green, off-thread raster stays descoped — the spike *is* the gate on phase 6 of the build
 order.
 
-**Thread/phase:** runs offline (not in the frame loop). The DWrite oracle uses `Text.DirectWrite` which owns
+**Thread/phase:** runs offline (not in the frame loop). The DWrite oracle uses `FluentGpu.Windows` (DirectWrite/ folder) which owns
 its CCWs on one thread (the COM thread-pinning rule); the concurrent variant deliberately violates the
 single-thread *assumption* to test it, never the single-writer *confinement* (each worker has its own
 analysis source/sink).
@@ -226,7 +226,7 @@ the golden corpus and the perceptual metric.
   the analytic path fails the golden for a primitive class, that class routes to the fallback and the table
   records it as a Metal-milestone debt item ([gpu-renderer.md](./gpu-renderer.md)).
 
-Runs against both `Rhi.Headless` (WARP, deterministic, the CI default) and, nightly, real D3D12 hardware to
+Runs against both `FluentGpu.Engine` (Headless/Rhi/) (WARP, deterministic, the CI default) and, nightly, real D3D12 hardware to
 characterize the WARP-vs-hardware delta.
 
 ### 2.4 `seam.race` — concurrency soak with SWEPT params (gates `Seam.Quarantine`, `Seam.RetireFence`)
@@ -366,19 +366,19 @@ Owns the binary-size gate ([architecture-spec §8](../architecture-spec.md), [ha
 ### 3.3 Golden-image perceptual diff
 
 The per-PR consumer of the `render.aa` corpus (§2.3). Renders the curated scene corpus through
-`Rhi.Headless` (WARP) and asserts CIEDE2000 + edge-shift within the disposition-table tolerance. Distinct from
+`FluentGpu.Engine` (Headless/Rhi/) (WARP) and asserts CIEDE2000 + edge-shift within the disposition-table tolerance. Distinct from
 the **structural** gate (§3.4): this one looks at *pixels*, that one looks at *commands*. A PR that changes a
 shader or the batcher must pass both. New goldens are added with the PR that introduces the primitive; a golden
 can only be *re-baselined* with an explicit reviewer-approved artifact diff (no silent golden updates).
 
-### 3.4 Headless structural gate — draw-call / batch / barrier / Bounds asserts on `Rhi.Headless` + `Pal.Headless`
+### 3.4 Headless structural gate — draw-call / batch / barrier / Bounds asserts on `FluentGpu.Engine` Headless/Rhi/ + Headless/Pal/
 
 This is the cheapest, fastest, most deterministic gate and the one that runs in the *portable* pass (no
-Windows, no GPU). `Rhi.Headless` is a CPU/null encoder that records *what was asked of it*; `Pal.Headless`
+Windows, no GPU). `FluentGpu.Engine` (Headless/Rhi/) is a CPU/null encoder that records *what was asked of it*; `FluentGpu.Engine` (Headless/Pal/)
 synthesizes window/input/DPI events ([architecture-spec §3](../architecture-spec.md)).
 
 ```csharp
-public sealed class StructuralLedger : ICommandEncoder    // the Rhi.Headless recording encoder
+public sealed class StructuralLedger : ICommandEncoder    // the Engine/Headless/Rhi recording encoder
 {
     public int DrawCalls, BatchCount, BarrierCount, PsoSwitches;
     public readonly List<RectPx> EmittedBounds = new();
@@ -678,7 +678,7 @@ being a separate CI job — it is a *scenario library*, not a clock.
 The validation program is **mostly portable** and is the lever that *proves* portability:
 
 - **Portable, runs on both OSes:** the Unicode-conformance half of `text.conformance`; the structural gate
-  (`Rhi.Headless` + `Pal.Headless` are portable CPU/synthetic leaves — they are the macOS-portability proof in
+  (`FluentGpu.Engine` Headless/Rhi/ + Headless/Pal/ are portable CPU/synthetic leaves — they are the macOS-portability proof in
   CI, [architecture-spec §3](../architecture-spec.md)); the alloc-tripwire + BDN backstop; the footprint
   ratchet (per-target baseline); the epoch fault-injection; the trust-ring analyzer (FG0001–3 are Roslyn,
   OS-agnostic); the reconcile/memo corpus.
@@ -736,7 +736,7 @@ hosts, so the macOS build of the validation assembly compiles and runs the porta
 ## 11. The app-author test harness (`FluentGpu.Testing`) — L13 folded into core
 
 > **Gap folded: L13 ("App-author test harness", was Tier-3 "defer").** The gap analysis observed the *hard part*
-> already exists (the headless leaves `Rhi.Headless` + `Pal.Headless`, the structural ledger, the alloc gates) and
+> already exists (the headless leaves `FluentGpu.Engine` Headless/Rhi/ + Headless/Pal/, the structural ledger, the alloc gates) and
 > only a thin consumer API was absent. For a TIER-1 framework that absence is unacceptable: an app author cannot
 > ship an accessible, interaction-correct app they cannot *test* off-screen in CI. So the harness is **core**, a
 > shipped public assembly (`FluentGpu.Testing`), not a deferred fast-follow. It is the consumer-facing twin of the
@@ -747,8 +747,8 @@ hosts, so the macOS build of the validation assembly compiles and runs the porta
 `FluentGpu.Testing` lets an app author mount a component subtree on the headless backend, drive a deterministic
 frame clock, **simulate** pointer/key/gesture/IME/focus, **assert** semantics (the same projection the screen
 reader sees), and capture **golden snapshots** (both structural command-ledger goldens *and* pixel goldens via
-`Rhi.Headless` WARP). The one rule: it composes **only public seams and the headless leaves** — it instantiates a
-real `Hosting` composition root parameterized with `Pal.Headless`/`Rhi.Headless`, so the harness exercises the
+`FluentGpu.Engine` (Headless/Rhi/) WARP). The one rule: it composes **only public seams and the headless leaves** — it instantiates a
+real `Hosting` composition root parameterized with `FluentGpu.Engine` (Headless/Pal/ and Headless/Rhi/), so the harness exercises the
 *actual* 13-phase loop, reconciler, layout, arena, overlay manager, and UIA projection. It does **not** fork a
 shadow engine. A test that passes here ran the production code paths with synthetic platform leaves.
 
@@ -864,7 +864,7 @@ the *contract*, not the mechanism:
   single-threaded API over the real multi-thread loop — the author never races. `DrainTransitions`/`DrainAsync`
   quiesce all worker/transition fan-out before returning. The `SeededScheduler` makes any fan-out order
   deterministic for the determinism gates (§12.1/§12.4).
-- **macOS:** `FluentGpu.Testing` is **fully portable** — it references only `Pal.Headless`/`Rhi.Headless` and the
+- **macOS:** `FluentGpu.Testing` is **fully portable** — it references only `FluentGpu.Engine` (Headless/Pal/ and Headless/Rhi/) and the
   seams, never a Windows concrete. An app author's test suite runs identically on the macOS CI leg. (The DWrite/
   CoreText *shaping* oracle stays in `Validation`'s Windows-gated spike host, not here.)
 

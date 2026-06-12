@@ -2,9 +2,9 @@
 
 [← Contributing to the engine](./index.md)
 
-This page is for engine contributors. It explains how the **reconciler** (`src/FluentGpu.Reconciler/Reconciler.cs`)
+This page is for engine contributors. It explains how the **reconciler** (`src/FluentGpu.Engine/Reconciler/Reconciler.cs`)
 turns an immutable `Element` tree into edits on the retained **struct-of-arrays** scene
-(`src/FluentGpu.Scene/SceneStore.cs`), where exactly to change each behavior, and how to prove a change with the
+(`src/FluentGpu.Engine/Scene/SceneStore.cs`), where exactly to change each behavior, and how to prove a change with the
 headless harness. It is the working view; the architecture authority is the design corpus — semantics live in
 [`reconciler-hooks.md`](../../../design/subsystems/reconciler-hooks.md), storage lives in
 [`scene-memory.md`](../../../design/subsystems/scene-memory.md), and the canonical contract values live in
@@ -17,7 +17,7 @@ reconciler.
 
 ## Element tree → reconciler → retained SoA SceneStore
 
-You author an immutable tree of `Element` records (`src/FluentGpu.Dsl/Element.cs`). The reconciler's job is to make
+You author an immutable tree of `Element` records (`src/FluentGpu.Engine/Dsl/Element.cs`). The reconciler's job is to make
 the retained `SceneStore` *match* that tree with the smallest possible set of edits, and to wire the reactive plumbing
 (render-effects, bindings, control-flow boundaries, context signals) so that future changes never have to walk the
 whole tree again.
@@ -66,8 +66,8 @@ untouched — the structural win over re-realizing a control. The free-list reus
 the slot's generation and pushes it back.
 
 **Where to change:** node lifecycle, topology, and the generation/free-list spine are all in
-`src/FluentGpu.Scene/SceneStore.cs` (`CreateNode`, `FreeSubtree`, `AppendChild`, `Detach`, `IsLive`). The handle type
-itself is in `FluentGpu.Foundation`.
+`src/FluentGpu.Engine/Scene/SceneStore.cs` (`CreateNode`, `FreeSubtree`, `AppendChild`, `Detach`, `IsLive`). The handle type
+itself is in `FluentGpu.Engine` (`Foundation/`).
 
 ## Keyed child diff (identity and state preservation by key)
 
@@ -128,7 +128,7 @@ registers a boundary `Effect` via `AddBinding(node, eff)`. The `Show` effect re-
 `Then`/`Else` through `ReconcileSingleChild`; the `For` effect re-evaluates `Count()`/`ItemAt(i)`, keys each row, and
 feeds the result to `ReconcileChildren` — so add/remove/reorder go through the same keyed diff with **no parent
 re-render**. The `Update` path for both is a `return` (a parent re-render must not disturb them — the effect owns its
-subtree). `ShowEl`/`ForEl` are defined in `src/FluentGpu.Hooks/ControlFlow.cs` (the `Flow.*` factory); the engine
+subtree). `ShowEl`/`ForEl` are defined in `src/FluentGpu.Engine/Hooks/ControlFlow.cs` (the `Flow.*` factory); the engine
 records carry `ElementTypeId` 7 and 10.
 
 **Context provision** (`ContextProviderEl`, `ElementTypeId` 4) stores a `Signal<object?>` per provider node
@@ -137,7 +137,7 @@ by walking ancestors and subscribing — that walk is `ResolveContext`, which cl
 matching channel, then falls back to host-published ambient signals (`Viewport.Size`, etc.) in `_ambient`. On a
 provider re-render with the same channel, `Update` writes the signal's value (`e.Sig.Value = np.Value`), which notifies
 **exactly** the subscribed consumers — no context-stack reconstruction, no prop drilling. `Context<T>`/`Ctx.Provide`
-live in `src/FluentGpu.Hooks/Context.cs`.
+live in `src/FluentGpu.Engine/Hooks/Context.cs`.
 
 ## Bindings as mount-time effects (the `Prop<T>` wiring)
 
@@ -180,7 +180,7 @@ The dirty axis the bind marks decides how cheap the frame is: `Transform`/`Fill`
 `WriteColumns`.
 
 **Where to change:** add the bind effect in `TreeReconciler.BindNode`, add the `!IsBound` static-value guard in the
-matching `WriteColumns` arm, and add the `Prop<T>` field to the element record in `src/FluentGpu.Dsl/` (the record
+matching `WriteColumns` arm, and add the `Prop<T>` field to the element record in `src/FluentGpu.Engine/Dsl/` (the record
 shape is owned by [`dsl-aot.md`](../../../design/subsystems/dsl-aot.md)). Add a `Check` that asserts the channel
 updates one node with `Rendered == false` (compositor path) or with a scoped relayout (layout path).
 
@@ -188,7 +188,7 @@ updates one node with `Rendered == false` (compositor path) or with a scoped rel
 
 The store is struct-of-arrays: one spine indexes parallel `T[]` columns, each touched by a *disjoint* set of phases so
 a phase streams only the cache lines it needs. The exact column shapes are owned by
-[`scene-memory.md` §2.2](../../../design/subsystems/scene-memory.md) and defined in `src/FluentGpu.Scene/Columns.cs` —
+[`scene-memory.md` §2.2](../../../design/subsystems/scene-memory.md) and defined in `src/FluentGpu.Engine/Scene/Columns.cs` —
 **read them there; this page does not restate the structs.** In brief, the dense per-node columns the reconciler
 writes are:
 
@@ -216,7 +216,7 @@ if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
 ```
 
 **Where to change:** column writes are `TreeReconciler.WriteColumns`; the column/side-table storage and accessors are
-`src/FluentGpu.Scene/SceneStore.cs` + `Columns.cs`. If you add a new per-node visual, prefer a sparse side-table
+`src/FluentGpu.Engine/Scene/SceneStore.cs` + `Columns.cs`. If you add a new per-node visual, prefer a sparse side-table
 (mirror an existing `Set/TryGet/Clear` trio and add its `Remove` to `FreeSubtree`) over widening a dense column — the
 dense `NodePaint` is deliberately one cache line.
 
@@ -250,7 +250,7 @@ changed" as the rule.
 
 ## The `ISceneBackend` op set
 
-`ISceneBackend` (top of `src/FluentGpu.Scene/SceneStore.cs`) is the **only** surface the reconciler uses to mutate the
+`ISceneBackend` (top of `src/FluentGpu.Engine/Scene/SceneStore.cs`) is the **only** surface the reconciler uses to mutate the
 retained tree — handle-in / handle-out, POD-only, no `ComPtr`, no `UIElement`, no `System.Object` across it. That
 narrowness is what keeps the reconciler platform-independent and lets the render thread own every `ComPtr` two layers
 down. The as-built interface is:
@@ -283,7 +283,7 @@ the *store-side implementation* — the columns those ops write, the growth-safe
 by [`scene-memory.md`](../../../design/subsystems/scene-memory.md). The richer doc surface (`MoveChild`,
 `WriteVisual`/`WriteLayout` mask diffs, `NodeChildCollection`) is the design target, not yet wired.
 
-**Where to change:** the interface and the `SceneStore` implementation are both in `src/FluentGpu.Scene/SceneStore.cs`.
+**Where to change:** the interface and the `SceneStore` implementation are both in `src/FluentGpu.Engine/Scene/SceneStore.cs`.
 Keep it POD-only — a GC reference crossing this seam (beyond the handler-column `Action`s, which live in side arrays
 at the edge) breaks the render-thread-confinement contract.
 
@@ -396,10 +396,10 @@ static Element Row(FluentGpu.Signals.IReadSignal<int> idx) => new BoxEl
 Virtual.ListBound(100000, 48f, Row) with { Grow = 1f };
 ```
 
-`VirtualListEl` (`src/FluentGpu.Reconciler/VirtualListEl.cs`, `ElementTypeId` 6) is the engine primitive the reconciler
+`VirtualListEl` (`src/FluentGpu.Engine/Reconciler/VirtualListEl.cs`, `ElementTypeId` 6) is the engine primitive the reconciler
 diffs directly. Two realize paths exist in `TreeReconciler`: `RealizeWindow` (keyed/unkeyed rows, recycling
 scrolled-out nodes via `ReconcileWindow`) and `RealizeBoundWindow` (the `RowBind` slot recycler above). The
-variable-extent path uses the Fenwick `ExtentTable` (`src/FluentGpu.Scene/ExtentTable.cs`) for O(log n)
+variable-extent path uses the Fenwick `ExtentTable` (`src/FluentGpu.Engine/Scene/ExtentTable.cs`) for O(log n)
 offset↔index mapping. The user-facing `Virtual.*` factories live in `FluentGpu.Controls`; the seam is owned by
 [`virtualization.md`](../../../design/subsystems/virtualization.md) and
 [`SPEC-INDEX.md` §2 "Virtualization seam"](../../../design/SPEC-INDEX.md).

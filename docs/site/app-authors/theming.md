@@ -8,7 +8,7 @@ startup.
 
 This page is the app-author guide to that surface — the families, how to switch themes, how the accent and
 window background are injected, the typeface facade, and the radius/spacing tokens. The token *table itself*
-(`src/FluentGpu.Dsl/Tokens.cs`) is the source of truth for the exact values; this page links every family back
+(`src/FluentGpu.Engine/Dsl/Tokens.cs`) is the source of truth for the exact values; this page links every family back
 to it rather than restating numbers.
 
 > Prerequisite: the signals mental model in **[signals, components & bindings](./signals-components-and-bindings.md)**
@@ -17,7 +17,7 @@ to it rather than restating numbers.
 
 ## Read semantic tokens, never hard-code colors (`Tok.*`)
 
-Every brush an app needs is a static getter on `Tok` (`src/FluentGpu.Dsl/Tokens.cs`). Use them as `Fill`,
+Every brush an app needs is a static getter on `Tok` (`src/FluentGpu.Engine/Dsl/Tokens.cs`). Use them as `Fill`,
 `BorderColor`, text `Color`, etc. — never an inline `ColorF`:
 
 ```csharp
@@ -157,7 +157,7 @@ That swap re-themes *future* reads. The honest caveat — and it is load-bearing
 happen. Tokens are resolved at element **construction**, baked into the immutable `Element` records and into
 each control's `Style` record. So switching the theme only reaches the screen once the affected components
 **re-render and reconstruct their elements** with the new token values. From the engine source
-(`src/FluentGpu.Dsl/Element.cs`, the `TextEl.Color` default):
+(`src/FluentGpu.Engine/Dsl/Element.cs`, the `TextEl.Color` default):
 
 > Defaults to the live theme's `TextFillColorPrimary` … resolved at element **construction**. NOTE: a runtime
 > `Tok.Use` switch does not itself re-render — the theme is set at startup today; a live theme switcher must
@@ -262,7 +262,7 @@ Theme.IconFont = "Segoe Fluent Icons";    // symbol face for Icon()/IconButton/N
 and the navigation chrome. (Any single run can still override its family with `.Font("Consolas")` — see the
 typography section of **[components, elements & layout](../../guide/components-elements-layout.md)**.)
 
-**`Theme` is a small back-compat facade over `Tok`** (`src/FluentGpu.Dsl/Theme.cs`). Its flat names forward to
+**`Theme` is a small back-compat facade over `Tok`** (`src/FluentGpu.Engine/Dsl/Theme.cs`). Its flat names forward to
 the active `TokenSet`, so a `Tok.Use` swap re-themes them too. The mapping is one-to-one:
 
 | `Theme` (facade) | Forwards to |
@@ -282,7 +282,7 @@ accent/Mica setters.
 
 ## Radii and spacing tokens
 
-Corner radii are the WinUI Fluent ramp, on `Radii` (`src/FluentGpu.Dsl/Radii.cs`):
+Corner radii are the WinUI Fluent ramp, on `Radii` (`src/FluentGpu.Engine/Dsl/Radii.cs`):
 
 ```csharp
 Radii.Control   // 4px  — buttons, inputs, small controls (ControlCornerRadius)
@@ -319,7 +319,7 @@ new BoxEl
 };
 ```
 
-**Spacing** is the WinUI Gallery spacing rhythm, on `Spacing` (`src/FluentGpu.Dsl/Spacing.cs`) — named `const
+**Spacing** is the WinUI Gallery spacing rhythm, on `Spacing` (`src/FluentGpu.Engine/Dsl/Spacing.cs`) — named `const
 float` DIP values for page gutters, card spacing, internal padding, and stack gaps:
 
 ```csharp

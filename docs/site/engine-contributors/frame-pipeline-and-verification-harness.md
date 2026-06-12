@@ -24,13 +24,13 @@ dotnet run   --project src/FluentGpu.VerticalSlice   # must print: ALL CHECKS PA
 
 | If you're changing… | Edit |
 |---|---|
-| The frame loop / phase order / `FrameStats` | `src/FluentGpu.Hosting/AppHost.cs` |
-| The alloc-tripwire bracket (`HotPhaseAllocBytes`) | `src/FluentGpu.Hosting/AppHost.cs` (`Paint`) |
-| The headless GPU device (decoded DrawList) | `src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs` |
-| The headless window / platform app / input | `src/FluentGpu.Pal.Headless/HeadlessPlatform.cs` |
-| The deterministic font advance model | `src/FluentGpu.Text.Headless/HeadlessFontSystem.cs` |
+| The frame loop / phase order / `FrameStats` | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
+| The alloc-tripwire bracket (`HotPhaseAllocBytes`) | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`Paint`) |
+| The headless GPU device (decoded DrawList) | `src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs` |
+| The headless window / platform app / input | `src/FluentGpu.Engine/Headless/Pal/HeadlessPlatform.cs` |
+| The deterministic font advance model | `src/FluentGpu.Engine/Headless/Text/HeadlessFontSystem.cs` |
 | The checks themselves (add/modify a group) | `src/FluentGpu.VerticalSlice/Program.cs` |
-| `InputEvent` / `WindowDesc` / the PAL seam | `src/FluentGpu.Pal/Pal.cs` |
+| `InputEvent` / `WindowDesc` / the PAL seam | `src/FluentGpu.Engine/Seams/Pal/Pal.cs` |
 
 The phase order and the SoA scene it patches are *described* (not re-derived) in the design canon: the 13-phase loop and
 the minimum vertical slice live in
@@ -40,7 +40,7 @@ the minimum vertical slice live in
 
 ## The 13-phase frame loop
 
-One method drives a frame: `AppHost.RunFrame()` (`src/FluentGpu.Hosting/AppHost.cs`). It does the *pump* (read OS input)
+One method drives a frame: `AppHost.RunFrame()` (`src/FluentGpu.Engine/Hosting/AppHost.cs`). It does the *pump* (read OS input)
 and then delegates the rest to `AppHost.Paint()` — the split exists so the window's `PaintRequested` callback can redraw
 *without* re-pumping during the OS modal move/resize loop (calling `Paint` from a `WndProc` is safe; calling `RunFrame`
 would re-enter the pump).
@@ -176,11 +176,11 @@ animation, and image pipeline, with only the three *outermost* seams swapped for
 
 | Seam | Real (Windows) | Headless (harness) | What it gives the test |
 |---|---|---|---|
-| PAL (platform/window/input) | `FluentGpu.Pal.Windows` | `HeadlessPlatformApp` / `HeadlessWindow` | synthetic window + `QueueInput` to inject events |
-| RHI (GPU device/swapchain) | `FluentGpu.Rhi.D3D12` | `HeadlessGpuDevice` | **decoded** DrawList command lists to assert against |
-| Text (font system) | `FluentGpu.Text.DirectWrite` | `HeadlessFontSystem` | deterministic glyph advances → reproducible layout |
+| PAL (platform/window/input) | `FluentGpu.Windows` (`Pal/`) | `HeadlessPlatformApp` / `HeadlessWindow` | synthetic window + `QueueInput` to inject events |
+| RHI (GPU device/swapchain) | `FluentGpu.Windows` (`D3D12/`) | `HeadlessGpuDevice` | **decoded** DrawList command lists to assert against |
+| Text (font system) | `FluentGpu.Windows` (`DirectWrite/`) | `HeadlessFontSystem` | deterministic glyph advances → reproducible layout |
 
-**`HeadlessGpuDevice`** (`src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs`) is a CPU/null encoder: its `SubmitDrawList`
+**`HeadlessGpuDevice`** (`src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`) is a CPU/null encoder: its `SubmitDrawList`
 walks the POD command stream and *decodes each opcode into a reusable typed list* — `LastRects`, `LastGlyphs`,
 `LastClips`, `LastImages`, `LastStrokes`, `LastShadows`, `LastArcs`, `LastPolylines`, `LastGradients`,
 `LastGradientStrokes`, `LastLayers`, `LastTabShapes`. So a test asserts **what the recorder actually emitted this frame**,
@@ -189,7 +189,7 @@ without a single pixel. It also tracks `ClipBalance`/`LayerBalance` (push/pop mu
 capacity) each submit, so after warmup the device itself adds no per-frame allocation — which is why the alloc tripwire
 stays honest.
 
-**`HeadlessFontSystem`** (`src/FluentGpu.Text.Headless/HeadlessFontSystem.cs`) replaces DirectWrite shaping with a
+**`HeadlessFontSystem`** (`src/FluentGpu.Engine/Headless/Text/HeadlessFontSystem.cs`) replaces DirectWrite shaping with a
 deterministic uniform-advance model the checks are written against by exact constant:
 
 ```text
@@ -201,7 +201,7 @@ wrap         = greedy word-wrap on ' ' runs
 Because `Measure`, `HitTestText`, `GetCaret`, and `GetRangeRects` all run the *same* line walk, a headless hit-test agrees
 with headless layout exactly — so the layout/text checks are reproducible across machines.
 
-**`HeadlessWindow`** (`src/FluentGpu.Pal.Headless/HeadlessPlatform.cs`) is a synthetic window: `QueueInput(InputEvent)`
+**`HeadlessWindow`** (`src/FluentGpu.Engine/Headless/Pal/HeadlessPlatform.cs`) is a synthetic window: `QueueInput(InputEvent)`
 enqueues an event that `PumpInto` drains into the host ring on the next `RunFrame`. Its `ClientSizePx` and `Scale` are
 settable mid-run, so a test can simulate a resize or a per-monitor DPI hop and assert the host re-lays-out. The headless
 path also enables the full **windowed-popup** pipeline (its swapchains are independent), so out-of-bounds overlays are
@@ -322,7 +322,7 @@ The two halves you assert against — *the scene* and *the DrawList* — come fr
   ground truth of *what was drawn*. (`device.FrameCount`, `device.ClipBalance`, `device.ResidentImages`, swapchain
   `PresentCount` round out the render-side asserts.)
 
-Synthetic input is a `QueueInput` of an `InputEvent` (`src/FluentGpu.Pal/Pal.cs`):
+Synthetic input is a `QueueInput` of an `InputEvent` (`src/FluentGpu.Engine/Seams/Pal/Pal.cs`):
 
 ```csharp
 var c = CenterOf(host.Scene, plus);   // some clickable node

@@ -232,7 +232,7 @@ If you skip step 1 you WILL miss states — that is the recurring failure this g
 
 ## 6. Template parts — one generic door, no styling knobs
 
-Customization of a control's internals goes through `TemplateParts` (`src/FluentGpu.Dsl/TemplateParts.cs`; usage in
+Customization of a control's internals goes through `TemplateParts` (`src/FluentGpu.Engine/Dsl/TemplateParts.cs`; usage in
 `docs/guide/components-elements-layout.md`), never through per-control feature props. Rules for every new control:
 
 - **Export `public const string PartXxx` consts** for each named template part — WinUI template-part `x:Name`s where

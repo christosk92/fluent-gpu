@@ -15,7 +15,7 @@ appear here.
 
 ## How the API is grouped (Public / Contributor / Internal)
 
-The solution ([`src/FluentGpu.slnx`](../../../src/FluentGpu.slnx)) is ~29 projects. They split into three concentric
+The solution ([`src/FluentGpu.slnx`](../../../src/FluentGpu.slnx)) is **8 projects** (4 libraries + 2 analyzers + 2 exes). They split into three concentric
 rings, and the ring tells you what you are *expected* to touch:
 
 - **Public** — what app authors call. You build a whole app out of this ring and rarely look further.
@@ -39,15 +39,15 @@ namespaces a typical app `using`s are `FluentGpu` (the entry point), `FluentGpu.
 
 | Assembly | Headline namespace(s) | What it gives you |
 | --- | --- | --- |
-| `FluentGpu.Dsl` | `FluentGpu.Dsl` | The immutable element records (`Element`, `BoxEl`/`TextEl`/`ImageEl`/`ScrollEl`) and the `Ui.*` builders (`VStack`/`HStack`/`Text`/`Heading`/`Icon`/`ScrollView`/`Image`/`Grid`), the fluent `Modifiers`, and the theme tokens (`Tok`, `Theme`, `Radii`). |
-| `FluentGpu.Hooks` | `FluentGpu.Hooks` | `Component` and `ReactiveComponent`, the state/effect/motion hooks surfaced as `protected` methods (`UseState`, `UseSignal`, `UseFloatSignal`, `UseComputed`, `UseEffect`, `UseSpring`, …), `Flow.For`/`Flow.Show`, `Ctx`, and `Embed`. |
+| `FluentGpu.Engine` (the `Dsl/` folder) | `FluentGpu.Dsl` | The immutable element records (`Element`, `BoxEl`/`TextEl`/`ImageEl`/`ScrollEl`) and the `Ui.*` builders (`VStack`/`HStack`/`Text`/`Heading`/`Icon`/`ScrollView`/`Image`/`Grid`), the fluent `Modifiers`, and the theme tokens (`Tok`, `Theme`, `Radii`). |
+| `FluentGpu.Engine` (the `Hooks/` folder) | `FluentGpu.Hooks` | `Component` and `ReactiveComponent`, the state/effect/motion hooks surfaced as `protected` methods (`UseState`, `UseSignal`, `UseFloatSignal`, `UseComputed`, `UseEffect`, `UseSpring`, …), `Flow.For`/`Flow.Show`, `Ctx`, and `Embed`. |
 | `FluentGpu.Controls` | `FluentGpu.Controls` | The Fluent control kit — `Button`, `Slider`, `CheckBox`, `ToggleSwitch`, `ComboBox`, `TextBox`, `NavigationView`, `TabView`, `Virtual`, `ItemsView`, and ~70 more. Controls are **pure composition** over the rings below — they add no opcode, column, PAL seam, or hook. |
-| `FluentGpu.Hosting` | `FluentGpu.Hosting` | `AppHost` — the single-UI-thread frame loop you normally drive through `FluentApp.Run` — and the per-frame `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`, …) you assert on in tests. |
-| `FluentGpu.Foundation` | `FluentGpu.Signals`, `FluentGpu.Foundation` | The signals reactive core (`Signal<T>`, `FloatSignal`, `Memo<T>`, `Effect`) and the unified bindable channel `Prop<T>` / `Prop.Of` — plus the shared value types (`ColorF`, `Affine2D`, geometry, `Edges4`). |
-| `FluentGpu.Media` | `FluentGpu.Media` | The async image pipeline surface — `IImageFetcher`, `IImageCodec`, the `DecodeScheduler`/disk-cache machinery behind `Ui.Image`. |
+| `FluentGpu.Engine` (the `Hosting/` folder) | `FluentGpu.Hosting` | `AppHost` — the single-UI-thread frame loop you normally drive through `FluentApp.Run` — and the per-frame `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`, …) you assert on in tests. |
+| `FluentGpu.Engine` (the `Foundation/` folder) | `FluentGpu.Signals`, `FluentGpu.Foundation` | The signals reactive core (`Signal<T>`, `FloatSignal`, `Memo<T>`, `Effect`) and the unified bindable channel `Prop<T>` / `Prop.Of` — plus the shared value types (`ColorF`, `Affine2D`, geometry, `Edges4`). |
+| `FluentGpu.Engine` (the `Media/` folder) | `FluentGpu.Media` | The async image pipeline surface — `IImageFetcher`, `IImageCodec`, the `DecodeScheduler`/disk-cache machinery behind `Ui.Image`. |
 
 > **Namespace gotcha (verified in source):** `Signal<T>` and `Prop<T>` live *physically* under the
-> `FluentGpu.Foundation` assembly (`src/FluentGpu.Foundation/Signals/`), but they are declared in the namespace
+> `FluentGpu.Engine` assembly (`src/FluentGpu.Engine/Foundation/Signals/`), but they are declared in the namespace
 > **`FluentGpu.Signals`** — so you author them with `using FluentGpu.Signals;`. Likewise the batteries-included
 > `FluentApp.Run` is in the **`FluentGpu`** namespace but ships from the `FluentGpu.WindowsApp` app project (see the
 > [Excluded](#excluded-from-api-metadata-the-apps-and-the-verification-harness) note below), so it does not appear in
@@ -73,16 +73,16 @@ record). The full reasoning is in [Contributing to the engine](../engine-contrib
 
 | Assembly | Headline type | What it owns |
 | --- | --- | --- |
-| `FluentGpu.Foundation` | `ReactiveCore` (`Reactive`/`Computation`/`ReactiveRuntime`) | The Solid/Preact-style reactivity graph — set→notify→flush. The notify path must stay allocation-free. |
-| `FluentGpu.Scene` | `SceneStore` (`: ISceneBackend`) | The retained struct-of-arrays RenderNode tree, its parallel columns, the 3-axis dirty flags, `ImageCache`, and the `VirtualLayout` participant. |
-| `FluentGpu.Layout` | `FlexLayout`, `LayoutInvalidator` | Flexbox + grid measure/arrange over the SoA columns; `Run` (full tree) vs `RunSubtree` (the scoped relayout) and the boundary walk that stops it. |
-| `FluentGpu.Render` | `SceneRecorder` | Phase 8 (record): walk the retained scene and emit the POD `DrawList` — local-space geometry + world transform, so transform/opacity animate without relayout or re-record. |
-| `FluentGpu.Reconciler` | `TreeReconciler` | The heart — render-effects, the keyed positional+type diff, `Prop<T>` binding wiring, `Flow.For`/`Flow.Show` boundaries, context, `VirtualListEl`. `ConsumeReconciled()`/`ConsumeRenderCount()` prove granularity. |
-| `FluentGpu.Rhi` | `IGpuDevice` (+ `ISwapchain`, `ICommandEncoder`) | The GPU seam every render backend implements — POD descs, `SubmitDrawList`, `DeviceLostToken`. |
-| `FluentGpu.Pal` | `IPlatformApp`, `IPlatformWindow` | The platform seam — windowing (`WindowDesc`, `NativeHandle`), the input/window event stream, and the system-service seams. |
-| `FluentGpu.Text` | `IFontSystem` | The text seam — itemize/shape/raster/measure. The Yoga measure bridge feeds the same advances the GPU glyph path renders. |
-| `FluentGpu.Input` | `InputDispatcher` | Input dispatch + routing over the PAL event stream (hit-test, focus, gestures). |
-| `FluentGpu.Animation` | `AnimEngine` | The authored timeline/keyframe/easing machinery the motion hooks and control motion drive. |
+| `FluentGpu.Engine` (the `Foundation/` folder) | `ReactiveCore` (`Reactive`/`Computation`/`ReactiveRuntime`) | The Solid/Preact-style reactivity graph — set→notify→flush. The notify path must stay allocation-free. |
+| `FluentGpu.Engine` (the `Scene/` folder) | `SceneStore` (`: ISceneBackend`) | The retained struct-of-arrays RenderNode tree, its parallel columns, the 3-axis dirty flags, `ImageCache`, and the `VirtualLayout` participant. |
+| `FluentGpu.Engine` (the `Layout/` folder) | `FlexLayout`, `LayoutInvalidator` | Flexbox + grid measure/arrange over the SoA columns; `Run` (full tree) vs `RunSubtree` (the scoped relayout) and the boundary walk that stops it. |
+| `FluentGpu.Engine` (the `Render/` folder) | `SceneRecorder` | Phase 8 (record): walk the retained scene and emit the POD `DrawList` — local-space geometry + world transform, so transform/opacity animate without relayout or re-record. |
+| `FluentGpu.Engine` (the `Reconciler/` folder) | `TreeReconciler` | The heart — render-effects, the keyed positional+type diff, `Prop<T>` binding wiring, `Flow.For`/`Flow.Show` boundaries, context, `VirtualListEl`. `ConsumeReconciled()`/`ConsumeRenderCount()` prove granularity. |
+| `FluentGpu.Engine` (the `Seams/Rhi/` folder) | `IGpuDevice` (+ `ISwapchain`, `ICommandEncoder`) | The GPU seam every render backend implements — POD descs, `SubmitDrawList`, `DeviceLostToken`. |
+| `FluentGpu.Engine` (the `Seams/Pal/` folder) | `IPlatformApp`, `IPlatformWindow` | The platform seam — windowing (`WindowDesc`, `NativeHandle`), the input/window event stream, and the system-service seams. |
+| `FluentGpu.Engine` (the `Seams/Text/` folder) | `IFontSystem` | The text seam — itemize/shape/raster/measure. The Yoga measure bridge feeds the same advances the GPU glyph path renders. |
+| `FluentGpu.Engine` (the `Input/` folder) | `InputDispatcher` | Input dispatch + routing over the PAL event stream (hit-test, focus, gestures). |
+| `FluentGpu.Engine` (the `Animation/` folder) | `AnimEngine` | The authored timeline/keyframe/easing machinery the motion hooks and control motion drive. |
 
 > **Authority, not duplication.** These types *implement* contracts that are specified once in the design corpus. Do
 > not restate a struct shape, an enum, or a seam in code or docs — reference the owner. The DrawList opcode shapes are
@@ -97,14 +97,14 @@ record). The full reasoning is in [Contributing to the engine](../engine-contrib
 The leaves *behind* the seams. They are included in this reference because the real Windows backends are useful to read,
 but app authors never call them and contributors touch them only when changing a backend.
 
-| Assembly | What it is |
+| Assembly / folder | What it is |
 | --- | --- |
-| `FluentGpu.Rhi.D3D12` | The Direct3D 12 RHI leaf — flip-model swap chain, the DirectComposition present tree, the rounded-rect/gradient/glyph pipelines. |
-| `FluentGpu.Text.DirectWrite` | The DirectWrite text backend — the same design advances and line-break math the GPU glyph path uses, so measured wrap matches rendered wrap. |
-| `FluentGpu.Pal.Windows` | Win32 windowing + theme — the custom frame, Mica/Acrylic material, accent pickup (`Win32App`, `Win32Window`, `Win32Theme`). |
-| `FluentGpu.Win32.Interop` | The shared Win32/COM interop layer the Windows backends bind through. |
-| `FluentGpu.Media.Codecs.Wic` | The WIC image codec (`IImageCodec` leaf) the real image pipeline decodes with. |
-| `FluentGpu.Accessibility.Uia` | The UI Automation accessibility integration (the `IA11yBackend` Windows leaf). |
+| `FluentGpu.Windows` (the `D3D12/` folder) | The Direct3D 12 RHI leaf — flip-model swap chain, the DirectComposition present tree, the rounded-rect/gradient/glyph pipelines. |
+| `FluentGpu.Windows` (the `DirectWrite/` folder) | The DirectWrite text backend — the same design advances and line-break math the GPU glyph path uses, so measured wrap matches rendered wrap. |
+| `FluentGpu.Windows` (the `Pal/` folder) | Win32 windowing + theme — the custom frame, Mica/Acrylic material, accent pickup (`Win32App`, `Win32Window`, `Win32Theme`). |
+| `FluentGpu.Windows` (the `Interop/` folder) | The shared Win32/COM interop layer the Windows backends bind through. |
+| `FluentGpu.Windows` (the `Wic/` folder) | The WIC image codec (`IImageCodec` leaf) the real image pipeline decodes with. |
+| `FluentGpu.Windows` (the `Uia/` folder) | The UI Automation accessibility integration (the `IA11yBackend` Windows leaf). |
 
 **Source generators and analyzers are intentionally absent from this reference.** The two tooling projects —
 `FluentGpu.SourceGen` and `FluentGpu.Interop.SourceGen` — run at *build* time (they emit `ApplyToScene`, `DiffProps`,
@@ -123,8 +123,8 @@ test-only seams, not library surface:
   [Engine contributors → verify with the harness](../engine-contributors/index.md#the-golden-rule-verify-with-the-headless-harness-before-claiming-done).
 - **`FluentGpu.WindowsApp`** — the gallery app (and the home of `FluentApp.Run`). It is where every control's verified,
   copy-pasteable snippet lives, but it is an application, so it carries no API metadata.
-- **The headless seams** — `FluentGpu.Rhi.Headless`, `FluentGpu.Pal.Headless`, `FluentGpu.Text.Headless` — plus
-  `FluentGpu.Rhi.Gdi`. These are test/CI backends behind the same seams the real leaves implement; they exist so the
+- **The headless seams** — the `FluentGpu.Engine/Headless/Rhi/`, `Headless/Pal/`, and `Headless/Text/` folders inside
+  `FluentGpu.Engine`. These are test/CI backends behind the same seams the real leaves implement; they exist so the
   harness can record the DrawList and assert *what was drawn* without a GPU or window. No public surface worth
   publishing.
 
@@ -148,8 +148,8 @@ What this means in practice:
 
 - **Improving the reference = improving the `///` comments in `src/`.** There is no separate prose to maintain for the
   generated pages; edit the doc comment on the type or member and regenerate. Many of the most useful summaries already
-  live there — e.g. `Prop<T>`'s comment in `src/FluentGpu.Foundation/Signals/Prop.cs` documents the static-vs-thunk-vs-
-  signal-direct discrimination, and `Component`'s hook methods in `src/FluentGpu.Hooks/Component.cs` document each
+  live there — e.g. `Prop<T>`'s comment in `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` documents the static-vs-thunk-vs-
+  signal-direct discrimination, and `Component`'s hook methods in `src/FluentGpu.Engine/Hooks/Component.cs` document each
   hook's subscribe semantics.
 - **`CS1591` is suppressed, not satisfied.** A member with no doc comment still generates an (empty-summary) entry; it
   is not a build error. Treat an empty summary in the rendered reference as a doc gap to fill at the source, not a

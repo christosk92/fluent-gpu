@@ -12,7 +12,7 @@ sentence is new to you, read [reactivity](../../guide/reactivity.md) next; this 
 on getting an app running.
 
 > All the symbols below are the real surface in `src/FluentGpu.WindowsApp/FluentApp.cs` and
-> `src/FluentGpu.Hosting/AppHost.cs`. The signatures here are copied from source, not paraphrased.
+> `src/FluentGpu.Engine/Hosting/AppHost.cs`. The signatures here are copied from source, not paraphrased.
 
 ## Hello, FluentGpu (`FluentApp.Run`)
 
@@ -43,7 +43,7 @@ sealed class App : Component
 That is a complete, runnable app. `App` derives from `Component`, overrides `Render()`, and returns
 an `Element` tree built with the `Ui.*` factories you brought in with `using static FluentGpu.Dsl.Ui`.
 `Render()` is the one method you must implement — `public abstract Element Render()` on
-`Component` (`src/FluentGpu.Hooks/Component.cs`).
+`Component` (`src/FluentGpu.Engine/Hooks/Component.cs`).
 
 To run the verification harness or any non-windowed scenario, see
 [Run headless](#running-headless-tests--ci) at the end of this page.
@@ -121,7 +121,7 @@ and the [precedence authority](../../../design/SPEC-INDEX.md).
 ## A live counter (`UseState`)
 
 The counter in the first example is the whole reactive model in miniature. `UseState<T>` is a hook on
-`Component` (`src/FluentGpu.Hooks/Component.cs`):
+`Component` (`src/FluentGpu.Engine/Hooks/Component.cs`):
 
 ```csharp
 protected (T Value, Action<T> Set) UseState<T>(T initial) => Context.UseState(initial);
@@ -218,7 +218,7 @@ with no fade or inertia.
 
 Every `RunFrame()`/`Paint()` returns a `FrameStats` (and the last one is on `host.LastStats`). It is
 your diagnostics window into what the frame actually did — and the primary way you *verify* a
-performance change. The shape (`src/FluentGpu.Hosting/AppHost.cs`):
+performance change. The shape (`src/FluentGpu.Engine/Hosting/AppHost.cs`):
 
 ```csharp
 public readonly record struct FrameStats(
@@ -263,9 +263,9 @@ it's the recommended way to verify app logic deterministically:
 ```csharp
 using FluentGpu.Foundation;      // StringTable
 using FluentGpu.Hosting;         // AppHost
-using FluentGpu.Pal.Headless;    // HeadlessPlatformApp, HeadlessWindow
-using FluentGpu.Rhi.Headless;    // HeadlessGpuDevice
-using FluentGpu.Text.Headless;   // HeadlessFontSystem
+using FluentGpu.Pal.Headless;    // HeadlessPlatformApp, HeadlessWindow  (src/FluentGpu.Engine/Headless/Pal/)
+using FluentGpu.Rhi.Headless;    // HeadlessGpuDevice                    (src/FluentGpu.Engine/Headless/Rhi/)
+using FluentGpu.Text.Headless;   // HeadlessFontSystem                   (src/FluentGpu.Engine/Headless/Text/)
 
 var strings = new StringTable();
 using var app = new HeadlessPlatformApp();
@@ -298,24 +298,26 @@ path.)
 
 ## The project layout (what you touch most)
 
-The solution (`src/FluentGpu.slnx`) is **29 projects**: the engine itself is an acyclic 18-assembly
-graph, plus the Windows backends, the headless backends used by tests, two source-generator tooling
-projects, and the two apps. As an app author you reference a handful and almost never open the rest:
+The solution (`src/FluentGpu.slnx`) is **8 projects**: four libraries (`FluentGpu.Engine`,
+`FluentGpu.Controls`, `FluentGpu.Windows`, `FluentGpu.WindowsApi`), two Roslyn source-generator
+analyzers (`FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`), and two app projects
+(`FluentGpu.VerticalSlice` validation harness, `FluentGpu.WindowsApp` gallery). As an app author
+you reference a handful and almost never open the rest:
 
-| Project | What's in it — and when you touch it |
+| Project / folder | What's in it — and when you touch it |
 |---|---|
 | `FluentGpu.WindowsApp` | `FluentApp.Run` (your entry point) **and** the gallery app that demonstrates every control. Start here. |
-| `FluentGpu.Dsl` | `Element` records, the `Ui.*` builders, `Modifiers`, and theming (`Tok`/`Theme`). This is the authoring surface you compose with. |
-| `FluentGpu.Hooks` | `Component` / `ReactiveComponent`, the hooks (`UseState`, `UseSignal`, `UseEffect`, …), context and control-flow. |
+| `FluentGpu.Engine` / `Dsl/` | `Element` records, the `Ui.*` builders, `Modifiers`, and theming (`Tok`/`Theme`). This is the authoring surface you compose with. |
+| `FluentGpu.Engine` / `Hooks/` | `Component` / `ReactiveComponent`, the hooks (`UseState`, `UseSignal`, `UseEffect`, …), context and control-flow. |
 | `FluentGpu.Controls` | Button / IconButton / ToggleButton / Slider / ScrollBar / NavigationView / Repeater / Virtual / Navigator — composition over the DSL, no rendering. |
-| `FluentGpu.Foundation` | Handles, allocators, `ColorF`/`Affine2D`/geometry, the **Signals reactive core** (`Signals/`), `StringTable`. |
-| `FluentGpu.Hosting` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` — this page's subject. |
-| `FluentGpu.Pal.* / Rhi.* / Text.*` | The platform/GPU/text seams: `.Windows` / `.D3D12` / `.DirectWrite` are the real backends, `.Headless` are the test backends. You swap these for headless tests; otherwise leave them alone. |
+| `FluentGpu.Engine` / `Foundation/` | Handles, allocators, `ColorF`/`Affine2D`/geometry, the **Signals reactive core** (`Foundation/Signals/`), `StringTable`. |
+| `FluentGpu.Engine` / `Hosting/` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` — this page's subject. |
+| `FluentGpu.Windows` | The Windows backend: `Pal/` (Win32 windowing + theme), `D3D12/` (GPU), `DirectWrite/` (text). `FluentGpu.Engine/Headless/` holds the test counterparts. You swap Engine's headless folders for tests; otherwise leave them alone. |
 
-The internals — `FluentGpu.Reconciler`, `FluentGpu.Layout`, `FluentGpu.Scene`, `FluentGpu.Render`,
-the seams' real backends — are *engine* territory. You don't edit them to build an app; if you're
-changing them, the where-to-change map and the verification harness live in the engine docs and the
-[design corpus](../../../design/SPEC-INDEX.md).
+The internals — `FluentGpu.Engine`'s `Reconciler/`, `Layout/`, `Scene/`, `Render/` folders, and
+the seams' real backends in `FluentGpu.Windows` — are *engine* territory. You don't edit them to
+build an app; if you're changing them, the where-to-change map and the verification harness live in
+the engine docs and the [design corpus](../../../design/SPEC-INDEX.md).
 
 ## Next steps
 

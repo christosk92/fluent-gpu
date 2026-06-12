@@ -1234,7 +1234,7 @@ Layout is **fully portable** — the cleanest seam in the system (`architecture-
 `FluentGpu.Layout` **unchanged**. The boundary is exactly two things, both already abstracted:
 
 1. **The text-measure seam** (`ITextLayoutEngine`/`ITextShaper`, §9) — Windows binds it to DWrite
-   (`Text.DirectWrite`); macOS binds the **same interface** to CoreText (`Text.CoreText`:
+   (`FluentGpu.Windows` DirectWrite/); macOS binds the **same interface** to CoreText (`Text.CoreText`:
    `CTFontGetGlyphsForCharacters`/`CTLine`/`CTRun` for shaping + line metrics). Layout calls `Measure` and treats the
    returned `TextMeasure` as opaque — it never knows which leaf produced it. (Line-breaking parity is a Text-leaf
    concern, deferred to the CoreText milestone per text.md §671.)

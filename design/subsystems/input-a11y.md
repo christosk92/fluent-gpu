@@ -1,6 +1,6 @@
 # FluentGpu Subsystem — Input, Focus, IME, Hit-Testing & Accessibility (UIA)
 
-*Owner doc for the **Input** subsystem (portable, COM-free) plus its OS leaves (`Pal.Windows` IME/clipboard/drag, `Accessibility.Uia`). Promotes architecture-spec §5.8 into a full design and folds the §5.8 corrections + the COM-generation ruling (dotnet10 §4 / hardened-v1 §4.2). Cross-cutting contracts (threading, memory, SceneStore columns, DrawList encoding, PAL/RHI seams, hooks/reconcile, color) are OWNED elsewhere and only **referenced** here — see foundations.md, architecture-spec.md §4, hardened-v1-plan.md §2/§4, dotnet10-csharp14-zero-alloc.md §4, and subsystems/{reconciler-hooks,gpu-renderer,text}.md.*
+*Owner doc for the **Input** subsystem (portable, COM-free) plus its OS leaves (`FluentGpu.Windows` Pal/ IME/clipboard/drag, `FluentGpu.Windows` Uia/). Promotes architecture-spec §5.8 into a full design and folds the §5.8 corrections + the COM-generation ruling (dotnet10 §4 / hardened-v1 §4.2). Cross-cutting contracts (threading, memory, SceneStore columns, DrawList encoding, PAL/RHI seams, hooks/reconcile, color) are OWNED elsewhere and only **referenced** here — see foundations.md, architecture-spec.md §4, hardened-v1-plan.md §2/§4, dotnet10-csharp14-zero-alloc.md §4, and subsystems/{reconciler-hooks,gpu-renderer,text}.md.*
 
 ---
 
@@ -25,12 +25,12 @@ The single hardest correctness facts this doc commits to:
 |---|---|---|---|---|
 | Hit-test, dispatch, **gesture arena**, gestures, focus, commands, accelerators, **overlay/portal manager**, **cursor resolver**, **edge-autoscroll driver**, event args, input hooks | **`FluentGpu.Input`** (portable) | `Scene`, `Layout`(iface), `Pal`(iface), `Animation`(iface), `Foundation` | UI thread, phases 1–2 + 7 (inertia, edge-autoscroll) | **none** |
 | Input hooks surface (`UseFocus`/`UseElementRef`/`UseCommand`/`UseAnnounce`/`UseGesture`/`UseAccelerator`) | **`FluentGpu.Hooks`** (the hook *shape*) impl wires through `Input` seams | `Dsl`, `Foundation` | UI thread, phase 4 (declared) | none |
-| IME (Imm32 v1; TSF v2) | **`Pal.Windows`** behind `Pal`.`IImeSession` | `Pal`, `Foundation` | UI thread (window pump) | flat C / `[LibraryImport]` (Imm32 is not COM); TSF v2 = `[GeneratedComInterface]` |
-| Clipboard + drag/drop | **`Pal.Windows`** behind `Pal`.`IClipboard`/`IDragDropBackend` | `Pal`, `Foundation` | UI thread (OLE modal loop) | OLE via `[GeneratedComInterface]`/`[GeneratedComClass]` |
-| UIA provider tree | **`Accessibility.Uia`** behind `IA11yBackend` | `Scene`(read-only ref), `Pal`(iface), `Foundation` | UI thread (all calls marshaled) | UIA via `[GeneratedComInterface]`/`[GeneratedComClass]` |
+| IME (Imm32 v1; TSF v2) | **`FluentGpu.Windows` (Pal/ folder)** behind `Pal`.`IImeSession` | `Pal`, `Foundation` | UI thread (window pump) | flat C / `[LibraryImport]` (Imm32 is not COM); TSF v2 = `[GeneratedComInterface]` |
+| Clipboard + drag/drop | **`FluentGpu.Windows` (Pal/ folder)** behind `Pal`.`IClipboard`/`IDragDropBackend` | `Pal`, `Foundation` | UI thread (OLE modal loop) | OLE via `[GeneratedComInterface]`/`[GeneratedComClass]` |
+| UIA provider tree | **`FluentGpu.Windows` (Uia/ folder)** behind `IA11yBackend` | `Scene`(read-only ref), `Pal`(iface), `Foundation` | UI thread (all calls marshaled) | UIA via `[GeneratedComInterface]`/`[GeneratedComClass]` |
 | macOS a11y / IME | **`Accessibility.NSAccessibility`**, **`Pal.Cocoa`** | same seams | main thread | Objective-C runtime, no COM |
 
-All OS leaves are referenced **only by `Hosting`** (foundations §7 cycle invariant 2). `FluentGpu.Input` itself carries `[assembly: DisableRuntimeMarshalling]` (it is 100% blittable, no source-gen COM). The COM leaves (`Accessibility.Uia`, the OLE/TSF parts of `Pal.Windows`) live in / mirror the **`PlatformIntegration`** policy (dotnet10 §3): **no** `DisableRuntimeMarshalling` (source-gen COM uses `in`/`out`), and each generated COM interface hierarchy is kept inside one assembly (cross-assembly `[GeneratedComInterface]` inheritance has a vtable-offset rebuild-coupling pitfall).
+All OS leaves are referenced **only by `Hosting`** (foundations §7 cycle invariant 2). `FluentGpu.Input` itself carries `[assembly: DisableRuntimeMarshalling]` (it is 100% blittable, no source-gen COM). The COM leaves (`FluentGpu.Windows` Uia/, the OLE/TSF parts of `FluentGpu.Windows` Pal/) live in / mirror the **`PlatformIntegration`** policy (dotnet10 §3): **no** `DisableRuntimeMarshalling` (source-gen COM uses `in`/`out`), and each generated COM interface hierarchy is kept inside one assembly (cross-assembly `[GeneratedComInterface]` inheritance has a vtable-offset rebuild-coupling pitfall).
 
 **Why this is `safe-by-construction` for confinement:** Input never owns a `ComPtr`; the render thread owns every ComPtr (hardened-v1 §2.1). The only COM Input *causes* (UIA/TSF/OLE callbacks) is marshaled back to the UI thread before it touches any Scene column, so the single-writer rule on `SceneStore` is preserved.
 
@@ -41,7 +41,7 @@ All OS leaves are referenced **only by `Hosting`** (foundations §7 cycle invari
 Reference: architecture-spec §4.8 + hardened-v1 §2.2. Input touches **phase 1 (pump), phase 2 (dispatch), phase 4 (hook declaration), phase 6.5 (focus-into-view layout effect)**, and **phase 7 (inertia integrator tick)**. It is *upstream* of PUBLISH(13a) and the render thread.
 
 ```
- 1 pump            [UI]  Pal.Windows WndProc → InputEvent/WindowEvent POD → InputEventRing (move-coalesced)
+ 1 pump            [UI]  FluentGpu.Windows Pal/ WndProc → InputEvent/WindowEvent POD → InputEventRing (move-coalesced)
  2 input-dispatch  [UI]  InputDispatcher.Drain(ReadOnlySpan<InputEvent>) against the COMMITTED prev-frame Scene:
                           a. hit-test ONCE (reverse-z, inverse transform, shape-accurate self-test) → the route
                           b. HandlerMask pre-filter
@@ -75,7 +75,7 @@ PUBLISH (13a)      [UI]  SceneFrame snapshot sealed — Input is done for the fr
 
 ---
 
-## 3. Phase 1 — pump → `InputEventRing` (Pal.Windows owns the encode; Input owns the schema)
+## 3. Phase 1 — pump → `InputEventRing` (FluentGpu.Windows Pal/ owns the encode; Input owns the schema)
 
 The window writes POD into a host-owned slab-backed ring (architecture-spec §4.7 amendment: **C# events are replaced by a POD ring**; no per-event delegate/closure alloc). `IPlatformWindow.PumpInto(ref InputEventRing ring)` drains `WM_*`/`NSEvent` into it once per frame.
 
@@ -294,7 +294,7 @@ public static class TransformChain
 ```
 
 - Hit-test descends *down*, applying `InverseStep` per level (cheaper than building the full inverse once — descent already visits every ancestor).
-- UIA `get_BoundingRectangle` and IME caret go *up* via `AccumulateToRoot` once for the single node of interest, then the host adds the client→screen offset (`ClientToScreen`, in `Pal.Windows`, the one place pixels meet the OS).
+- UIA `get_BoundingRectangle` and IME caret go *up* via `AccumulateToRoot` once for the single node of interest, then the host adds the client→screen offset (`ClientToScreen`, in `FluentGpu.Windows` Pal/, the one place pixels meet the OS).
 - **`get_BoundingRectangle` uses this chain, not just a client→screen offset** (folds the §5.8 fix: a transformed/scrolled element's a11y rect must reflect ancestor transforms).
 
 ### 5.4 Hover / capture / enter-leave
@@ -520,8 +520,8 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 >    every tick through the one chokepoint is the *reason* virtualization stays correct under inertia.
 > 2. **They have no headless presence.** The engine's gates — `HotPhaseAllocBytes == 0` over a fling, and the
 >    §12.6 / `validation.md` integrator-determinism sweep (same target + timestep ⇒ bit-identical trace at
->    dt ∈ {8.33, 16.67, 33.3} ms) — require a deterministic, pure-managed integrator that runs in `Pal.Headless`.
->    An OS engine cannot pass either gate. (Confined-to-`Pal.Windows` Win32 calls like `EnableMouseInPointer`
+>    dt ∈ {8.33, 16.67, 33.3} ms) — require a deterministic, pure-managed integrator that runs in `FluentGpu.Engine` (Headless/Pal/ folder).
+>    An OS engine cannot pass either gate. (Confined-to-`FluentGpu.Windows` Pal/ Win32 calls like `EnableMouseInPointer`
 >    are fine; an OS *animation/physics* engine in the hot integrator path is the rejected dependency.)
 
 > **Shipped Phase-1 subset (the arena lands later, §7A unchanged).** Phase 1 ships the **synchronous
@@ -628,7 +628,7 @@ internal struct AcceleratorEntry {        // SlabAllocator<AcceleratorEntry>
 
 ## 10. IME — v1 = Imm32 (TSF = v2)
 
-**v1 = `WM_IME_*` / Imm32** (folds the re-scope): covers CJK, far simpler than TSF; lives in `Pal.Windows` behind the portable `IImeSession` seam.
+**v1 = `WM_IME_*` / Imm32** (folds the re-scope): covers CJK, far simpler than TSF; lives in `FluentGpu.Windows` (Pal/ folder) behind the portable `IImeSession` seam.
 
 ```csharp
 namespace FluentGpu.Pal;
@@ -641,7 +641,7 @@ public interface IImeSession {
 ```
 
 - Windows impl: `WM_IME_STARTCOMPOSITION`/`WM_IME_COMPOSITION` → `ImmGetCompositionStringW` (GCS_COMPSTR for the in-progress underline string, GCS_RESULTSTR for the committed run); `ImmSetCompositionWindow`/`ImmSetCandidateWindow` for placement. Committed text arrives via `WM_CHAR` (§3).
-- **Caret rect** for `SetCompositionRect` is computed via the **shared transform helper** (§5.3): the editable node's caret rect is LOCAL (from the text seam's `HitTestTextPosition→caretRect` once editing exists — architecture-spec §line 688, a v1-display-only/v2-editing boundary), projected to client DIP via `AccumulateToRoot`, then client→screen in `Pal.Windows`.
+- **Caret rect** for `SetCompositionRect` is computed via the **shared transform helper** (§5.3): the editable node's caret rect is LOCAL (from the text seam's `HitTestTextPosition→caretRect` once editing exists — architecture-spec §line 688, a v1-display-only/v2-editing boundary), projected to client DIP via `AccumulateToRoot`, then client→screen in `FluentGpu.Windows` Pal/.
 - **Composition underline** is rendered as a transient overlay run (an extra `DrawGlyphRun` + an underline `FillRect`) pulling HC colors.
 
 **TSF = v2 (a major workstream, not a footnote):** `ITextStoreACP2`/TSF requires document lock arbitration, advise sinks, ACP range mapping, and composition mutation that respects the TSF **write-lock state** — explicitly deferred. When it lands it is **`[GeneratedComInterface]` cold COM** (human-timescale), not hand-vtable. macOS uses `NSTextInputClient` behind the same `IImeSession` seam.
@@ -651,13 +651,13 @@ public interface IImeSession {
 
 ## 11. Accessibility — UIA over the retained tree (no peer control)
 
-UIA is a **projection** of the same `SceneStore` (P7: single source of truth — UIA `Navigate` is a topology walk, not a peer tree). It lives in `Accessibility.Uia` behind the portable `IA11yBackend` seam.
+UIA is a **projection** of the same `SceneStore` (P7: single source of truth — UIA `Navigate` is a topology walk, not a peer tree). It lives in `FluentGpu.Windows` (Uia/ folder) behind the portable `IA11yBackend` seam.
 
 ### 11.1 COM generation ruling (FOLDED — this overrides the spec's "hand-vtable both directions")
 
 > **The architecture-spec §5.8/§8 "hand-built vtable / `ComPtr<T>` for both directions, no ComWrappers" wording is superseded for the UIA/TSF/OLE surface by the dotnet10 §4 + hardened-v1 §4.2 ruling.** UIA is **cold/warm** COM (human-timescale, never per-frame), so its providers are authored with **`[GeneratedComInterface]`** (consume `IUIAutomation*` services) and **`[GeneratedComClass]`** (the provider CCWs the OS calls into). Hand-vtable `calli` is kept ONLY for the per-frame hot path (D3D12/DComp/Present in the render thread) and in-loop DWrite CCWs — none of which Input/A11y touches.
 
-Rationale (dotnet10 §4): on .NET 10 dispatch is a cached native fn-ptr vtable and the RCW/CCW is allocated once per object and cached; the cost source-gen COM adds (a wrapper object + a dictionary lookup) is irrelevant at human timescale, and it deletes a large error-prone hand-written unsafe surface with correct HRESULT→exception, `[PreserveSig]`, and `[UnmanagedCallersOnly]` vtables. **No `System.Runtime.InteropServices.ComWrappers` on the hot path** (there is no hot path here). The provider classes carry `[GeneratedComClass]`; the consumed UIA core interfaces carry `[GeneratedComInterface]`; the whole hierarchy stays in `Accessibility.Uia` (no cross-assembly `[GeneratedComInterface]` inheritance — vtable-offset rebuild pitfall).
+Rationale (dotnet10 §4): on .NET 10 dispatch is a cached native fn-ptr vtable and the RCW/CCW is allocated once per object and cached; the cost source-gen COM adds (a wrapper object + a dictionary lookup) is irrelevant at human timescale, and it deletes a large error-prone hand-written unsafe surface with correct HRESULT→exception, `[PreserveSig]`, and `[UnmanagedCallersOnly]` vtables. **No `System.Runtime.InteropServices.ComWrappers` on the hot path** (there is no hot path here). The provider classes carry `[GeneratedComClass]`; the consumed UIA core interfaces carry `[GeneratedComInterface]`; the whole hierarchy stays in `FluentGpu.Windows` Uia/ (no cross-assembly `[GeneratedComInterface]` inheritance — vtable-offset rebuild pitfall).
 
 ```csharp
 [GeneratedComInterface, Guid("…IRawElementProviderSimple…")]
@@ -1005,7 +1005,7 @@ All deps are `ReadOnlySpan<DepKey>` (foundations §6.4 / reconciler-hooks §3.2)
 - **Phases 1–2 alloc budget = freshly-captured user closures at the edge only** (architecture-spec §8). `Drain`, hit-test, gesture FSM, **gesture arena**, focus nav, accelerator match, route capture, **cursor resolution**, **light-dismiss FSM**, **edge-autoscroll arming** are all slab/arena/`stackalloc`. The route is `stackalloc Span<NodeHandle>` + a parallel `stackalloc Affine2D[]` of inverses; tab buckets are arena scratch reset per nav; the FSM/accelerator/handler/**arena-member/arena-state/team/overlay-entry/edge-autoscroll** tables are slab-backed.
 - **One hit-test per pointer event.** The route computed once in §5.1 is reused by the arena, cursor resolver, light-dismiss classifier, and edge-autoscroll arming — none re-hit-tests (a correctness *and* a budget property).
 - **No GC ref into a pool on the hot path** (foundations §1.1): handler delegates are the GC edge, stored in `HandlerTable` columns parallel to the spine, resolved by slot, validated by generation. `ElementRef`/`AcceleratorEntry`/`OverlayEntry`/`ArenaMember`/provider bindings carry `NodeHandle` + a gen check, never a raw object ref into the slab.
-- **Input owns ZERO ComPtr.** UIA/TSF/OLE COM (including the new `ITextProvider`/`ITextRangeProvider` CCWs, §11.6) is owned by `Accessibility.Uia`/`Pal.Windows` and is cold/warm — confined to those leaves and marshaled to the UI thread before touching Scene. The render thread owns every hot-path ComPtr; Input never crosses that seam.
+- **Input owns ZERO ComPtr.** UIA/TSF/OLE COM (including the new `ITextProvider`/`ITextRangeProvider` CCWs, §11.6) is owned by `FluentGpu.Windows` Uia/ and Pal/ and is cold/warm — confined to those leaves and marshaled to the UI thread before touching Scene. The render thread owns every hot-path ComPtr; Input never crosses that seam.
 - **Single-writer on SceneStore is preserved:** Input writes only its own columns — `SelectionState` (the sole selection writer, §12A), `ScrollOffset` (the sole scroll-offset writer across inertia/edge-autoscroll/ScrollToIndex/AT-realize, §12D.2), and overlay z-stack state (its own slabs). UIA reads (and `ITextRangeProvider` walks) are marshaled to the UI thread (the SceneStore's sole consumer-thread for these columns), so there is no off-thread SoA read. `ThreadGuard.AssertWriter` in `InputDispatcher`/`FocusEngine`/`OverlayManager`/`EdgeAutoScrollDriver` deterministically throws on a wrong-thread entry in asserts builds (erased from shipping AOT — production safety == CI coverage; hardened-v1 §8).
 - **DrawList contribution is POD:** the only things Input emits downstream are `DrawFocusRingCmd` / `DrawSelectionRectCmd` / `DrawAccessKeyBadgeCmd` + the overlay-layer opcodes, marked `PaintDirty`; the render thread records them at phase 8 exactly like any node. No cross-thread mutable state.
 
@@ -1040,14 +1040,14 @@ Nothing above `Hosting` recompiles (architecture-spec §9). The Input subsystem 
 
 | Seam | Windows leaf | macOS leaf | What stays portable |
 |---|---|---|---|
-| pump → ring | `Pal.Windows` WM_* → InputEvent | `Pal.Cocoa` NSEvent → InputEvent | `InputEventRing`, `InputEvent` schema, coalescing |
+| pump → ring | `FluentGpu.Windows` Pal/ WM_* → InputEvent | `Pal.Cocoa` NSEvent → InputEvent | `InputEventRing`, `InputEvent` schema, coalescing |
 | `IImeSession` | Imm32 (v1) / TSF (v2) | `NSTextInputClient` | caret rect via shared transform; composition events in the ring |
-| `IA11yBackend` | `Accessibility.Uia` (UIA, generated COM) | `Accessibility.NSAccessibility` | `A11yInfo` column, topology walk, auto-name helper, stable RuntimeId concept |
+| `IA11yBackend` | `FluentGpu.Windows` Uia/ (UIA, generated COM) | `Accessibility.NSAccessibility` | `A11yInfo` column, topology walk, auto-name helper, stable RuntimeId concept |
 | `IClipboard`/`IDragDropBackend` | OLE (generated COM), UI-thread `DoDragDrop` | `NSPasteboard`/`NSDragging*` | format StringIds, UI-thread routing, drop-feedback overlay |
 | `ISystemColors` (focus/HC color) | Windows HC tokens | macOS appearance colors | `DrawFocusRingCmd.Brush` source |
 | `IPlatformWindow.SetCursor` (L10; owned by `pal-rhi.md`) | `SetCursor`/`LoadCursor`, `WM_SETCURSOR` | `NSCursor.set()` / `addCursorRect` | `CursorId` enum, resolver, hover-route arbitration (§12C) |
-| UIA `ITextProvider`/`ITextRangeProvider` (L3) | `Accessibility.Uia` (generated COM) | `NSAccessibility` text marker / `AXTextMarkerRange` | the `TextLayoutSlot` read-side + `SelectionState`; range = codepoint pair (§11.6) |
-| overlay manager (L4) | portable `OverlayManager`; UIA `Window`/`Menu`/`ToolTip` via `Accessibility.Uia` | same manager; `NSAccessibility` window/menu roles | z-stack, light-dismiss FSM, focus contain/restore, portal (§12B) |
+| UIA `ITextProvider`/`ITextRangeProvider` (L3) | `FluentGpu.Windows` Uia/ (generated COM) | `NSAccessibility` text marker / `AXTextMarkerRange` | the `TextLayoutSlot` read-side + `SelectionState`; range = codepoint pair (§11.6) |
+| overlay manager (L4) | portable `OverlayManager`; UIA `Window`/`Menu`/`ToolTip` via `FluentGpu.Windows` Uia/ | same manager; `NSAccessibility` window/menu roles | z-stack, light-dismiss FSM, focus contain/restore, portal (§12B) |
 
 Forbidden above the seam (architecture-spec §9): any `HWND`/`NSWindow`/`HRESULT`/`NSError`/`ComPtr`/`id<…>`/`IRawElementProvider*`/`ITextRangeProvider`/`NSAccessibility*`/`HCURSOR`/`NSCursor`/`WM_*`/`NSEvent`/`Windows.Foundation.Point`/WinRT type. The portable layer sees only `Size2/Scale/PointPx/Vec2`, opaque `NativeHandle`, POD `InputEvent`/`WindowEvent`, `CursorId`, generational handles.
 

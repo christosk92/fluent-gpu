@@ -59,7 +59,7 @@ while (!window.IsClosed)
 - **`host.Paint(clicks)`** is the pump-free half (phases 3–12); the window's `PaintRequested` callback calls it so the
   window keeps redrawing during the OS modal move/resize loop.
 
-`FrameStats` (returned each frame, `src/FluentGpu.Hosting/AppHost.cs`) is your diagnostics window:
+`FrameStats` (returned each frame, `src/FluentGpu.Engine/Hosting/AppHost.cs`) is your diagnostics window:
 
 | Field | Meaning |
 |---|---|
@@ -115,19 +115,16 @@ controls, navigation, animation) and prints `[PASS]`/`[FAIL]` + `ALL CHECKS PASS
 
 ## Project layout (assemblies)
 
-The engine is an acyclic 18-assembly graph (`src/`). The ones you touch most:
+The engine ships as 4 libraries + 2 Roslyn analyzers + 2 executables (`src/FluentGpu.slnx`). The ones you touch most:
 
 | Assembly | What's in it |
 |---|---|
-| `FluentGpu.Foundation` | handles, allocators, `ColorF`/`Affine2D`/geometry, **the Signals reactive core** (`Signals/`), `StringTable` |
-| `FluentGpu.Dsl` | `Element` records, `Ui.*` builders, `Modifiers`, theming (`Tok`/`Theme`) |
-| `FluentGpu.Hooks` | `Component`/`ReactiveComponent`, `RenderContext` + hooks, `ComponentEl`/`Context`/`ControlFlow` |
-| `FluentGpu.Reconciler` | the reconciler (render-effects, keyed diff, `For`/`Show`, bindings), `VirtualListEl` |
-| `FluentGpu.Layout` | `FlexLayout`, `LayoutInvalidator` (scoped relayout) |
-| `FluentGpu.Scene` | the retained SoA `SceneStore` + columns + `ImageCache` |
-| `FluentGpu.Render` | `SceneRecorder` (scene → DrawList) |
-| `FluentGpu.Hosting` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` |
-| `FluentGpu.Controls` | Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator |
-| `FluentGpu.Pal.* / Rhi.* / Text.*` | platform/GPU/text seams: `.Windows`/`.D3D12`/`.DirectWrite` real, `.Headless` for tests |
+| `FluentGpu.Engine` | the portable engine core — Foundation (handles, allocators, `ColorF`/`Affine2D`, Signals), Seams (Rhi/Pal/Text interfaces), Scene, Render, Layout, Dsl, Hooks, Reconciler, Animation, Input, Media, Hosting, and the Headless backends; one folder per former project, namespaces verbatim |
+| `FluentGpu.Controls` | Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator — refs Engine only, TerraFX-free |
+| `FluentGpu.Windows` | the swappable Windows backend (D3D12/, Pal/, DirectWrite/, Wic/, Uia/, Interop/) — holds the one TerraFX.Interop.Windows reference |
+| `FluentGpu.WindowsApi` | OS-service scaffold (Notifications, Credentials, Packaging, Activation) |
+| `FluentGpu.SourceGen` / `FluentGpu.Interop.SourceGen` | netstandard2.0 Roslyn analyzers (cannot merge) |
+| `FluentGpu.VerticalSlice` | NativeAOT validation harness exe (refs Engine + Controls; TerraFX-free) |
+| `FluentGpu.WindowsApp` | gallery / composition root (refs Engine + Controls + Windows) |
 
 Next: **[reactivity.md](./reactivity.md)** — the signals model that everything else builds on.

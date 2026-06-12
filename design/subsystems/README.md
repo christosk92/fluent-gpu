@@ -25,7 +25,7 @@ numbering; phase 6.5 RATIFIED; setState-in-effect ⇒ N+1 (no synchronous re-loo
 
 | Doc | Owns (in one line) |
 |-----|--------------------|
-| [pal-rhi.md](./pal-rhi.md) | PAL seams (incl. 5 new: ISystemColors/IBackdropSource/IVideoPresenter/IVirtualMemory/IImageCodec) + RHI seam + Rhi.D3D12 internals + Pal.Windows windowing + DXGI flip-model & multi-visual DComp present-tree + CopyBufferToTexture/staging-ring/per-bucket-pool *mechanism*. |
+| [pal-rhi.md](./pal-rhi.md) | PAL seams (incl. 5 new: ISystemColors/IBackdropSource/IVideoPresenter/IVirtualMemory/IImageCodec) + RHI seam + `FluentGpu.Windows` D3D12/ internals + Pal/ windowing + DXGI flip-model & multi-visual DComp present-tree + CopyBufferToTexture/staging-ring/per-bucket-pool *mechanism*. |
 | [scene-memory.md](./scene-memory.md) | The SoA SceneStore + DrawList ENCODING FRAMEWORK: the DrawCmd header, the byte arenas, the parallel `ulong[]` sortkey array, the opcode ENUM list, the 3 dirty axes + arena dirty-worklist, the clean-span+epoch rule, the column layout that SnapshotColumns snapshot (references gpu-renderer.md for per-opcode payload fields). |
 | [gpu-renderer.md](./gpu-renderer.md) | The batched 2D renderer: every DrawList opcode's PAYLOAD STRUCT SHAPE (incl. DrawImageCmd union + DrawVideoCmd 7-field), instance structs, SortKey layout + batch-break rules, render-thread record/batch/tessellate types, the HLSL shader set, color contract, clip mechanism, AA ladder, clean-span reuse rule, the batch-time `ImageRef` UV-resolve branch, video hole-punch. |
 | [text.md](./text.md) | Text/glyph subsystem: itemize/shape/font/raster/atlas/layout seams, GlyphKey/PackedGlyph, DrawGlyphRunCmd emission, the R8+BGRA glyph atlas + eviction, shaped/wrap caches, Yoga measure bridge, DWrite leaf, lyrics layout + UseSyncedLyrics. |
@@ -113,7 +113,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | IBackdropSource (Mica/Acrylic) | pal-rhi.md (seam) / window-backdrop-mica.md (host-window consumer) / backdrop-effects-animation.md (in-app bake/recipe consumer) |
 | IVideoPresenter (+ VideoSurfaceId) | pal-rhi.md (seam) / media-pipeline.md (VideoSurfaceRegistry + present-tree placement) |
 | IVirtualMemory (reserve/commit) | pal-rhi.md (seam) / scene-memory.md + foundations.md (ChunkedArena consumer) |
-| IImageCodec (WIC; Media.Codecs.Wic leaf) | pal-rhi.md (seam) / media-pipeline.md (decode driver) |
+| IImageCodec (WIC; `FluentGpu.Windows` Wic/) | pal-rhi.md (seam) / media-pipeline.md (decode driver) |
 | IDragDropBackend, IA11yBackend, IFocusSink | input-a11y.md |
 | IEffectRunner (Render seam, not PAL) | backdrop-effects-animation.md |
 | IBrushSink (Scene seam, not PAL) | theming.md |
@@ -127,8 +127,8 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show + the `Prop<T>` reactive element props (Transform/Opacity/Fill/Width/Height/Text/Color/Source/Placeholder; record shape co-owned by dsl-aot.md) | reconciler-hooks.md §0bis |
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
-| IVirtualLayout / IMeasuredVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Scene\VirtualLayout.cs) |
-| VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
+| IVirtualLayout / IMeasuredVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
+| VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Engine\Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
 | SelectionModel / ItemContainer / ItemsView (E11-L3) | controls.md (selection semantics cite WinUI controls\dev\ItemsView selectors; as-built: src\FluentGpu.Controls) |
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |
 | UseTheme / UseSystemColors / UseHighContrast / UseDerivedBrush / UseDynamicColor | theming.md (UseDynamicColor's wantPalette trigger half: media-pipeline.md) |
@@ -161,24 +161,31 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 
 ### 2.6 New assemblies
 
-| Assembly / leaf | Authority |
+The repo physically ships **4 libraries + 4 satellites = 8 projects** (`src/FluentGpu.slnx`); the portable
+engine modules below are **folders inside `FluentGpu.Engine`** (namespaces verbatim), the OS leaves are
+**folders inside `FluentGpu.Windows`**. The **Authority** column (doc ownership of each contract) is
+unchanged. Design-only assemblies not yet split out physically (Theme/Validation/Testing/Devtools/
+Localization) live where their owning doc places them — Engine folders or CI-only — and are noted inline.
+
+| Contract / module → physical home | Authority |
 |-----------------|-----------|
-| FluentGpu.Foundation (Handle/Slab/HandleTable/ChunkedArena/StringId) | scene-memory.md (usage) / `../foundations.md` (root primitives) |
-| FluentGpu.Scene (SoA SceneStore + DrawList encoding) | scene-memory.md |
-| FluentGpu.Render (renderer + DrawList arenas + render-frame body) | gpu-renderer.md (renderer) / threading-render-seam.md (frame body) |
-| FluentGpu.Media (+ leaf Media.Codecs.Wic) | media-pipeline.md |
-| FluentGpu.Theme | theming.md |
-| FluentGpu.Validation (CI-only) | validation.md |
-| **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`) | validation.md |
-| **FluentGpu.Controls** (the SDK controls layer; apps + Dsl's `Ui` re-export reference it; pay-per-reference trim). **Deps (as-shipped):** Foundation, Dsl, Hooks, **Animation, Scene, Reconciler** — *not* "Dsl/Hooks/Foundation only" (ratification: NavigationView/PageHost are `Component`s and Repeater/`Virtual` need Reconciler types; `IVirtualLayout` is in Scene). Stays **acyclic** — Reconciler references only `VirtualListEl`, so `Controls → Reconciler` is one-way. | controls.md (content) / dsl-aot.md (assembly-graph + trim placement) |
-| **FluentGpu.Devtools** (dev-only live inspector; `EnableDevtools`-gated, 0 bytes release) | devtools.md (content) / dsl-aot.md (EnableDevtools FeatureSwitch + trim placement) |
-| **FluentGpu.Localization** (CLDR slices; dropped in `Invariant` mode) | dsl-aot.md (build placement) / text.md (ILocaleFormatter consumer) |
-| FluentGpu.SourceGen | dsl-aot.md |
-| FluentGpu.Interop.SourceGen (+ FGCOM rules) | com-interop.md |
-| FluentGpu.Rhi + leaf Rhi.D3D12, FluentGpu.Pal + leaf Pal.Windows | pal-rhi.md |
-| FluentGpu.Text + leaf Text.DirectWrite | text.md |
-| Accessibility.Uia / Accessibility.NSAccessibility (IA11yBackend leaves) | input-a11y.md |
-| FluentGpu.Hosting (composition root, device-lost rendezvous lock, worker pool wiring) | threading-render-seam.md (topology) / pal-rhi.md (device-lost lock) |
+| FluentGpu.Foundation (Handle/Slab/HandleTable/ChunkedArena/StringId) → `FluentGpu.Engine` Foundation/ | scene-memory.md (usage) / `../foundations.md` (root primitives) |
+| FluentGpu.Scene (SoA SceneStore + DrawList encoding) → `FluentGpu.Engine` Scene/ | scene-memory.md |
+| FluentGpu.Render (renderer + DrawList arenas + render-frame body) → `FluentGpu.Engine` Render/ | gpu-renderer.md (renderer) / threading-render-seam.md (frame body) |
+| FluentGpu.Media → `FluentGpu.Engine` Media/ (+ WIC codec leaf → `FluentGpu.Windows` Wic/) | media-pipeline.md |
+| FluentGpu.Theme (theming engine; design-only, lands in `FluentGpu.Engine` when split out) | theming.md |
+| FluentGpu.Validation (CI-only; not a shipped library) | validation.md |
+| **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`; design-only target) | validation.md |
+| **FluentGpu.Controls** (the SDK controls layer; apps + Dsl's `Ui` re-export reference it; pay-per-reference trim; **refs `FluentGpu.Engine` only, TerraFX-free**). **Deps (as-shipped):** Foundation, Dsl, Hooks, **Animation, Scene, Reconciler** — *not* "Dsl/Hooks/Foundation only" (ratification: NavigationView/PageHost are `Component`s and Repeater/`Virtual` need Reconciler types; `IVirtualLayout` is in Scene). Stays **acyclic** — `VirtualListEl` is declared in Engine's Reconciler/, so `Controls → Reconciler` is one-way with no back-edge. | controls.md (content) / dsl-aot.md (assembly-graph + trim placement) |
+| **FluentGpu.Devtools** (dev-only live inspector; `EnableDevtools`-gated, 0 bytes release; design-only target) | devtools.md (content) / dsl-aot.md (EnableDevtools FeatureSwitch + trim placement) |
+| **FluentGpu.Localization** (CLDR slices; dropped in `Invariant` mode; design-only target) | dsl-aot.md (build placement) / text.md (ILocaleFormatter consumer) |
+| FluentGpu.SourceGen (portable analyzer satellite) | dsl-aot.md |
+| FluentGpu.Interop.SourceGen (+ FGCOM rules; analyzer satellite, referenced by `FluentGpu.Windows`) | com-interop.md |
+| FluentGpu.Rhi + FluentGpu.Pal seams → `FluentGpu.Engine` Seams/Rhi/ + Seams/Pal/; D3D12 + Win32 impls → `FluentGpu.Windows` D3D12/ + Pal/ (+ Interop/) | pal-rhi.md |
+| FluentGpu.Text seam → `FluentGpu.Engine` Seams/Text/; DWrite impl → `FluentGpu.Windows` DirectWrite/ | text.md |
+| IA11yBackend leaves: UIA → `FluentGpu.Windows` Uia/; NSAccessibility → future `FluentGpu.Windows.Mac` | input-a11y.md |
+| FluentGpu.Hosting (composition root, device-lost rendezvous lock, worker pool wiring) → `FluentGpu.Engine` Hosting/ (the OS backend is bound by the app composition root, `FluentGpu.WindowsApp`) | threading-render-seam.md (topology) / pal-rhi.md (device-lost lock) |
+| OS-services scaffold (Notifications/Credentials/Packaging/Activation) → `FluentGpu.WindowsApi` (MSIX packaging is app-side) | — (new scaffold; no subsystem contract yet) |
 
 ### 2.7 Other cross-cutting artifacts
 

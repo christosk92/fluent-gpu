@@ -139,7 +139,7 @@ Chip("Func",   Prop.Of(() => op.Value * op.Value));  // Func<float>  → Prop<fl
 Chip("signal", op);                             // FloatSignal  → Prop<float>
 ```
 
-Things that trip people up, all enforced by the type (`src/FluentGpu.Foundation/Signals/Prop.cs`):
+Things that trip people up, all enforced by the type (`src/FluentGpu.Engine/Foundation/Signals/Prop.cs`):
 
 - **Inline lambdas need `Prop.Of`.** `Opacity = () => x` does *not* compile bare — C# cannot chain a lambda conversion into a user-defined conversion. Write `Opacity = Prop.Of(() => x)`, or assign a typed `Func<float>` local. A pure pass-through should assign the signal itself (`Opacity = op`) — no closure at all.
 - **A bound channel is wired once at mount and ignores its static sibling.** Pushing a *fresh* thunk on a later re-render is ignored — change the *signal's value*, not the bind. (A bound `with`-clone stays bound.)
@@ -150,7 +150,7 @@ A bound channel and an animation/transition both want to own the same node prope
 
 ## State hooks
 
-All hooks must be called **unconditionally and in the same order every render** — cells are slot-indexed (the React rules-of-hooks). No hooks inside `if`/loops. The surface lives on `Component` (`src/FluentGpu.Hooks/Component.cs`); the implementation is `src/FluentGpu.Hooks/RenderContext.cs`.
+All hooks must be called **unconditionally and in the same order every render** — cells are slot-indexed (the React rules-of-hooks). No hooks inside `if`/loops. The surface lives on `Component` (`src/FluentGpu.Engine/Hooks/Component.cs`); the implementation is `src/FluentGpu.Engine/Hooks/RenderContext.cs`.
 
 | Hook | Returns | Subscribes on read? | Use for |
 |---|---|---|---|

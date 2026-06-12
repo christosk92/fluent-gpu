@@ -59,7 +59,7 @@ The alloc tripwire is the one you will trip most. The honest contributor mental 
 - **The paint phases (6–13) are asserted Δ==0.** In `AppHost.RunFrame()` the host captures
   `before = GC.GetAllocatedBytesForCurrentThread()` just before phase 3 (`_runtime.Flush()`), then computes
   `hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before` after Present (phase 11) and stores it as
-  `FrameStats.HotPhaseAllocBytes` (`src/FluentGpu.Hosting/AppHost.cs`). On a steady frame this must be `0`.
+  `FrameStats.HotPhaseAllocBytes` (`src/FluentGpu.Engine/Hosting/AppHost.cs`). On a steady frame this must be `0`.
 - **The reconcile/render *edge* (phases 2/4) is budgeted, not zeroed.** A legitimate huge-subtree `setState`
   mints that subtree in one frame; that Gen0 is *measured and ratcheted*, never pretended to be zero. This is
   why the engine is "**near-zero-allocation**" — zero on the paint half, bounded at the edge — and the gate
@@ -185,7 +185,7 @@ Check("7. setState re-rendered the label", f2.Rendered && HasGlyph(device, strin
 ```
 
 `AppHost.RunFrame()` returns a `FrameStats` — your instrument panel. It is a `readonly record struct` defined in
-`src/FluentGpu.Hosting/AppHost.cs`:
+`src/FluentGpu.Engine/Hosting/AppHost.cs`:
 
 ```csharp
 public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled, long HotPhaseAllocBytes, bool Rendered)

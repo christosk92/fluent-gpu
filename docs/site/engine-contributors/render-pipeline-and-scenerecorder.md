@@ -3,7 +3,7 @@
 [← Contributing to the engine](./index.md) · [Reconciler and the retained scene](./reconciler-and-scene.md) · [Layout internals](./layout-internals.md)
 
 This page is for engine contributors changing the **record half** of the frame — phase 8 and its neighbours. It tells you
-how [`SceneRecorder`](../../../src/FluentGpu.Render/SceneRecorder.cs) walks the retained scene into a `DrawList`, what the
+how [`SceneRecorder`](../../../src/FluentGpu.Engine/Render/SceneRecorder.cs) walks the retained scene into a `DrawList`, what the
 DrawList POD stream is (and who owns its opcode shapes), the rounded-rect SDF pipeline rules that every `BoxEl` rasterizes
 through, the color/coordinate contract those pipelines honour, why a bound transform re-records without relayout, how
 record stays allocation-free, and exactly how to verify a change in the headless harness.
@@ -14,10 +14,10 @@ everywhere else.** A `DrawList` opcode's fields live in [`gpu-renderer.md`](../.
 the byte container that holds them lives in [`scene-memory.md`](../../../design/subsystems/scene-memory.md); this page is
 the working view of the code that fills the container.
 
-> **Where to change what.** Record walk + DrawList emit: `src/FluentGpu.Render/SceneRecorder.cs`. The POD command stream
-> + `DrawOp` enum + `DrawList` writer: `src/FluentGpu.Render/DrawList.cs`. The rounded-rect / gradient SDF pipelines and
-> their HLSL: `src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs` and `GradientPipeline.cs`. The headless decoder you assert
-> against: `src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs`. The harness that drives them: `src/FluentGpu.VerticalSlice/Program.cs`.
+> **Where to change what.** Record walk + DrawList emit: `src/FluentGpu.Engine/Render/SceneRecorder.cs`. The POD command stream
+> + `DrawOp` enum + `DrawList` writer: `src/FluentGpu.Engine/Render/DrawList.cs`. The rounded-rect / gradient SDF pipelines and
+> their HLSL: `src/FluentGpu.Windows/D3D12/RoundRectPipeline.cs` and `GradientPipeline.cs`. The headless decoder you assert
+> against: `src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs`. The harness that drives them: `src/FluentGpu.VerticalSlice/Program.cs`.
 
 ---
 
@@ -69,7 +69,7 @@ if (!p.LocalTransform.IsIdentity)
     world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
 ```
 
-`Affine2D` is the engine's 2×3 affine ([`src/FluentGpu.Foundation/Geometry.cs`](../../../src/FluentGpu.Foundation/Geometry.cs)).
+`Affine2D` is the engine's 2×3 affine ([`src/FluentGpu.Engine/Foundation/Geometry.cs`](../../../src/FluentGpu.Engine/Foundation/Geometry.cs)).
 Its `Multiply` is `this ∘ other` (apply `other` first), and `TransformBounds` gives the device-space AABB of a local rect —
 the recorder uses it for every cull/clip test. `Bounds` are **node-LOCAL** ([`SPEC-INDEX.md`](../../../design/SPEC-INDEX.md)
 §2, color/coordinate row), and `LocalTransform` maps local→parent, which is exactly why the recorder rebuilds `world` on the
@@ -181,8 +181,8 @@ SortKey bit-packing is the render-thread batcher's contract — the slice's para
 
 ## The rounded-rect SDF pipeline rules
 
-Every `BoxEl` rasterizes through **one** SDF rounded-rect pipeline: [`RoundRectPipeline`](../../../src/FluentGpu.Rhi.D3D12/RoundRectPipeline.cs)
-for solid, [`GradientPipeline`](../../../src/FluentGpu.Rhi.D3D12/GradientPipeline.cs) for gradient. A unit quad is drawn
+Every `BoxEl` rasterizes through **one** SDF rounded-rect pipeline: [`RoundRectPipeline`](../../../src/FluentGpu.Windows/D3D12/RoundRectPipeline.cs)
+for solid, [`GradientPipeline`](../../../src/FluentGpu.Windows/D3D12/GradientPipeline.cs) for gradient. A unit quad is drawn
 instanced; the VS positions it and the PS evaluates the analytic rounded-box SDF with single-pass derivative AA. Three rules
 govern how the recorder feeds them — each is the fix for a real, named bug; **do not regress them** (they are also the rules
 in [control-fidelity.md §1](../../guide/control-fidelity.md)):
@@ -260,7 +260,7 @@ The canonical color/coordinate/DPI contract is owned by [foundations.md P8 + arc
   2×3 affine, then to NDC: `ndc = float2(world.x/gViewport.x*2-1, 1 - world.y/gViewport.y*2)`.
 - **Text gamma is the deliberate exception.** Glyph coverage blends with the text-gamma exception the canon calls out; the
   rounded-rect/gradient lanes are plain linear-premultiplied.
-- **Acrylic.** In-app acrylic math is portable and headless-verifiable in [`AcrylicBackdropMath`](../../../src/FluentGpu.Render/AcrylicBackdropMath.cs)
+- **Acrylic.** In-app acrylic math is portable and headless-verifiable in [`AcrylicBackdropMath`](../../../src/FluentGpu.Engine/Render/AcrylicBackdropMath.cs)
   (`DownsampleFactor`, `SnapshotRegion`, `BucketDim`, the fixed `KernelSigma = 7.5` separable kernel taps) so the GPU leaf's
   blur is a thin consumer; the COM/HLSL stays render-thread-confined. The recorder emits the frosted surface via the
   acrylic `PushLayer` (the WinUI `AcrylicBrush` recipe fields: tint / fallback / tint-opacity / blur-sigma / noise / luminosity).
@@ -314,7 +314,7 @@ buffer, `stackalloc` it or stash it in a pre-sized field. A regression here is c
 
 ## Verifying: balance counters, per-opcode logs, the named checks
 
-Verify with the **headless harness**, never by eye. [`HeadlessGpuDevice`](../../../src/FluentGpu.Rhi.Headless/HeadlessGpuDevice.cs)
+Verify with the **headless harness**, never by eye. [`HeadlessGpuDevice`](../../../src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs)
 is the structural test backend: `SubmitDrawList` decodes the POD stream into reusable, inspectable command lists (capacity
 retained → no per-frame alloc after warmup) and tracks push/pop balances. The workflow in the harness
 (`src/FluentGpu.VerticalSlice/Program.cs`) is: build a scene, `SceneRecorder.Record(scene, dl)`, `dev.SubmitDrawList(dl.Bytes, dl.SortKeys, frame)`,

@@ -8,7 +8,7 @@ reconciler path, a scene column, a render opcode, a PAL/RHI/Text seam) is define
 referenced everywhere else. The #1 review finding on this codebase is the same artifact defined two ways in two files.
 So before you touch anything, the rule is: **find the one owner, change it there, verify against the headless harness.**
 
-This page maps subsystem → owning file, walks the 29-project assembly graph, and then gives the precise, file-level
+This page maps subsystem → owning file, walks the consolidated assembly graph, and then gives the precise, file-level
 "where do I change *this*" for each layer, ending with two recipes (adding an `Element` type; the canon gate after
 editing `design/`). The architecture *reasoning* lives in the [design corpus](../../../design/README.md) — this page
 links to it rather than restating it.
@@ -26,21 +26,21 @@ Each row is **one owner**. Change the artifact there; reference it elsewhere. (P
 
 | Subsystem | The `src/` file that owns it | Key types |
 |---|---|---|
-| Reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | `Reactive`, `Computation`, `ReactiveRuntime`, `Signal<T>`, `FloatSignal`, `Effect`, `Memo<T>` |
-| The unified bindable channel | `src/FluentGpu.Foundation/Signals/Prop.cs` | `Prop<T>`, `Prop.Of` |
-| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | `RenderContext`, hook cells |
-| Component model | `src/FluentGpu.Hooks/Component.cs` | `Component`, `ReactiveComponent`, `RunsOnce` |
-| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Reconciler/Reconciler.cs` | `TreeReconciler` |
-| `Element` shapes / props | `src/FluentGpu.Dsl/Element.cs`, and `src/FluentGpu.Hooks/{ComponentEl,Context,ControlFlow}.cs` | `Element`, `BoxEl`, `TextEl`, `GridEl`, `ImageEl`, `ScrollEl`, `ShowEl`, `ForEl`, … |
-| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Dsl/{Factories,Modifiers}.cs` | `Ui`, modifier extensions |
+| Reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | `Reactive`, `Computation`, `ReactiveRuntime`, `Signal<T>`, `FloatSignal`, `Effect`, `Memo<T>` |
+| The unified bindable channel | `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` | `Prop<T>`, `Prop.Of` |
+| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | `RenderContext`, hook cells |
+| Component model | `src/FluentGpu.Engine/Hooks/Component.cs` | `Component`, `ReactiveComponent`, `RunsOnce` |
+| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` | `TreeReconciler` |
+| `Element` shapes / props | `src/FluentGpu.Engine/Dsl/Element.cs`, and `src/FluentGpu.Engine/Hooks/{ComponentEl,Context,ControlFlow}.cs` | `Element`, `BoxEl`, `TextEl`, `GridEl`, `ImageEl`, `ScrollEl`, `ShowEl`, `ForEl`, … |
+| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/{Factories,Modifiers}.cs` | `Ui`, modifier extensions |
 | Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` | composition only — **no** new opcode/column/seam |
-| Layout (flex/grid/measure) | `src/FluentGpu.Layout/FlexLayout.cs` | `FlexLayout.Run` / `RunSubtree` |
-| Scoped relayout / boundary firewall | `src/FluentGpu.Layout/LayoutInvalidator.cs` | `LayoutInvalidator`, `IsLayoutBoundary` |
-| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` | `SceneStore`, `ISceneBackend`, `LayoutInput`, `NodePaint`, `NodeFlags`, `VisualKind` |
-| Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` | `SceneRecorder` |
-| Rounded-rect / border raster | `src/FluentGpu.Render/SceneRecorder.cs` + `src/FluentGpu.Rhi.D3D12/*Pipeline.cs` | the SDF ring + gradient PSOs |
-| Frame loop, scheduling | `src/FluentGpu.Hosting/AppHost.cs` | `AppHost.RunFrame` / `Paint`, `FrameStats` |
-| Theming tokens / colors | `src/FluentGpu.Dsl/{Tokens,Theme}.cs` | `Tok`, `TokenSet` |
+| Layout (flex/grid/measure) | `src/FluentGpu.Engine/Layout/FlexLayout.cs` | `FlexLayout.Run` / `RunSubtree` |
+| Scoped relayout / boundary firewall | `src/FluentGpu.Engine/Layout/LayoutInvalidator.cs` | `LayoutInvalidator`, `IsLayoutBoundary` |
+| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` | `SceneStore`, `ISceneBackend`, `LayoutInput`, `NodePaint`, `NodeFlags`, `VisualKind` |
+| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` | `SceneRecorder` |
+| Rounded-rect / border raster | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/*Pipeline.cs` | the SDF ring + gradient PSOs |
+| Frame loop, scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` | `AppHost.RunFrame` / `Paint`, `FrameStats` |
+| Theming tokens / colors | `src/FluentGpu.Engine/Dsl/{Tokens,Theme}.cs` | `Tok`, `TokenSet` |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | `Check(...)` |
 
 The cross-cutting **contract** owners (every opcode, RHI method, PAL seam, hook, source generator, scene column,
@@ -51,50 +51,57 @@ change; this page is for the *code-file* change.
 
 ---
 
-## The 29-project assembly graph
+## The assembly graph
 
-The solution ([`src/FluentGpu.slnx`](../../../src/FluentGpu.slnx)) is an **acyclic** graph of 29 projects, grouped into
-six solution folders. (The guide's "18-assembly" figure counts the original core engine; the solution as-built has
-grown the seams, headless backends, and tooling out to 29 — `FluentGpu.slnx` is the source of truth.)
+The solution ([`src/FluentGpu.slnx`](../../../src/FluentGpu.slnx)) is an **acyclic** graph of **4 libraries + 2 analyzers + 2 exes**, grouped into
+five solution folders. (`FluentGpu.slnx` is the source of truth.) <!-- canon-allow: superseded assembly count, narrating the old layout -->
 
-**Core** (12) — the engine proper, platform-agnostic:
+**UI-Rendering** — the portable engine core in one library project (`FluentGpu.Engine`):
 
-| Project | What's in it |
+| Assembly | What's in it (folder) |
 |---|---|
-| `FluentGpu.Foundation` | handles, allocators, `ColorF`/`Affine2D`/geometry, `StringTable`, **the signals reactive core** (`Signals/`) and `Prop<T>` |
-| `FluentGpu.Scene` | the retained SoA `SceneStore`, the columns, `ImageCache`, `VirtualLayout` |
-| `FluentGpu.Layout` | `FlexLayout`, `LayoutInvalidator` (scoped relayout), `ExtentTable` |
-| `FluentGpu.Render` | `SceneRecorder` (scene → DrawList) |
-| `FluentGpu.Dsl` | `Element` records, `Ui.*` builders, `Modifiers`, theming (`Tok`/`Theme`) |
-| `FluentGpu.Hooks` | `Component`/`ReactiveComponent`, `RenderContext` + hooks, `ComponentEl`/`Context`/`ControlFlow` |
-| `FluentGpu.Reconciler` | the reconciler (render-effects, keyed diff, `For`/`Show`, bindings), `VirtualListEl` |
-| `FluentGpu.Controls` | Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator |
-| `FluentGpu.Input` | hit-testing, the dispatcher, focus, gestures |
-| `FluentGpu.Animation` | `AnimEngine`, springs, keyframes, the motion channels |
-| `FluentGpu.Hosting` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` |
-| `FluentGpu.Media` | the image/video pipeline (decode, residency, mosaic) |
+| `FluentGpu.Engine` (`Foundation/`) | handles, allocators, `ColorF`/`Affine2D`/geometry, `StringTable`, **the signals reactive core** (`Signals/`) and `Prop<T>` |
+| `FluentGpu.Engine` (`Scene/`) | the retained SoA `SceneStore`, the columns, `ImageCache`, `VirtualLayout` |
+| `FluentGpu.Engine` (`Layout/`) | `FlexLayout`, `LayoutInvalidator` (scoped relayout), `ExtentTable` |
+| `FluentGpu.Engine` (`Render/`) | `SceneRecorder` (scene → DrawList) |
+| `FluentGpu.Engine` (`Dsl/`) | `Element` records, `Ui.*` builders, `Modifiers`, theming (`Tok`/`Theme`) |
+| `FluentGpu.Engine` (`Hooks/`) | `Component`/`ReactiveComponent`, `RenderContext` + hooks, `ComponentEl`/`Context`/`ControlFlow` |
+| `FluentGpu.Engine` (`Reconciler/`) | the reconciler (render-effects, keyed diff, `For`/`Show`, bindings), `VirtualListEl` |
+| `FluentGpu.Engine` (`Input/`) | hit-testing, the dispatcher, focus, gestures |
+| `FluentGpu.Engine` (`Animation/`) | `AnimEngine`, springs, keyframes, the motion channels |
+| `FluentGpu.Engine` (`Hosting/`) | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` |
+| `FluentGpu.Engine` (`Media/`) | the image/video pipeline (decode, residency, mosaic) |
+| `FluentGpu.Engine` (`Seams/Rhi/`, `Seams/Pal/`, `Seams/Text/`) | the abstract platform/GPU/text boundaries (interface-only, no platform code) |
+| `FluentGpu.Engine` (`Headless/Rhi/`, `Headless/Pal/`, `Headless/Text/`) | the GPU/window/font-free fakes the golden-check harness runs against |
 
-**Seams** (3) — the abstract platform boundaries (no platform code): `FluentGpu.Rhi`, `FluentGpu.Pal`, `FluentGpu.Text`.
+**Controls-Windowing** — portable control kit and Windows backend:
 
-**Backends.Windows** (7) — the real Win32/D3D12 leaves behind those seams: `FluentGpu.Rhi.D3D12`, `FluentGpu.Pal.Windows`,
-`FluentGpu.Text.DirectWrite`, `FluentGpu.Media.Codecs.Wic`, `FluentGpu.Win32.Interop`, `FluentGpu.Accessibility.Uia`,
-`FluentGpu.Rhi.Gdi`.
+| Assembly | What's in it |
+|---|---|
+| `FluentGpu.Controls` | Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator — **composition only, refs Engine only, TerraFX-free** |
+| `FluentGpu.Windows` (`Pal/`) | `Win32App`/`Win32Window` — the real Win32 PAL (was `FluentGpu.Pal.Windows`) |
+| `FluentGpu.Windows` (`D3D12/`) | `D3D12Device` — the Direct3D 12 RHI (was `FluentGpu.Rhi.D3D12`); the ONE TerraFX `PackageReference` lives here |
+| `FluentGpu.Windows` (`DirectWrite/`) | `DirectWriteFontSystem` — the text backend (was `FluentGpu.Text.DirectWrite`) |
+| `FluentGpu.Windows` (`Wic/`) | `WicImageCodec` — the WIC image codec (was `FluentGpu.Media.Codecs.Wic`) |
+| `FluentGpu.Windows` (`Interop/`) | Win32 interop helpers (was `FluentGpu.Win32.Interop`) |
+| `FluentGpu.Windows` (`Uia/`) | UIA accessibility (was `FluentGpu.Accessibility.Uia`) |
 
-**Backends.Headless** (3) — the GPU/window/font-free fakes the golden-check harness runs against:
-`FluentGpu.Rhi.Headless`, `FluentGpu.Pal.Headless`, `FluentGpu.Text.Headless`.
+**Windows-APIs** — OS services scaffold:
 
-**Tooling** (2) — Roslyn source generators / analyzers: `FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`.
+| Assembly | What's in it |
+|---|---|
+| `FluentGpu.WindowsApi` | empty scaffold for Notifications, Credentials, Packaging, Activation — refs Engine only |
 
-**Apps** (2) — `FluentGpu.VerticalSlice` (the headless golden-check harness — **your verification target**) and
+**Tooling** — Roslyn source generators (netstandard2.0, cannot merge): `FluentGpu.SourceGen`, `FluentGpu.Interop.SourceGen`.
+
+**Apps** — `FluentGpu.VerticalSlice` (the headless golden-check harness — **your verification target**) and
 `FluentGpu.WindowsApp` (the on-screen gallery + `FluentApp.Run`).
 
-The invariant the whole graph protects: **Core never references a Windows backend.** Code flows Core → Seam interface;
-the concrete leaf is injected at composition time in `FluentGpu.Hosting` (or by the headless harness). Keep it acyclic
-— if a feature seems to need a Core → backend reference, you've put the artifact in the wrong layer.
+The invariant the whole graph protects: **Engine never references a Windows backend.** Code flows Engine (seam interfaces) → `FluentGpu.Windows` leaves; the concrete leaf is injected at composition time in `AppHost` (or by the headless harness). Keep it acyclic — if a feature seems to need an Engine → backend reference, the artifact is in the wrong layer.
 
 ---
 
-## Signals & reactive core — `FluentGpu.Foundation/Signals`
+## Signals & reactive core — `FluentGpu.Engine/Foundation/Signals`
 
 This is the load-bearing centre: **every** update in the engine is one reactive computation re-running because a signal
 it read changed. There is no full-app re-render and no global dirty flag.
@@ -131,7 +138,7 @@ canonical reactive model — mirror it into [`reconciler-hooks.md` §0bis](../..
 
 ---
 
-## Hooks & components — `FluentGpu.Hooks`
+## Hooks & components — `FluentGpu.Engine` (`Hooks/`)
 
 The hook surface lives on `Component` (`Component.cs`) and is implemented in `RenderContext` (`RenderContext.cs`).
 
@@ -153,7 +160,7 @@ memo-skip) are owned by [`reconciler-hooks.md`](../../../design/subsystems/recon
 
 ---
 
-## Reconciler, For/Show, bindings, context — `FluentGpu.Reconciler`
+## Reconciler, For/Show, bindings, context — `FluentGpu.Engine` (`Reconciler/`)
 
 `TreeReconciler` (in `Reconciler.cs`) is the heart: it patches the retained `SceneStore` from the immutable `Element`
 tree. It is signals-first — every component is a reactive render-effect that re-renders + reconciles **only its own
@@ -178,7 +185,7 @@ The dispatch you'll touch most:
 - **`ChildrenOf(Element?)`** returns the positional children of a container (`BoxEl.Children` / `GridEl.Children`),
   empty for leaves.
 
-`ShowEl`/`ForEl` are records in `FluentGpu.Hooks/ControlFlow.cs` (with the `Flow.Show` / `Flow.For` fluent factory);
+`ShowEl`/`ForEl` are records in `FluentGpu.Engine/Hooks/ControlFlow.cs` (with the `Flow.Show` / `Flow.For` fluent factory);
 the reconciler runs their `When`/`Count`/`ItemAt` thunks inside a boundary effect and re-realizes through the keyed
 diff. Context providers publish a `Signal<object?>` per provider node; a consumer resolves by walking ancestors
 (`ResolveContext`). The keyed-LIS child reconciler and the `Mutate()` epoch chokepoint are specified in
@@ -186,7 +193,7 @@ diff. Context providers publish a `Signal<object?>` per provider node; a consume
 
 ---
 
-## Element shapes & DSL — `FluentGpu.Dsl`
+## Element shapes & DSL — `FluentGpu.Engine` (`Dsl/`)
 
 An `Element` (in `Element.cs`) is an **immutable description** of a UI node — cheap to build, never touches the scene
 directly. The base carries `Key` and an abstract `ushort ElementTypeId` (a source-gen-style stable id for the
@@ -194,18 +201,18 @@ reconciler's integer type-dispatch). The records and their ids today:
 
 | `ElementTypeId` | Record | File |
 |---|---|---|
-| 1 | `BoxEl` | `FluentGpu.Dsl/Element.cs` |
-| 2 | `TextEl` | `FluentGpu.Dsl/Element.cs` |
-| 3 | `ComponentEl` | `FluentGpu.Hooks/ComponentEl.cs` |
-| 4 | `ContextProviderEl` | `FluentGpu.Hooks/Context.cs` |
-| 5 | `ScrollEl` | `FluentGpu.Dsl/Element.cs` |
-| 6 | `VirtualListEl` | `FluentGpu.Reconciler/VirtualListEl.cs` |
-| 7 | `ShowEl` | `FluentGpu.Hooks/ControlFlow.cs` |
-| 8 | `ImageEl` | `FluentGpu.Dsl/Element.cs` |
-| 9 | `GridEl` | `FluentGpu.Dsl/Element.cs` |
-| 10 | `ForEl` | `FluentGpu.Hooks/ControlFlow.cs` |
-| 11 | `PolylineStrokeEl` | `FluentGpu.Dsl/Element.cs` |
-| 12 | `SpanTextEl` | `FluentGpu.Dsl/Element.cs` |
+| 1 | `BoxEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 2 | `TextEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 3 | `ComponentEl` | `FluentGpu.Engine/Hooks/ComponentEl.cs` |
+| 4 | `ContextProviderEl` | `FluentGpu.Engine/Hooks/Context.cs` |
+| 5 | `ScrollEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 6 | `VirtualListEl` | `FluentGpu.Engine/Reconciler/VirtualListEl.cs` |
+| 7 | `ShowEl` | `FluentGpu.Engine/Hooks/ControlFlow.cs` |
+| 8 | `ImageEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 9 | `GridEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 10 | `ForEl` | `FluentGpu.Engine/Hooks/ControlFlow.cs` |
+| 11 | `PolylineStrokeEl` | `FluentGpu.Engine/Dsl/Element.cs` |
+| 12 | `SpanTextEl` | `FluentGpu.Engine/Dsl/Element.cs` |
 
 Bindable properties on these records are a single `Prop<T>` — e.g. `BoxEl.Fill` is `Prop<ColorF>`, `TextEl.Text` is
 `Prop<string>`, `ImageEl.Source` is `Prop<string>`. A `Prop<T>` accepts a static value, a `Func<T>` thunk (via
@@ -224,14 +231,14 @@ artifact belongs in its owning subsystem (renderer / scene / seam / hooks), and 
 
 Visual-state and motion authoring is done through existing engine primitives, not a hand-rolled state machine:
 `BoxEl.{Hover,Pressed}{Fill,BorderColor}` + the eased hover/press progress for ordinary interaction, and the
-`FluentGpu.Animation` `AnimEngine` (keyframes/springs/stroke-trim) for authored WinUI timelines. Building a
+`FluentGpu.Engine` (`Animation/`) `AnimEngine` (keyframes/springs/stroke-trim) for authored WinUI timelines. Building a
 WinUI-faithful control — where to find the exact templates/storyboards/timing tokens and how to verify them — is its
 own guide: [control-fidelity.md](../../guide/control-fidelity.md). The control kit's contract is owned by
 [`controls.md`](../../../design/subsystems/controls.md).
 
 ---
 
-## Layout — `FluentGpu.Layout`
+## Layout — `FluentGpu.Engine` (`Layout/`)
 
 `FlexLayout` (in `FlexLayout.cs`) is a flexbox engine over the SoA scene columns: a bottom-up **Measure** descent then
 a top-down **Arrange** descent (distribute free space by grow/shrink, position by justify-content, align the cross axis
@@ -247,7 +254,7 @@ the card, never the page (`IsLayoutBoundary` is the exact predicate: explicit `W
 
 ---
 
-## Retained scene — `FluentGpu.Scene`
+## Retained scene — `FluentGpu.Engine` (`Scene/`)
 
 `SceneStore` (in `SceneStore.cs`) is the **struct-of-arrays** retained RenderNode tree the reconciler patches: one
 spine (a `gen` array + free-list, `Handle = {index, gen}`) indexes all the parallel columns. It implements the narrow
@@ -266,7 +273,7 @@ opcode reads) is owned by [`scene-memory.md`](../../../design/subsystems/scene-m
 
 ---
 
-## Record → DrawList — `FluentGpu.Render`
+## Record → DrawList — `FluentGpu.Engine` (`Render/`)
 
 `SceneRecorder` (in `SceneRecorder.cs`) is phase 8 (record): it walks the retained `SceneStore` and emits the DrawList.
 It composites **like a browser** — each node's geometry is emitted in LOCAL space with a world transform
@@ -275,7 +282,7 @@ transform/opacity changes animate **without relayout or re-record of content**. 
 interaction row; a focused node gets the dual-stroke focus ring.
 
 The recorder is also where the rounded-rect / border *emission* happens; the *raster* (the hollow SDF ring, gradient
-strokes, AA, clip) is the D3D12 pipelines in `src/FluentGpu.Rhi.D3D12/*Pipeline.cs`. The DrawList **encoding
+strokes, AA, clip) is the D3D12 pipelines in `src/FluentGpu.Windows/D3D12/*Pipeline.cs`. The DrawList **encoding
 framework** (the command header, byte arenas, the parallel sortkey array, the opcode enum, the clean-span+epoch reuse
 rule) is owned by [`scene-memory.md`](../../../design/subsystems/scene-memory.md); each opcode's **payload struct
 shape** (and the color contract) is owned by [`gpu-renderer.md`](../../../design/subsystems/gpu-renderer.md). Add an
@@ -283,7 +290,7 @@ opcode in those owners; the recorder is the *emit* site, not the definition site
 
 ---
 
-## Frame loop — `FluentGpu.Hosting`
+## Frame loop — `FluentGpu.Engine` (`Hosting/`)
 
 `AppHost` (in `AppHost.cs`) is the composition root **and** the single-UI-thread frame loop. `RunFrame()` runs one
 full frame and returns `FrameStats`; `Paint(clicks)` is the pump-free half the window's `PaintRequested` callback uses
@@ -306,7 +313,7 @@ single-thread as-built that implements it.
 
 ---
 
-## Theming tokens — `FluentGpu.Dsl/Tokens.cs`
+## Theming tokens — `FluentGpu.Engine/Dsl/Tokens.cs`
 
 `Tok` (in `Tokens.cs`) is the active design-token table + the theme switch. A `TokenSet` is an immutable, baked
 palette of every semantic Fluent brush for one theme (the WinUI `*_themeresources` mirror), built once and never
@@ -380,7 +387,7 @@ separate manual "needs-pixels" pass on the real D3D12 path.
 Walking the existing wiring (above) gives the exact steps. Say you're adding a leaf `MyLeafEl`:
 
 1. **Pick a free `ElementTypeId`.** The ids 1–12 are taken (see the table above); the next free id is **13**. Define
-   the record in `FluentGpu.Dsl/Element.cs` (or the relevant `FluentGpu.Hooks/*.cs` for a control-flow/context kind),
+   the record in `FluentGpu.Engine/Dsl/Element.cs` (or the relevant `FluentGpu.Engine/Hooks/*.cs` for a control-flow/context kind),
    override `ElementTypeId => 13`, and expose bindable props as `Prop<T>` (a static value / `Func<T>` / signal — never
    a `*Bind` twin).
 
@@ -394,7 +401,7 @@ Walking the existing wiring (above) gives the exact steps. Say you're adding a l
    }
    ```
 
-2. **Write its columns in the reconciler.** Add a `case MyLeafEl m:` to `WriteColumns` in `Reconciler.cs` that sets the
+2. **Write its columns in the reconciler.** Add a `case MyLeafEl m:` to `WriteColumns` in `FluentGpu.Engine/Reconciler/Reconciler.cs` that sets the
    scene `Paint`/`Layout` fields (and the `VisualKind`) from the element. If the element draws something new, you may
    need a `VisualKind` member — but that, and any new opcode/column, must be added in its scene/renderer owner first
    ([`scene-memory.md`](../../../design/subsystems/scene-memory.md) /
@@ -409,7 +416,7 @@ Walking the existing wiring (above) gives the exact steps. Say you're adding a l
    and `Update` must route it if it needs special structural handling (like `ScrollEl`/`VirtualListEl`).
 
 5. **Add a factory + a golden check.** Expose a `Ui.MyLeaf(...)` builder in `Factories.cs`, then add a
-   `Check("…", …)` in `Program.cs` that mounts it headlessly and asserts the recorded output (and `FrameStats` if it
+   `Check("…", …)` in `src/FluentGpu.VerticalSlice/Program.cs` that mounts it headlessly and asserts the recorded output (and `FrameStats` if it
    participates in reactivity). Run the harness.
 
 The source-generator-driven `ElementTypeId` allocation and the keyed reconcile mechanics are specified in

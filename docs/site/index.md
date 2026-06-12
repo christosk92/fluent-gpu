@@ -121,7 +121,7 @@ new BoxEl { Transform = Prop.Of(() => Affine2D.Translation(vol.Value * 100f, 0f)
 ```
 
 `Prop.Of(...)` is required only for an **inline lambda** (C# cannot chain a lambda conversion into a user conversion); a
-concrete signal assigns directly — `Text = sig`. The `Prop<T>` type lives in `src/FluentGpu.Foundation/Signals/Prop.cs`.
+concrete signal assigns directly — `Text = sig`. The `Prop<T>` type lives in `src/FluentGpu.Engine/Foundation/Signals/Prop.cs`.
 
 **Start here, in order:**
 
@@ -151,18 +151,18 @@ canonical contract owners are in [`SPEC-INDEX.md`](../../design/SPEC-INDEX.md)):
 
 | If you're changing… | Edit |
 |---|---|
-| The reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
-| The unified bindable channel (`Prop<T>`) | `src/FluentGpu.Foundation/Signals/Prop.cs` |
-| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Hooks/RenderContext.cs` + `Component.cs` |
-| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Reconciler/Reconciler.cs` |
-| Element shapes / props | `src/FluentGpu.Dsl/{Element,ControlFlow,Context,ComponentEl}.cs` |
-| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Dsl/{Factories,Modifiers}.cs` |
+| The reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
+| The unified bindable channel (`Prop<T>`) | `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` |
+| Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Engine/Hooks/RenderContext.cs` + `Component.cs` |
+| Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| Element shapes / props | `src/FluentGpu.Engine/Dsl/{Element,ControlFlow,Context,ComponentEl}.cs` |
+| DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/{Factories,Modifiers}.cs` |
 | Controls (Button/Slider/Nav/Virtual…) | `src/FluentGpu.Controls/*.cs` (composition only — no new opcodes/columns) |
-| Rounded-rect / border rendering | `src/FluentGpu.Render/SceneRecorder.cs` + `src/FluentGpu.Rhi.D3D12/*Pipeline.cs` |
-| Frame loop, scheduling | `src/FluentGpu.Hosting/AppHost.cs` (`RunFrame`/`Paint`) |
-| Layout (flex/grid/measure) | `src/FluentGpu.Layout/{FlexLayout,LayoutInvalidator}.cs` |
-| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
-| Theming tokens / colors | `src/FluentGpu.Dsl/{Tokens,Theme}.cs` |
+| Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/*Pipeline.cs` |
+| Frame loop, scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`) |
+| Layout (flex/grid/measure) | `src/FluentGpu.Engine/Layout/{FlexLayout,LayoutInvalidator}.cs` |
+| Retained scene (SoA tree, columns, dirty flags) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Theming tokens / colors | `src/FluentGpu.Engine/Dsl/{Tokens,Theme}.cs` |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
 
 **Verify with the headless harness, not by eye.** It is the single source of truth for "does the engine still work" —
@@ -202,16 +202,16 @@ pipeline as-built, and the design corpus for architecture — start at [`design/
   contract-ownership map; [`architecture-spec.md`](../../design/architecture-spec.md) is the end-to-end engine.
 - **The key types**, in one place:
   - `FluentApp.Run` — `src/FluentGpu.WindowsApp/FluentApp.cs`. The batteries-included entry point.
-  - `Component` (and `ReactiveComponent`) — `src/FluentGpu.Hooks/Component.cs`. Override `Render()`; it re-runs on its
+  - `Component` (and `ReactiveComponent`) — `src/FluentGpu.Engine/Hooks/Component.cs`. Override `Render()`; it re-runs on its
     own state/context changes only.
-  - `Signal<T>` — `src/FluentGpu.Foundation/Signals/Signal.cs` (namespace `FluentGpu.Signals`). The unit of state:
+  - `Signal<T>` — `src/FluentGpu.Engine/Foundation/Signals/Signal.cs` (namespace `FluentGpu.Signals`). The unit of state:
     `.Value` reads **and subscribes** the current computation; `.Peek()` reads without subscribing; setting `.Value`
     notifies subscribers.
-  - `Prop<T>` / `Prop.Of` — `src/FluentGpu.Foundation/Signals/Prop.cs`. One unified bindable channel per property,
+  - `Prop<T>` / `Prop.Of` — `src/FluentGpu.Engine/Foundation/Signals/Prop.cs`. One unified bindable channel per property,
     accepting a static `T`, a `Func<T>` thunk, or a concrete signal.
 
 > Note: `Signal<T>` and `Prop<T>` are authored from the namespace `FluentGpu.Signals` (the `using FluentGpu.Signals;`
-> cheat-sheet import), even though their files live under the `FluentGpu.Foundation` assembly's `Signals/` folder.
+> cheat-sheet import), even though their files live under the `FluentGpu.Engine` assembly's `Foundation/Signals/` folder.
 
 ---
 

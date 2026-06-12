@@ -16,7 +16,7 @@ seen from below:
 > full-app re-render** and **no global dirty flag** — the engine's job is to keep those re-runs surgical.
 
 Internalize that and the architecture stops being a pile of subsystems and becomes one idea with a data substrate under
-it. The reactive core's own header (`src/FluentGpu.Foundation/Signals/ReactiveCore.cs`) states it plainly: *"This is the
+it. The reactive core's own header (`src/FluentGpu.Engine/Foundation/Signals/ReactiveCore.cs`) states it plainly: *"This is the
 single update mechanism the whole engine is built on — a property binding is an effect at node granularity; a component
 re-render is an effect at subtree granularity."*
 
@@ -25,52 +25,51 @@ re-render is an effect at subtree granularity."*
 The engine is a strict **acyclic** graph of assemblies under `src/`. The dependency direction is load-bearing: an
 assembly may only reference ones *below* it, and the build is structured so a leaf (a real Windows backend, or a
 headless test backend) can be swapped behind a seam without anything above the seam knowing. The canonical assembly
-layout is owned by [`design/foundations.md`](../../../design/foundations.md) (the repo today is **~29 projects** — the
-older "18 assemblies" count in some prose is stale).
+layout is owned by [`design/foundations.md`](../../../design/foundations.md) (the repo is **4 libraries + 2 analyzers + 2 exes** — the older "18 assemblies" or "29 projects" counts in some prose are stale).
 
 The assemblies you will actually edit, with the one type each is known for:
 
 | Assembly | What lives there | Headline type |
 |---|---|---|
-| `FluentGpu.Foundation` | handles, the four allocators, `ColorF`/`Affine2D`/geometry, `StringTable`, **the Signals reactive core** (`Signals/`) | **`ReactiveCore`** (`Reactive`/`Computation`/`ReactiveRuntime`) |
-| `FluentGpu.Dsl` | `Element` records, `Ui.*` builders, `Modifiers`, theming tokens (`Tok`/`Theme`), the `Prop<T>` bindable channel | `Element`, `BoxEl`/`TextEl`/`ImageEl` |
-| `FluentGpu.Hooks` | `Component`/`ReactiveComponent`, `RenderContext` + the hook cells, `ComponentEl`/`Context`/`ControlFlow` | `Component` |
-| `FluentGpu.Reconciler` | the heart: render-effects, the keyed positional+type diff, `For`/`Show`, context, bindings, `VirtualListEl` | **`Reconciler`** (`TreeReconciler`) |
-| `FluentGpu.Layout` | flexbox/grid measure+arrange, the scoped-relayout boundary walk | **`FlexLayout`**, `LayoutInvalidator` |
-| `FluentGpu.Scene` | the retained SoA tree, the parallel columns, the 3-axis dirty flags, `ImageCache`, `VirtualLayout` | **`SceneStore`** (`ISceneBackend`) |
-| `FluentGpu.Render` | the record pass — walk the scene, emit the DrawList | **`SceneRecorder`** |
-| `FluentGpu.Hosting` | the frame loop, `FrameStats`, `FrameDiagnostics` | **`AppHost`** |
+| `FluentGpu.Engine` (`Foundation/`) | handles, the four allocators, `ColorF`/`Affine2D`/geometry, `StringTable`, **the Signals reactive core** (`Signals/`) | **`ReactiveCore`** (`Reactive`/`Computation`/`ReactiveRuntime`) |
+| `FluentGpu.Engine` (`Dsl/`) | `Element` records, `Ui.*` builders, `Modifiers`, theming tokens (`Tok`/`Theme`), the `Prop<T>` bindable channel | `Element`, `BoxEl`/`TextEl`/`ImageEl` |
+| `FluentGpu.Engine` (`Hooks/`) | `Component`/`ReactiveComponent`, `RenderContext` + the hook cells, `ComponentEl`/`Context`/`ControlFlow` | `Component` |
+| `FluentGpu.Engine` (`Reconciler/`) | the heart: render-effects, the keyed positional+type diff, `For`/`Show`, context, bindings, `VirtualListEl` | **`Reconciler`** (`TreeReconciler`) |
+| `FluentGpu.Engine` (`Layout/`) | flexbox/grid measure+arrange, the scoped-relayout boundary walk | **`FlexLayout`**, `LayoutInvalidator` |
+| `FluentGpu.Engine` (`Scene/`) | the retained SoA tree, the parallel columns, the 3-axis dirty flags, `ImageCache`, `VirtualLayout` | **`SceneStore`** (`ISceneBackend`) |
+| `FluentGpu.Engine` (`Render/`) | the record pass — walk the scene, emit the DrawList | **`SceneRecorder`** |
+| `FluentGpu.Engine` (`Hosting/`) | the frame loop, `FrameStats`, `FrameDiagnostics` | **`AppHost`** |
 | `FluentGpu.Controls` | Button/IconButton/ToggleButton/Slider/ScrollBar/NavigationView/Repeater/Virtual/Navigator — **composition only** | `Button`, `Slider`, … |
-| `FluentGpu.Pal.* / Rhi.* / Text.*` | the platform/GPU/text seams: `.Windows` / `.D3D12` / `.DirectWrite` real, `.Headless` for tests/CI | the seam interfaces |
+| `FluentGpu.Engine` (`Seams/Rhi/`, `Seams/Pal/`, `Seams/Text/`) / `FluentGpu.Windows` | the platform/GPU/text seams (interface-only in Engine); real Windows backends in `FluentGpu.Windows`; headless in `Engine/Headless/` | the seam interfaces |
 
 The six types worth knowing before your first change — each is one stage of the single mechanism above:
 
-- **`ReactiveCore`** (`src/FluentGpu.Foundation/Signals/ReactiveCore.cs`) — the Solid/Preact-style reactivity graph.
+- **`ReactiveCore`** (`src/FluentGpu.Engine/Foundation/Signals/ReactiveCore.cs`) — the Solid/Preact-style reactivity graph.
   Signals are observable cells; computations (effects, memos, component render-effects) auto-subscribe to the signals
   they *read* during a run and re-run when one changes. Scheduling is **deferred**: a write marks dependents stale and
   asks the host for a frame; the host drains them once per frame via `ReactiveRuntime.Flush` (phase 3). Tracking state
   is `[ThreadStatic]` because the runtime is UI-thread-confined. This is *the* file for the set→notify→flush contract;
   it must stay allocation-free on the notify path.
-- **`Reconciler`** / `TreeReconciler` (`src/FluentGpu.Reconciler/Reconciler.cs`) — patches the retained `SceneStore`
+- **`Reconciler`** / `TreeReconciler` (`src/FluentGpu.Engine/Reconciler/Reconciler.cs`) — patches the retained `SceneStore`
   from the immutable `Element` tree. Every component is a reactive render-effect that re-renders and reconciles **only
   its own subtree** when its state/context changes (granular, never the whole app); a reused component on a parent
   re-render is a no-op (it is autonomous). Fine-grained bindings and reactive control-flow (`ShowEl`/`ForEl`) are
   effects too. The keyed positional+type diff is the structural engine underneath `For`/`Show`. Its
   `ConsumeReconciled()` / `ConsumeRenderCount()` are how the harness proves granularity.
-- **`SceneStore`** / `ISceneBackend` (`src/FluentGpu.Scene/SceneStore.cs`) — the struct-of-arrays retained RenderNode
+- **`SceneStore`** / `ISceneBackend` (`src/FluentGpu.Engine/Scene/SceneStore.cs`) — the struct-of-arrays retained RenderNode
   tree: one spine (generation + free-list) indexes every parallel column (`LayoutInput`, `NodePaint`, `InteractionInfo`,
   `NodeFlags`, bounds, …). The reconciler's *only* window onto it is `ISceneBackend` — **handle-in / handle-out,
   POD-only**. Node identity is a `Handle = {u32 Index, u32 Gen}` (the generation defends against ABA — see
   [`SPEC-INDEX.md`](../../../design/SPEC-INDEX.md) §2).
-- **`FlexLayout`** (`src/FluentGpu.Layout/FlexLayout.cs`) — flexbox/grid over the SoA columns: a bottom-up `Measure`
+- **`FlexLayout`** (`src/FluentGpu.Engine/Layout/FlexLayout.cs`) — flexbox/grid over the SoA columns: a bottom-up `Measure`
   descent then a top-down `Arrange` descent. `Run` does the full tree; **`RunSubtree` re-solves only one subtree against
   its already-placed bounds** — that is the scoped relayout, the thing that keeps a deep change from re-laying-out the
   page. The boundary walk that decides where a scoped relayout stops lives next door in `LayoutInvalidator`.
-- **`SceneRecorder`** (`src/FluentGpu.Render/SceneRecorder.cs`) — phase 8 (record): walks the retained scene and emits
+- **`SceneRecorder`** (`src/FluentGpu.Engine/Render/SceneRecorder.cs`) — phase 8 (record): walks the retained scene and emits
   the DrawList, compositing **like a browser** — each node's geometry is emitted in *local* space with a world transform
   (parent ∘ translate ∘ LocalTransform) and a cumulative opacity, *"so transform/opacity animate without relayout or
   re-record of content."* This is why a bound `Transform`/`Opacity` is compositor-only.
-- **`AppHost`** (`src/FluentGpu.Hosting/AppHost.cs`) — the composition root and the single-UI-thread frame loop.
+- **`AppHost`** (`src/FluentGpu.Engine/Hosting/AppHost.cs`) — the composition root and the single-UI-thread frame loop.
   `RunFrame()` runs one full frame and returns a `FrameStats`; it drains the reactive runtime once per frame
   (`_runtime.Flush()` is phase 3), runs *scoped* layout only when a reconcile or layout-bind changed something, then
   records. `Paint(int clicks = 0)` is the pump-free half (so the window keeps redrawing during the OS modal

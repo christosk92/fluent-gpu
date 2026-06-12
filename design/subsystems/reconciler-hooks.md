@@ -39,10 +39,10 @@ contracts owned elsewhere:
 > the as-built model; the lane/`UpdateQueue` sections (P1/P2a) remain the design target for concurrency and are not
 > yet wired.
 
-- **Reactive core** (`FluentGpu.Signals`, shipped in the `FluentGpu.Foundation` assembly): `Signal<T>`/`FloatSignal`
+- **Reactive core** (`FluentGpu.Signals`, shipped in FluentGpu.Engine's `Foundation/` folder): `Signal<T>`/`FloatSignal`
   (observable cells, auto-tracked on read), `Memo<T>` (lazy derived), `Effect`/`Computation` (re-runs on dep change),
   `ReactiveRuntime` (per-`AppHost` scheduler: `Schedule`/`Flush`/`Batch`, `FrameRequested` wakes the loop). Files:
-  `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs`. AOT-clean (delegates, no reflection);
+  `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs`. AOT-clean (delegates, no reflection);
   the set→notify path is allocation-free (subscriptions are wired once at mount).
 - **A component is a reactive computation.** `UseState`/`UseReducer` return a `Signal<T>` value; reading it in
   `Render()` subscribes the component's **render-effect**. A setState writes the signal → schedules ONLY that
@@ -65,12 +65,12 @@ contracts owned elsewhere:
   `*Bind` prop (TransformBind/OpacityBind/…) beside its static twin <!-- canon-allow: names the superseded *Bind form on purpose -->.
 - **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
   and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
-  parent re-render (`src/FluentGpu.Hooks/ControlFlow.cs`, check #61).
+  parent re-render (`src/FluentGpu.Engine/Hooks/ControlFlow.cs`, check #61).
 - **Context = signals.** A `ContextProviderEl` stores a `Signal<object?>` per provider node; `UseContext` resolves
   the nearest provider by walking ancestors (`SceneStore.Parent`) and subscribes — so a value change re-renders
   exactly the consumers, and a scoped re-render needs no context-stack reconstruction. Ambient contexts
   (`Viewport.Size`, `FrameDiagnostics.Current`) are host-published signals.
-- **Scoped relayout** (`src/FluentGpu.Layout/LayoutInvalidator.cs`): a `LayoutDirty` worklist on `SceneStore`; each
+- **Scoped relayout** (`src/FluentGpu.Engine/Layout/LayoutInvalidator.cs`): a `LayoutDirty` worklist on `SceneStore`; each
   dirty node walks UP to the nearest **layout boundary** (fixed-size, non-flexing, clip-to-bounds, or a scroll
   viewport, or root) and only that subtree is re-solved (`FlexLayout.RunSubtree`) — the firewall from `layout.md
   §4`. Full layout only on first frame / resize / DPI / root-structural change. (A text measure-cache is a tracked
@@ -1399,7 +1399,7 @@ CI-gated edge (`hardened-v1-plan.md` §4.5: O(Δ) Gen0, not zero).
 | `ISceneBackend` impl (SoA column writes, snapshot copy) | **No** | In `Scene`; knows SoA layout, not GPU/OS |
 | `RerenderToken`/`IReRenderSink`/`IPlatformAppLoop.Post` | **No** (PAL interface) | Windows impl uses the OS message loop; macOS uses CFRunLoop — leaf, behind PAL |
 | Off-thread marshal mechanism | **No** | `IPlatformAppLoop.IsOnLoopThread`/`Post<TState>` — PAL, not `DispatcherQueue` |
-| `ComPtr<T>`, DXGI, D3D12, DComp, DWrite, HWND, `WM_*` | **N/A here** | Live only in `Rhi.D3D12`/`Pal.Windows`/`Text.DirectWrite` leaves, ≥2 layers below; never referenced |
+| `ComPtr<T>`, DXGI, D3D12, DComp, DWrite, HWND, `WM_*` | **N/A here** | Live only in `FluentGpu.Windows` D3D12/ / Pal/ / DirectWrite/ leaves, ≥2 layers below; never referenced |
 
 The macOS/Metal port reimplements only the PAL app-loop (`IPlatformAppLoop`) and the RHI/Text leaves; the reconciler
 + hooks subsystem ships **unchanged**.

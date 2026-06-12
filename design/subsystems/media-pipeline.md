@@ -43,7 +43,7 @@ beyond one `ImageRef` branch in the batcher's UV-resolve*.
    needs a texture-upload path on the glyph atlas it does not have).
 
 **Assembly.** Portable **`FluentGpu.Media`** (deps `Foundation` + `Rhi`/`Text` *interfaces* only) +
-leaf **`Media.Codecs.Wic`** (behind portable `IImageCodec`). Referenced **only by `Hosting`**; acyclic.
+leaf **`FluentGpu.Windows` (Wic/ folder)** (behind portable `IImageCodec`). Referenced **only by `Hosting`**; acyclic.
 Palette extraction lives in **`FluentGpu.Theme`** (a sibling subsystem) and is fed by *this* pipeline's CPU
 staging block — see §4.6 for the handshake (no GPU readback).
 
@@ -197,7 +197,7 @@ public sealed class DecodeScheduler
     readonly Channel<DecodeRequest> _in;     // bounded: cap ~256, custom drop-lowest-priority overflow
     readonly /*MPSC*/ UploadResultRing _out; // lock-free ring drained by the render thread (§2)
     readonly SlabAllocator<StagingBlock> _staging;   // recycled CPU pixel blocks, bucket-sized
-    readonly IImageCodec _codec;             // Media.Codecs.Wic leaf behind the portable interface
+    readonly IImageCodec _codec;             // FluentGpu.Windows Wic/ leaf behind the portable interface
     readonly CancellationTokenSource[] _cts; // per CancelTicket; pooled, reset on recycle
 
     public ushort Enqueue(in DecodeRequest r);   // returns CancelTicket; bounded write or priority-drop
@@ -220,7 +220,7 @@ DecodeJob(req):
 
 **`IImageCodec` (portable seam; PAL-adjacent, lives in `Rhi`/`Pal`-style interface namespace within Media):**
 ```csharp
-public interface IImageCodec      // Media.Codecs.Wic implements on Windows; CGImageSource on macOS
+public interface IImageCodec      // FluentGpu.Windows Wic/ implements on Windows; CGImageSource on macOS
 {
     bool DecodeConstrained(ReadOnlySpan<byte> encoded, byte bucket, Span<byte> dstBgra8,
                            out ushort w, out ushort h, out ushort naturalW, out ushort naturalH);
@@ -301,7 +301,7 @@ re-requests at `Visible`. The hard cap exists only for pathological 512px-everyw
 ### 4.1 The RHI delta — `CopyBufferToTexture` + texture-staging ring + per-bucket pool (REQUIRED)
 
 The RHI seam (`gpu-renderer` §2, `architecture-spec` §4.7) has **no** texture upload. ADD to `FluentGpu.Rhi`
-(interface) and `FluentGpu.Rhi.D3D12` (leaf):
+(interface) and `FluentGpu.Windows` (D3D12/ folder) (leaf):
 
 ```csharp
 // FluentGpu.Rhi — ICommandEncoder, NEW
@@ -314,7 +314,7 @@ void          ReleaseBucketTexture(TextureHandle); // returns to pool (does NOT 
 TextureHandle AcquireAtlasPage();                  // BGRA8 small-image atlas page (also pooled)
 ```
 
-- **Dedicated texture-staging ring** in `Rhi.D3D12`: an MB-sized `D3D12_HEAP_TYPE_UPLOAD` buffer,
+- **Dedicated texture-staging ring** in `FluentGpu.Windows` D3D12/: an MB-sized `D3D12_HEAP_TYPE_UPLOAD` buffer,
   bump-allocated, **fence-gated reset** — separate from the instance `UploadRing` (which stays
   vertex/instance/index only; texture rows have different alignment `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT=256`
   and a much larger byte footprint, so sharing the instance ring would thrash it). `D3D12MA` backs both
@@ -457,13 +457,13 @@ The single best decision (KEEP): externally-decoded video (PlayReady `MediaPlaye
 **sibling DComp visual the engine never paints into**, turning the heaviest continuous work into a non-issue on
 the single-thread v1 — it runs on the OS compositor thread by construction.
 
-### 8.1 PAL seam `IVideoPresenter` (ADD; `Pal.Windows` → DirectComposition)
+### 8.1 PAL seam `IVideoPresenter` (ADD; `FluentGpu.Windows` Pal/ → DirectComposition)
 
 ```csharp
 namespace FluentGpu.Pal;
 public readonly record struct VideoSurfaceId(uint Value);   // POD, opaque across the seam
 
-public interface IVideoPresenter           // Pal.Windows → IDCompositionDevice child visual; macOS → AVPlayerLayer
+public interface IVideoPresenter           // FluentGpu.Windows Pal/ → IDCompositionDevice child visual; macOS → AVPlayerLayer
 {
     VideoSurfaceId CreateSurface();
     void  Place(VideoSurfaceId id, in IntRect deviceRect, float opacity, int z);   // off-loop transform poke
@@ -645,9 +645,9 @@ exact field the playback clock writes. No new opcode (no `DrawLyricsRun`); no Te
 |---|---|---|---|
 | `ImageHandle`/`ImageRealization`/`DrawImageCmd`/`DrawVideoCmd` | **100% portable** | — | — |
 | `DecodeScheduler`/`ResidencyManager`/`UseImage`/`UseMosaic`/`VideoSurfaceRegistry`/`LyricsLayoutEngine` | **100% portable** | — | — |
-| Decode (`IImageCodec`) | seam | `Media.Codecs.Wic` (WIC `IWIC*`, `[GeneratedComInterface]`) | `Media.Codecs.CG` (`CGImageSource` constrained decode) |
-| Texture upload (`CopyBufferToTexture` + staging ring + pool) | RHI interface | `Rhi.D3D12` (`UpdateTileMappings`-free placed upload) | `Rhi.Metal` (`MTLBlitCommandEncoder.copyFromBuffer:toTexture:`) |
-| Video present (`IVideoPresenter`) | PAL interface | `Pal.Windows` (DirectComposition child visual) | `Pal.Mac` (`AVPlayerLayer` under `CAMetalLayer`) |
+| Decode (`IImageCodec`) | seam | `FluentGpu.Windows` Wic/ (WIC `IWIC*`, `[GeneratedComInterface]`) | `Media.Codecs.CG` (`CGImageSource` constrained decode) |
+| Texture upload (`CopyBufferToTexture` + staging ring + pool) | RHI interface | `FluentGpu.Windows` D3D12/ (`UpdateTileMappings`-free placed upload) | `Rhi.Metal` (`MTLBlitCommandEncoder.copyFromBuffer:toTexture:`) |
+| Video present (`IVideoPresenter`) | PAL interface | `FluentGpu.Windows` Pal/ (DirectComposition child visual) | `Pal.Mac` (`AVPlayerLayer` under `CAMetalLayer`) |
 | Palette feed | trigger only (extraction in `FluentGpu.Theme`) | — | — |
 
 ~all of this subsystem's LOC is portable C# over POD + the RHI/PAL/Text *interfaces*; only the codec, the

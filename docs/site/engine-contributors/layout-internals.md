@@ -2,17 +2,17 @@
 
 [← Contributing to the engine](./index.md)
 
-Layout is **phase 6** of the frame loop: between reconcile (which patches the retained scene) and record (which walks it into a DrawList), the layout engine fills every node's `Bounds` — a node-**local** rect in its parent's coordinate space. It is the cleanest seam in the system: `FluentGpu.Layout` references only `Foundation` + `Scene` + the text-measure interface, with **zero** Windows/GPU dependency, so the macOS port is a text-leaf swap with no layout changes.
+Layout is **phase 6** of the frame loop: between reconcile (which patches the retained scene) and record (which walks it into a DrawList), the layout engine fills every node's `Bounds` — a node-**local** rect in its parent's coordinate space. It is the cleanest seam in the system: `FluentGpu.Engine` (`Layout/`) references only `Foundation/` + `Scene/` + the text-measure interface, with **zero** Windows/GPU dependency, so the macOS port is a text-leaf swap with no layout changes.
 
 This page is the as-built tour for someone **changing** the engine. It assumes you have read [rendering & performance](../../guide/rendering-and-performance.md) (the frame pipeline, the three dirty axes, the boundary firewall from above) and want to know how the two descents, the scoped-relayout walk, and the virtualization participant are wired — and exactly which file to open. The architecture **authority** is [`design/subsystems/layout.md`](../../../design/subsystems/layout.md) (and [`virtualization.md`](../../../design/subsystems/virtualization.md)); this page is the working view over the live source and **flags where the live core is narrower than the design of record**. Where they disagree, the source wins.
 
-> **Where it all lives.** `src/FluentGpu.Layout/FlexLayout.cs` (the two descents + grid + scroll + the virtualization arrange) · `src/FluentGpu.Layout/LayoutInvalidator.cs` (the scoped-relayout boundary walk) · `src/FluentGpu.Scene/VirtualLayout.cs` (the `IVirtualLayout` seam + built-in layouts) · `src/FluentGpu.Hosting/AppHost.cs` (the phase-6 call site). Verify in `src/FluentGpu.VerticalSlice/Program.cs`.
+> **Where it all lives.** `src/FluentGpu.Engine/Layout/FlexLayout.cs` (the two descents + grid + scroll + the virtualization arrange) · `src/FluentGpu.Engine/Layout/LayoutInvalidator.cs` (the scoped-relayout boundary walk) · `src/FluentGpu.Engine/Scene/VirtualLayout.cs` (the `IVirtualLayout` seam + built-in layouts) · `src/FluentGpu.Engine/Hosting/AppHost.cs` (the phase-6 call site). Verify in `src/FluentGpu.VerticalSlice/Program.cs`.
 
 ---
 
 ## Incremental layout (`FlexLayout.Run` full vs `RunSubtree` scoped)
 
-`FlexLayout` ([`FlexLayout.cs`](../../../src/FluentGpu.Layout/FlexLayout.cs)) exposes exactly three public entry points, and the whole incremental story is the choice between them:
+`FlexLayout` ([`FlexLayout.cs`](../../../src/FluentGpu.Engine/Layout/FlexLayout.cs)) exposes exactly three public entry points, and the whole incremental story is the choice between them:
 
 ```csharp
 public void Run(NodeHandle root);                 // content-size the root (golden flexbox checks)
@@ -38,7 +38,7 @@ public void RunSubtree(NodeHandle node)
 
 The key line is that it arranges at `(b.X, b.Y)` — the node's existing origin — so **the parent is never disturbed**. The node keeps its slot; only its descendants are re-measured and re-placed. This is the per-frame-affordable relayout that lets a deep `setState` reflow its own card without re-laying-out the page. (It also accepts a `LayoutInput.Width` override: a `SizeMode.Relayout` animation writes the interpolated width there each tick, and `RunSubtree` honors it over the bounds — that is how smooth size animations reflow their content.)
 
-The phase-6 driver in `AppHost.RunFrame` ([`AppHost.cs`](../../../src/FluentGpu.Hosting/AppHost.cs) ~L427) picks the entry point:
+The phase-6 driver in `AppHost.RunFrame` ([`AppHost.cs`](../../../src/FluentGpu.Engine/Hosting/AppHost.cs) ~L427) picks the entry point:
 
 ```csharp
 bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
@@ -66,7 +66,7 @@ The flex algorithm is the **ported Reactor/Yoga** flexbox, kept numerically fait
 
 The dispatch happens at the top of both `Measure` and `Arrange`: a node with a scroll side-table is a viewport (`MeasureViewport`/`ArrangeViewport`), one with a grid side-table is a grid (`MeasureGrid`/`ArrangeGrid`), a `NodeFlags.ZStack` node overlays its children (`MeasureZStack`/`ArrangeZStack`), and `li.Wrap` routes to the multi-line `MeasureWrap`/`ArrangeWrap`. Everything else is plain flex.
 
-The knobs are the `Foundation` enums ([`LayoutTypes.cs`](../../../src/FluentGpu.Foundation/LayoutTypes.cs)):
+The knobs are the `Foundation` enums ([`LayoutTypes.cs`](../../../src/FluentGpu.Engine/Foundation/LayoutTypes.cs)):
 
 ```csharp
 public enum FlexJustify : byte { Start = 0, Center, End, SpaceBetween, SpaceAround, SpaceEvenly }
@@ -75,7 +75,7 @@ public enum FlexAlign   : byte { Auto = 0, Start, Center, End, Stretch }   // Au
 
 `Justify` is realized by `Distribute(justify, leftover, n) → (lead, between)` (the leading offset + inter-item spacing), and `AlignSelf == Auto` inherits the container's `AlignItems` at placement time. A subtlety worth knowing before you touch `Arrange`: a row with a definite width pre-computes a `growAvail` (the content width minus the fixed siblings and gaps) and measures grow children against *that*, not the whole row — otherwise a fixed pane plus grow content would wrap to the entire window. A column re-measures stretch children against the **final** cross width during arrange (a `NavigationView` content frame's width is only known after its fixed pane consumed its 320px), so wrapped text breaks at the real frame width.
 
-**Grid is a distinct algorithm, not nested-flex faking.** `MeasureGrid`/`ArrangeGrid` resolve real tracks via `ResolveColumns`, sized by `TrackSize` ([`TrackSize.cs`](../../../src/FluentGpu.Foundation/TrackSize.cs)):
+**Grid is a distinct algorithm, not nested-flex faking.** `MeasureGrid`/`ArrangeGrid` resolve real tracks via `ResolveColumns`, sized by `TrackSize` ([`TrackSize.cs`](../../../src/FluentGpu.Engine/Foundation/TrackSize.cs)):
 
 ```csharp
 public enum TrackKind : byte { Pixel = 0, Star = 1, Auto = 2 }
@@ -92,7 +92,7 @@ TrackSize.Auto      // sized to its widest cell
 
 ## The `MeasureFunc` / text-measure-cache bridge
 
-A text leaf (`VisualKind.Text`) is the one place layout calls **out** of `FluentGpu.Layout`. In the live code that call is `_fonts.Measure(text, style, maxWidth)` through the `IFontSystem` seam — the engine's equivalent of Yoga's per-node `MeasureFunc`, but as a **central dispatch** (no delegate-per-node). It is gated by a per-node **text measure cache** so a scoped relayout skips re-shaping unchanged text:
+A text leaf (`VisualKind.Text`) is the one place layout calls **out** of `FluentGpu.Engine` (`Layout/`). In the live code that call is `_fonts.Measure(text, style, maxWidth)` through the `IFontSystem` seam — the engine's equivalent of Yoga's per-node `MeasureFunc`, but as a **central dispatch** (no delegate-per-node). It is gated by a per-node **text measure cache** so a scoped relayout skips re-shaping unchanged text:
 
 ```csharp
 ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
@@ -117,7 +117,7 @@ The cache key is the pure tuple `(text, style, availWidth)`, so it is **self-inv
 
 ## Scoped relayout: the `LayoutDirty` worklist and `LayoutInvalidator` up-walk
 
-`SceneStore` keeps a `LayoutDirty` worklist (the nodes a reconcile / width-height / text bind marked this frame). `LayoutInvalidator.RunDirty` ([`LayoutInvalidator.cs`](../../../src/FluentGpu.Layout/LayoutInvalidator.cs)) consumes it: for each dirty node it walks **up** to the nearest layout boundary, dedupes the resulting boundary roots, and re-solves each:
+`SceneStore` keeps a `LayoutDirty` worklist (the nodes a reconcile / width-height / text bind marked this frame). `LayoutInvalidator.RunDirty` ([`LayoutInvalidator.cs`](../../../src/FluentGpu.Engine/Layout/LayoutInvalidator.cs)) consumes it: for each dirty node it walks **up** to the nearest layout boundary, dedupes the resulting boundary roots, and re-solves each:
 
 ```csharp
 public void RunDirty(Size2 window)
@@ -150,7 +150,7 @@ Cost is **O(change)**, not O(tree): an idle worklist returns immediately, and a 
 
 ## The layout-boundary predicate (the firewall) — exact form
 
-The firewall is one predicate. A **layout boundary** is a node whose own size cannot change because of a descendant, so the up-walk stops there and the parent is never disturbed. The live form ([`LayoutInvalidator.cs`](../../../src/FluentGpu.Layout/LayoutInvalidator.cs)):
+The firewall is one predicate. A **layout boundary** is a node whose own size cannot change because of a descendant, so the up-walk stops there and the parent is never disturbed. The live form ([`LayoutInvalidator.cs`](../../../src/FluentGpu.Engine/Layout/LayoutInvalidator.cs)):
 
 ```csharp
 private static bool IsLayoutBoundary(in LayoutInput s, NodeFlags f)
@@ -180,13 +180,13 @@ Scrolling is **layout-free**, and the ownership is a hard split you must not blu
 
 The design of record specifies that **`FlowDirection` (RTL) is resolved logical→physical at the reconciler's `WriteLayout` boundary** — `ResolveLogical` mirrors flex direction, justify/align, and the start/end edges *before* the column is written, so the ported flex core stays purely physical and golden-parity-clean ([`layout.md` §10A](../../../design/subsystems/layout.md)). An engine contributor should know this is the intended seam: RTL is a **reconciler-side rewrite of `LayoutInput`**, not a branch inside `FlexLayout`.
 
-**It is not implemented in the live tree.** There is no `FlowDirection`/`ResolveLogical` in `FluentGpu.Layout` or the reconciler today (the only `Rtl`/`FlowDirection` references in `src/` are in the text itemizer and the slider's directional fill). So `FlexLayout` is physical-only and LTR. If you implement RTL, do it at `WriteLayout` per the design — keep the firewall predicate and the two descents untouched — and add a parity check (a mirrored tree's `Bounds` against the LTR mirror). Until then, do not document RTL as a shipping capability.
+**It is not implemented in the live tree.** There is no `FlowDirection`/`ResolveLogical` in `FluentGpu.Engine` (`Layout/`) or the reconciler today (the only `Rtl`/`FlowDirection` references in `src/` are in the text itemizer and the slider's directional fill). So `FlexLayout` is physical-only and LTR. If you implement RTL, do it at `WriteLayout` per the design — keep the firewall predicate and the two descents untouched — and add a parity check (a mirrored tree's `Bounds` against the LTR mirror). Until then, do not document RTL as a shipping capability.
 
 ---
 
 ## The virtualization layout participant (`IVirtualLayout` / `IMeasuredVirtualLayout`)
 
-A virtualized collection is **one** retained viewport node with a window of keyed children; the layout half is a pluggable participant. The seam lives in `src/FluentGpu.Scene/VirtualLayout.cs`:
+A virtualized collection is **one** retained viewport node with a window of keyed children; the layout half is a pluggable participant. The seam lives in `src/FluentGpu.Engine/Scene/VirtualLayout.cs`:
 
 ```csharp
 public interface IVirtualLayout
