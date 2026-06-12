@@ -475,9 +475,6 @@ public sealed record ImageEl : Element
     public CornerRadius4 Corners { get; init; }
     /// <summary>Unified channel: static tint, thunk, or signal (pairs with a bound <see cref="Source"/>).</summary>
     public Prop<ColorF> Placeholder { get; init; } = ColorF.FromRgba(0x33, 0x33, 0x33);
-    // Legacy *Bind spellings — write-only init-aliases, deleted by the migration waves.
-    public Func<string>? SourceBind { init { if (value is not null) Source = value; } }
-    public Func<ColorF>? PlaceholderBind { init { if (value is not null) Placeholder = value; } }
     /// <summary>Optional BlurHash string — a tiny blurred LQIP preview shown instantly (decoded to a small texture)
     /// until the full-res art lands. Falls back to the flat <see cref="Placeholder"/> tint when null.</summary>
     public string? BlurHash { get; init; }

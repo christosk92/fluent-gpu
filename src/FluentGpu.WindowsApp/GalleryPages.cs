@@ -1095,7 +1095,7 @@ sealed class VirtualizationPage : Component
     static string Cover(int i) => $"https://picsum.photos/seed/fgrow{i % 120}/80/80";
 
     // BOUND row template (Virtual.ListBound): built ONCE per visible slot with an index SIGNAL — scrolling rebinds the
-    // slot by writing the signal, so only these TextBind/FillBind/SourceBind thunks re-run (no element rebuild, no
+    // slot by writing the signal, so only these bound Text/Fill/Source thunks re-run (no element rebuild, no
     // reconcile, no node churn). This is the recycler fast path a 100k thumb-drag storm exercises.
     static Element Row(FluentGpu.Signals.IReadSignal<int> idx)
     {
@@ -1119,7 +1119,7 @@ sealed class VirtualizationPage : Component
                 new ImageEl
                 {
                     Width = 32f, Height = 32f, Corners = CornerRadius4.All(8f),
-                    SourceBind = () => Cover(idx.Value), PlaceholderBind = () => TileTint(idx.Value),
+                    Source = Prop.Of(() => Cover(idx.Value)), Placeholder = Prop.Of(() => TileTint(idx.Value)),
                 },
                 new BoxEl
                 {
