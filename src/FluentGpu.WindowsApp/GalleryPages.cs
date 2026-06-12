@@ -1113,7 +1113,7 @@ sealed class VirtualizationPage : Component
                 new BoxEl
                 {
                     Width = 64f,
-                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, TextBind = () => $"{idx.Value + 1}" }],
+                    Children = [new TextEl("") { Size = 13f, Color = IndexGrey, Text = Prop.Of(() => $"{idx.Value + 1}") }],
                 },
                 // real thumbnail; tint shows until it decodes, then cross-fades in
                 new ImageEl
@@ -1129,7 +1129,7 @@ sealed class VirtualizationPage : Component
                     Justify = FlexJustify.Center,
                     Children =
                     [
-                        new TextEl("") { Size = 14f, Color = Theme.WindowText, TextBind = () => $"Item {idx.Value}" },
+                        new TextEl("") { Size = 14f, Color = Theme.WindowText, Text = Prop.Of(() => $"Item {idx.Value}") },
                         new TextEl("subtitle") { Size = 12f, Color = SubGrey },
                     ],
                 },

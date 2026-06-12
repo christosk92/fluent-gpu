@@ -208,7 +208,7 @@ sealed class BoundVirtualProbe : Component
                {
                    Height = 40,
                    Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
-                   Children = [new TextEl("") { Size = 12f, TextBind = () => $"row {idx.Value}" }],
+                   Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => $"row {idx.Value}") }],
                };
            })
            with { Width = 300, Height = 400 };
@@ -1281,7 +1281,7 @@ sealed class PipsPagerOutputProbe : Component
             Children =
             [
                 PipsPager.Create(5, selected.Value, i => selected.Value = i),
-                new TextEl("") { Size = 14f, Color = Tok.TextPrimary, TextBind = () => $"Page {selected.Value + 1} / 5" },
+                new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Text = Prop.Of(() => $"Page {selected.Value + 1} / 5") },
             ],
         };
     }
@@ -10236,7 +10236,7 @@ static class Slice
                         new BoxEl { Height = 10, BorderWidth = proof, Width = Prop.Of(() => w.Value), OnRealized = nh => nW = nh },
                         new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
-                        new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, TextBind = () => txt.Value } ] },
+                        new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, Text = Prop.Of(() => txt.Value) } ] },
                         new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, ColorBind = () => col.Value } ] },
                         new BoxEl { OnRealized = nh => wImg = nh, Children = [ new ImageEl { Width = 24, Height = 24, PlaceholderBind = () => tint.Value } ] },
                         // the EditableText shape: a STATIC Color AND a ColorBind on one TextEl — the bind must win

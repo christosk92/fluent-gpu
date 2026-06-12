@@ -25,7 +25,7 @@ static class GalleryPage
     }
 
     /// <summary>A bold readout whose text rides a signal-reading thunk — only the text node updates (no page re-render).</summary>
-    public static TextEl LiveText(Func<string> text) => new("") { Size = 14f, Bold = true, Color = Tok.TextPrimary, TextBind = text };
+    public static TextEl LiveText(Func<string> text) => new(text) { Size = 14f, Bold = true, Color = Tok.TextPrimary };
 
     // A clickable tile (image or glyph + title + optional subtitle) that navigates the shell — the WinUI
     // ControlItemTemplate card. Used by the overview / All / home pages.

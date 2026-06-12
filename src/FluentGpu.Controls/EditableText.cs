@@ -265,7 +265,7 @@ public sealed class EditableText : Component
             DisabledColor = DisabledForeground,
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
             Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,   // wrap width = content box (padding 10+6)
-            TextBind = BindDisplay,
+            Text = Prop.Of(BindDisplay),
             ColorBind = BindColor,
         };
         // Parts: restyle the run (font family, size…); the display binds + wrap mechanics always win (caret/hit-test
@@ -274,7 +274,7 @@ public sealed class EditableText : Component
         {
             Wrap = AcceptsReturn ? TextWrap.Wrap : TextWrap.NoWrap,
             Width = AcceptsReturn ? MathF.Max(8f, Width - 16f) : float.NaN,
-            TextBind = BindDisplay,
+            Text = Prop.Of(BindDisplay),
             ColorBind = BindColor,
         };
 

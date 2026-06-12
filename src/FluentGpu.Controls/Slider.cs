@@ -594,7 +594,7 @@ internal sealed class RangedSlider : Component
             [
                 new TextEl(Format(tipValue.Peek()))
                 {
-                    TextBind = () => Format(tipValue.Value),   // live scrub readout — signal-bound, no bubble re-render
+                    Text = Prop.Of(() => Format(tipValue.Value)),   // live scrub readout — signal-bound, no bubble re-render
                     Size = 15f,                                // SLIDER_TOOLTIP_DEFAULT_FONT_SIZE (Slider_Partial.h:16)
                     Color = Tok.TextPrimary,
                 },
