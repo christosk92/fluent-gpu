@@ -84,6 +84,24 @@ static class Program
 {
     static void Main(string[] args)
     {
+        // ── FluentGpu.WindowsApi validation harness (runs BEFORE the window/GPU stack spins up). ──────────────────────
+        // The spawned single-instance child mode MUST be first: it is a second process that should never touch the
+        // window path — it acquires the gate, forwards its activation payload via WM_COPYDATA, and exits with a code the
+        // parent asserts on.
+        int childIdx = Array.IndexOf(args, "--windowsapi-smoke-child");
+        if (childIdx >= 0 && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            string payload = childIdx + 1 < args.Length ? args[childIdx + 1] : string.Empty;
+            Environment.Exit(WindowsApiSmoke.RunChild(payload));
+            return;
+        }
+        // The parent smoke: headless console-style [PASS]/[FAIL] checks over all four pillars; exit code = failure count.
+        if (Array.IndexOf(args, "--windowsapi-smoke") >= 0 && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
+        {
+            Environment.Exit(WindowsApiSmoke.Run());
+            return;
+        }
+
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
         string demo = "default";
         string? screenshot = null;   // --screenshot <path> renders a deterministic scene and writes a PNG (visual diff loop)

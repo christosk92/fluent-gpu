@@ -79,6 +79,25 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// <summary>WinUI HyperlinkButton NavigateUri launch (HyperLinkButton_Partial.cpp:172).</summary>
     public void OpenUri(string uri) => ShellExecuteW(0, "open", uri, null, null, 1);
 
+    // ── single-instance activation redirect (IPlatformApp.ActivationRedirected) ──────────────────────────────────────
+    // A second launch of a single-instance app forwards its activation URI to this running instance via WM_COPYDATA
+    // (FluentGpu.WindowsApi.Activation.SingleInstanceGate). The message lands in Win32Window.Handle32 (the WM_COPYDATA
+    // case), which routes it here through s_activationRedirected. Static bridge because the message arrives on the
+    // window (not the app) and the static WndProc has no app instance in hand — the single-window v1 host model means
+    // last-constructed app wins, mirroring how AppHost mirrors OpenUri onto InputHooks.Current.Default.
+    private static Action<string>? s_activationRedirected;
+
+    /// <inheritdoc/>
+    public event Action<string>? ActivationRedirected
+    {
+        add => s_activationRedirected += value;
+        remove => s_activationRedirected -= value;
+    }
+
+    /// <summary>Raise <see cref="ActivationRedirected"/> on the UI thread. Called by <see cref="Win32Window"/>'s
+    /// WM_COPYDATA case (which the OS dispatches on the window's own thread), so subscribers run UI-thread-safe.</summary>
+    internal static void RaiseActivationRedirected(string payload) => s_activationRedirected?.Invoke(payload);
+
     public void Dispose() { }
 }
 
@@ -89,6 +108,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_KEYDOWN = 0x0100, WM_SYSKEYDOWN = 0x0104,
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
+                       WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
                        WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
                        WM_IME_SETCONTEXT = 0x0281,
                        // Modal move/size loop keep-alive: DefWindowProc runs its OWN message pump while the user drags the
@@ -254,6 +274,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _active = true;  // WM_(NC)ACTIVATE — IsActive pull side
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private static readonly Point2 OffscreenDip = new(-10000f, -10000f);
+
+    // ── single-instance activation redirect (WM_COPYDATA receiver) ──────────────────────────────────────────────────
+    // COPYDATASTRUCT is not in the TerraFX static-import surface, so it is declared locally (the file's convention for
+    // ABI shapes TerraFX omits; SetForegroundWindow IS in TerraFX and is used directly, like ShowWindow/SetWindowPos
+    // elsewhere here). The cookie MUST equal FluentGpu.WindowsApi.Activation.SingleInstanceGate.ActivationCopyDataCookie
+    // ('F''G''A''C') — the two assemblies are independent peers and cannot share the constant.
+    private const nuint ActivationCopyDataCookie = 0x46474143;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COPYDATASTRUCT { public nuint dwData; public uint cbData; public nint lpData; }
 
     public Win32Window(in WindowDesc desc)
     {
@@ -551,6 +581,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void Dispose()
     {
+        _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); DestroyWindow(_hwnd); }
         if (_self.IsAllocated) _self.Free();
     }
@@ -706,6 +737,26 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 _active = ((nuint)wParam & 0xFFFF) != 0;
                 _queue.Enqueue(new InputEvent(_active ? InputKind.WindowFocus : InputKind.WindowBlur, default, 0, 0, TimestampMs: Now()));
                 return true;
+            case WM_COPYDATA:
+            {
+                // Single-instance activation redirect: a second launch forwarded its activation URI to us via
+                // SendMessageTimeoutW (FluentGpu.WindowsApi.Activation.SingleInstanceGate). dwData must equal the agreed
+                // cookie (kept in sync with SingleInstanceGate.ActivationCopyDataCookie — the two assemblies are
+                // independent peers and can't share the constant). Delivered on the UI thread (the OS dispatches a sent
+                // message on the receiver's thread), so RaiseActivationRedirected → AppHost.WakeFrame is UI-thread-safe.
+                var cds = (COPYDATASTRUCT*)(nint)lParam;
+                if (cds is not null && cds->dwData == ActivationCopyDataCookie)
+                {
+                    string uri = cds->cbData >= sizeof(char)
+                        ? new string((char*)cds->lpData, 0, (int)(cds->cbData / sizeof(char)))
+                        : string.Empty;
+                    SetForegroundWindow(hWnd);   // bring our window up (the sender granted us foreground via ASFW_ANY)
+                    Win32App.RaiseActivationRedirected(uri);
+                    result = (LRESULT)1;   // TRUE = handled (WM_COPYDATA convention)
+                    return true;
+                }
+                return false;
+            }
             case WM_SETCURSOR:
                 // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
                 if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }

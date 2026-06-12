@@ -9,4 +9,10 @@
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Binding-only (P/Invoke declarations + blittable structs; no native payload). WindowsApi is a self-owning
+         peer of FluentGpu.Windows — a credentials-only app gets Engine + these bindings, never the D3D12 backend.
+         Same pinned version as FluentGpu.Windows.csproj (docs/plans/windowsapi-implementation-research.md §1). -->
+    <PackageReference Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
+  </ItemGroup>
 </Project>

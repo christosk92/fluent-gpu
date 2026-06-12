@@ -185,6 +185,24 @@ public interface IPlatformApp : IDisposable
     void OpenUri(string uri);
 
     /// <summary>
+    /// Raised when a SECOND launch of a single-instance app is redirected to this (already-running) instance, carrying the
+    /// new launch's activation payload — the deep-link URI (<c>wavee://callback?…</c>) or the empty string for a bare
+    /// focus-only relaunch. The inbound producer (<c>FluentGpu.WindowsApi.Activation.SingleInstanceGate</c>) forwards it
+    /// from the exiting second instance via <c>WM_COPYDATA</c>; the Win32 PAL reconstructs the string inside its
+    /// <c>WndProc</c> and invokes this. Mirrors the outbound <see cref="OpenUri"/> seam shape (this is its inbound twin).
+    /// <para>
+    /// THREADING CONTRACT — delivered on the UI thread. The Win32 backend raises it synchronously from
+    /// <c>WM_COPYDATA</c>, which the OS dispatches on the window's own (UI) thread, so subscribers may touch
+    /// non-thread-safe host state (e.g. <c>AppHost.WakeFrame</c>) directly. A cross-thread producer (a notification COM
+    /// activator firing on a threadpool/agile-COM thread) MUST <c>PostMessage</c> to hop onto the UI thread before
+    /// raising it — never invoke it off-thread. The default implementation never fires (headless / non-redirecting
+    /// backends), keeping it test-neutral; it is a default-interface-method event so backends opt in without every
+    /// <see cref="IPlatformApp"/> implementer having to declare it.
+    /// </para>
+    /// </summary>
+    event Action<string>? ActivationRedirected { add { } remove { } }
+
+    /// <summary>
     /// The WORK AREA (desktop minus taskbar/docked bars) of the monitor containing <paramref name="screenPointPx"/>,
     /// in physical virtual-screen px — the multi-monitor placement seam WinUI's windowed popups use
     /// (Popup.cpp monitor-bounds placement; <c>DXamlCore::CalculateAvailableMonitorRect</c>,

@@ -14,5 +14,9 @@
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
     <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+    <!-- The OS-services pillar (notifications/credentials/packaging/activation). Referenced for the
+         windowsapi-smoke validation harness (WindowsApiSmoke.cs); the gallery app is where WindowsApi
+         is validated end-to-end (per the implementation plan: validation lives in the gallery, not the slice). -->
+    <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
   </ItemGroup>
 </Project>

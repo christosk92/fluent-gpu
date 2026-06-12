@@ -136,6 +136,23 @@ public sealed class AppHost : IDisposable
     /// <summary>MemCensus GPU one-line detail hook (glyph/texture-store summary); headless leaves null.</summary>
     public Func<string>? GpuDetail { get; set; }
 
+    // ── single-instance activation redirect (IPlatformApp.ActivationRedirected → app code) ──────────────────────────
+    // The PAL raises IPlatformApp.ActivationRedirected on the UI thread when a second app launch is forwarded here (the
+    // WM_COPYDATA path). The ctor stashes the payload and wakes a frame; Paint() drains it at the top and re-raises the
+    // public event below — so app handlers run on the UI thread, inside the frame, free to write signals that re-render.
+    private string? _pendingActivation;
+    private Action<string>? _onActivationRedirected;   // cached subscription (unsubscribed in Dispose)
+    private Action<RectF>? _onOccludedRectChanged;     // SIP OccludedRect → caret reflow (unsubscribed in Dispose)
+
+    /// <summary>
+    /// Raised on the UI thread when a SECOND launch of a single-instance app is redirected to this running instance,
+    /// carrying the new launch's activation payload (the deep-link URI, e.g. <c>wavee://callback?…</c>, or the empty
+    /// string for a focus-only relaunch). Wired from <see cref="IPlatformApp.ActivationRedirected"/> and delivered at the
+    /// top of the next frame, so handlers may freely mutate signals (a re-render is already scheduled). Set up by
+    /// <c>FluentGpu.WindowsApi.Activation.SingleInstanceGate</c> on the sender side; never fires under the headless PAL.
+    /// </summary>
+    public event Action<string>? ActivationRedirected;
+
     private long Probe(int seg, long sinceBytes, long sinceTicks)
     {
         long nowTicks = Stopwatch.GetTimestamp();
@@ -274,6 +291,7 @@ public sealed class AppHost : IDisposable
         if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
+        if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
         return r;
     }
 
@@ -355,6 +373,7 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnScrollHover = _scrollAnim.Hover;
         _dispatcher.OnScrollLeave = _scrollAnim.Leave;
         _scrollAnim.ScrollWrite = _dispatcher.WriteScrollOffset;   // Fling integrator writes absolute offsets through the Input chokepoint
+        _scrollAnim.OverscrollWrite = _dispatcher.WriteOverscroll; // overscroll spring-back writes the visual band (offset untouched)
         _dispatcher.OnFlingStarted = SeedScrollFling;              // touch-up flick → friction-decay inertia in phase 7
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
@@ -402,6 +421,13 @@ public sealed class AppHost : IDisposable
         // the InputHooks.Current channel-default instance too (last-constructed host wins — matches the
         // single-window v1 host model; headless checks construct hosts sequentially).
         InputHooks.Current.Default.OpenUri = app.OpenUri;
+
+        // Inbound twin of OpenUri: a single-instance second-launch redirect (the PAL's WM_COPYDATA → ActivationRedirected,
+        // already on the UI thread). Stash + WakeFrame here; Paint() drains _pendingActivation at the top and re-raises
+        // the public AppHost.ActivationRedirected for app code. WakeFrame is UI-thread-only — safe because the PAL
+        // delivers this on the UI thread (no PostMessage hop needed, unlike a cross-thread notification activator).
+        _onActivationRedirected = uri => { _pendingActivation = uri; WakeFrame(); };
+        app.ActivationRedirected += _onActivationRedirected;
         _inputHooks.TextInput = window.TextInput;
         _inputHooks.Fonts = fonts;
         _inputHooks.CaretFocus = (n, blinkMs) => _caretBlinker.Focus(n, blinkMs);
@@ -412,6 +438,20 @@ public sealed class AppHost : IDisposable
             float s = _window.Scale <= 0f ? 1f : _window.Scale;
             _window.TextInput.SetCaretRectPx(new RectF(dip.X * s, dip.Y * s, dip.W * s, dip.H * s));
         };
+
+        // SIP (touch keyboard) trigger seam (input-a11y.md §10): EditableText shows/hides the on-screen keyboard through
+        // these on a TOUCH focus-gain / focus-loss; the dispatcher reports the focus-causing pointer's device class.
+        _inputHooks.LastPointerWasTouch = () => _dispatcher.LastPointerKind == PointerKind.Touch;
+        _inputHooks.ShowTouchKeyboard = _window.TextInput.TryShowTouchKeyboard;
+        _inputHooks.HideTouchKeyboard = _window.TextInput.TryHideTouchKeyboard;
+        // The panel's Showing/Hiding OccludedRect (CLIENT DIP) reflows the focused editor's caret above it — the WinUI
+        // EnsureFocusedElementInView the InputPaneHandler drives. Cached delegate (unsubscribed in Dispose) so a disposed
+        // host leaves no callback into it; a WakeFrame schedules the frame that paints the scrolled position.
+        _onOccludedRectChanged = dipRect =>
+        {
+            if (_dispatcher.EnsureFocusedAboveOcclusion(dipRect.Y)) WakeFrame();
+        };
+        _window.TextInput.OccludedRectChanged += _onOccludedRectChanged;
 
         // E4 windowed out-of-bounds popups: the OverlayHost asks for monitor work areas + popup-window leases through
         // these hooks; the host owns the DIP↔screen-px conversion (window scale + client origin) and the render side
@@ -478,6 +518,12 @@ public sealed class AppHost : IDisposable
         ref ScrollState sc = ref _scene.ScrollRef(node);
         sc.FlingVelocity = velocityPxPerS;
         sc.ScrollMode = 1;   // ScrollAnimator Fling mode
+        // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollAnimator) so the same decay
+        // curve lands EXACTLY on a snap value — capture the launch offset (the impulse "ignored value" anchor) and reset
+        // the one-shot retarget latch here. A non-snap viewport ignores both.
+        sc.FlingRetargeted = false;
+        sc.FlingSnapTarget = float.NaN;
+        sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
         _scrollAnim.Arm(node);
     }
 
@@ -570,6 +616,15 @@ public sealed class AppHost : IDisposable
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
         {
+            // Single-instance activation redirect: deliver a pending second-launch payload (set by the UI-thread
+            // ActivationRedirected subscription) to app code BEFORE the reactive flush, so any signal writes the handler
+            // makes are picked up by _runtime.Flush() and rendered this same frame. UI-thread only — no lock needed.
+            if (_pendingActivation is { } activation)
+            {
+                _pendingActivation = null;
+                ActivationRedirected?.Invoke(activation);
+            }
+
             long frameStart = Stopwatch.GetTimestamp();
             bool resized = EnsureSize();
             var layoutSize = ClientSizeDip();
@@ -1184,6 +1239,12 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        // Detach the activation-redirect subscription so a disposed host's IPlatformApp keeps no callback into it.
+        if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }
+        // Symmetric SIP teardown: drop the OccludedRect subscription so a disposed host's window TextInput keeps no
+        // callback into it (the SIP reflow closure captures _dispatcher).
+        if (_onOccludedRectChanged is { } onOcc) { _window.TextInput.OccludedRectChanged -= onOcc; _onOccludedRectChanged = null; }
+
         // mem-05: the ctor mirrored this host's app.OpenUri onto the shared InputHooks.Current.Default channel (static
         // HyperlinkButton factories reach the seam there). Release it so a disposed host's IPlatformApp graph is
         // collectable — but ONLY if this host's delegate is still installed (Target == our _app): a later-constructed
