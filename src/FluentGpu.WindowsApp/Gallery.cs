@@ -251,15 +251,16 @@ sealed class GalleryApp : Component
     public override Element Render()
     {
         var shell = VStack(0,
-            // The WinUI 3 Gallery titlebar: back (visible, disabled — no Frame back-stack yet) + hamburger + accent
-            // icon + title + the centered AutoSuggestBox + engine-drawn min/max/close on the custom frame.
+            // The WinUI 3 Gallery titlebar: hamburger + accent icon + title + the centered AutoSuggestBox +
+            // engine-drawn min/max/close on the custom frame. Back is COLLAPSED, not disabled — WinUI binds
+            // IsBackButtonVisible to rootFrame.CanGoBack, and this gallery has no back stack yet (flip
+            // ShowBackButton=true + BackEnabled when a Navigator lands).
             Embed.Comp(() => new TitleBar
             {
                 Title = "FluentGpu Gallery",
                 IconGlyph = Icons.Grid,
                 IconColor = Tok.AccentDefault,
-                ShowBackButton = true,
-                BackEnabled = false,
+                ShowBackButton = false,
                 ShowPaneToggle = true,
                 OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,
                 // WinUI sizing: 580 is the MAX — the search gives way as the window narrows (caption buttons never

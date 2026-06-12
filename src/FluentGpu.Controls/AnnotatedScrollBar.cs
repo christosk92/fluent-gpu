@@ -255,7 +255,7 @@ public static class AnnotatedScrollBar
                 Direction = 0,
                 Justify = FlexJustify.End,
                 HitTestVisible = false,
-                TransformBind = thumbPositionBind,
+                Transform = thumbPositionBind,
                 Children =
                 [
                     new BoxEl
@@ -270,7 +270,7 @@ public static class AnnotatedScrollBar
             // Parts: restyle anything (swap the thumb visual via Children…); the Key and the compositor position
             // bind always win — they ARE the scroll indicator, not style.
             if (Parts is not null)
-                thumb = Parts.Apply(PartThumb, thumb) with { Key = "asb-thumb", TransformBind = thumbPositionBind };
+                thumb = Parts.Apply(PartThumb, thumb) with { Key = "asb-thumb", Transform = thumbPositionBind };
             railLayers.Add(thumb);
 
             var rail = new BoxEl

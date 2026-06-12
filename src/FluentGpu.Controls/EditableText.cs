@@ -287,7 +287,7 @@ public sealed class EditableText : Component
             new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center,
-                TransformBind = () => Affine2D.Translation(-scroll.Value, 0f),
+                Transform = Prop.Of(() => Affine2D.Translation(-scroll.Value, 0f)),
                 OnRealized = h => _scrollerNode = h,
                 Children = [textEl],
             },

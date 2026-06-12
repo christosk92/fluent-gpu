@@ -335,12 +335,12 @@ public sealed class RatingControl : Component
             {
                 Margin = leadGap,
                 TransformOriginX = 0.5f, TransformOriginY = 0.5f,
-                TransformBind = scaleBind,
+                Transform = scaleBind,
             };
             // Parts: restyle every cell (margins, fills…); the focal hover-scale bind always wins.
             if (Parts is { } sp)
                 star = sp.Apply(PartStarCell, star) with
-                { TransformOriginX = 0.5f, TransformOriginY = 0.5f, TransformBind = scaleBind };
+                { TransformOriginX = 0.5f, TransformOriginY = 0.5f, Transform = scaleBind };
             stars[i] = star;
         }
 

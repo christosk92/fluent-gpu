@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Pal;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -55,7 +56,10 @@ public sealed class TitleBar : Component
     const float IconSize = 16f;          // WinUI icon Viewbox 16×16
     const float MinDragStrip = 48f;      // WinUI min drag-region column before the caption buttons
 
-    // ── configuration (set once at construction; live values flow via signals/context) ───────────────────────────────
+    // ── configuration ─────────────────────────────────────────────────────────────────────────────────────────────
+    // MOUNT-TIME config: the reconciler reuses the component instance on parent re-render without re-applying these
+    // plain fields (constructor args freeze at mount — pitfalls.md). Anything that must change at runtime flows via
+    // signals/context (activation, window state and the measured content width already do).
     public string Title = "";
     public string Subtitle = "";
     /// <summary>App-identity glyph (the gallery uses the accent grid glyph; WinUI uses an ImageIcon). Empty = none.</summary>
@@ -79,9 +83,13 @@ public sealed class TitleBar : Component
 
     // Captured part handles (OnRealized fires at mount; the component instance persists across re-renders, so plain
     // fields are the stable store) → the WM_NCHITTEST region report.
-    NodeHandle _root, _back, _pane, _content, _min, _max, _close;
+    NodeHandle _root, _back, _pane, _contentCol, _content, _min, _max, _close;
     // Reused region buffer: filled in place on each relayout push — no steady-state allocation (7 = islands(3)+buttons(3)+caption).
     readonly TitleBarRegion[] _regions = new TitleBarRegion[7];
+    // The content column's MEASURED width (DIP), fed back from the layout effect: the column is Grow=1, so its
+    // laid-out width IS the true available space between the clusters — no text-width estimating. Starts unmeasured
+    // (infinity → content renders at its natural max); the first layout corrects it within one frame.
+    readonly Signal<float> _availDip = new(float.PositiveInfinity);
 
     public override Element Render()
     {
@@ -92,22 +100,28 @@ public sealed class TitleBar : Component
         bool maximized = hooks.GetWindowState?.Invoke() == WindowState.Maximized;
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
-        // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change).
+        // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, and the measured-width
+        // feedback render, whose island rect must re-push too).
         UseLayoutEffect(() => PushRegions(hooks),
-            viewport.Width, viewport.Height, epoch, ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
+            viewport.Width, viewport.Height, epoch, _availDip.Peek(), ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
 
-        // WinUI Deactivated state: back/pane foreground → tertiary (fills unchanged).
+        // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
+        // margins give the 4px back↔pane gap and the 2px before the 14px header pad = the 16px pane→icon gap).
+        // Deactivated state: foreground → tertiary (fills unchanged).
         var navStyle = IconButton.DefaultStyle with
         {
             Size = NavButtonSize,
+            Height = 44f,
             Foreground = active ? Tok.TextPrimary : Tok.TextTertiary,
         };
+        var navMargin = new Edges4(2f, 2f, 2f, 2f);
 
         var kids = new List<Element>(14);
 
         if (ShowBackButton)
         {
-            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: BackEnabled);
+            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: BackEnabled)
+                with { Margin = navMargin };
             var applied = Parts.Apply(PartBackButton, back);
             kids.Add(applied with
             {
@@ -115,11 +129,10 @@ public sealed class TitleBar : Component
                 OnRealized = TemplateParts.Chain<NodeHandle>(h => _back = h, applied.OnRealized),
             });
         }
-        if (ShowBackButton && ShowPaneToggle)
-            kids.Add(new BoxEl { Width = 4f });                   // the adjacent 2px+2px button margins
         if (ShowPaneToggle)
         {
-            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle);
+            var pane = IconButton.Create(Icons.Menu, () => OnPaneToggle?.Invoke(), navStyle)
+                with { Margin = navMargin };
             var applied = Parts.Apply(PartPaneToggle, pane);
             kids.Add(applied with
             {
@@ -163,18 +176,10 @@ public sealed class TitleBar : Component
             kids.Add(new BoxEl { Width = 16f });                  // WinUI subtitle margin-right
         }
 
-        // The content column's available width: viewport minus every fixed part. The title/subtitle advance uses a
-        // ~6.5px/char Caption-12 estimate — it only sets the SHRINK BREAKPOINT (the px where content starts giving
-        // way), never a drawn size, so estimate slop is invisible. Keeps the caption buttons pinned at every width.
-        float fixedDip = 2f + LeftHeaderPad + MinDragStrip
-                       + (ShowBackButton ? NavButtonSize : 0f)
-                       + (ShowBackButton && ShowPaneToggle ? 4f : 0f)
-                       + (ShowPaneToggle ? NavButtonSize : 0f)
-                       + (IconGlyph.Length > 0 ? IconSize + 16f : 0f)
-                       + (Title.Length > 0 ? Title.Length * 6.5f + 8f : 0f)
-                       + (Subtitle.Length > 0 ? Subtitle.Length * 6.5f + 16f : 0f)
-                       + (ShowCaptionButtons ? 3f * CaptionButton.Width : 140f);
-        float contentAvail = MathF.Max(0f, viewport.Width - fixedDip);
+        // The content column's available width — the MEASURED Grow=1 column width from the previous layout
+        // (subscribing here re-renders this component when the measurement changes, e.g. on window resize).
+        // WinUI sizing contract: the content area shrinks first; the caption buttons never move.
+        float contentAvail = _availDip.Value;
 
         // The centered, flexible content column. The interactive island (HTCLIENT) is the inner box that HUGS the
         // content's natural width (the gallery's search box) — NOT the flexible column: the empty flex space
@@ -192,7 +197,14 @@ public sealed class TitleBar : Component
             Opacity = active ? 1f : 0.5f,                          // WinUI deactivated content dim
             Children = [island],
         };
-        kids.Add(Parts.Apply(PartContent, content) with { Children = content.Children });
+        {
+            var applied = Parts.Apply(PartContent, content);
+            kids.Add(applied with
+            {
+                Children = content.Children,
+                OnRealized = TemplateParts.Chain<NodeHandle>(h => _contentCol = h, applied.OnRealized),
+            });
+        }
 
         kids.Add(new BoxEl { Width = MinDragStrip });             // the guaranteed-grabbable drag strip
 
@@ -240,10 +252,19 @@ public sealed class TitleBar : Component
     }
 
     /// <summary>Build + push the non-client region report (CLIENT DIP). Order is the hit-test contract: interactive
-    /// islands first, buttons next, the whole-bar Caption band last (first match wins in WM_NCHITTEST).</summary>
+    /// islands first, buttons next, the whole-bar Caption band last (first match wins in WM_NCHITTEST).
+    /// Also feeds back the measured content-column width that <see cref="Content"/> clamps against.</summary>
     void PushRegions(InputHooks hooks)
     {
-        if (hooks.SetTitleBarRegions is not { } push || hooks.GetNodeRect is not { } rectOf) return;
+        if (hooks.GetNodeRect is not { } rectOf) return;
+        // Grow=1 ⇒ the column's laid-out width IS the available content space. Equality-gated signal write:
+        // re-renders (and re-pushes) only when the measurement actually changed (e.g. a window resize).
+        if (!_contentCol.IsNull)
+        {
+            float w = rectOf(_contentCol).W;
+            if (MathF.Abs(w - _availDip.Peek()) > 0.5f) _availDip.Value = w;
+        }
+        if (hooks.SetTitleBarRegions is not { } push) return;
         int n = 0;
         if (ShowBackButton && !_back.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_back), TitleBarHit.Client);
         if (ShowPaneToggle && !_pane.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_pane), TitleBarHit.Client);

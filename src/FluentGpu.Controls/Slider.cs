@@ -267,7 +267,7 @@ public static partial class Slider
             Fill = s.ThumbRing, HoverFill = s.ThumbRing, PressedFill = s.ThumbRing,
             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
             OnRealized = onRealized,
-            TransformBind = transformBind,
+            Transform = transformBind,
             Children = thumbKids,
         };
         // PartThumb: restyle the ring; the inner-dot structure, ref capture and value-position bind always win.
@@ -456,10 +456,10 @@ public static partial class Slider
         {
             Width = width, Height = s.TrackHeight, Corners = CornerRadius4.All(s.TrackCornerRadius),
             Fill = valueFill, HoverFill = valueHover, PressedFill = valuePress,   // SliderTrackValueFill* (lines 24-26)
-            TransformBind = fillBind,
+            Transform = fillBind,
         };
         if (parts is not null)
-            fill = parts.Apply(PartValueFill, fill) with { Width = width, TransformBind = fillBind };   // the signal bind + its full-width basis always win
+            fill = parts.Apply(PartValueFill, fill) with { Width = width, Transform = fillBind };   // the signal bind + its full-width basis always win
 
         var track = new BoxEl
         {

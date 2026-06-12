@@ -1555,7 +1555,7 @@ sealed class StatePage_BindHost : Component
                 {
                     Width = 32f, Height = 32f, Margin = Edges4.All(2), Corners = Radii.ControlAll,
                     Fill = Prop.Of(() => ColorF.Lerp(Grey, Tok.AccentDefault, x.Value)),
-                    TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),
+                    Transform = Prop.Of(() => Affine2D.Translation(x.Value * 184f, 0f)),
                 },
             ],
         };
@@ -1571,7 +1571,7 @@ sealed class StatePage_BindHost : Component
             new BoxEl
             {
                 Width = 32, Height = 32,
-                TransformBind = () => Affine2D.Translation(x.Value * 184f, 0f),  // compositor-only
+                Transform = Prop.Of(() => Affine2D.Translation(x.Value * 184f, 0f)),  // compositor-only
                 Fill = Prop.Of(() => ColorF.Lerp(grey, Tok.AccentDefault, x.Value)),  // compositor-only
             };
             """);

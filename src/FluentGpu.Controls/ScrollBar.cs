@@ -337,7 +337,7 @@ internal sealed class ScrollBarAnatomy : Component
             Margin = horiz ? new Edges4(0f, 0f, 0f, ScrollBar.ThumbInset) : new Edges4(0f, 0f, ScrollBar.ThumbInset, 0f),
             AlignSelf = FlexAlign.End,                          // cross-axis END (far edge anchored)
             HitTestVisible = false,                             // the strip owns the pointer
-            TransformBind = thumbPositionBind,
+            Transform = thumbPositionBind,
         };
         // Parts: restyle anything (fill, corners, the 3px inset…); the Key and the bind-driven geometry always win —
         // the eased cross-axis size (+ its static carrier) and the compositor position bind ARE the scrollbar, not style.
@@ -349,7 +349,7 @@ internal sealed class ScrollBarAnatomy : Component
                 Key = "sb-thumb",
                 Width = horiz ? (Prop<float>)thumbLen : thumbCrossBind,
                 Height = horiz ? thumbCrossBind : (Prop<float>)thumbLen,
-                TransformBind = thumbPositionBind,
+                Transform = thumbPositionBind,
             };
         }
 

@@ -10235,7 +10235,7 @@ static class Slice
                         new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0xFF), Opacity = Prop.Of(() => op.Value), OnRealized = nh => nOp = nh },
                         new BoxEl { Height = 10, BorderWidth = proof, Width = Prop.Of(() => w.Value), OnRealized = nh => nW = nh },
                         new BoxEl { Width = 40, BorderWidth = proof, Height = Prop.Of(() => h.Value), OnRealized = nh => nH = nh },
-                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, TransformBind = () => Affine2D.Translation(tx.Value, 0f), OnRealized = nh => nT = nh },
+                        new BoxEl { Width = 40, Height = 10, BorderWidth = proof, Transform = Prop.Of(() => Affine2D.Translation(tx.Value, 0f)), OnRealized = nh => nT = nh },
                         new BoxEl { OnRealized = nh => wTxt = nh, Children = [ new TextEl("") { Underline = (r & 1) == 1, Text = Prop.Of(() => txt.Value) } ] },
                         new BoxEl { OnRealized = nh => wCol = nh, Children = [ new TextEl("c") { Underline = (r & 1) == 1, Color = Prop.Of(() => col.Value) } ] },
                         new BoxEl { OnRealized = nh => wImg = nh, Children = [ new ImageEl { Width = 24, Height = 24, Placeholder = Prop.Of(() => tint.Value) } ] },

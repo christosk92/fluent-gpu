@@ -28,6 +28,9 @@ public static partial class IconButton
     public sealed record Style
     {
         public float Size { get; init; } = 36f;
+        /// <summary>Root height; null = square (= <see cref="Size"/>). Set for stretched chrome buttons — the WinUI
+        /// TitleBar back/pane are 40w × 44h (Stretch in the 48px bar with Margin 2).</summary>
+        public float? Height { get; init; }
         public float GlyphSize { get; init; } = 16f;                 // WinUI NavigationViewItem / AppBar icon box height
         public float CornerRadius { get; init; } = Radii.Control;    // ControlCornerRadius (AppBarButton_themeresources.xaml:137) — rounded-square, NOT a circle
         public string IconFont { get; init; } = Theme.IconFont;
@@ -85,7 +88,7 @@ public static partial class IconButton
         icon = parts.Apply(PartIcon, icon) with { Children = icon.Children };
         var root = new BoxEl
         {
-            Width = s.Size, Height = s.Size, Direction = 0, Role = AutomationRole.Button,
+            Width = s.Size, Height = s.Height ?? s.Size, Direction = 0, Role = AutomationRole.Button,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(s.CornerRadius),
             // Disabled is a logical state: resting fill swaps to the WinUI disabled token. Hover/Pressed never fire while
